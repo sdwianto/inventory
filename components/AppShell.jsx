@@ -32,6 +32,8 @@ const NAV = [
   {
     type: 'group', key: 'stok', label: 'Stok', icon: Boxes,
     items: [
+      { href: '/stok/saldo', label: 'Saldo per Gudang', icon: Boxes },
+      { href: '/stok/release', label: 'Release Inventory', icon: ArrowUpFromLine },
       { href: '/stok/kartu', label: 'Kartu Stok', icon: Receipt },
       { href: '/stok/penyesuaian', label: 'Penyesuaian', icon: FileEdit },
       { href: '/stok/transfer', label: 'Transfer Stok', icon: ArrowLeftRight },
@@ -55,9 +57,13 @@ const DEFAULT_EXPANDED = Object.fromEntries(
 
 // Role permissions: which items each role can see
 const ROLE_PERMISSIONS = {
-  KASIR: ['/dashboard', '/penerimaan', '/produk', '/stok/kartu'],
+  KASIR: ['/dashboard', '/penerimaan', '/produk', '/stok/kartu', '/stok/saldo'],
+  GUDANG: ['/dashboard', '/penerimaan', '/produk', '/mapping',
+    '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
+  SUPERVISOR: ['/dashboard', '/penerimaan', '/produk',
+    '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/produk', '/mapping',
-          '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
+          '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user'],
   MASTER: '*',
   OWNER: '*',

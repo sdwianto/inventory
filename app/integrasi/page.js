@@ -34,7 +34,7 @@ export default function IntegrasiPage() {
       const res = await fetch('/api/integrations/sync-catalog', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Sync gagal');
-      toast.success(`Sync selesai — ${data.created} baru, ${data.updated} diperbarui`);
+      toast.success(`Sync selesai — ${data.created} baru, ${data.updated} diperbarui dari ${data.vendorTenantCount || '?'} vendor tenant`);
       loadStatus();
     } catch (e) {
       toast.error(e.message);
@@ -44,7 +44,7 @@ export default function IntegrasiPage() {
 
   const checklist = [
     { ok: status?.source === 'database' || status?.source === 'env', label: 'Terhubung ke sales.app', hint: 'Jalankan Setup dari sales.app /integrasi' },
-    { ok: status?.catalogReachable, label: `Katalog vendor (${status?.catalogCount ?? 0} produk)`, hint: 'Pastikan produk ada di tenant vendor sales' },
+    { ok: status?.catalogReachable, label: `Katalog sales.app (${status?.catalogCount ?? 0} produk, ${status?.vendorTenantCount ?? 0} tenant)`, hint: 'Sync semua tenant vendor sekaligus' },
     { ok: (status?.localProductCount || 0) > 0, label: `Produk lokal (${status?.localProductCount ?? 0})`, hint: 'Klik Sync Katalog' },
     { ok: !!status?.webhookSecret, label: 'Webhook secret', hint: 'Otomatis saat pairing' },
   ];
@@ -65,7 +65,7 @@ export default function IntegrasiPage() {
           <h2 className="font-semibold text-sm">Cara setup (sekali saja)</h2>
           <ol className="text-sm text-slate-600 space-y-2 list-decimal list-inside">
             <li>Buka <strong>sales.app → Pengaturan → Integrasi API</strong></li>
-            <li>Pilih tenant vendor + isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{status?.tenantId || 'sppg'}</code></li>
+            <li>Isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{status?.tenantId || 'sppg'}</code> — semua produk dari semua tenant sales.app akan di-sync</li>
             <li>Klik <strong>Setup &amp; Hubungkan Inventory</strong></li>
           </ol>
         </section>

@@ -18,9 +18,10 @@ import { useConfirm } from '@/components/ConfirmProvider';
 import { getUser } from '@/lib/auth-client';
 import TenantScopeField, { tenantLabel } from '@/components/TenantScopeField';
 import { withActingTenantQuery } from '@/lib/tenant-api';
+import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 
 const emptyProduct = {
-  kode: '', barcode: '', nama: '', grup: 'Umum', satuan: 'PCS',
+  kode: '', barcode: '', nama: '', grup: 'Umum', satuan: 'PCS', gudangKode: 'GKERING',
   hargaBeli: 0, hargaSpesial: 0, hargaGrosir: 0, hargaEcer: 0, stok: 0, minStok: 0, aktif: true,
   tenantId: '',
 };
@@ -336,6 +337,7 @@ export default function ProdukPage() {
     { key: 'barcode', label: 'Barcode' },
     { key: 'nama', label: 'Nama' },
     { key: 'grup', label: 'Grup' },
+    { key: 'gudangKode', label: 'Gudang', value: (r) => warehouseName(r.gudangKode || 'GKERING') },
     { key: 'satuan', label: 'Satuan' },
     { key: 'hargaBeli', label: 'Harga Beli' },
     { key: 'hargaSpesial', label: 'Harga Spesial' },
@@ -374,7 +376,7 @@ export default function ProdukPage() {
     }
   };
 
-  const colSpan = isMaster ? 12 : 11;
+  const colSpan = isMaster ? 13 : 12;
   const allSelected = products.length > 0 && selection.count === products.length;
   const isVendorSynced = (p) => p?.syncSource === 'sales.app';
   const [syncing, setSyncing] = useState(false);
@@ -476,6 +478,7 @@ export default function ProdukPage() {
                   <th className="px-3 py-2 text-left">Barcode</th>
                   <th className="px-3 py-2 text-left">Nama</th>
                   <th className="px-3 py-2 text-left">Grup</th>
+                  <th className="px-3 py-2 text-left">Gudang</th>
                   <th className="px-3 py-2 text-center">Sat</th>
                   <th className="px-3 py-2 text-right">Hrg Beli</th>
                   <th className="px-3 py-2 text-right">Hrg Grosir</th>
@@ -517,6 +520,15 @@ export default function ProdukPage() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs"><span className="px-2 py-0.5 bg-slate-100 rounded">{p.grup}</span></td>
+                    <td className="px-3 py-2 text-xs">
+                      <span className={`px-2 py-0.5 rounded font-medium ${
+                        (p.gudangKode || 'GKERING') === 'GBASAH'
+                          ? 'bg-blue-50 text-blue-800'
+                          : 'bg-amber-50 text-amber-800'
+                      }`}>
+                        {warehouseName(p.gudangKode || 'GKERING')}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-center text-xs uppercase">{p.satuan}</td>
                     <td className="px-3 py-2 text-right text-slate-500">{formatIDR(p.hargaBeli)}</td>
                     <td className="px-3 py-2 text-right">{formatIDR(p.hargaGrosir)}</td>
@@ -613,6 +625,19 @@ export default function ProdukPage() {
                   <option value={form.satuan}>{form.satuan} (legacy)</option>
                 )}
               </select>
+            </div>
+            <div className="col-span-2">
+              <Label>Gudang Penyimpanan *</Label>
+              <select
+                className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+                value={form.gudangKode || 'GKERING'}
+                onChange={(e) => setForm({ ...form, gudangKode: e.target.value })}
+              >
+                {WAREHOUSES.map((w) => (
+                  <option key={w.kode} value={w.kode}>{w.nama} — item tidak bisa disimpan di kedua gudang</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 mt-1">Setiap produk hanya di Gudang Kering atau Gudang Basah.</p>
             </div>
             <div className="col-span-2 md:col-span-1"><Label>Harga Beli</Label><Input type="number" min={0} value={form.hargaBeli} onChange={(e) => setForm({ ...form, hargaBeli: parseInt(e.target.value || '0', 10) })} /></div>
             <PriceWithMargin
