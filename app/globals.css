@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+        "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+        "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+@layer base {
+  :root {
+        /* BGN — Badan Gizi Nasional */
+        --background: 204 45% 97%;
+        --foreground: 210 65% 10%;
+        --card: 0 0% 100%;
+        --card-foreground: 210 65% 10%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 210 65% 10%;
+        --primary: 214 65% 12%;
+        --primary-foreground: 45 40% 96%;
+        --secondary: 200 45% 90%;
+        --secondary-foreground: 210 65% 12%;
+        --muted: 200 35% 94%;
+        --muted-foreground: 210 25% 40%;
+        --accent: 42 45% 55%;
+        --accent-foreground: 210 65% 10%;
+        --destructive: 0 84.2% 60.2%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 200 35% 85%;
+        --input: 200 35% 88%;
+        --ring: 42 45% 55%;
+        --chart-1: 214 65% 12%;
+        --chart-2: 42 45% 55%;
+        --chart-3: 100 45% 52%;
+        --chart-4: 200 45% 75%;
+        --chart-5: 210 40% 35%;
+        --radius: 0.5rem;
+        --sidebar-background: 214 65% 12%;
+        --sidebar-foreground: 200 30% 90%;
+        --sidebar-primary: 42 45% 55%;
+        --sidebar-primary-foreground: 210 65% 10%;
+        --sidebar-accent: 214 55% 18%;
+        --sidebar-accent-foreground: 45 40% 96%;
+        --sidebar-border: 214 50% 20%;
+        --sidebar-ring: 42 45% 55%;
+    }
+  .dark {
+        --background: 222.2 84% 4.9%;
+        --foreground: 210 40% 98%;
+        --card: 222.2 84% 4.9%;
+        --card-foreground: 210 40% 98%;
+        --popover: 222.2 84% 4.9%;
+        --popover-foreground: 210 40% 98%;
+        --primary: 210 40% 98%;
+        --primary-foreground: 222.2 47.4% 11.2%;
+        --secondary: 217.2 32.6% 17.5%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 217.2 32.6% 17.5%;
+        --muted-foreground: 215 20.2% 65.1%;
+        --accent: 217.2 32.6% 17.5%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 62.8% 30.6%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217.2 32.6% 17.5%;
+        --input: 217.2 32.6% 17.5%;
+        --ring: 212.7 26.8% 83.9%;
+    }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+
+/* Tombol & highlight brand BGN */
+@layer components {
+  .btn-bgn {
+    @apply bg-bgn-navy text-white hover:bg-bgn-navy-light shadow-sm;
+  }
+  .nav-active-bgn {
+    @apply bg-bgn-gold text-bgn-navy font-semibold;
+  }
+  .surface-bgn {
+    @apply bg-bgn-sky-light border-bgn-sky;
+  }
+}
+
+/* -------- Print Styles for Receipt (thermal / Epson TM-U220 impact) -------- */
+.receipt-print {
+  display: none;
+}
+
+.receipt-preview.receipt-print {
+  display: block;
+}
+
+.receipt-print .receipt-wrap {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.receipt-print .receipt-item-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.receipt-print .receipt-logo-img {
+  max-width: 48mm;
+  max-height: 12mm;
+  margin: 0 auto;
+  display: block;
+  filter: grayscale(100%) contrast(1.15);
+}
+
+.receipt-print .receipt-small {
+  font-size: 0.85em;
+}
+
+.receipt-print .receipt-feed {
+  height: var(--receipt-feed-mm, 14mm);
+  min-height: var(--receipt-feed-mm, 14mm);
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .receipt-print,
+  .receipt-print * {
+    visibility: visible;
+  }
+  body > .receipt-print {
+    visibility: visible;
+    display: block !important;
+  }
+  .receipt-print {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--receipt-printable-mm, 76mm);
+    max-width: var(--receipt-paper-mm, 80mm);
+    padding: 3mm 2mm;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: var(--receipt-font-px, 12px);
+    line-height: var(--receipt-line-height, 1.4);
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .receipt-print.narrow,
+  html[data-receipt-paper='58'] .receipt-print {
+    width: var(--receipt-printable-mm, 48mm);
+    max-width: 58mm;
+    padding: 2mm;
+    font-size: var(--receipt-font-px, 10px);
+  }
+  /* Epson TM-U220: area cetak 76 mm pada roll 80 mm */
+  .receipt-print.profile-epson-tm-u220 {
+    width: 76mm;
+    max-width: 80mm;
+  }
+  .receipt-print .line {
+    border-top: 1px dashed #000;
+    margin: 4px 0;
+  }
+  .receipt-print .double-line {
+    border-top: 2px solid #000;
+    margin: 4px 0;
+  }
+  .receipt-print table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  .receipt-print th,
+  .receipt-print td {
+    padding: 1px 2px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .receipt-print .text-right {
+    text-align: right;
+  }
+  .receipt-print .text-center {
+    text-align: center;
+  }
+  .receipt-print .bold {
+    font-weight: bold;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    margin: 0;
+    size: var(--receipt-paper-mm, 80mm) auto;
+  }
+  html[data-receipt-paper='58'] {
+    @page {
+      size: 58mm auto;
+    }
+  }
+}
