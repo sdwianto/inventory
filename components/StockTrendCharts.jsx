@@ -1,9 +1,11 @@
 'use client';
 
+import { useMemo } from 'react';
 import {
+  Area,
+  Bar,
   CartesianGrid,
-  Line,
-  LineChart,
+  ComposedChart,
   XAxis,
   YAxis,
 } from 'recharts';
@@ -16,33 +18,58 @@ import {
 } from '@/components/ui/chart';
 import { formatNumber } from '@/lib/format';
 import { warehouseName } from '@/lib/warehouses-client';
+import {
+  CHART_MODE_LABEL,
+  hasWarehouseActivity,
+  prepareWarehouseChartData,
+} from '@/lib/stock-trend-chart';
 
 const KERING_CONFIG = {
   masuk: { label: 'Masuk (qty)', color: '#16a34a' },
   keluar: { label: 'Keluar (qty)', color: '#dc2626' },
-  saldo: { label: 'Saldo harian (akumulasi)', color: '#b45309' },
+  saldo: { label: 'Saldo akumulasi', color: '#b45309' },
 };
 
 const BASAH_CONFIG = {
   masuk: { label: 'Masuk (qty)', color: '#059669' },
   keluar: { label: 'Keluar (qty)', color: '#e11d48' },
-  saldo: { label: 'Saldo harian (akumulasi)', color: '#0284c7' },
+  saldo: { label: 'Saldo akumulasi', color: '#0284c7' },
 };
 
-function WarehouseDailyChart({
+function formatTooltipDate(payload) {
+  const p = payload?.[0]?.payload;
+  if (!p) return '';
+  if (p.mode === 'weekly' || !p.period) return p.label || '';
+  const d = new Date(`${p.period}T12:00:00`);
+  return d.toLocaleDateString('id-ID', {
+    weekday: 'short', day: 'numeric', month: 'long', year: 'numeric',
+  });
+}
+
+function WarehouseComposedChart({
   title,
   subtitle,
-  data,
+  rawData,
   masukKey,
   keluarKey,
   saldoKey,
   config,
   accentClass,
 }) {
-  const hasActivity = data.some((d) => (d[masukKey] || 0) + (d[keluarKey] || 0) > 0);
-  const lastSaldo = data.length ? data[data.length - 1][saldoKey] : 0;
-  const totalMasuk = data.reduce((s, d) => s + (d[masukKey] || 0), 0);
-  const totalKeluar = data.reduce((s, d) => s + (d[keluarKey] || 0), 0);
+  const { data, mode, activeCount, totalDays } = useMemo(
+    () => prepareWarehouseChartData(rawData, masukKey, keluarKey, saldoKey),
+    [rawData, masukKey, keluarKey, saldoKey],
+  );
+
+  const chartData = useMemo(
+    () => data.map((d) => ({ ...d, mode })),
+    [data, mode],
+  );
+
+  const hasActivity = rawData.some((d) => hasWarehouseActivity(d, masukKey, keluarKey));
+  const totalMasuk = rawData.reduce((s, d) => s + (d[masukKey] || 0), 0);
+  const totalKeluar = rawData.reduce((s, d) => s + (d[keluarKey] || 0), 0);
+  const lastSaldo = rawData.length ? rawData[rawData.length - 1][saldoKey] : 0;
 
   return (
     <div className={`rounded-xl border p-4 shadow-sm ${accentClass}`}>
@@ -50,6 +77,11 @@ function WarehouseDailyChart({
         <div>
           <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
           <p className="text-xs text-slate-500">{subtitle}</p>
+          {mode !== 'daily' && (
+            <p className="mt-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-0.5 inline-block">
+              Mode {CHART_MODE_LABEL[mode]} — {activeCount} dari {totalDays} hari punya transaksi
+            </p>
+          )}
         </div>
         <div className="flex gap-3 text-xs">
           <span className="text-green-700">↑ {formatNumber(totalMasuk)} masuk</span>
@@ -58,39 +90,56 @@ function WarehouseDailyChart({
         </div>
       </div>
 
-      {!hasActivity && data.length <= 1 ? (
-        <div className="h-[260px] flex items-center justify-center text-sm text-slate-400 border border-dashed rounded-lg bg-white/60">
+      {!hasActivity ? (
+        <div className="h-[280px] flex items-center justify-center text-sm text-slate-400 border border-dashed rounded-lg bg-white/60">
           Belum ada pergerakan di periode ini
         </div>
       ) : (
-        <ChartContainer config={config} className="h-[280px] w-full aspect-auto">
-          <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+        <ChartContainer config={config} className="h-[300px] w-full aspect-auto">
+          <ComposedChart data={chartData} margin={{ top: 8, right: 48, left: 4, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
             <XAxis
               dataKey="label"
               tickLine={false}
               axisLine={false}
               tick={{ fontSize: 10, fill: '#64748b' }}
-              interval="preserveStartEnd"
-              minTickGap={28}
+              interval={chartData.length > 20 ? 'preserveStartEnd' : 0}
+              minTickGap={mode === 'active' ? 8 : 28}
+              angle={chartData.length > 8 ? -25 : 0}
+              textAnchor={chartData.length > 8 ? 'end' : 'middle'}
+              height={chartData.length > 8 ? 52 : 30}
             />
             <YAxis
+              yAxisId="saldo"
               tickLine={false}
               axisLine={false}
               tick={{ fontSize: 10, fill: '#64748b' }}
-              width={40}
+              width={44}
+              label={{
+                value: 'Saldo',
+                angle: -90,
+                position: 'insideLeft',
+                style: { fontSize: 9, fill: '#94a3b8' },
+              }}
+            />
+            <YAxis
+              yAxisId="flow"
+              orientation="right"
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 10, fill: '#64748b' }}
+              width={44}
+              label={{
+                value: 'Masuk/Keluar',
+                angle: 90,
+                position: 'insideRight',
+                style: { fontSize: 9, fill: '#94a3b8' },
+              }}
             />
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  labelFormatter={(_, payload) => {
-                    const p = payload?.[0]?.payload;
-                    if (!p?.period) return p?.label || '';
-                    const d = new Date(`${p.period}T12:00:00`);
-                    return d.toLocaleDateString('id-ID', {
-                      weekday: 'short', day: 'numeric', month: 'long', year: 'numeric',
-                    });
-                  }}
+                  labelFormatter={(_, payload) => formatTooltipDate(payload)}
                   formatter={(value, name) => {
                     const labels = { masuk: 'Masuk', keluar: 'Keluar', saldo: 'Saldo akumulasi' };
                     return [formatNumber(value), labels[name] || name];
@@ -99,35 +148,37 @@ function WarehouseDailyChart({
               }
             />
             <ChartLegend content={<ChartLegendContent />} />
-            <Line
-              type="monotone"
-              dataKey={masukKey}
-              name="masuk"
-              stroke="var(--color-masuk)"
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-            <Line
-              type="monotone"
-              dataKey={keluarKey}
-              name="keluar"
-              stroke="var(--color-keluar)"
-              strokeWidth={2}
-              strokeDasharray="6 4"
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-            <Line
+            <Area
+              yAxisId="saldo"
               type="monotone"
               dataKey={saldoKey}
               name="saldo"
+              fill="var(--color-saldo)"
+              fillOpacity={0.15}
               stroke="var(--color-saldo)"
               strokeWidth={2.5}
-              dot={false}
+              dot={chartData.length <= 14}
               activeDot={{ r: 5 }}
             />
-          </LineChart>
+            <Bar
+              yAxisId="flow"
+              dataKey={masukKey}
+              name="masuk"
+              fill="var(--color-masuk)"
+              radius={[3, 3, 0, 0]}
+              barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
+              maxBarSize={20}
+            />
+            <Bar
+              yAxisId="flow"
+              dataKey={keluarKey}
+              name="keluar"
+              fill="var(--color-keluar)"
+              radius={[3, 3, 0, 0]}
+              barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
+              maxBarSize={20}
+            />
+          </ComposedChart>
         </ChartContainer>
       )}
     </div>
@@ -151,26 +202,28 @@ export default function StockTrendCharts({ trend }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">
-        Grafik harian — garis hijau = barang masuk, merah putus-putus = keluar, garis tebal = saldo stok
-        tertahan (akumulasi). Saldo awal periode: {warehouseName('GKERING')} {formatNumber(opening.kering)},
+        Area = saldo stok tertahan (akumulasi, sumbu kiri). Batang hijau/merah = masuk &amp; keluar
+        per hari (sumbu kanan). Jika transaksi jarang, grafik otomatis menampilkan{' '}
+        <strong>hari aktif</strong> atau <strong>agregasi mingguan</strong>.
+        Saldo awal periode: {warehouseName('GKERING')} {formatNumber(opening.kering)},
         {' '}{warehouseName('GBASAH')} {formatNumber(opening.basah)}.
       </p>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <WarehouseDailyChart
+        <WarehouseComposedChart
           title={warehouseName('GKERING')}
-          subtitle="Perbandingan masuk vs keluar & saldo harian"
-          data={data}
+          subtitle="Area saldo + batang masuk/keluar"
+          rawData={data}
           masukKey="keringMasukQty"
           keluarKey="keringKeluarQty"
           saldoKey="keringSaldoKumulatif"
           config={KERING_CONFIG}
           accentClass="bg-gradient-to-br from-amber-50/80 to-white"
         />
-        <WarehouseDailyChart
+        <WarehouseComposedChart
           title={warehouseName('GBASAH')}
-          subtitle="Perbandingan masuk vs keluar & saldo harian"
-          data={data}
+          subtitle="Area saldo + batang masuk/keluar"
+          rawData={data}
           masukKey="basahMasukQty"
           keluarKey="basahKeluarQty"
           saldoKey="basahSaldoKumulatif"
@@ -203,7 +256,7 @@ export default function StockTrendCharts({ trend }) {
             {
               label: 'Hari dalam grafik',
               value: formatNumber(data.length),
-              sub: 'agregasi per hari',
+              sub: 'rentang penuh periode',
               color: 'text-slate-700',
             },
           ].map((s) => (

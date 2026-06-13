@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { vendorDisplayName } from '@/lib/vendor-display';
+import ProductStockReminder from '@/components/ProductStockReminder';
 
 function productLabel(p) {
   if (!p) return '';
@@ -84,6 +85,7 @@ export default function ProductSearchSelect({
                       <span className="font-mono">{p.kode}</span>
                       {p.satuan && <span>· {p.satuan}</span>}
                       {vendorDisplayName(p) && <span>· {vendorDisplayName(p)}</span>}
+                      <ProductStockReminder product={p} className="contents" />
                     </div>
                   </div>
                 </CommandItem>

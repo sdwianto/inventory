@@ -6,6 +6,7 @@ import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import PoCalendar from '@/components/PoCalendar';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
+import ProductStockReminder from '@/components/ProductStockReminder';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +17,8 @@ import { toast } from 'sonner';
 import {
   CalendarDays, ChevronDown, ChevronRight, Package, Plus, Send, ShoppingBag, Trash2,
 } from 'lucide-react';
-import { formatDate, formatDateTime, formatNumber } from '@/lib/format';
+import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
+import { defaultEstimasiHarga, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
 import { cn } from '@/lib/utils';
 import { vendorDisplayName } from '@/lib/vendor-display';
 import {
@@ -39,7 +41,8 @@ export default function CustomerPoPage() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createDate, setCreateDate] = useState(null);
-  const [lines, setLines] = useState([{ localStokId: '', qty: 1 }]);
+  const emptyLine = () => ({ localStokId: '', qty: 1, estimasiHarga: '', estimasiManual: false });
+  const [lines, setLines] = useState([emptyLine()]);
   const [catatan, setCatatan] = useState('');
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState('');
@@ -49,7 +52,7 @@ export default function CustomerPoPage() {
   const load = () => fetch('/api/customer-purchase-orders').then((r) => r.json()).then(setList);
   useEffect(() => {
     load();
-    fetch('/api/products?limit=500').then((r) => r.json()).then(setProducts);
+    fetch('/api/products?limit=500&withWarehouseStock=1').then((r) => r.json()).then(setProducts);
   }, []);
 
   const synced = products.filter((p) => p.syncSource === 'sales.app');
@@ -64,7 +67,7 @@ export default function CustomerPoPage() {
   const openCreate = (date) => {
     const d = date || selectedDate || new Date();
     setCreateDate(d);
-    setLines([{ localStokId: '', qty: 1 }]);
+    setLines([emptyLine()]);
     setCatatan('');
     setCreateOpen(true);
   };
@@ -75,7 +78,17 @@ export default function CustomerPoPage() {
     setMonth(startOfMonth(date));
   };
 
-  const addLine = () => setLines([...lines, { localStokId: '', qty: 1 }]);
+  const addLine = () => setLines([...lines, emptyLine()]);
+
+  const selectProduct = (i, id) => {
+    const p = synced.find((x) => x.id === id);
+    const beli = parseInt(p?.hargaBeli || 0, 10);
+    updateLine(i, {
+      localStokId: id,
+      estimasiHarga: defaultEstimasiHarga(beli) || '',
+      estimasiManual: false,
+    });
+  };
   const removeLine = (i) => setLines(lines.length > 1 ? lines.filter((_, idx) => idx !== i) : lines);
   const updateLine = (i, patch) => setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
 
@@ -87,7 +100,11 @@ export default function CustomerPoPage() {
   const lineSummary = useMemo(() => {
     const filled = lineDetails.filter((l) => l.product && l.qty);
     const totalQty = filled.reduce((s, l) => s + (parseFloat(l.qty) || 0), 0);
-    return { rows: filled.length, totalQty };
+    const totalEstimasi = filled.reduce(
+      (s, l) => s + (parseFloat(l.qty) || 0) * parseEstimasiHargaInput(l.estimasiHarga),
+      0,
+    );
+    return { rows: filled.length, totalQty, totalEstimasi };
   }, [lineDetails]);
 
   const createPo = async () => {
@@ -104,6 +121,8 @@ export default function CustomerPoPage() {
         nama: p.nama,
         satuan: p.satuan,
         qty: parseFloat(l.qty) || 0,
+        estimasiHarga: parseEstimasiHargaInput(l.estimasiHarga),
+        hargaBeliReferensi: parseInt(p.hargaBeli || 0, 10),
       };
     }).filter(Boolean);
     if (!items.length) {
@@ -267,6 +286,7 @@ export default function CustomerPoPage() {
                               <tr className="text-slate-500 border-b">
                                 <th className="text-left py-1 pr-2">Kode</th>
                                 <th className="text-left py-1 pr-2">Produk</th>
+                                <th className="text-right py-1 pr-2">Estimasi</th>
                                 <th className="text-right py-1 pr-2">Qty</th>
                                 <th className="text-center py-1">Satuan</th>
                               </tr>
@@ -276,6 +296,9 @@ export default function CustomerPoPage() {
                                 <tr key={it.lineId || it.kode} className="border-b border-slate-100 last:border-0">
                                   <td className="py-1.5 pr-2 font-mono">{it.kode}</td>
                                   <td className="py-1.5 pr-2">{it.nama}</td>
+                                  <td className="py-1.5 text-right whitespace-nowrap text-slate-600">
+                                    {it.estimasiHarga ? formatIDR(it.estimasiHarga) : '—'}
+                                  </td>
                                   <td className="py-1.5 text-right whitespace-nowrap">{formatNumber(it.qty)}</td>
                                   <td className="py-1.5 text-center text-slate-600">{it.satuan || '—'}</td>
                                 </tr>
@@ -300,7 +323,7 @@ export default function CustomerPoPage() {
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package className="w-5 h-5 text-orange-500" />
@@ -331,20 +354,21 @@ export default function CustomerPoPage() {
               </div>
 
               <div className="border rounded-lg overflow-hidden">
-                <div className="hidden sm:grid sm:grid-cols-[2rem_1fr_auto] gap-2 px-3 py-2 bg-slate-100 text-xs uppercase text-slate-600 font-medium">
+                <div className="hidden sm:grid sm:grid-cols-[2rem_1fr_9rem_auto] gap-2 px-3 py-2 bg-slate-100 text-xs uppercase text-slate-600 font-medium">
                   <span>#</span>
                   <span>Produk</span>
+                  <span className="text-right">Estimasi harga</span>
                   <span className="text-right pr-1">Qty · Satuan</span>
                 </div>
                 <div className="divide-y">
                   {lineDetails.map((l, i) => (
-                    <div key={i} className="flex flex-col sm:grid sm:grid-cols-[2rem_1fr_auto] gap-2 sm:gap-3 px-3 py-3 items-start">
+                    <div key={i} className="flex flex-col sm:grid sm:grid-cols-[2rem_1fr_9rem_auto] gap-2 sm:gap-3 px-3 py-3 items-start">
                       <span className="text-xs text-slate-400 pt-2">{i + 1}</span>
                       <div className="w-full min-w-0">
                         <ProductSearchSelect
                           products={synced}
                           value={l.localStokId}
-                          onChange={(id) => updateLine(i, { localStokId: id })}
+                          onChange={(id) => selectProduct(i, id)}
                           placeholder="Cari / pilih produk…"
                         />
                         {l.product && (
@@ -356,7 +380,32 @@ export default function CustomerPoPage() {
                             {vendorDisplayName(l.product) && (
                               <span className="rounded bg-orange-50 px-1.5 py-0.5 text-orange-700">{vendorDisplayName(l.product)}</span>
                             )}
+                            <ProductStockReminder product={l.product} className="contents" />
                           </div>
+                        )}
+                      </div>
+                      <div className="w-full sm:w-auto shrink-0">
+                        <Label className="text-[10px] text-slate-400 uppercase sm:sr-only">Estimasi harga</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          disabled={!l.product}
+                          placeholder="Rp / satuan"
+                          className="text-right h-9 tabular-nums"
+                          value={l.estimasiHarga}
+                          onChange={(e) => updateLine(i, {
+                            estimasiHarga: e.target.value,
+                            estimasiManual: true,
+                          })}
+                        />
+                        {l.product && (
+                          <p className="mt-1 text-[10px] text-slate-400 text-right">
+                            Beli terakhir {formatIDR(l.product.hargaBeli || 0)}
+                            {!l.estimasiManual && (l.product.hargaBeli || 0) > 0 && (
+                              <span className="text-orange-600"> · +10%</span>
+                            )}
+                          </p>
                         )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0 self-start sm:pt-0.5 w-full sm:w-auto justify-end">
@@ -403,6 +452,9 @@ export default function CustomerPoPage() {
               {lineSummary.rows > 0 && (
                 <p className="text-xs text-slate-500 text-right">
                   {lineSummary.rows} baris · total {formatNumber(lineSummary.totalQty)} unit
+                  {lineSummary.totalEstimasi > 0 && (
+                    <> · estimasi {formatIDR(lineSummary.totalEstimasi)}</>
+                  )}
                 </p>
               )}
             </div>

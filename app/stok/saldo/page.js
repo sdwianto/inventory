@@ -28,7 +28,7 @@ export default function SaldoGudangPage() {
   const [summary, setSummary] = useState(null);
   const [trend, setTrend] = useState({ periods: [], totals: {} });
   const [q, setQ] = useState('');
-  const [trendMonths, setTrendMonths] = useState('6');
+  const [trendMonths, setTrendMonths] = useState('1');
   const [loading, setLoading] = useState(true);
   const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
 
@@ -132,7 +132,7 @@ export default function SaldoGudangPage() {
               </div>
               <div>
                 <h2 className="font-semibold text-slate-800">Trend Populasi Stok</h2>
-                <p className="text-xs text-slate-500">Grafik harian per gudang — masuk, keluar, dan saldo akumulasi</p>
+                <p className="text-xs text-slate-500">Area saldo + batang masuk/keluar per gudang (otomatis padat jika data jarang)</p>
               </div>
             </div>
             <Select value={trendMonths} onValueChange={(v) => { setTrendMonths(v); load(q, v); }}>
