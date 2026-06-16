@@ -23,7 +23,7 @@ npm run dev
 ```
 
 - URL: http://localhost:3001
-- Login: `admin@inventory.local` / `admin123` (tenant: `sppg`)
+- Login: akun dibuat via **User Management** (role ADMIN / SUPERVISOR / GUDANG)
 
 ## Integrasi sales.app
 

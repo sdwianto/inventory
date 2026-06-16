@@ -16,15 +16,19 @@ import { toast } from 'sonner';
 export default function KartuStokPage() {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [data, setData] = useState({ rows: [], product: null });
+  const [data, setData] = useState({ rows: [], product: null, ledgerSaldo: null });
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [reconciling, setReconciling] = useState(false);
 
   useEffect(() => {
-    fetch('/api/products?limit=500').then(r => r.json()).then(setProducts);
+    fetch('/api/products?limit=500')
+      .then((r) => r.json())
+      .then((data) => setProducts(Array.isArray(data) ? data : []))
+      .catch(() => setProducts([]));
   }, []);
 
   const load = async (productId) => {
@@ -51,6 +55,31 @@ export default function KartuStokPage() {
 
   const totalMasuk = data.rows.reduce((s, r) => s + (r.masuk || 0), 0);
   const totalKeluar = data.rows.reduce((s, r) => s + (r.keluar || 0), 0);
+  const saldoKartu = data.rows.length
+    ? data.rows[data.rows.length - 1].saldo
+    : (data.ledgerSaldo ?? data.product?.stok ?? 0);
+  const stokMismatch = data.product
+    && data.ledgerSaldo != null
+    && Math.abs((data.product.stok || 0) - data.ledgerSaldo) > 1e-9;
+
+  const reconcile = async () => {
+    if (!selectedProduct) return;
+    setReconciling(true);
+    try {
+      const res = await fetch('/api/stok/kartu/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: selectedProduct.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal sinkronisasi');
+      toast.success(`Stok master disamakan ke ${formatNumber(json.ledgerSaldo)} ${selectedProduct.satuan}`);
+      load(selectedProduct.id);
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setReconciling(false);
+  };
 
   const exportData = async (format) => {
     try {
@@ -112,14 +141,36 @@ export default function KartuStokPage() {
         </div>
 
         {data.product && (
-          <ListSummaryCards
-            items={[
-              { label: 'Stok Saat Ini', value: `${formatNumber(data.product.stok)} ${data.product.satuan}` },
-              { label: 'Harga Beli', value: formatIDR(data.product.hargaBeli) },
-              { label: 'Total Masuk', value: formatNumber(totalMasuk), valueClassName: 'text-green-600', icon: ArrowDown },
-              { label: 'Total Keluar', value: formatNumber(totalKeluar), valueClassName: 'text-red-600', icon: ArrowUp },
-            ]}
-          />
+          <>
+            {stokMismatch && (
+              <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Stok master ({formatNumber(data.product.stok)}) tidak sama dengan saldo kartu ({formatNumber(data.ledgerSaldo)}).
+                  Biasanya terjadi jika penyesuaian tercatat di gudang yang salah.
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-amber-300 shrink-0"
+                  onClick={reconcile}
+                  disabled={reconciling}
+                >
+                  {reconciling ? 'Menyinkronkan...' : 'Samakan stok master'}
+                </Button>
+              </div>
+            )}
+            <ListSummaryCards
+              items={[
+                {
+                  label: 'Saldo Kartu Stok',
+                  value: `${formatNumber(saldoKartu)} ${data.product.satuan}`,
+                },
+                { label: 'Harga Beli', value: formatIDR(data.product.hargaBeli) },
+                { label: 'Total Masuk', value: formatNumber(totalMasuk), valueClassName: 'text-green-600', icon: ArrowDown },
+                { label: 'Total Keluar', value: formatNumber(totalKeluar), valueClassName: 'text-red-600', icon: ArrowUp },
+              ]}
+            />
+          </>
         )}
 
         <div className="bg-white border rounded-lg overflow-hidden">

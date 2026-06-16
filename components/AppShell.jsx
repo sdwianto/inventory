@@ -57,10 +57,9 @@ const DEFAULT_EXPANDED = Object.fromEntries(
 
 // Role permissions: which items each role can see
 const ROLE_PERMISSIONS = {
-  KASIR: ['/dashboard', '/penerimaan', '/produk', '/stok/kartu', '/stok/saldo'],
-  GUDANG: ['/dashboard', '/penerimaan', '/produk', '/mapping',
+  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk', '/mapping',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
-  SUPERVISOR: ['/dashboard', '/penerimaan', '/produk',
+  SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/produk', '/mapping',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
@@ -303,8 +302,11 @@ export default function AppShell({ children }) {
               {user.role === 'ADMIN' && (
                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">ADMIN</span>
               )}
-              {user.role === 'KASIR' && (
-                <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs font-bold rounded">KASIR</span>
+              {user.role === 'SUPERVISOR' && (
+                <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded">SUPERVISOR</span>
+              )}
+              {user.role === 'GUDANG' && (
+                <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs font-bold rounded">GUDANG</span>
               )}
               <span className="text-slate-300 hidden sm:inline">|</span>
               {user.role === 'MASTER' && !scopeTenantLabel ? (

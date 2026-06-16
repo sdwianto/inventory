@@ -14,7 +14,10 @@ import { getUser } from '@/lib/auth-client';
 import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport } from '@/lib/run-list-export';
 
+const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+
 export default function PenyesuaianPage() {
+  const [user, setUser] = useState(null);
   const [list, setList] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [detail, setDetail] = useState(null);
@@ -27,11 +30,19 @@ export default function PenyesuaianPage() {
 
   const load = async () => {
     const res = await fetch('/api/stok/penyesuaian');
-    setList(await res.json());
+    const data = await res.json();
+    if (!res.ok) {
+      setList([]);
+      return;
+    }
+    setList(Array.isArray(data) ? data : []);
   };
-  useEffect(() => { load(); }, []);
   useEffect(() => {
-    if (showPicker) fetch('/api/products?limit=500').then(r => r.json()).then(setProducts);
+    setUser(getUser());
+    load();
+  }, []);
+  useEffect(() => {
+    if (showPicker) fetch('/api/products?limit=500&withWarehouseStock=1').then(r => r.json()).then(setProducts);
   }, [showPicker]);
 
   const openNew = () => {
@@ -43,9 +54,11 @@ export default function PenyesuaianPage() {
       toast.error('Produk sudah ada di daftar');
       return;
     }
+    const gudangKode = (p.gudangKode || 'GKERING').toUpperCase();
+    const qtySistem = p.stokByWarehouse?.[gudangKode] ?? p.stok ?? 0;
     setItems([...items, {
       stokId: p.id, kode: p.kode, nama: p.nama, satuan: p.satuan,
-      qtySistem: p.stok || 0, qtyAktual: p.stok || 0,
+      gudangKode, qtySistem, qtyAktual: qtySistem,
     }]);
     setShowPicker(false);
   };
@@ -100,6 +113,20 @@ export default function PenyesuaianPage() {
       toast.success(`${rows.length} baris diekspor`);
     } catch (e) { toast.error(e.message); }
   };
+
+  const canAdjust = STOCK_ADJUST_ROLES.includes(user?.role);
+
+  if (user && !canAdjust) {
+    return (
+      <AppShell>
+        <div className="p-8 text-center text-slate-500">
+          <FileEdit className="w-12 h-12 mx-auto mb-3 opacity-30" />
+          <p className="font-medium text-slate-700">Akses ditolak</p>
+          <p className="text-sm mt-1">Penyesuaian stok hanya untuk Supervisor dan Admin.</p>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -167,6 +194,7 @@ export default function PenyesuaianPage() {
                   <tr>
                     <th className="px-2 py-2 text-left">Kode</th>
                     <th className="px-2 py-2 text-left">Nama</th>
+                    <th className="px-2 py-2 text-left">Gudang</th>
                     <th className="px-2 py-2 text-right">Qty Sistem</th>
                     <th className="px-2 py-2 text-right">Qty Aktual</th>
                     <th className="px-2 py-2 text-right">Selisih</th>
@@ -174,13 +202,14 @@ export default function PenyesuaianPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.length === 0 && <tr><td colSpan={6} className="text-center py-6 text-slate-400 text-xs">Belum ada item</td></tr>}
+                  {items.length === 0 && <tr><td colSpan={7} className="text-center py-6 text-slate-400 text-xs">Belum ada item</td></tr>}
                   {items.map((it, i) => {
                     const selisih = (it.qtyAktual || 0) - (it.qtySistem || 0);
                     return (
                       <tr key={i} className="border-t">
                         <td className="px-2 py-2 font-mono text-xs">{it.kode}</td>
                         <td className="px-2 py-2">{it.nama}</td>
+                        <td className="px-2 py-2 text-xs text-slate-600">{it.gudangKode || '-'}</td>
                         <td className="px-2 py-2 text-right font-mono">{formatNumber(it.qtySistem)} {it.satuan}</td>
                         <td className="px-2 py-2 text-right">
                           <input type="number" value={it.qtyAktual} onChange={e => updateAktual(i, e.target.value)} className="w-24 border rounded px-2 py-1 text-right" step="0.01" />

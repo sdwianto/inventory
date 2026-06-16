@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/PasswordInput';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
@@ -17,12 +18,13 @@ import { useListSelection } from '@/hooks/useListSelection';
 import { runListExport } from '@/lib/run-list-export';
 import { postBulkDelete } from '@/lib/bulk-delete-client';
 
-const empty = { email: '', password: '', name: '', role: 'KASIR', tenantId: 'default' };
+const empty = { email: '', password: '', name: '', role: 'GUDANG', tenantId: 'default' };
 
 const ROLE_BADGE = {
   MASTER: 'bg-orange-100 text-orange-700',
   ADMIN: 'bg-blue-100 text-blue-700',
-  KASIR: 'bg-slate-100 text-slate-700',
+  SUPERVISOR: 'bg-amber-100 text-amber-800',
+  GUDANG: 'bg-slate-100 text-slate-700',
   OWNER: 'bg-purple-100 text-purple-700',
 };
 
@@ -269,12 +271,13 @@ export default function UserManagementPage() {
             <div><Label>Nama *</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
             <div>
               <Label>Password {editing ? '(kosongkan jika tidak diubah)' : '*'}</Label>
-              <Input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder={editing ? '••••••••' : ''} />
+              <PasswordInput value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder={editing ? '••••••••' : ''} />
             </div>
             <div>
               <Label>Role</Label>
               <select value={form.role} onChange={e => setForm({...form, role: e.target.value})} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="KASIR">KASIR (hanya POS)</option>
+                <option value="GUDANG">GUDANG (staff gudang — terima barang, release, buat PO)</option>
+                <option value="SUPERVISOR">SUPERVISOR (supervisor — approve release & ajukan PO)</option>
                 <option value="ADMIN">ADMIN (akses penuh dalam tenant)</option>
                 {currentUser?.role === 'MASTER' && <option value="MASTER">MASTER (lintas tenant)</option>}
               </select>

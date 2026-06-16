@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, Package, Settings2, RefreshCw } from 'lucide-react';
@@ -22,73 +23,48 @@ import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 
 const emptyProduct = {
   kode: '', barcode: '', nama: '', grup: 'Umum', satuan: 'PCS', gudangKode: 'GKERING',
-  hargaBeli: 0, hargaSpesial: 0, hargaGrosir: 0, hargaEcer: 0, stok: 0, minStok: 0, aktif: true,
+  hargaBeli: 0, stok: 0, minStok: 0, aktif: true,
   tenantId: '',
 };
 
-function marginPct(hargaBeli, hargaJual) {
-  const beli = Number(hargaBeli) || 0;
-  const jual = Number(hargaJual) || 0;
-  if (beli <= 0) return null;
-  return Math.round(((jual - beli) / beli) * 1000) / 10;
-}
+const PRODUCT_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
-function hargaFromMarginPct(hargaBeli, pct) {
-  const beli = Number(hargaBeli) || 0;
-  if (beli <= 0) return 0;
-  const p = Number(pct);
-  if (!Number.isFinite(p)) return 0;
-  return Math.round(beli * (1 + p / 100));
-}
+const selectClass = 'w-full border border-slate-200 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-200 disabled:bg-slate-50 disabled:text-slate-500';
 
-function PriceWithMargin({ label, required, hargaBeli, value, onChange }) {
-  const pct = marginPct(hargaBeli, value);
-  const canCalc = Number(hargaBeli) > 0;
-
+function FormSectionTitle({ children }) {
   return (
-    <div>
-      <Label>
-        {label}
-        {required ? ' *' : ''}
-        {canCalc && pct !== null && (
-          <span className="ml-2 text-xs font-normal text-orange-600">({pct > 0 ? '+' : ''}{pct}%)</span>
-        )}
-      </Label>
-      <div className="flex gap-2">
-        <div className="flex-1 min-w-0">
-          <Input
-            type="number"
-            min={0}
-            value={value}
-            onChange={(e) => onChange(parseInt(e.target.value || '0', 10))}
-            placeholder="Rp"
-          />
-        </div>
-        <div className="flex items-center gap-1 w-[7.5rem] shrink-0">
-          <Input
-            type="number"
-            step="0.1"
-            className="text-right"
-            value={canCalc && pct !== null ? pct : ''}
-            placeholder="%"
-            disabled={!canCalc}
-            title={canCalc ? 'Margin % dari harga beli' : 'Isi harga beli dulu'}
-            onChange={(e) => {
-              if (!canCalc) return;
-              onChange(hargaFromMarginPct(hargaBeli, e.target.value));
-            }}
-          />
-          <span className="text-xs text-slate-500">%</span>
-        </div>
-      </div>
-      {canCalc && value > 0 && (
-        <p className="text-[11px] text-slate-500 mt-1">
-          {formatIDR(value)} · margin {pct > 0 ? '+' : ''}{pct}% dari beli {formatIDR(hargaBeli)}
-        </p>
-      )}
-      {!canCalc && (
-        <p className="text-[11px] text-amber-600 mt-1">Isi harga beli untuk menghitung %</p>
-      )}
+    <p className="col-span-2 text-xs font-semibold uppercase tracking-wide text-slate-500 border-t border-slate-100 pt-3 mt-1">
+      {children}
+    </p>
+  );
+}
+
+function WarehousePicker({ value, onChange }) {
+  const current = value || 'GKERING';
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {WAREHOUSES.map((w) => {
+        const selected = current === w.kode;
+        const basah = w.kode === 'GBASAH';
+        return (
+          <button
+            key={w.kode}
+            type="button"
+            onClick={() => onChange(w.kode)}
+            className={`rounded-lg border-2 px-3 py-2.5 text-left transition-all ${
+              selected
+                ? basah
+                  ? 'border-blue-500 bg-blue-50 shadow-sm'
+                  : 'border-amber-500 bg-amber-50 shadow-sm'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            <span className={`text-sm font-semibold ${basah ? 'text-blue-800' : 'text-amber-800'}`}>
+              {w.nama}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -111,9 +87,11 @@ export default function ProdukPage() {
   const [newSatuan, setNewSatuan] = useState('');
   const [metaTenantId, setMetaTenantId] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
   const selection = useListSelection();
 
   const isMaster = user?.role === 'MASTER';
+  const canManageProducts = PRODUCT_MANAGE_ROLES.includes(user?.role);
 
   const effectiveTenantForForm = () => {
     if (isMaster) return form.tenantId || filterTenantId || '';
@@ -287,6 +265,10 @@ export default function ProdukPage() {
       const method = editing ? 'PUT' : 'POST';
       const payload = { ...form };
       if (!isMaster) delete payload.tenantId;
+      if (editing) delete payload.stok;
+      delete payload.hargaSpesial;
+      delete payload.hargaGrosir;
+      delete payload.hargaEcer;
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -340,9 +322,6 @@ export default function ProdukPage() {
     { key: 'gudangKode', label: 'Gudang', value: (r) => warehouseName(r.gudangKode || 'GKERING') },
     { key: 'satuan', label: 'Satuan' },
     { key: 'hargaBeli', label: 'Harga Beli' },
-    { key: 'hargaSpesial', label: 'Harga Spesial' },
-    { key: 'hargaGrosir', label: 'Harga Grosir' },
-    { key: 'hargaEcer', label: 'Harga Ecer' },
     { key: 'stok', label: 'Stok' },
     { key: 'minStok', label: 'Stok Minimum' },
     { key: 'aktif', label: 'Aktif', value: (r) => (r.aktif !== false ? 'Ya' : 'Tidak') },
@@ -354,7 +333,8 @@ export default function ProdukPage() {
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Gagal memuat data');
-    const rows = Array.isArray(data) ? data : [];
+    let rows = Array.isArray(data) ? data : [];
+    rows = rows.filter((p) => gudangFilter[p.gudangKode || 'GKERING']);
     if (rows.length === 0) throw new Error('Tidak ada data untuk diekspor');
     return rows;
   };
@@ -376,8 +356,23 @@ export default function ProdukPage() {
     }
   };
 
-  const colSpan = isMaster ? 13 : 12;
-  const allSelected = products.length > 0 && selection.count === products.length;
+  const colSpan = (isMaster ? 11 : 10) - (canManageProducts ? 0 : 2);
+
+  const toggleGudang = (kode, checked) => {
+    setGudangFilter((prev) => {
+      const next = { ...prev, [kode]: checked };
+      if (!next.GKERING && !next.GBASAH) return prev;
+      return next;
+    });
+  };
+
+  const filteredProducts = useMemo(() => products.filter((p) => {
+    const g = p.gudangKode || 'GKERING';
+    return gudangFilter[g];
+  }), [products, gudangFilter]);
+
+  const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
+  const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(p.id));
   const isVendorSynced = (p) => p?.syncSource === 'sales.app';
   const [syncing, setSyncing] = useState(false);
 
@@ -401,30 +396,40 @@ export default function ProdukPage() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Package className="w-6 h-6" /> Master Produk</h1>
-            <p className="text-sm text-slate-500">Nama &amp; satuan disinkron dari sales.app — stok/harga dikelola di sini</p>
+            <p className="text-sm text-slate-500">
+              {canManageProducts
+                ? 'Nama & satuan disinkron dari sales.app — stok & harga beli dikelola di sini'
+                : 'Lihat daftar produk — perubahan stok via penerimaan barang & release inventory'}
+            </p>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <Button variant="outline" onClick={syncFromVendor} disabled={syncing}>
-              <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Sync...' : 'Sync dari sales.app'}
-            </Button>
+            {canManageProducts && (
+              <>
+                <Button variant="outline" onClick={syncFromVendor} disabled={syncing}>
+                  <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+                  {syncing ? 'Sync...' : 'Sync dari sales.app'}
+                </Button>
+                <Button variant="outline" onClick={openMetaDialog}>
+                  <Settings2 className="w-4 h-4 mr-2" /> Grup &amp; Satuan
+                </Button>
+                <Button onClick={openNew} className="bg-orange-500 hover:bg-orange-600">
+                  <Plus className="w-4 h-4 mr-2" /> Produk Baru
+                </Button>
+              </>
+            )}
             <ListExportMenu onExport={exportData} disabled={loading} />
-            <Button variant="outline" onClick={openMetaDialog}>
-              <Settings2 className="w-4 h-4 mr-2" /> Grup &amp; Satuan
-            </Button>
-            <Button onClick={openNew} className="bg-orange-500 hover:bg-orange-600">
-              <Plus className="w-4 h-4 mr-2" /> Produk Baru
-            </Button>
           </div>
         </div>
 
-        <BulkSelectionBar
-          count={selection.count}
-          entityLabel="produk"
-          onDelete={bulkDelete}
-          onClear={selection.clear}
-          deleting={bulkDeleting}
-        />
+        {canManageProducts && (
+          <BulkSelectionBar
+            count={selection.count}
+            entityLabel="produk"
+            onDelete={bulkDelete}
+            onClear={selection.clear}
+            deleting={bulkDeleting}
+          />
+        )}
 
         <div className="flex gap-2 flex-wrap items-end">
           {isMaster && (
@@ -452,10 +457,40 @@ export default function ProdukPage() {
             />
           </div>
           <div className="text-sm text-slate-500 self-center pb-2">
-            Total: <span className="font-semibold text-slate-800">{products.length}</span> produk
+            Total: <span className="font-semibold text-slate-800">{filteredProducts.length}</span> produk
+            {!showAllGudang && products.length !== filteredProducts.length && (
+              <span className="text-xs text-slate-400 ml-1">dari {products.length}</span>
+            )}
             {isMaster && !filterTenantId && (
               <span className="text-xs text-slate-400 ml-1">(semua tenant)</span>
             )}
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-4 rounded-lg border bg-slate-50 px-3 py-2 self-center">
+            {WAREHOUSES.map((w) => (
+              <label
+                key={w.kode}
+                className="inline-flex items-center gap-2 cursor-pointer select-none"
+              >
+                <Checkbox
+                  id={`produk-gudang-${w.kode}`}
+                  checked={!!gudangFilter[w.kode]}
+                  onCheckedChange={(v) => toggleGudang(w.kode, v === true)}
+                  className={
+                    w.kode === 'GBASAH'
+                      ? 'border-blue-400 data-[state=checked]:bg-blue-600'
+                      : 'border-amber-500 data-[state=checked]:bg-amber-600'
+                  }
+                />
+                <Label
+                  htmlFor={`produk-gudang-${w.kode}`}
+                  className={`text-sm font-medium cursor-pointer ${
+                    w.kode === 'GBASAH' ? 'text-blue-800' : 'text-amber-800'
+                  }`}
+                >
+                  {w.nama}
+                </Label>
+              </label>
+            ))}
           </div>
         </div>
 
@@ -464,15 +499,17 @@ export default function ProdukPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-100 text-xs uppercase text-slate-600">
                 <tr>
-                  <th className="px-3 py-2 w-10">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={() => selection.toggleAll(products)}
-                      disabled={products.length === 0}
-                      aria-label="Pilih semua"
-                    />
-                  </th>
+                  {canManageProducts && (
+                    <th className="px-3 py-2 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={() => selection.toggleAll(filteredProducts)}
+                        disabled={filteredProducts.length === 0}
+                        aria-label="Pilih semua"
+                      />
+                    </th>
+                  )}
                   {isMaster && <th className="px-3 py-2 text-left">Tenant</th>}
                   <th className="px-3 py-2 text-left">Kode</th>
                   <th className="px-3 py-2 text-left">Barcode</th>
@@ -480,30 +517,32 @@ export default function ProdukPage() {
                   <th className="px-3 py-2 text-left">Grup</th>
                   <th className="px-3 py-2 text-left">Gudang</th>
                   <th className="px-3 py-2 text-center">Sat</th>
-                  <th className="px-3 py-2 text-right">Hrg Beli</th>
-                  <th className="px-3 py-2 text-right">Hrg Grosir</th>
-                  <th className="px-3 py-2 text-right">Hrg Ecer</th>
+                  <th className="px-3 py-2 text-right">Harga Beli</th>
                   <th className="px-3 py-2 text-right">Stok</th>
-                  <th className="px-3 py-2 text-center w-24">Aksi</th>
+                  {canManageProducts && <th className="px-3 py-2 text-center w-24">Aksi</th>}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
                   <tr><td colSpan={colSpan} className="text-center py-10 text-slate-400">Memuat...</td></tr>
                 )}
-                {!loading && products.length === 0 && (
-                  <tr><td colSpan={colSpan} className="text-center py-10 text-slate-400">Tidak ada produk</td></tr>
+                {!loading && filteredProducts.length === 0 && (
+                  <tr><td colSpan={colSpan} className="text-center py-10 text-slate-400">
+                    {products.length === 0 ? 'Tidak ada produk' : 'Tidak ada produk di gudang yang dipilih'}
+                  </td></tr>
                 )}
-                {products.map((p) => (
+                {filteredProducts.map((p) => (
                   <tr key={p.id} className={`border-t hover:bg-slate-50 ${selection.isSelected(p.id) ? 'bg-orange-50/50' : ''}`}>
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={selection.isSelected(p.id)}
-                        onChange={() => selection.toggle(p.id)}
-                        aria-label={`Pilih ${p.nama}`}
-                      />
-                    </td>
+                    {canManageProducts && (
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selection.isSelected(p.id)}
+                          onChange={() => selection.toggle(p.id)}
+                          aria-label={`Pilih ${p.nama}`}
+                        />
+                      </td>
+                    )}
                     {isMaster && (
                       <td className="px-3 py-2 text-xs">
                         <span className="px-2 py-0.5 bg-orange-50 text-orange-800 rounded font-mono">
@@ -530,20 +569,20 @@ export default function ProdukPage() {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-center text-xs uppercase">{p.satuan}</td>
-                    <td className="px-3 py-2 text-right text-slate-500">{formatIDR(p.hargaBeli)}</td>
-                    <td className="px-3 py-2 text-right">{formatIDR(p.hargaGrosir)}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{formatIDR(p.hargaEcer)}</td>
+                    <td className="px-3 py-2 text-right font-medium">{formatIDR(p.hargaBeli)}</td>
                     <td className="px-3 py-2 text-right">
                       <span className={`font-semibold ${p.stok <= (p.minStok || 0) ? 'text-red-600' : ''}`}>{p.stok}</span>
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="flex justify-center gap-1">
-                        <button type="button" onClick={() => openEdit(p)} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded"><Pencil className="w-4 h-4" /></button>
-                        {!isVendorSynced(p) && (
-                          <button type="button" onClick={() => remove(p.id)} className="p-1.5 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
-                        )}
-                      </div>
-                    </td>
+                    {canManageProducts && (
+                      <td className="px-3 py-2">
+                        <div className="flex justify-center gap-1">
+                          <button type="button" onClick={() => openEdit(p)} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded"><Pencil className="w-4 h-4" /></button>
+                          {!isVendorSynced(p) && (
+                            <button type="button" onClick={() => remove(p.id)} className="p-1.5 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -553,10 +592,10 @@ export default function ProdukPage() {
       </div>
 
       <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           {editing && isVendorSynced(editing) && (
-            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2 mb-2">
-              Kode, nama, dan satuan dikelola di sales.app. Di inventory hanya stok &amp; harga yang bisa diubah.
+            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+              Kode, nama, dan satuan dikelola di sales.app. Di inventory hanya stok &amp; harga beli yang bisa diubah.
             </p>
           )}
           <DialogHeader>
@@ -589,13 +628,38 @@ export default function ProdukPage() {
                 />
               </div>
             )}
-            <div><Label>Kode *</Label><Input value={form.kode} onChange={(e) => setForm({ ...form, kode: e.target.value })} disabled={!!editing || (editing && isVendorSynced(editing))} /></div>
-            <div><Label>Barcode</Label><Input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} disabled={editing && isVendorSynced(editing)} /></div>
-            <div className="col-span-2"><Label>Nama Produk *</Label><Input value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} disabled={editing && isVendorSynced(editing)} /></div>
+
+            <FormSectionTitle>Identitas Produk</FormSectionTitle>
+            <div>
+              <Label>Kode *</Label>
+              <Input
+                value={form.kode}
+                onChange={(e) => setForm({ ...form, kode: e.target.value })}
+                disabled={!!editing || (editing && isVendorSynced(editing))}
+                className="font-mono"
+              />
+            </div>
+            <div>
+              <Label>Barcode</Label>
+              <Input
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                disabled={editing && isVendorSynced(editing)}
+                className="font-mono"
+              />
+            </div>
+            <div className="col-span-2">
+              <Label>Nama Produk *</Label>
+              <Input
+                value={form.nama}
+                onChange={(e) => setForm({ ...form, nama: e.target.value })}
+                disabled={editing && isVendorSynced(editing)}
+              />
+            </div>
             <div>
               <Label>Grup *</Label>
               <select
-                className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+                className={selectClass}
                 value={form.grup}
                 onChange={(e) => setForm({ ...form, grup: e.target.value })}
                 disabled={grupList.length === 0 || (editing && isVendorSynced(editing))}
@@ -612,7 +676,7 @@ export default function ProdukPage() {
             <div>
               <Label>Satuan *</Label>
               <select
-                className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+                className={selectClass}
                 value={form.satuan}
                 onChange={(e) => setForm({ ...form, satuan: e.target.value })}
                 disabled={satuanList.length === 0 || (editing && isVendorSynced(editing))}
@@ -626,43 +690,56 @@ export default function ProdukPage() {
                 )}
               </select>
             </div>
+
+            <FormSectionTitle>Gudang Penyimpanan</FormSectionTitle>
             <div className="col-span-2">
-              <Label>Gudang Penyimpanan *</Label>
-              <select
-                className="w-full border rounded-md px-3 py-2 text-sm bg-white"
-                value={form.gudangKode || 'GKERING'}
-                onChange={(e) => setForm({ ...form, gudangKode: e.target.value })}
-              >
-                {WAREHOUSES.map((w) => (
-                  <option key={w.kode} value={w.kode}>{w.nama} — item tidak bisa disimpan di kedua gudang</option>
-                ))}
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1">Setiap produk hanya di Gudang Kering atau Gudang Basah.</p>
+              <WarehousePicker
+                value={form.gudangKode}
+                onChange={(kode) => setForm({ ...form, gudangKode: kode })}
+              />
+              <p className="text-[11px] text-slate-400 mt-2">Satu produk hanya disimpan di satu gudang.</p>
             </div>
-            <div className="col-span-2 md:col-span-1"><Label>Harga Beli</Label><Input type="number" min={0} value={form.hargaBeli} onChange={(e) => setForm({ ...form, hargaBeli: parseInt(e.target.value || '0', 10) })} /></div>
-            <PriceWithMargin
-              label="Harga Spesial"
-              hargaBeli={form.hargaBeli}
-              value={form.hargaSpesial}
-              onChange={(v) => setForm({ ...form, hargaSpesial: v })}
-            />
-            <PriceWithMargin
-              label="Harga Grosir"
-              hargaBeli={form.hargaBeli}
-              value={form.hargaGrosir}
-              onChange={(v) => setForm({ ...form, hargaGrosir: v })}
-            />
-            <PriceWithMargin
-              label="Harga Ecer"
-              required
-              hargaBeli={form.hargaBeli}
-              value={form.hargaEcer}
-              onChange={(v) => setForm({ ...form, hargaEcer: v })}
-            />
-            <div><Label>Stok</Label><Input type="number" value={form.stok} onChange={(e) => setForm({ ...form, stok: parseFloat(e.target.value || '0') })} /></div>
-            <div><Label>Stok Minimum</Label><Input type="number" value={form.minStok} onChange={(e) => setForm({ ...form, minStok: parseFloat(e.target.value || '0') })} /></div>
+
+            <FormSectionTitle>Harga Beli &amp; Stok</FormSectionTitle>
+            <div>
+              <Label>Harga Beli</Label>
+              <Input
+                type="number"
+                min={0}
+                value={form.hargaBeli}
+                onChange={(e) => setForm({ ...form, hargaBeli: parseInt(e.target.value || '0', 10) })}
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Harga pembelian dari vendor (sales.app).</p>
+            </div>
+            <div>
+              <Label>Stok</Label>
+              {editing ? (
+                <>
+                  <div className="border rounded-md px-3 py-2 bg-slate-50 font-mono text-sm">{form.stok}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Ubah stok lewat menu <strong>Stok → Penyesuaian</strong> (stock opname). GRN &amp; release juga memperbarui stok otomatis.
+                  </p>
+                </>
+              ) : (
+                <Input
+                  type="number"
+                  min={0}
+                  value={form.stok}
+                  onChange={(e) => setForm({ ...form, stok: parseFloat(e.target.value || '0') })}
+                />
+              )}
+            </div>
+            <div>
+              <Label>Stok Minimum</Label>
+              <Input
+                type="number"
+                min={0}
+                value={form.minStok}
+                onChange={(e) => setForm({ ...form, minStok: parseFloat(e.target.value || '0') })}
+              />
+            </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
             <Button onClick={save} className="bg-orange-500 hover:bg-orange-600">Simpan</Button>
           </DialogFooter>

@@ -19,12 +19,12 @@ async function handleRoute(request, context) {
   const url = new URL(request.url);
 
   try {
-    const db = await connectToMongo();
-
-    // Health check — tanpa bootstrap DB (respons instan).
+    // Health check — tanpa MongoDB (respons instan, sama seperti sales.app).
     if ((route === '/' || route === '/root') && method === 'GET') {
       return ok({ message: 'Inventory API ready' });
     }
+
+    const db = await connectToMongo();
 
     const isPublic = isPublicRoute(method, route);
     if (!isPublic) {

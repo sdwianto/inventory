@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { startOfMonth } from 'date-fns';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -15,9 +15,10 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  CalendarDays, ChevronDown, ChevronRight, Package, Plus, Send, ShoppingBag, Trash2,
+  CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Package, Pencil, Plus, RefreshCw, Send, ShoppingBag, Trash2, XCircle,
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
+import { getUser } from '@/lib/auth-client';
 import { defaultEstimasiHarga, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
 import { cn } from '@/lib/utils';
 import { vendorDisplayName } from '@/lib/vendor-display';
@@ -34,12 +35,28 @@ function toDateInputValue(d) {
   return `${y}-${m}-${day}`;
 }
 
+function poCreatorLabel(po) {
+  return po?.createdBy?.userName
+    || po?.createdBy?.name
+    || po?.createdBy?.email
+    || po?.requestedBy?.userName
+    || 'Tidak tercatat';
+}
+
+const CAN_CREATE = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+const CAN_REQUEST = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+const CAN_DIRECT_SUBMIT = ['ADMIN', 'MASTER'];
+const CAN_APPROVE = ['ADMIN', 'MASTER'];
+const AUTO_VENDOR_SYNC_MS = 45_000;
+
 export default function CustomerPoPage() {
+  const [user, setUser] = useState(null);
   const [list, setList] = useState([]);
   const [products, setProducts] = useState([]);
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingPo, setEditingPo] = useState(null);
   const [createDate, setCreateDate] = useState(null);
   const emptyLine = () => ({ localStokId: '', qty: 1, estimasiHarga: '', estimasiManual: false });
   const [lines, setLines] = useState([emptyLine()]);
@@ -48,14 +65,54 @@ export default function CustomerPoPage() {
   const [submitting, setSubmitting] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [showAll, setShowAll] = useState(false);
+  const autoSyncBusy = useRef(false);
 
   const load = () => fetch('/api/customer-purchase-orders').then((r) => r.json()).then(setList);
   useEffect(() => {
+    setUser(getUser());
     load();
     fetch('/api/products?limit=500&withWarehouseStock=1').then((r) => r.json()).then(setProducts);
   }, []);
 
+  const canCreate = CAN_CREATE.includes(user?.role);
+  const canRequest = CAN_REQUEST.includes(user?.role);
+  const canDirectSubmit = CAN_DIRECT_SUBMIT.includes(user?.role);
+  const canApprove = CAN_APPROVE.includes(user?.role);
+
   const synced = products.filter((p) => p.syncSource === 'sales.app');
+
+  const pendingVendorSyncCount = useMemo(
+    () => (Array.isArray(list) ? list : []).filter((p) => p.status === 'APPROVED' && p.vendorSyncPending !== false).length,
+    [list],
+  );
+
+  const runAutoVendorSync = useCallback(async () => {
+    if (autoSyncBusy.current) return;
+    autoSyncBusy.current = true;
+    try {
+      const res = await fetch('/api/customer-purchase-orders/sync-pending', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) return;
+      if (data.synced?.length > 0) {
+        await load();
+        const labels = data.synced.map((s) => s.noPO).join(', ');
+        toast.success(`${data.synced.length} PO terkirim otomatis ke vendor`, {
+          description: labels,
+        });
+      }
+    } catch {
+      /* sales.app belum online — coba lagi nanti */
+    } finally {
+      autoSyncBusy.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || pendingVendorSyncCount === 0) return undefined;
+    runAutoVendorSync();
+    const timer = setInterval(runAutoVendorSync, AUTO_VENDOR_SYNC_MS);
+    return () => clearInterval(timer);
+  }, [user, pendingVendorSyncCount, runAutoVendorSync]);
 
   const filteredList = useMemo(() => {
     const rows = Array.isArray(list) ? list : [];
@@ -66,11 +123,54 @@ export default function CustomerPoPage() {
 
   const openCreate = (date) => {
     const d = date || selectedDate || new Date();
+    setEditingPo(null);
     setCreateDate(d);
     setLines([emptyLine()]);
     setCatatan('');
     setCreateOpen(true);
   };
+
+  const openEdit = (po) => {
+    setEditingPo(po);
+    setCreateDate(getPoArrivalDate(po) || new Date());
+    setLines((po.items || []).length
+      ? (po.items || []).map((it) => ({
+        localStokId: it.localStokId || '',
+        qty: it.qty,
+        estimasiHarga: it.estimasiHarga || '',
+        estimasiManual: true,
+      }))
+      : [emptyLine()]);
+    setCatatan(po.catatan || '');
+    setCreateOpen(true);
+  };
+
+  const canEditPo = (po) => {
+    if (!po || !['DRAFT', 'PENDING_APPROVAL'].includes(po.status)) return false;
+    if (canApprove) return true;
+    if (po.status === 'DRAFT' && ['SUPERVISOR', 'GUDANG'].includes(user?.role)) {
+      return po.createdBy?.userId === user?.id;
+    }
+    return false;
+  };
+
+  const buildItemsPayload = () => lines.map((l) => {
+    const p = products.find((x) => x.id === l.localStokId);
+    if (!p || !l.qty) return null;
+    if (!p.vendorStokId && p.syncSource !== 'sales.app') return null;
+    return {
+      localStokId: p.id,
+      vendorStokId: p.vendorStokId,
+      vendorTenantId: p.vendorTenantId,
+      vendorKode: p.kode,
+      kode: p.kode,
+      nama: p.nama,
+      satuan: p.satuan,
+      qty: parseFloat(l.qty) || 0,
+      estimasiHarga: parseEstimasiHargaInput(l.estimasiHarga),
+      hargaBeliReferensi: parseInt(p.hargaBeli || 0, 10),
+    };
+  }).filter(Boolean);
 
   const handleSelectDate = (date) => {
     setSelectedDate(date);
@@ -108,23 +208,7 @@ export default function CustomerPoPage() {
   }, [lineDetails]);
 
   const createPo = async () => {
-    const items = lines.map((l) => {
-      const p = products.find((x) => x.id === l.localStokId);
-      if (!p || !l.qty) return null;
-      if (!p.vendorStokId && p.syncSource !== 'sales.app') return null;
-      return {
-        localStokId: p.id,
-        vendorStokId: p.vendorStokId,
-        vendorTenantId: p.vendorTenantId,
-        vendorKode: p.kode,
-        kode: p.kode,
-        nama: p.nama,
-        satuan: p.satuan,
-        qty: parseFloat(l.qty) || 0,
-        estimasiHarga: parseEstimasiHargaInput(l.estimasiHarga),
-        hargaBeliReferensi: parseInt(p.hargaBeli || 0, 10),
-      };
-    }).filter(Boolean);
+    const items = buildItemsPayload();
     if (!items.length) {
       toast.error('Pilih produk yang sudah di-sync dari sales.app');
       return;
@@ -148,6 +232,7 @@ export default function CustomerPoPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(`PO ${data.noPO} dibuat untuk ${formatDate(createDate)}`);
       setCreateOpen(false);
+      setEditingPo(null);
       setSelectedDate(createDate);
       setShowAll(false);
       setExpandedId(data.id);
@@ -156,17 +241,130 @@ export default function CustomerPoPage() {
     setSaving(false);
   };
 
+  const saveEditPo = async () => {
+    const items = buildItemsPayload();
+    if (!items.length) {
+      toast.error('Pilih produk yang sudah di-sync dari sales.app');
+      return;
+    }
+    if (!createDate) {
+      toast.error('Tanggal kedatangan wajib');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/customer-purchase-orders/${editingPo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items,
+          catatan,
+          tanggalKedatangan: toDateInputValue(createDate),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan');
+      toast.success(`PO ${data.noPO} diperbarui`);
+      setCreateOpen(false);
+      setEditingPo(null);
+      setExpandedId(data.id);
+      load();
+    } catch (e) { toast.error(e.message); }
+    setSaving(false);
+  };
+
+  const requestApproval = async (id) => {
+    setSubmitting(id);
+    const res = await fetch(`/api/customer-purchase-orders/${id}/request-approval`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) toast.error(data.error || 'Gagal mengajukan');
+    else toast.success('PO diajukan — menunggu persetujuan Admin');
+    load();
+    setSubmitting('');
+  };
+
+  const approvePo = async (id) => {
+    setSubmitting(id);
+    try {
+      const res = await fetch(`/api/customer-purchase-orders/${id}/approve`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Gagal menyetujui PO');
+        return;
+      }
+      if (data.vendorSynced === false || data.status === 'APPROVED') {
+        toast.success('PO disetujui', {
+          description: data.vendorSyncError
+            ? `Kirim ke vendor ditunda: ${data.vendorSyncError}`
+            : 'Menunggu pengiriman ke sales.app',
+        });
+      } else if (data.vendorSubmissions?.length > 1) {
+        toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s) => s.vendorNoSO).join(', ')}`);
+      } else {
+        toast.success(`Disetujui & dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
+      }
+      load();
+    } catch {
+      toast.error('Gagal menyetujui — tidak dapat menghubungi server');
+    }
+    setSubmitting('');
+  };
+
+  const syncVendorPo = async (id) => {
+    setSubmitting(id);
+    try {
+      const res = await fetch(`/api/customer-purchase-orders/${id}/sync-vendor`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Gagal kirim ke sales.app');
+        return;
+      }
+      toast.success(`Dikirim ke vendor → SO ${data.vendorNoSO || data.vendorSoId || ''}`);
+      load();
+    } catch {
+      toast.error('Gagal kirim — tidak dapat menghubungi server');
+    }
+    setSubmitting('');
+  };
+
+  const rejectPo = async (id) => {
+    setSubmitting(id);
+    const res = await fetch(`/api/customer-purchase-orders/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Ditolak admin' }),
+    });
+    const data = await res.json();
+    if (!res.ok) toast.error(data.error || 'Gagal menolak');
+    else toast.success('PO ditolak');
+    load();
+    setSubmitting('');
+  };
+
   const submitPo = async (id) => {
     setSubmitting(id);
-    const res = await fetch(`/api/customer-purchase-orders/${id}/submit`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) toast.error(data.error || 'Gagal kirim ke sales.app');
-    else if (data.vendorSubmissions?.length > 1) {
-      toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s) => s.vendorNoSO).join(', ')}`);
-    } else {
-      toast.success(`Dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
+    try {
+      const res = await fetch(`/api/customer-purchase-orders/${id}/submit`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Gagal kirim ke sales.app');
+        return;
+      }
+      if (data.vendorSynced === false || data.status === 'APPROVED') {
+        toast.success('PO dikirim (disetujui)', {
+          description: data.vendorSyncError
+            ? `Sinkron vendor ditunda: ${data.vendorSyncError}`
+            : 'Menunggu sales.app',
+        });
+      } else if (data.vendorSubmissions?.length > 1) {
+        toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s) => s.vendorNoSO).join(', ')}`);
+      } else {
+        toast.success(`Dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
+      }
+      load();
+    } catch {
+      toast.error('Gagal kirim — tidak dapat menghubungi server');
     }
-    load();
     setSubmitting('');
   };
 
@@ -183,12 +381,20 @@ export default function CustomerPoPage() {
               <ShoppingBag className="w-6 h-6" /> PO ke Vendor
             </h1>
             <p className="text-sm text-slate-500">
-              Jadwalkan permintaan kedatangan barang per tanggal → kirim ke sales.app
+              Staff gudang / supervisor buat PO → admin setujui → kirim ke vendor otomatis saat sales.app online
             </p>
+            {pendingVendorSyncCount > 0 && (
+              <p className="text-xs text-emerald-700 mt-1 flex items-center gap-1">
+                <RefreshCw className="w-3 h-3" />
+                {pendingVendorSyncCount} PO menunggu — sinkron otomatis setiap ±{Math.round(AUTO_VENDOR_SYNC_MS / 1000)} detik
+              </p>
+            )}
           </div>
-          <Button onClick={() => openCreate(selectedDate || new Date())} className="bg-orange-500 hover:bg-orange-600">
-            <Plus className="w-4 h-4 mr-1" /> Buat PO
-          </Button>
+          {canCreate && (
+            <Button onClick={() => openCreate(selectedDate || new Date())} className="bg-orange-500 hover:bg-orange-600">
+              <Plus className="w-4 h-4 mr-1" /> Buat PO
+            </Button>
+          )}
         </div>
         <OperationalScopeBar />
 
@@ -222,7 +428,7 @@ export default function CustomerPoPage() {
                     {showAll ? 'Filter tanggal' : 'Lihat semua'}
                   </Button>
                 )}
-                {selectedDate && (
+                {selectedDate && canCreate && (
                   <Button size="sm" onClick={() => openCreate(selectedDate)} className="bg-orange-500 hover:bg-orange-600">
                     <Plus className="w-3 h-3 mr-1" /> PO baru
                   </Button>
@@ -260,11 +466,39 @@ export default function CustomerPoPage() {
                             </div>
                             <div className="text-xs text-slate-500 mt-0.5">
                               Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(po.tanggal)}
+                              {poCreatorLabel(po) !== 'Tidak tercatat' && ` · oleh ${poCreatorLabel(po)}`}
                               {po.vendorNoSO && ` · SO: ${po.vendorNoSO}`}
                             </div>
                           </div>
                         </button>
-                        {po.status === 'DRAFT' && (
+                        {canEditPo(po) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={() => openEdit(po)}
+                          >
+                            <Pencil className="w-3 h-3 mr-1" />
+                            Edit
+                          </Button>
+                        )}
+                        {po.status === 'DRAFT' && canRequest && (
+                          ['SUPERVISOR', 'GUDANG'].includes(user?.role)
+                            ? po.createdBy?.userId === user?.id
+                            : true
+                        ) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={() => requestApproval(po.id)}
+                            disabled={submitting === po.id}
+                          >
+                            <Send className="w-3 h-3 mr-1" />
+                            {submitting === po.id ? '...' : 'Ajukan'}
+                          </Button>
+                        )}
+                        {po.status === 'DRAFT' && canDirectSubmit && (
                           <Button
                             size="sm"
                             className="shrink-0"
@@ -275,11 +509,86 @@ export default function CustomerPoPage() {
                             {submitting === po.id ? '...' : 'Kirim'}
                           </Button>
                         )}
+                        {po.status === 'APPROVED' && canApprove && po.vendorSyncPending && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0 border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+                            onClick={() => syncVendorPo(po.id)}
+                            disabled={submitting === po.id}
+                          >
+                            <RefreshCw className={`w-3 h-3 mr-1 ${submitting === po.id ? 'animate-spin' : ''}`} />
+                            {submitting === po.id ? '...' : 'Kirim ke vendor'}
+                          </Button>
+                        )}
+                        {po.status === 'PENDING_APPROVAL' && canApprove && (
+                          <>
+                            <Button
+                              size="sm"
+                              className="shrink-0 bg-green-600 hover:bg-green-700"
+                              onClick={() => approvePo(po.id)}
+                              disabled={submitting === po.id}
+                            >
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              {submitting === po.id ? '...' : 'Setujui'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="shrink-0"
+                              onClick={() => rejectPo(po.id)}
+                              disabled={submitting === po.id}
+                            >
+                              <XCircle className="w-3 h-3" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                       {open && (
                         <div className="border-t bg-slate-50/50 px-3 py-2 text-sm">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 mb-2 pb-2 border-b border-slate-100">
+                            <span>
+                              <span className="font-medium text-slate-700">Dibuat oleh:</span>{' '}
+                              {poCreatorLabel(po)}
+                            </span>
+                            <span>
+                              <span className="font-medium text-slate-700">Waktu buat:</span>{' '}
+                              {formatDateTime(po.createdAt || po.tanggal)}
+                            </span>
+                            {po.requestedAt && (
+                              <span>
+                                <span className="font-medium text-slate-700">Diajukan:</span>{' '}
+                                {formatDateTime(po.requestedAt)}
+                              </span>
+                            )}
+                            {po.approvedBy?.userName && (
+                              <span>
+                                <span className="font-medium text-slate-700">Disetujui:</span>{' '}
+                                {po.approvedBy.userName}
+                                {po.approvedAt && ` · ${formatDateTime(po.approvedAt)}`}
+                              </span>
+                            )}
+                            {po.lastEditedBy?.userName && (
+                              <span>
+                                <span className="font-medium text-slate-700">Terakhir diedit:</span>{' '}
+                                {po.lastEditedBy.userName}
+                                {po.lastEditedAt && ` · ${formatDateTime(po.lastEditedAt)}`}
+                              </span>
+                            )}
+                          </div>
+                          {po.vendorSyncError && po.status === 'APPROVED' && (
+                            <p className="text-xs text-amber-700 mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
+                              <span className="font-medium">Antrian kirim ke vendor:</span> {po.vendorSyncError}
+                              <span className="block text-[10px] text-amber-600 mt-0.5">
+                                Akan dikirim otomatis saat sales.app online (atau klik Kirim ke vendor)
+                              </span>
+                            </p>
+                          )}
                           {po.catatan && (
                             <p className="text-xs text-slate-600 mb-2"><span className="font-medium">Catatan:</span> {po.catatan}</p>
+                          )}
+                          {po.rejectReason && (
+                            <p className="text-xs text-red-600 mb-2"><span className="font-medium">Alasan ditolak:</span> {po.rejectReason}</p>
                           )}
                           <table className="w-full text-xs">
                             <thead>
@@ -322,15 +631,20 @@ export default function CustomerPoPage() {
         </div>
       </div>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={(open) => {
+        setCreateOpen(open);
+        if (!open) setEditingPo(null);
+      }}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package className="w-5 h-5 text-orange-500" />
-              Buat PO Baru
+              {editingPo ? `Edit PO ${editingPo.noPO}` : 'Buat PO Baru'}
             </DialogTitle>
             <DialogDescription>
-              Permintaan kedatangan barang: {createDate ? formatArrivalLabel(createDate) : '—'}
+              {editingPo
+                ? `Perbarui detail PO sebelum ${editingPo.status === 'PENDING_APPROVAL' ? 'disetujui' : 'diajukan/dikirim'}`
+                : `Permintaan kedatangan barang: ${createDate ? formatArrivalLabel(createDate) : '—'}`}
             </DialogDescription>
           </DialogHeader>
 
@@ -471,9 +785,13 @@ export default function CustomerPoPage() {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" type="button" onClick={() => setCreateOpen(false)}>Batal</Button>
-            <Button onClick={createPo} disabled={saving} className="bg-orange-500 hover:bg-orange-600">
-              {saving ? 'Menyimpan...' : 'Simpan PO (DRAFT)'}
+            <Button variant="outline" type="button" onClick={() => { setCreateOpen(false); setEditingPo(null); }}>Batal</Button>
+            <Button
+              onClick={editingPo ? saveEditPo : createPo}
+              disabled={saving}
+              className="bg-orange-500 hover:bg-orange-600"
+            >
+              {saving ? 'Menyimpan...' : editingPo ? 'Simpan Perubahan' : 'Simpan PO (DRAFT)'}
             </Button>
           </DialogFooter>
         </DialogContent>

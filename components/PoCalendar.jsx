@@ -74,7 +74,7 @@ export default function PoCalendar({
   const poByDate = useMemo(() => groupPosByArrivalDate(pos), [pos]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 overflow-hidden">
       <DayPicker
         mode="single"
         locale={localeId}
@@ -86,13 +86,13 @@ export default function PoCalendar({
         className="w-full p-0"
         classNames={{
           root: 'w-full',
-          months: 'w-full',
-          month: 'w-full space-y-2',
-          month_caption: 'flex justify-center items-center h-9 relative',
+          months: 'relative w-full',
+          month: 'relative w-full space-y-2',
+          month_caption: 'flex h-9 w-full items-center justify-center px-10',
           caption_label: 'text-base font-semibold capitalize',
-          nav: 'flex items-center gap-1',
-          button_previous: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 absolute left-0'),
-          button_next: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 absolute right-0'),
+          nav: 'absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-between',
+          button_previous: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 shrink-0'),
+          button_next: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 shrink-0'),
           month_grid: 'w-full',
           weekdays: 'flex mb-1',
           weekday: 'flex-1 text-center text-[11px] font-medium text-slate-500 uppercase',
