@@ -13,8 +13,6 @@ import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-  ChartLegend,
-  ChartLegendContent,
 } from '@/components/ui/chart';
 import { formatNumber } from '@/lib/format';
 import { warehouseName } from '@/lib/warehouses-client';
@@ -25,16 +23,35 @@ import {
 } from '@/lib/stock-trend-chart';
 
 const KERING_CONFIG = {
-  masuk: { label: 'Masuk (qty)', color: '#16a34a' },
-  keluar: { label: 'Keluar (qty)', color: '#dc2626' },
-  saldo: { label: 'Saldo akumulasi', color: '#b45309' },
+  masuk: { label: 'Masuk', color: '#16a34a' },
+  keluar: { label: 'Keluar', color: '#dc2626' },
+  saldo: { label: 'Saldo', color: '#b45309' },
 };
 
 const BASAH_CONFIG = {
-  masuk: { label: 'Masuk (qty)', color: '#059669' },
-  keluar: { label: 'Keluar (qty)', color: '#e11d48' },
-  saldo: { label: 'Saldo akumulasi', color: '#0284c7' },
+  masuk: { label: 'Masuk', color: '#059669' },
+  keluar: { label: 'Keluar', color: '#e11d48' },
+  saldo: { label: 'Saldo', color: '#0284c7' },
 };
+
+const LEGEND_ORDER = ['saldo', 'masuk', 'keluar'];
+
+function ChartSeriesLegend({ config }) {
+  return (
+    <div className="flex flex-wrap justify-center gap-x-5 gap-y-1.5 pt-3 text-xs text-slate-600">
+      {LEGEND_ORDER.map((key) => (
+        <span key={key} className="inline-flex items-center gap-1.5">
+          <span
+            className="w-2.5 h-2.5 rounded-sm shrink-0"
+            style={{ backgroundColor: config[key]?.color }}
+            aria-hidden
+          />
+          {config[key]?.label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function formatTooltipDate(payload) {
   const p = payload?.[0]?.payload;
@@ -95,91 +112,93 @@ function WarehouseComposedChart({
           Belum ada pergerakan di periode ini
         </div>
       ) : (
-        <ChartContainer config={config} className="h-[300px] w-full aspect-auto">
-          <ComposedChart data={chartData} margin={{ top: 8, right: 48, left: 4, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-            <XAxis
-              dataKey="label"
-              tickLine={false}
-              axisLine={false}
-              tick={{ fontSize: 10, fill: '#64748b' }}
-              interval={chartData.length > 20 ? 'preserveStartEnd' : 0}
-              minTickGap={mode === 'active' ? 8 : 28}
-              angle={chartData.length > 8 ? -25 : 0}
-              textAnchor={chartData.length > 8 ? 'end' : 'middle'}
-              height={chartData.length > 8 ? 52 : 30}
-            />
-            <YAxis
-              yAxisId="saldo"
-              tickLine={false}
-              axisLine={false}
-              tick={{ fontSize: 10, fill: '#64748b' }}
-              width={44}
-              label={{
-                value: 'Saldo',
-                angle: -90,
-                position: 'insideLeft',
-                style: { fontSize: 9, fill: '#94a3b8' },
-              }}
-            />
-            <YAxis
-              yAxisId="flow"
-              orientation="right"
-              tickLine={false}
-              axisLine={false}
-              tick={{ fontSize: 10, fill: '#64748b' }}
-              width={44}
-              label={{
-                value: 'Masuk/Keluar',
-                angle: 90,
-                position: 'insideRight',
-                style: { fontSize: 9, fill: '#94a3b8' },
-              }}
-            />
-            <ChartTooltip
-              content={
-                <ChartTooltipContent
-                  labelFormatter={(_, payload) => formatTooltipDate(payload)}
-                  formatter={(value, name) => {
-                    const labels = { masuk: 'Masuk', keluar: 'Keluar', saldo: 'Saldo akumulasi' };
-                    return [formatNumber(value), labels[name] || name];
-                  }}
-                />
-              }
-            />
-            <ChartLegend content={<ChartLegendContent />} />
-            <Area
-              yAxisId="saldo"
-              type="monotone"
-              dataKey={saldoKey}
-              name="saldo"
-              fill="var(--color-saldo)"
-              fillOpacity={0.15}
-              stroke="var(--color-saldo)"
-              strokeWidth={2.5}
-              dot={chartData.length <= 14}
-              activeDot={{ r: 5 }}
-            />
-            <Bar
-              yAxisId="flow"
-              dataKey={masukKey}
-              name="masuk"
-              fill="var(--color-masuk)"
-              radius={[3, 3, 0, 0]}
-              barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
-              maxBarSize={20}
-            />
-            <Bar
-              yAxisId="flow"
-              dataKey={keluarKey}
-              name="keluar"
-              fill="var(--color-keluar)"
-              radius={[3, 3, 0, 0]}
-              barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
-              maxBarSize={20}
-            />
-          </ComposedChart>
-        </ChartContainer>
+        <>
+          <ChartContainer config={config} className="h-[300px] w-full aspect-auto">
+            <ComposedChart data={chartData} margin={{ top: 8, right: 48, left: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 10, fill: '#64748b' }}
+                interval={chartData.length > 20 ? 'preserveStartEnd' : 0}
+                minTickGap={mode === 'active' ? 8 : 28}
+                angle={chartData.length > 8 ? -25 : 0}
+                textAnchor={chartData.length > 8 ? 'end' : 'middle'}
+                height={chartData.length > 8 ? 52 : 30}
+              />
+              <YAxis
+                yAxisId="saldo"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 10, fill: '#64748b' }}
+                width={44}
+                label={{
+                  value: 'Saldo',
+                  angle: -90,
+                  position: 'insideLeft',
+                  style: { fontSize: 9, fill: '#94a3b8' },
+                }}
+              />
+              <YAxis
+                yAxisId="flow"
+                orientation="right"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 10, fill: '#64748b' }}
+                width={44}
+                label={{
+                  value: 'Masuk/Keluar',
+                  angle: 90,
+                  position: 'insideRight',
+                  style: { fontSize: 9, fill: '#94a3b8' },
+                }}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(_, payload) => formatTooltipDate(payload)}
+                    formatter={(value, name) => {
+                      const labels = { masuk: 'Masuk', keluar: 'Keluar', saldo: 'Saldo akumulasi' };
+                      return [formatNumber(value), labels[name] || name];
+                    }}
+                  />
+                }
+              />
+              <Area
+                yAxisId="saldo"
+                type="monotone"
+                dataKey={saldoKey}
+                name="saldo"
+                fill="var(--color-saldo)"
+                fillOpacity={0.15}
+                stroke="var(--color-saldo)"
+                strokeWidth={2.5}
+                dot={chartData.length <= 14}
+                activeDot={{ r: 5 }}
+              />
+              <Bar
+                yAxisId="flow"
+                dataKey={masukKey}
+                name="masuk"
+                fill="var(--color-masuk)"
+                radius={[3, 3, 0, 0]}
+                barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
+                maxBarSize={20}
+              />
+              <Bar
+                yAxisId="flow"
+                dataKey={keluarKey}
+                name="keluar"
+                fill="var(--color-keluar)"
+                radius={[3, 3, 0, 0]}
+                barSize={chartData.length > 30 ? 6 : chartData.length > 14 ? 10 : 16}
+                maxBarSize={20}
+              />
+            </ComposedChart>
+          </ChartContainer>
+          <ChartSeriesLegend config={config} />
+        </>
       )}
     </div>
   );

@@ -126,8 +126,44 @@ body {
   min-height: var(--receipt-feed-mm, 14mm);
 }
 
+/* Salinan faktur A4 di body — disembunyikan di layar, hanya tampil saat print */
+.doc-print-host {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 210mm;
+  max-width: 210mm;
+  pointer-events: none;
+  opacity: 0;
+  z-index: -1;
+}
+
+/* Lebar kolom tabel faktur (screen + print) */
+.vendor-invoice-items-table {
+  table-layout: fixed;
+}
+.vendor-invoice-items-table .vi-col-no { width: 4%; }
+.vendor-invoice-items-table .vi-col-kode { width: 11%; }
+.vendor-invoice-items-table .vi-col-nama { width: 27%; }
+.vendor-invoice-items-table .vi-col-sat { width: 7%; }
+.vendor-invoice-items-table .vi-col-qty { width: 7%; }
+.vendor-invoice-items-table .vi-col-harga { width: 15%; }
+.vendor-invoice-items-table .vi-col-diskon { width: 12%; }
+.vendor-invoice-items-table .vi-col-jumlah { width: 17%; }
+
+/* Faktur A4 — lebar konten dimaksimalkan, margin tepi tipis tapi tetap ada */
+.vendor-invoice-sheet {
+  --vi-sheet-max: 186mm;
+  --vi-sheet-pad-x: 4mm;
+  width: min(100%, var(--vi-sheet-max));
+  max-width: var(--vi-sheet-max);
+  margin-inline: auto;
+  padding-inline: var(--vi-sheet-pad-x);
+  box-sizing: border-box;
+}
+
 @media print {
-  body * {
+  body:not(.doc-print-active) * {
     visibility: hidden;
   }
   .receipt-print,
@@ -196,13 +232,139 @@ body {
   .no-print {
     display: none !important;
   }
-  @page {
-    margin: 0;
-    size: var(--receipt-paper-mm, 80mm) auto;
+  html:not([data-doc-print='a4']) {
+    @page {
+      margin: 0;
+      size: var(--receipt-paper-mm, 80mm) auto;
+    }
   }
-  html[data-receipt-paper='58'] {
+  html[data-receipt-paper='58']:not([data-doc-print='a4']) {
     @page {
       size: 58mm auto;
+    }
+  }
+
+  /* Cetak dokumen A4 (faktur tagihan vendor) — render via PrintPortal di document.body */
+  html[data-doc-print='a4'],
+  html[data-doc-print='a4'] body {
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  body.doc-print-active * {
+    visibility: hidden !important;
+  }
+  body.doc-print-active .doc-print-host,
+  body.doc-print-active .doc-print-host * {
+    visibility: visible !important;
+  }
+  body.doc-print-active .doc-print-host {
+    display: block !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 8mm 0 10mm !important;
+    background: #fff;
+    opacity: 1 !important;
+    z-index: auto !important;
+    pointer-events: auto !important;
+    overflow: visible !important;
+    box-sizing: border-box;
+  }
+  body.doc-print-active .vendor-invoice-document {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #fff;
+    color: #000;
+    font-size: 9pt;
+    line-height: 1.35;
+    box-shadow: none;
+    overflow: visible !important;
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  body.doc-print-active .vendor-invoice-sheet {
+    --vi-sheet-max: 190mm;
+    --vi-sheet-pad-x: 3mm;
+    width: min(100%, var(--vi-sheet-max)) !important;
+    max-width: var(--vi-sheet-max) !important;
+    margin-inline: auto !important;
+    padding-inline: var(--vi-sheet-pad-x) !important;
+    box-sizing: border-box;
+  }
+  body.doc-print-active .vendor-invoice-document *,
+  body.doc-print-active .vendor-invoice-document *::before,
+  body.doc-print-active .vendor-invoice-document *::after {
+    box-sizing: border-box;
+  }
+  body.doc-print-active .vendor-invoice-header {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  body.doc-print-active .vendor-invoice-meta-grid,
+  body.doc-print-active .vendor-invoice-footer-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+  body.doc-print-active .vendor-invoice-document table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse;
+    table-layout: fixed !important;
+    page-break-inside: auto;
+    font-size: 7.5pt;
+  }
+  body.doc-print-active .vendor-invoice-document th,
+  body.doc-print-active .vendor-invoice-document td {
+    padding: 2px 3px !important;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal !important;
+    vertical-align: top;
+  }
+  body.doc-print-active .vendor-invoice-document .vi-money {
+    font-size: 7pt;
+    line-height: 1.2;
+  }
+  body.doc-print-active .vendor-invoice-document tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  body.doc-print-active .vendor-invoice-document thead {
+    display: table-header-group;
+  }
+  body.doc-print-active .vendor-invoice-meta-grid > div,
+  body.doc-print-active .vendor-invoice-footer-grid > div {
+    min-width: 0;
+  }
+  body.doc-print-active .vendor-invoice-totals .flex {
+    gap: 4px;
+  }
+  body.doc-print-active .vendor-invoice-totals .tabular-nums {
+    font-size: 7.5pt;
+    white-space: nowrap;
+  }
+  body.doc-print-active .no-print {
+    display: none !important;
+  }
+  html[data-doc-print='a4'] {
+    @page {
+      size: A4 portrait;
+      margin: 9mm 8mm;
     }
   }
 }

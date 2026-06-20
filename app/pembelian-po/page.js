@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
-import { defaultEstimasiHarga, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
+import { poEstimasiFromProduct, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
 import { cn } from '@/lib/utils';
 import { vendorDisplayName } from '@/lib/vendor-display';
 import {
@@ -66,13 +66,42 @@ export default function CustomerPoPage() {
   const [expandedId, setExpandedId] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const autoSyncBusy = useRef(false);
+  const [vendorTierMap, setVendorTierMap] = useState({});
+  const [defaultTier, setDefaultTier] = useState('ECER');
 
-  const load = () => fetch('/api/customer-purchase-orders').then((r) => r.json()).then(setList);
+  const loadProducts = useCallback(() => {
+    fetch('/api/products?limit=500&withWarehouseStock=1')
+      .then((r) => r.json())
+      .then((data) => setProducts(Array.isArray(data) ? data : []))
+      .catch(() => setProducts([]));
+  }, []);
+
+  const loadVendorTiers = useCallback(() => {
+    fetch('/api/integrations/vendor-tiers')
+      .then((r) => r.json())
+      .then((data) => {
+        setVendorTierMap(data.tierMap || {});
+        setDefaultTier(data.tierHargaDefault || 'ECER');
+      })
+      .catch(() => {});
+  }, []);
+
+  const load = () => fetch('/api/customer-purchase-orders')
+    .then((r) => r.json())
+    .then((data) => setList(Array.isArray(data) ? data : []))
+    .catch(() => setList([]));
   useEffect(() => {
     setUser(getUser());
     load();
-    fetch('/api/products?limit=500&withWarehouseStock=1').then((r) => r.json()).then(setProducts);
-  }, []);
+    loadProducts();
+    loadVendorTiers();
+    const onCatalogSynced = () => {
+      loadProducts();
+      loadVendorTiers();
+    };
+    window.addEventListener('vendor-catalog-synced', onCatalogSynced);
+    return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
+  }, [loadProducts, loadVendorTiers]);
 
   const canCreate = CAN_CREATE.includes(user?.role);
   const canRequest = CAN_REQUEST.includes(user?.role);
@@ -182,10 +211,9 @@ export default function CustomerPoPage() {
 
   const selectProduct = (i, id) => {
     const p = synced.find((x) => x.id === id);
-    const beli = parseInt(p?.hargaBeli || 0, 10);
     updateLine(i, {
       localStokId: id,
-      estimasiHarga: defaultEstimasiHarga(beli) || '',
+      estimasiHarga: poEstimasiFromProduct(p, vendorTierMap, defaultTier) || '',
       estimasiManual: false,
     });
   };

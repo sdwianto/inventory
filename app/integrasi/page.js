@@ -35,6 +35,7 @@ export default function IntegrasiPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Sync gagal');
       toast.success(`Sync selesai — ${data.created} baru, ${data.updated} diperbarui dari ${data.vendorTenantCount || '?'} vendor tenant`);
+      window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
       loadStatus();
     } catch (e) {
       toast.error(e.message);
@@ -96,9 +97,22 @@ export default function IntegrasiPage() {
             {status.vendorName && (
               <p className="text-xs text-slate-600">Vendor: {status.vendorName} ({status.vendorTenantId})</p>
             )}
+            {status.tierHargaDefault && (
+              <p className="text-xs text-slate-600">
+                Tier harga referensi PO: <strong>{status.tierHargaDefault}</strong> (dari profil pelanggan di sales.app)
+              </p>
+            )}
+            {status.lastCatalogSyncAt && (
+              <p className="text-xs text-slate-500">
+                Sync terakhir: {new Date(status.lastCatalogSyncAt).toLocaleString('id-ID')}
+              </p>
+            )}
             {status.pairedAt && (
               <p className="text-xs text-slate-500">Paired: {new Date(status.pairedAt).toLocaleString('id-ID')}</p>
             )}
+            <p className="text-[11px] text-slate-500">
+              Katalog, harga &amp; tier otomatis disync saat login (maks. sekali per 15 menit).
+            </p>
             <Button
               onClick={syncCatalog}
               disabled={syncing || !status.salesApiKey}

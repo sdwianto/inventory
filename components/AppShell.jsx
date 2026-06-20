@@ -7,8 +7,8 @@ import { getUser, clearUser, syncSessionUser } from '@/lib/auth-client';
 import {
   LayoutDashboard, ShoppingCart, Package, Receipt, LogOut, Menu, Store,
   Boxes, FileEdit, Factory, ChevronDown, ChevronRight, Users, UserCircle,
-  CreditCard, Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
-  TrendingUp, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
+  Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
+  TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,17 +16,18 @@ import { formatDateTime } from '@/lib/format';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { getLokasiAktif, loadLokasiForTenant } from '@/lib/lokasi-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
+import { triggerVendorCatalogAutoSync } from '@/lib/integration-auto-sync';
 
 const NAV = [
   { type: 'item', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true },
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
-  { type: 'item', href: '/hutang', label: 'Hutang Vendor', icon: Banknote },
+  { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
+  { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
   {
     type: 'group', key: 'master', label: 'Master Data', icon: Database,
     items: [
       { href: '/produk', label: 'Produk', icon: Package },
-      { href: '/mapping', label: 'Mapping Vendor', icon: CreditCard },
     ],
   },
   {
@@ -57,11 +58,11 @@ const DEFAULT_EXPANDED = Object.fromEntries(
 
 // Role permissions: which items each role can see
 const ROLE_PERMISSIONS = {
-  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk', '/mapping',
+  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
-  ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/produk', '/mapping',
+  ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user'],
   MASTER: '*',
@@ -93,6 +94,7 @@ export default function AppShell({ children }) {
   const [tenantLogo, setTenantLogo] = useState('');
   const [lokasiLabel, setLokasiLabel] = useState('');
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
+  const [navBadges, setNavBadges] = useState({ hutangReview: 0 });
 
   const refreshOperationalScope = async (synced) => {
     if (!synced) return;
@@ -126,6 +128,9 @@ export default function AppShell({ children }) {
       }
       setUserState(synced);
       refreshOperationalScope(synced);
+      if (synced.role !== 'MASTER') {
+        triggerVendorCatalogAutoSync().catch(() => {});
+      }
       const logoTenant = synced.role === 'MASTER' ? getActingTenantId() : (synced.tenantId || 'default');
       if (synced.role !== 'MASTER' || logoTenant) {
         fetchTenantSettings(logoTenant || synced.tenantId, { bustCache: false }).then((s) => {
@@ -147,6 +152,28 @@ export default function AppShell({ children }) {
   }, [user]);
 
   useEffect(() => {
+    if (!user || !['ADMIN', 'MASTER'].includes(user.role)) return undefined;
+    const loadBadges = () => {
+      fetch('/api/hutang?approvalStatus=PENDING_REVIEW')
+        .then((r) => r.json())
+        .then((list) => {
+          setNavBadges({
+            hutangReview: Array.isArray(list) ? list.length : 0,
+          });
+        })
+        .catch(() => {});
+    };
+    loadBadges();
+    const t = setInterval(loadBadges, 60000);
+    const onHutangChange = () => loadBadges();
+    window.addEventListener('erp-hutang-change', onHutangChange);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('erp-hutang-change', onHutangChange);
+    };
+  }, [user]);
+
+  useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -157,7 +184,7 @@ export default function AppShell({ children }) {
     if (pathname?.startsWith('/stok')) next.stok = true;
     if (pathname?.startsWith('/produk') || pathname?.startsWith('/pelanggan') || pathname?.startsWith('/member') || pathname?.startsWith('/supplier')) next.master = true;
     if (pathname?.startsWith('/transaksi') || pathname?.startsWith('/piutang')) next.penjualan = true;
-    if (pathname?.startsWith('/pembelian') || pathname?.startsWith('/hutang')) next.pembelian = true;
+    if (pathname?.startsWith('/pembelian') || pathname?.startsWith('/hutang') || pathname?.startsWith('/pengeluaran-pengadaan')) next.pembelian = true;
     if (pathname?.startsWith('/penjualan')) next.penjualan = true;
     if (pathname?.startsWith('/laporan')) next.laporan = true;
     if (pathname?.startsWith('/akunting')) next.akunting = true;
@@ -226,7 +253,12 @@ export default function AppShell({ children }) {
                   } ${item.highlight && !active ? 'ring-1 ring-bgn-gold/50' : ''}`}
                 >
                   <Icon className="w-4 h-4" />
-                  <span>{item.label}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {item.badgeKey && navBadges[item.badgeKey] > 0 && (
+                    <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full bg-orange-500 text-white text-xs font-bold flex items-center justify-center">
+                      {navBadges[item.badgeKey]}
+                    </span>
+                  )}
                 </Link>
               );
             }

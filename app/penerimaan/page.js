@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -8,15 +9,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { formatDateTime } from '@/lib/format';
-import { PackageCheck } from 'lucide-react';
+import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
+import { PackageCheck, FileText, Truck, Eye } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
+  UNKNOWN_PRODUCT: 'bg-amber-100 text-amber-800',
   NEEDS_MAPPING: 'bg-amber-100 text-amber-800',
   POSTED: 'bg-green-100 text-green-800',
 };
+
+const STATUS_LABEL = {
+  DRAFT: 'DRAFT',
+  UNKNOWN_PRODUCT: 'Produk belum terdaftar',
+  NEEDS_MAPPING: 'Produk belum terdaftar',
+  POSTED: 'POSTED',
+};
+
+const isUnresolvedGrn = (status) => status === 'UNKNOWN_PRODUCT' || status === 'NEEDS_MAPPING';
+
+function supplierLabel(row) {
+  return row?.supplierName || row?.vendorTenantName || row?.vendorName || '—';
+}
 
 export default function PenerimaanPage() {
   const [list, setList] = useState([]);
@@ -25,9 +40,32 @@ export default function PenerimaanPage() {
   const [detail, setDetail] = useState(null);
   const [qtyMap, setQtyMap] = useState({});
   const [gudangMap, setGudangMap] = useState({});
+  const [doView, setDoView] = useState(null);
+  const [loadingDo, setLoadingDo] = useState('');
 
-  const load = () => fetch('/api/goods-receipts').then((r) => r.json()).then(setList);
+  const load = () => fetch('/api/goods-receipts')
+    .then((r) => r.json())
+    .then((data) => setList(Array.isArray(data) ? data : []))
+    .catch(() => setList([]));
   useEffect(() => { load(); }, []);
+
+  const openDoView = async (id) => {
+    setLoadingDo(id);
+    try {
+      const res = await fetch(`/api/goods-receipts/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal memuat DO');
+      setDoView(data);
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setLoadingDo('');
+  };
+
+  const doTotal = (g) => (g?.items || []).reduce(
+    (s, it) => s + (parseFloat(it.qtyOrdered) || 0) * (parseInt(it.harga || 0, 10) || 0),
+    0,
+  );
 
   const syncFromSales = async () => {
     setSyncing(true);
@@ -80,7 +118,29 @@ export default function PenerimaanPage() {
     const data = await res.json();
     if (!res.ok) toast.error(data.error || 'Gagal');
     else {
-      toast.success('Barang diterima — stok & harga beli diperbarui');
+      const from = supplierLabel(data);
+      const inv = data.noInvoice || data.invoiceSync?.noInvoice;
+      if (data.invoiceSync?.error) {
+        toast.warning(`Barang diterima dari ${from}, tapi faktur otomatis gagal: ${data.invoiceSync.error}`);
+      } else if (data.invoiceSync?.hutang?.hutangId) {
+        const inv = data.noInvoice || data.invoiceSync?.noInvoice || data.invoiceSync?.hutang?.noInvoice;
+        const approval = data.invoiceSync?.hutang?.approvalStatus;
+        const isPending = !approval || approval === 'PENDING_REVIEW'
+          || data.invoiceSync?.hutang?.action === 'created';
+        if (isPending) {
+          toast.success(`Barang diterima — faktur ${inv} masuk Tagihan Vendor (menunggu review admin)`);
+        } else {
+          toast.success(`Barang diterima — faktur ${inv} sudah ada di Tagihan Vendor`);
+        }
+        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+      } else if (data.invoiceSync?.hutang?.error) {
+        toast.warning(`Barang diterima, faktur dibuat tapi gagal masuk Tagihan Vendor: ${data.invoiceSync.hutang.error}`);
+      } else if (inv) {
+        toast.success(`Barang diterima dari ${from} — faktur ${inv} otomatis diposting`);
+        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+      } else {
+        toast.success(`Barang diterima dari ${from} — stok & harga beli diperbarui`);
+      }
       setDetail(null);
       load();
     }
@@ -94,18 +154,29 @@ export default function PenerimaanPage() {
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><PackageCheck className="w-6 h-6" /> Penerimaan Barang (GRN)</h1>
             <p className="text-sm text-slate-500">DO SHIPPED dari sales.app → GRN otomatis via webhook, atau tarik manual jika webhook terlewat</p>
+            <p className="text-xs text-slate-400 mt-0.5">Klik baris untuk lihat detail DO dari supplier sebelum menerima barang</p>
           </div>
           <Button variant="outline" onClick={syncFromSales} disabled={syncing}>
             {syncing ? 'Menarik DO…' : 'Tarik DO dari sales.app'}
           </Button>
         </div>
         <OperationalScopeBar />
+        {list.some((r) => isUnresolvedGrn(r.status)) && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+            <strong>{list.filter((r) => isUnresolvedGrn(r.status)).length} GRN</strong>
+            {' '}memiliki produk vendor yang belum terdaftar di master produk lokal.
+            {' '}Sinkron katalog dari <Link href="/integrasi" className="underline font-medium">Integrasi</Link>
+            {' '}atau daftarkan manual di{' '}
+            <Link href="/produk" className="underline font-medium">Master Produk</Link>.
+          </div>
+        )}
         <div className="bg-white border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
                 <th className="px-3 py-2 text-left">No. GRN</th>
                 <th className="px-3 py-2 text-left">No. DO</th>
+                <th className="px-3 py-2 text-left">Supplier</th>
                 <th className="px-3 py-2 text-left">No. Invoice</th>
                 <th className="px-3 py-2 text-left">Tanggal</th>
                 <th className="px-3 py-2 text-left">Gudang</th>
@@ -114,26 +185,53 @@ export default function PenerimaanPage() {
               </tr>
             </thead>
             <tbody>
-              {!list.length && <tr><td colSpan={7} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>}
+              {!list.length && <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>}
               {(Array.isArray(list) ? list : []).map((r) => (
-                <tr key={r.id} className="border-t">
+                <tr
+                  key={r.id}
+                  className="border-t cursor-pointer hover:bg-slate-50 transition-colors"
+                  onClick={() => openDoView(r.id)}
+                  title="Klik untuk lihat DO"
+                >
                   <td className="px-3 py-2 font-mono text-xs">{r.noGRN}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.noDO}</td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    <span className="inline-flex items-center gap-1 text-blue-700 underline-offset-2 group-hover:underline">
+                      <FileText className="w-3.5 h-3.5 shrink-0" />
+                      {r.noDO}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={supplierLabel(r)}>
+                    {supplierLabel(r)}
+                  </td>
                   <td className="px-3 py-2 font-mono text-xs">{r.noInvoice || '—'}</td>
                   <td className="px-3 py-2 text-xs">{formatDateTime(r.tanggal)}</td>
                   <td className="px-3 py-2 text-xs">{r.lokasi || (r.status === 'POSTED' ? '—' : '')}</td>
                   <td className="px-3 py-2 text-center">
-                    <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[r.status] || 'bg-slate-100'}`}>{r.status}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[r.status] || 'bg-slate-100'}`}>
+                      {STATUS_LABEL[r.status] || r.status}
+                    </span>
                   </td>
-                  <td className="px-3 py-2 text-center">
-                    {r.status === 'DRAFT' && (
-                      <Button size="sm" onClick={() => openPost(r.id)} disabled={posting === r.id}>
-                        Terima Barang
-                      </Button>
-                    )}
-                    {r.status === 'NEEDS_MAPPING' && (
-                      <a href="/mapping" className="text-amber-700 text-xs underline">Mapping dulu</a>
-                    )}
+                  <td className="px-3 py-2">
+                    <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => openDoView(r.id)}
+                        disabled={loadingDo === r.id}
+                        title="Lihat DO"
+                        aria-label="Lihat DO"
+                        className="p-1.5 rounded text-slate-500 hover:bg-slate-100 hover:text-blue-700 disabled:opacity-50"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                      {r.status === 'DRAFT' && (
+                        <Button size="sm" onClick={() => openPost(r.id)} disabled={posting === r.id}>
+                          Terima Barang
+                        </Button>
+                      )}
+                      {isUnresolvedGrn(r.status) && (
+                        <Link href="/produk" className="text-amber-700 text-xs underline">Daftar di Master Produk</Link>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -147,7 +245,11 @@ export default function PenerimaanPage() {
           <DialogHeader>
             <DialogTitle>Terima Barang — {detail?.noGRN}</DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-slate-500">DO: {detail?.noDO} · Gudang mengikuti master produk (Kering/Basah tidak bisa dicampur)</p>
+          <p className="text-xs text-slate-500">
+            DO: {detail?.noDO}
+            {supplierLabel(detail) !== '—' ? ` · Supplier: ${supplierLabel(detail)}` : ''}
+            {' · '}Gudang mengikuti master produk (Kering/Basah tidak bisa dicampur)
+          </p>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {(detail?.items || []).map((it) => (
               <div key={it.lineId} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
@@ -184,6 +286,115 @@ export default function PenerimaanPage() {
             <Button onClick={postGrn} disabled={!!posting} className="bg-orange-500 hover:bg-orange-600">
               {posting ? 'Memproses...' : 'Konfirmasi Terima'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!doView} onOpenChange={(o) => !o && setDoView(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Truck className="w-5 h-5 text-orange-500" />
+              Surat Jalan / DO — {doView?.noDO}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border bg-slate-50/70 p-3 text-sm">
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">No. DO</p>
+              <p className="font-mono font-medium">{doView?.noDO || '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">No. SO (sales.app)</p>
+              <p className="font-mono font-medium">{doView?.noSO || '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">No. PO</p>
+              <p className="font-mono font-medium">{doView?.noPO || '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Supplier (tenant vendor)</p>
+              <p className="font-medium">{supplierLabel(doView)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">No. Invoice</p>
+              <p className="font-mono font-medium">{doView?.noInvoice || '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Tanggal kirim</p>
+              <p className="font-medium">{doView?.tanggal ? formatDateTime(doView.tanggal) : '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Status</p>
+              <span className={`inline-block px-2 py-0.5 rounded text-xs ${STATUS_STYLE[doView?.status] || 'bg-slate-100'}`}>
+                {STATUS_LABEL[doView?.status] || doView?.status}
+              </span>
+            </div>
+          </div>
+
+          <div className="border rounded-lg overflow-hidden mt-1">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-100 text-slate-600 uppercase">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Kode</th>
+                  <th className="px-2 py-1.5 text-left">Produk</th>
+                  <th className="px-2 py-1.5 text-right">Qty kirim</th>
+                  <th className="px-2 py-1.5 text-center">Satuan</th>
+                  <th className="px-2 py-1.5 text-right">Harga</th>
+                  <th className="px-2 py-1.5 text-right">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(doView?.items || []).map((it) => (
+                  <tr
+                    key={it.lineId || it.vendorKode}
+                    className={`border-t border-slate-100 ${!it.localStokId ? 'bg-amber-50' : ''}`}
+                  >
+                    <td className="px-2 py-1.5 font-mono">{it.vendorKode || it.localKode || '—'}</td>
+                    <td className="px-2 py-1.5">{it.localNama || it.vendorNama || it.nama}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNumber(it.qtyOrdered)}</td>
+                    <td className="px-2 py-1.5 text-center text-slate-500">{it.satuan || '—'}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{it.harga ? formatIDR(it.harga) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {it.harga ? formatIDR((parseFloat(it.qtyOrdered) || 0) * (parseInt(it.harga || 0, 10) || 0)) : '—'}
+                    </td>
+                  </tr>
+                ))}
+                {!(doView?.items || []).length && (
+                  <tr><td colSpan={6} className="text-center py-6 text-slate-400">Tidak ada item</td></tr>
+                )}
+              </tbody>
+              {doTotal(doView) > 0 && (
+                <tfoot>
+                  <tr className="border-t bg-slate-50 font-semibold">
+                    <td colSpan={5} className="px-2 py-1.5 text-right">Total nilai DO</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatIDR(doTotal(doView))}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setDoView(null)}>Tutup</Button>
+            {doView?.status === 'DRAFT' && (
+              <Button
+                className="bg-orange-500 hover:bg-orange-600"
+                onClick={() => {
+                  const id = doView.id;
+                  setDoView(null);
+                  openPost(id);
+                }}
+              >
+                <PackageCheck className="w-4 h-4 mr-1" />
+                Terima Barang
+              </Button>
+            )}
+            {isUnresolvedGrn(doView?.status) && (
+              <Link href="/produk">
+                <Button className="bg-amber-500 hover:bg-amber-600">Daftar produk di Master</Button>
+              </Link>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

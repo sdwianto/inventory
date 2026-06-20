@@ -20,6 +20,7 @@ import { getUser } from '@/lib/auth-client';
 import TenantScopeField, { tenantLabel } from '@/components/TenantScopeField';
 import { withActingTenantQuery } from '@/lib/tenant-api';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
+import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/lib/vendor-price';
 
 const emptyProduct = {
   kode: '', barcode: '', nama: '', grup: 'Umum', satuan: 'PCS', gudangKode: 'GKERING',
@@ -88,6 +89,8 @@ export default function ProdukPage() {
   const [metaTenantId, setMetaTenantId] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
+  const [vendorTierMap, setVendorTierMap] = useState({});
+  const [defaultTier, setDefaultTier] = useState('ECER');
   const selection = useListSelection();
 
   const isMaster = user?.role === 'MASTER';
@@ -164,6 +167,27 @@ export default function ProdukPage() {
     }
     if (!isMaster || filterTenantId) load(q, filterTenantId);
   }, [user, filterTenantId]);
+
+  useEffect(() => {
+    const loadTiers = () => {
+      fetch('/api/integrations/vendor-tiers')
+        .then((r) => r.json())
+        .then((data) => {
+          setVendorTierMap(data.tierMap || {});
+          setDefaultTier(data.tierHargaDefault || 'ECER');
+        })
+        .catch(() => {});
+    };
+    if (!user) return undefined;
+    loadTiers();
+    const onCatalogSynced = () => {
+      loadTiers();
+      if (isMaster && !filterTenantId) load(q, '');
+      else if (!isMaster || filterTenantId) load(q, filterTenantId);
+    };
+    window.addEventListener('vendor-catalog-synced', onCatalogSynced);
+    return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
+  }, [user, q, filterTenantId, isMaster]);
 
   const openNew = () => {
     setEditing(null);
@@ -374,6 +398,16 @@ export default function ProdukPage() {
   const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(p.id));
   const isVendorSynced = (p) => p?.syncSource === 'sales.app';
+  const displayHargaBeli = (p) => {
+    const beli = parseInt(p?.hargaBeli || 0, 10);
+    if (beli > 0) return { amount: beli, vendorRef: false };
+    if (isVendorSynced(p)) {
+      const tier = resolveVendorTier(p, vendorTierMap, defaultTier);
+      const ref = vendorPriceFromProduct(p, tier);
+      if (ref > 0) return { amount: ref, vendorRef: true, tier };
+    }
+    return { amount: beli, vendorRef: false };
+  };
   const [syncing, setSyncing] = useState(false);
 
   const syncFromVendor = async () => {
@@ -385,6 +419,7 @@ export default function ProdukPage() {
       const total = data.total ?? 0;
       if (total === 0) throw new Error('Katalog kosong — cek SALES_VENDOR_TENANT_ID di .env.local (produk sales.app mungkin di tenant lain)');
       toast.success(`Sync OK: ${data.created || 0} baru, ${data.updated || 0} diperbarui (${total} dari sales.app)`);
+      window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
       load(q);
     } catch (e) { toast.error(e.message); }
     setSyncing(false);
@@ -398,7 +433,7 @@ export default function ProdukPage() {
             <h1 className="text-2xl font-bold flex items-center gap-2"><Package className="w-6 h-6" /> Master Produk</h1>
             <p className="text-sm text-slate-500">
               {canManageProducts
-                ? 'Nama & satuan disinkron dari sales.app — stok & harga beli dikelola di sini'
+                ? 'Nama, satuan & harga vendor (sesuai tier pelanggan) disinkron dari sales.app — stok & harga beli lokal dikelola di sini'
                 : 'Lihat daftar produk — perubahan stok via penerimaan barang & release inventory'}
             </p>
           </div>
@@ -569,7 +604,17 @@ export default function ProdukPage() {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-center text-xs uppercase">{p.satuan}</td>
-                    <td className="px-3 py-2 text-right font-medium">{formatIDR(p.hargaBeli)}</td>
+                    <td className="px-3 py-2 text-right font-medium">
+                      {(() => {
+                        const { amount, vendorRef, tier } = displayHargaBeli(p);
+                        return vendorRef ? (
+                          <span title={`Harga vendor tier ${vendorTierLabel(tier)}`}>
+                            {formatIDR(amount)}
+                            <span className="ml-1 text-[10px] text-blue-600 font-normal">{vendorTierLabel(tier)}</span>
+                          </span>
+                        ) : formatIDR(amount);
+                      })()}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <span className={`font-semibold ${p.stok <= (p.minStok || 0) ? 'text-red-600' : ''}`}>{p.stok}</span>
                     </td>
