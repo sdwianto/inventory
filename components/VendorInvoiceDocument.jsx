@@ -95,6 +95,19 @@ export default function VendorInvoiceDocument({ detail, className = '', printId 
         </div>
       </header>
 
+      {approval === 'REJECTED' && (
+        <section className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-red-700 mb-1">Alasan penolakan</p>
+          <p className="leading-snug">{detail.rejectReason || 'Ditolak admin'}</p>
+          {(detail.rejectedBy?.userName || detail.rejectedAt) && (
+            <p className="text-[11px] text-red-600 mt-1.5">
+              {detail.rejectedBy?.userName && `Oleh ${detail.rejectedBy.userName}`}
+              {detail.rejectedAt && `${detail.rejectedBy?.userName ? ' · ' : ''}${formatDateTime(detail.rejectedAt)}`}
+            </p>
+          )}
+        </section>
+      )}
+
       <section className="vendor-invoice-meta-grid grid sm:grid-cols-2 gap-3 mb-3">
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex gap-3 items-start">

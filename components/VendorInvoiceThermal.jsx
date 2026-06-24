@@ -113,6 +113,15 @@ export default function VendorInvoiceThermal({ detail, layout: layoutProp, previ
       <div className="text-center receipt-line receipt-small">
         Status: {detail.approvalStatus || detail.status}
       </div>
+      {(detail.approvalStatus || detail.status) === 'REJECTED' && (
+        <>
+          <div className="line" />
+          <div className="receipt-line bold">DITOLAK</div>
+          <div className="receipt-line receipt-wrap receipt-small">
+            Alasan: {detail.rejectReason || 'Ditolak admin'}
+          </div>
+        </>
+      )}
       <div className="receipt-feed" aria-hidden="true" />
     </div>
   );

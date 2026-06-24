@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
-import { poEstimasiFromProduct, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
+import { poEstimasiFromProduct, parseEstimasiHargaInput, getEstimasiHargaHint, formatBeliDeltaSign } from '@/lib/po-estimasi-harga';
 import { cn } from '@/lib/utils';
 import { vendorDisplayName } from '@/lib/vendor-display';
 import {
@@ -41,6 +41,28 @@ function poCreatorLabel(po) {
     || po?.createdBy?.email
     || po?.requestedBy?.userName
     || 'Tidak tercatat';
+}
+
+function mergeFormLinesFromPo(items, emptyLine) {
+  if (!items?.length) return [emptyLine()];
+  const map = new Map();
+  for (const it of items) {
+    const id = it.localStokId;
+    if (!id) continue;
+    const prev = map.get(id);
+    if (prev) {
+      prev.qty = (parseFloat(prev.qty) || 0) + (parseFloat(it.qty) || 0);
+    } else {
+      map.set(id, {
+        localStokId: id,
+        qty: it.qty,
+        estimasiHarga: it.estimasiHarga || '',
+        estimasiManual: true,
+      });
+    }
+  }
+  const merged = [...map.values()];
+  return merged.length ? merged : [emptyLine()];
 }
 
 const CAN_CREATE = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
@@ -162,14 +184,7 @@ export default function CustomerPoPage() {
   const openEdit = (po) => {
     setEditingPo(po);
     setCreateDate(getPoArrivalDate(po) || new Date());
-    setLines((po.items || []).length
-      ? (po.items || []).map((it) => ({
-        localStokId: it.localStokId || '',
-        qty: it.qty,
-        estimasiHarga: it.estimasiHarga || '',
-        estimasiManual: true,
-      }))
-      : [emptyLine()]);
+    setLines(mergeFormLinesFromPo(po.items, emptyLine));
     setCatatan(po.catatan || '');
     setCreateOpen(true);
   };
@@ -183,23 +198,35 @@ export default function CustomerPoPage() {
     return false;
   };
 
-  const buildItemsPayload = () => lines.map((l) => {
-    const p = products.find((x) => x.id === l.localStokId);
-    if (!p || !l.qty) return null;
-    if (!p.vendorStokId && p.syncSource !== 'sales.app') return null;
-    return {
-      localStokId: p.id,
-      vendorStokId: p.vendorStokId,
-      vendorTenantId: p.vendorTenantId,
-      vendorKode: p.kode,
-      kode: p.kode,
-      nama: p.nama,
-      satuan: p.satuan,
-      qty: parseFloat(l.qty) || 0,
-      estimasiHarga: parseEstimasiHargaInput(l.estimasiHarga),
-      hargaBeliReferensi: parseInt(p.hargaBeli || 0, 10),
-    };
-  }).filter(Boolean);
+  const buildItemsPayload = () => {
+    const map = new Map();
+    for (const l of lines) {
+      const p = products.find((x) => x.id === l.localStokId);
+      if (!p || !l.qty) continue;
+      if (!p.vendorStokId && p.syncSource !== 'sales.app') continue;
+      const qty = parseFloat(l.qty) || 0;
+      const estimasiHarga = parseEstimasiHargaInput(l.estimasiHarga);
+      const prev = map.get(p.id);
+      if (prev) {
+        prev.qty += qty;
+        if (l.estimasiManual && estimasiHarga) prev.estimasiHarga = estimasiHarga;
+      } else {
+        map.set(p.id, {
+          localStokId: p.id,
+          vendorStokId: p.vendorStokId,
+          vendorTenantId: p.vendorTenantId,
+          vendorKode: p.kode,
+          kode: p.kode,
+          nama: p.nama,
+          satuan: p.satuan,
+          qty,
+          estimasiHarga,
+          hargaBeliReferensi: parseInt(p.hargaBeli || 0, 10),
+        });
+      }
+    }
+    return [...map.values()];
+  };
 
   const handleSelectDate = (date) => {
     setSelectedDate(date);
@@ -210,7 +237,22 @@ export default function CustomerPoPage() {
   const addLine = () => setLines([...lines, emptyLine()]);
 
   const selectProduct = (i, id) => {
+    if (!id) {
+      updateLine(i, { localStokId: '', estimasiHarga: '', estimasiManual: false });
+      return;
+    }
+    const existingIdx = lines.findIndex((l, idx) => idx !== i && l.localStokId === id);
     const p = synced.find((x) => x.id === id);
+    if (existingIdx >= 0) {
+      const addQty = parseFloat(lines[i].qty) || 1;
+      const mergedQty = (parseFloat(lines[existingIdx].qty) || 0) + addQty;
+      const next = lines
+        .map((l, idx) => (idx === existingIdx ? { ...l, qty: mergedQty } : l))
+        .filter((_, idx) => idx !== i);
+      setLines(next.length ? next : [emptyLine()]);
+      toast.info(`${p?.nama || 'Produk'} digabung — total qty ${mergedQty}`);
+      return;
+    }
     updateLine(i, {
       localStokId: id,
       estimasiHarga: poEstimasiFromProduct(p, vendorTierMap, defaultTier) || '',
@@ -696,17 +738,24 @@ export default function CustomerPoPage() {
               </div>
 
               <div className="border rounded-lg overflow-hidden">
-                <div className="hidden sm:grid sm:grid-cols-[2rem_1fr_9rem_auto] gap-2 px-3 py-2 bg-slate-100 text-xs uppercase text-slate-600 font-medium">
+                <div className="hidden sm:grid sm:grid-cols-[2rem_minmax(0,1fr)_8.5rem_5.5rem_4.5rem_2.5rem] gap-x-3 gap-y-0 px-3 py-2 bg-slate-100 text-[11px] uppercase tracking-wide text-slate-600 font-medium items-end">
                   <span>#</span>
                   <span>Produk</span>
                   <span className="text-right">Estimasi harga</span>
-                  <span className="text-right pr-1">Qty · Satuan</span>
+                  <span className="text-right">Qty</span>
+                  <span className="text-center">Satuan</span>
+                  <span aria-hidden="true" />
                 </div>
                 <div className="divide-y">
-                  {lineDetails.map((l, i) => (
-                    <div key={i} className="flex flex-col sm:grid sm:grid-cols-[2rem_1fr_9rem_auto] gap-2 sm:gap-3 px-3 py-3 items-start">
-                      <span className="text-xs text-slate-400 pt-2">{i + 1}</span>
-                      <div className="w-full min-w-0">
+                  {lineDetails.map((l, i) => {
+                    const hint = l.product
+                      ? getEstimasiHargaHint(l.product, vendorTierMap, defaultTier, l.estimasiManual, l.estimasiHarga)
+                      : null;
+                    return (
+                    <div key={i} className="flex flex-col sm:grid sm:grid-cols-[2rem_minmax(0,1fr)_8.5rem_5.5rem_4.5rem_2.5rem] gap-x-3 gap-y-2 px-3 py-3 items-start">
+                      <span className="text-xs text-slate-400 pt-2 hidden sm:inline">{i + 1}</span>
+                      <div className="w-full min-w-0 sm:col-span-1">
+                        <span className="text-xs text-slate-400 sm:hidden mb-1 block">Baris {i + 1}</span>
                         <ProductSearchSelect
                           products={synced}
                           value={l.localStokId}
@@ -727,7 +776,7 @@ export default function CustomerPoPage() {
                         )}
                       </div>
                       <div className="w-full sm:w-auto shrink-0">
-                        <Label className="text-[10px] text-slate-400 uppercase sm:sr-only">Estimasi harga</Label>
+                        <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Estimasi harga</Label>
                         <Input
                           type="number"
                           min={0}
@@ -741,44 +790,66 @@ export default function CustomerPoPage() {
                             estimasiManual: true,
                           })}
                         />
-                        {l.product && (
-                          <p className="mt-1 text-[10px] text-slate-400 text-right">
-                            Beli terakhir {formatIDR(l.product.hargaBeli || 0)}
-                            {!l.estimasiManual && (l.product.hargaBeli || 0) > 0 && (
-                              <span className="text-orange-600"> · +10%</span>
+                        {hint && (
+                          <p className="mt-1 text-[10px] text-slate-500 text-right leading-snug">
+                            {hint.kind === 'local' && hint.beli > 0 && (
+                              <>
+                                {formatIDR(hint.beli)}
+                                <span className="text-orange-600 font-medium"> +10%</span>
+                                {' → '}
+                                <span className="font-medium text-slate-700">{formatIDR(hint.withBuffer)}</span>
+                              </>
                             )}
+                            {(hint.kind === 'vendor' || hint.kind === 'manual') && (
+                              hint.beli > 0 && hint.deltaPct != null ? (
+                                <span>
+                                  <span className={cn(
+                                    'font-medium',
+                                    hint.deltaPct > 0 ? 'text-orange-600' : hint.deltaPct < 0 ? 'text-green-700' : 'text-slate-600',
+                                  )}
+                                  >
+                                    {formatBeliDeltaSign(hint.deltaPct)}
+                                  </span>
+                                  {' dari harga beli di gudang '}
+                                  <span className="font-medium text-slate-700">{formatIDR(hint.beli)}</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">Belum ada harga beli di gudang</span>
+                              )
+                            )}
+                            {hint.kind === 'local' && hint.beli <= 0 && hint.label}
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 shrink-0 self-start sm:pt-0.5 w-full sm:w-auto justify-end">
-                        <div className="flex flex-col gap-0.5">
-                          <Label className="text-[10px] text-slate-400 uppercase sm:sr-only">Qty</Label>
-                          <Input
-                            type="number"
-                            min={0.01}
-                            step="any"
-                            className="text-right h-9 w-28 min-w-[7rem] tabular-nums"
-                            value={l.qty}
-                            onChange={(e) => updateLine(i, { qty: e.target.value })}
-                          />
-                        </div>
-                        <div className="flex flex-col gap-0.5">
-                          <Label className="text-[10px] text-slate-400 uppercase sm:sr-only">Satuan</Label>
-                          <span className={cn(
-                            'inline-flex h-9 min-w-[4.5rem] items-center justify-center rounded-md border px-3 text-xs font-semibold',
-                            l.product?.satuan
-                              ? 'bg-white text-slate-700 border-slate-200'
-                              : 'bg-slate-50 text-slate-400 border-dashed',
-                          )}
-                          >
-                            {l.product?.satuan || '—'}
-                          </span>
-                        </div>
+                      <div className="w-full sm:w-auto shrink-0">
+                        <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Qty</Label>
+                        <Input
+                          type="number"
+                          min={0.01}
+                          step="any"
+                          className="text-right h-9 w-full sm:w-full tabular-nums"
+                          value={l.qty}
+                          onChange={(e) => updateLine(i, { qty: e.target.value })}
+                        />
+                      </div>
+                      <div className="w-full sm:w-auto shrink-0 flex flex-col">
+                        <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Satuan</Label>
+                        <span className={cn(
+                          'inline-flex h-9 w-full items-center justify-center rounded-md border px-2 text-xs font-semibold',
+                          l.product?.satuan
+                            ? 'bg-white text-slate-700 border-slate-200'
+                            : 'bg-slate-50 text-slate-400 border-dashed',
+                        )}
+                        >
+                          {l.product?.satuan || '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-end sm:justify-center sm:pt-0.5">
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9 shrink-0 text-slate-400 hover:text-red-600 self-end sm:self-center"
+                          className="h-9 w-9 shrink-0 text-slate-400 hover:text-red-600"
                           onClick={() => removeLine(i)}
                           disabled={lines.length <= 1}
                           title="Hapus baris"
@@ -787,7 +858,8 @@ export default function CustomerPoPage() {
                         </Button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

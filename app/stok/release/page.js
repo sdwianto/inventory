@@ -56,6 +56,63 @@ export default function ReleaseInventoryPage() {
 
   const canCreate = CAN_CREATE.includes(user?.role);
   const canApprove = CAN_APPROVE.includes(user?.role);
+  const isAdminApprover = ['ADMIN', 'MASTER'].includes(user?.role);
+
+  const renderPendingActions = (r) => {
+    if (r.status !== 'PENDING_APPROVAL' || !canApprove) return null;
+
+    const isOwn = r.createdBy?.userId === user?.id;
+
+    if (isAdminApprover) {
+      return (
+        <>
+          <Button
+            size="sm"
+            className="h-8 bg-green-600 hover:bg-green-700 whitespace-nowrap"
+            onClick={() => action(r.id, 'approve')}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+            {isOwn ? 'Admin Approve' : 'Approve'}
+          </Button>
+          {!isOwn && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 whitespace-nowrap text-red-700 border-red-200 hover:bg-red-50"
+              onClick={() => action(r.id, 'reject', { reason: 'Dibatalkan admin' })}
+            >
+              <XCircle className="w-3.5 h-3.5 mr-1" />
+              Batal
+            </Button>
+          )}
+        </>
+      );
+    }
+
+    if (isOwn) return null;
+
+    return (
+      <>
+        <Button
+          size="sm"
+          className="h-8 bg-green-600 hover:bg-green-700 whitespace-nowrap"
+          onClick={() => action(r.id, 'approve')}
+        >
+          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+          Setujui
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 whitespace-nowrap text-red-700 border-red-200 hover:bg-red-50"
+          onClick={() => action(r.id, 'reject', { reason: 'Ditolak supervisor' })}
+        >
+          <XCircle className="w-3.5 h-3.5 mr-1" />
+          Tolak
+        </Button>
+      </>
+    );
+  };
 
   const addItem = (p) => {
     if (form.items.find((it) => it.stokId === p.id)) {
@@ -150,7 +207,7 @@ export default function ReleaseInventoryPage() {
                 <th className="px-3 py-2 text-center">Item</th>
                 <th className="px-3 py-2 text-center">Status</th>
                 <th className="px-3 py-2 text-left">Dibuat oleh</th>
-                <th className="px-3 py-2 text-center">Aksi</th>
+                <th className="px-3 py-2 text-center min-w-[180px]">Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -168,27 +225,15 @@ export default function ReleaseInventoryPage() {
                     <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[r.status] || ''}`}>{r.status}</span>
                   </td>
                   <td className="px-3 py-2 text-xs">{r.createdBy?.userName || '—'}</td>
-                  <td className="px-3 py-2 text-center space-x-1">
-                    {r.status === 'DRAFT' && canCreate && r.createdBy?.userId === user?.id && (
-                      <Button size="sm" variant="outline" onClick={() => action(r.id, 'submit')}>
-                        <Send className="w-3 h-3 mr-1" /> Ajukan
-                      </Button>
-                    )}
-                    {r.status === 'PENDING_APPROVAL' && canApprove && r.createdBy?.userId !== user?.id && (
-                      <>
-                        <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => action(r.id, 'approve')}>
-                          <CheckCircle2 className="w-3 h-3 mr-1" /> Setujui
+                  <td className="px-3 py-2">
+                    <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                      {r.status === 'DRAFT' && canCreate && r.createdBy?.userId === user?.id && (
+                        <Button size="sm" variant="outline" className="h-8 whitespace-nowrap" onClick={() => action(r.id, 'submit')}>
+                          <Send className="w-3.5 h-3.5 mr-1" /> Ajukan
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => action(r.id, 'reject', { reason: 'Ditolak supervisor' })}>
-                          <XCircle className="w-3 h-3" />
-                        </Button>
-                      </>
-                    )}
-                    {r.status === 'PENDING_APPROVAL' && canApprove && user?.role === 'ADMIN' && (
-                      <Button size="sm" className="bg-green-600 hover:bg-green-700 ml-1" onClick={() => action(r.id, 'approve')}>
-                        Admin Approve
-                      </Button>
-                    )}
+                      )}
+                      {renderPendingActions(r)}
+                    </div>
                   </td>
                 </tr>
               ))}

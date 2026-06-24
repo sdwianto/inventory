@@ -90,7 +90,7 @@ export default function VendorInvoiceDetail({
 
         <VendorInvoiceDocument detail={detail} className="mx-auto" />
 
-        <div className="flex flex-wrap gap-2 pt-4 mt-4 border-t no-print">
+        <div className="flex flex-wrap gap-2 pt-4 mt-4 border-t no-print justify-end">
           {approval === 'PENDING_REVIEW' && (
             <>
               <Button onClick={onApprove} disabled={acting === 'approve'} className="bg-green-600 hover:bg-green-700">

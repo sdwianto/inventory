@@ -76,23 +76,6 @@ export default function HutangVendorPage() {
     return () => window.removeEventListener('erp-hutang-change', onHutangChange);
   }, [load, loadPendingCount]);
 
-  useEffect(() => {
-    const sync = () => {
-      fetch('/api/hutang/sync-pending', { method: 'POST' })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.created > 0) {
-            toast.success(`${d.created} tagihan baru dari sales.app`);
-            load();
-          }
-        })
-        .catch(() => {});
-    };
-    sync();
-    const t = setInterval(sync, 45000);
-    return () => clearInterval(t);
-  }, [load]);
-
   const openDetail = async (id) => {
     setLoadingDetail(id);
     try {
@@ -193,8 +176,11 @@ export default function HutangVendorPage() {
       if (data.skipped) toast.info(data.error || 'Endpoint sync belum tersedia di sales.app');
       else if ((data.reconcile?.replayed || 0) > 0 && (data.reconcile?.created || 0) > 0) {
         toast.success(`${data.reconcile.created} faktur dibuat ulang di sales.app`);
-      } else if ((data.reconcile?.fixed || 0) > 0) {
-        toast.success(`${data.reconcile.fixed} tagihan diperbaiki — cek tab Menunggu review`);
+      } else if ((data.refreshed || 0) > 0 || (data.reconcile?.fixed || 0) > 0) {
+        const n = (data.refreshed || 0) + (data.reconcile?.fixed || 0);
+        toast.success(`${n} tagihan dipulihkan — cek tab Menunggu review`);
+      } else if ((data.pendingAfter || 0) > 0) {
+        toast.success(`${data.pendingAfter} tagihan menunggu review admin`);
       } else if (data.reconcile?.salesErrors?.length) {
         toast.warning(`Gagal buat faktur di sales: ${data.reconcile.salesErrors[0]?.error || 'cek pelanggan B2B'}`);
       } else if ((data.created || 0) > 0) {

@@ -20,7 +20,7 @@ import { triggerVendorCatalogAutoSync } from '@/lib/integration-auto-sync';
 
 const NAV = [
   { type: 'item', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true },
+  { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true, badgeKey: 'grnPending' },
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
   { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
@@ -94,7 +94,10 @@ export default function AppShell({ children }) {
   const [tenantLogo, setTenantLogo] = useState('');
   const [lokasiLabel, setLokasiLabel] = useState('');
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
-  const [navBadges, setNavBadges] = useState({ hutangReview: 0 });
+  const [navBadges, setNavBadges] = useState({ hutangReview: 0, grnPending: 0 });
+
+  const GRN_PENDING_STATUSES = new Set(['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING']);
+  const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 
   const refreshOperationalScope = async (synced) => {
     if (!synced) return;
@@ -153,23 +156,47 @@ export default function AppShell({ children }) {
 
   useEffect(() => {
     if (!user || !['ADMIN', 'MASTER'].includes(user.role)) return undefined;
-    const loadBadges = () => {
+    const loadHutangBadge = () => {
       fetch('/api/hutang?approvalStatus=PENDING_REVIEW')
         .then((r) => r.json())
         .then((list) => {
-          setNavBadges({
+          setNavBadges((prev) => ({
+            ...prev,
             hutangReview: Array.isArray(list) ? list.length : 0,
-          });
+          }));
         })
         .catch(() => {});
     };
-    loadBadges();
-    const t = setInterval(loadBadges, 60000);
-    const onHutangChange = () => loadBadges();
+    loadHutangBadge();
+    const t = setInterval(loadHutangBadge, 60000);
+    const onHutangChange = () => loadHutangBadge();
     window.addEventListener('erp-hutang-change', onHutangChange);
     return () => {
       clearInterval(t);
       window.removeEventListener('erp-hutang-change', onHutangChange);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !GRN_BADGE_ROLES.has(user.role)) return undefined;
+    const loadGrnBadge = () => {
+      fetch('/api/goods-receipts')
+        .then((r) => r.json())
+        .then((list) => {
+          const count = Array.isArray(list)
+            ? list.filter((g) => GRN_PENDING_STATUSES.has(g.status)).length
+            : 0;
+          setNavBadges((prev) => ({ ...prev, grnPending: count }));
+        })
+        .catch(() => {});
+    };
+    loadGrnBadge();
+    const t = setInterval(loadGrnBadge, 60000);
+    const onGrnChange = () => loadGrnBadge();
+    window.addEventListener('erp-grn-change', onGrnChange);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('erp-grn-change', onGrnChange);
     };
   }, [user]);
 

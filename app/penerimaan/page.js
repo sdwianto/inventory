@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
-import { PackageCheck, FileText, Truck, Eye } from 'lucide-react';
+import { PackageCheck, FileText, Truck, Eye, RefreshCw } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
 
 const STATUS_STYLE = {
@@ -33,6 +33,10 @@ function supplierLabel(row) {
   return row?.supplierName || row?.vendorTenantName || row?.vendorName || '—';
 }
 
+function itemRowKey(it, idx) {
+  return `${it?.lineId || 'line'}-${idx}`;
+}
+
 export default function PenerimaanPage() {
   const [list, setList] = useState([]);
   const [posting, setPosting] = useState('');
@@ -42,10 +46,39 @@ export default function PenerimaanPage() {
   const [gudangMap, setGudangMap] = useState({});
   const [doView, setDoView] = useState(null);
   const [loadingDo, setLoadingDo] = useState('');
+  const [replayingInvoice, setReplayingInvoice] = useState('');
+
+  const needsInvoiceReplay = (row) => row?.status === 'POSTED' && row?.noDO && !row?.noInvoice;
+
+  const replayInvoice = async (id, noGRN) => {
+    setReplayingInvoice(id);
+    try {
+      const res = await fetch(`/api/goods-receipts/${id}/replay-invoice`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.invoiceSync?.error || 'Gagal buat faktur');
+      const inv = data.noInvoice || data.invoiceSync?.noInvoice;
+      const hutang = data.invoiceSync?.hutang;
+      if (data.invoiceSync?.error) {
+        toast.warning(`GRN ${noGRN}: ${data.invoiceSync.error}`);
+      } else if (hutang?.hutangId || inv) {
+        toast.success(`Faktur ${inv || ''} dibuat — cek Tagihan Vendor (menunggu review)`);
+        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+      } else {
+        toast.success(`Permintaan faktur untuk ${noGRN} terkirim ke sales.app`);
+      }
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setReplayingInvoice('');
+  };
 
   const load = () => fetch('/api/goods-receipts')
     .then((r) => r.json())
-    .then((data) => setList(Array.isArray(data) ? data : []))
+    .then((data) => {
+      setList(Array.isArray(data) ? data : []);
+      window.dispatchEvent(new CustomEvent('erp-grn-change'));
+    })
     .catch(() => setList([]));
   useEffect(() => { load(); }, []);
 
@@ -93,9 +126,10 @@ export default function PenerimaanPage() {
     );
     const initQty = {};
     const initGudang = {};
-    for (const it of (data.items || [])) {
-      initQty[it.lineId] = it.qtyOrdered ?? 0;
-      initGudang[it.lineId] = gudangByStok[it.localStokId] || 'GKERING';
+    for (const [idx, it] of (data.items || []).entries()) {
+      const key = itemRowKey(it, idx);
+      initQty[key] = it.qtyOrdered ?? 0;
+      initGudang[key] = gudangByStok[it.localStokId] || 'GKERING';
     }
     setQtyMap(initQty);
     setGudangMap(initGudang);
@@ -104,10 +138,11 @@ export default function PenerimaanPage() {
   const postGrn = async () => {
     if (!detail) return;
     setPosting(detail.id);
-    const items = (detail.items || []).map((it) => ({
+    const items = (detail.items || []).map((it, idx) => ({
       lineId: it.lineId,
-      qty: parseFloat(qtyMap[it.lineId]) || 0,
-      lokasiKode: gudangMap[it.lineId] || 'GKERING',
+      lineIndex: idx,
+      qty: parseFloat(qtyMap[itemRowKey(it, idx)]) || 0,
+      lokasiKode: gudangMap[itemRowKey(it, idx)] || 'GKERING',
     })).filter((it) => it.qty > 0);
 
     const res = await fetch(`/api/goods-receipts/${detail.id}/post`, {
@@ -125,7 +160,8 @@ export default function PenerimaanPage() {
       } else if (data.invoiceSync?.hutang?.hutangId) {
         const inv = data.noInvoice || data.invoiceSync?.noInvoice || data.invoiceSync?.hutang?.noInvoice;
         const approval = data.invoiceSync?.hutang?.approvalStatus;
-        const isPending = !approval || approval === 'PENDING_REVIEW'
+        const refreshed = data.invoiceSync?.hutang?.action === 'refreshed';
+        const isPending = refreshed || !approval || approval === 'PENDING_REVIEW'
           || data.invoiceSync?.hutang?.action === 'created';
         if (isPending) {
           toast.success(`Barang diterima — faktur ${inv} masuk Tagihan Vendor (menunggu review admin)`);
@@ -228,6 +264,31 @@ export default function PenerimaanPage() {
                           Terima Barang
                         </Button>
                       )}
+                      {needsInvoiceReplay(r) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-orange-700 border-orange-300 hover:bg-orange-50"
+                          disabled={replayingInvoice === r.id}
+                          title="Buat ulang faktur di sales.app dan masukkan ke Tagihan Vendor"
+                          onClick={() => replayInvoice(r.id, r.noGRN)}
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 mr-1 ${replayingInvoice === r.id ? 'animate-spin' : ''}`} />
+                          Buat faktur
+                        </Button>
+                      )}
+                      {r.status === 'POSTED' && r.noInvoice && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-slate-600"
+                          disabled={replayingInvoice === r.id}
+                          title="Sinkron ulang faktur dari sales.app"
+                          onClick={() => replayInvoice(r.id, r.noGRN)}
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${replayingInvoice === r.id ? 'animate-spin' : ''}`} />
+                        </Button>
+                      )}
                       {isUnresolvedGrn(r.status) && (
                         <Link href="/produk" className="text-amber-700 text-xs underline">Daftar di Master Produk</Link>
                       )}
@@ -251,8 +312,10 @@ export default function PenerimaanPage() {
             {' · '}Gudang mengikuti master produk (Kering/Basah tidak bisa dicampur)
           </p>
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {(detail?.items || []).map((it) => (
-              <div key={it.lineId} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
+            {(detail?.items || []).map((it, idx) => {
+              const rowKey = itemRowKey(it, idx);
+              return (
+              <div key={rowKey} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
                 <div className="flex-1 min-w-[140px]">
                   <div className="font-medium truncate">{it.localNama || it.vendorNama || it.nama}</div>
                   <div className="text-xs text-slate-500">{it.vendorKode} · kirim: {it.qtyOrdered} {it.satuan}</div>
@@ -260,11 +323,11 @@ export default function PenerimaanPage() {
                 <div className="w-36">
                   <Label className="text-xs">Gudang</Label>
                   <div className={`h-9 px-3 flex items-center rounded-md border text-xs font-medium ${
-                    (gudangMap[it.lineId] || 'GKERING') === 'GBASAH'
+                    (gudangMap[rowKey] || 'GKERING') === 'GBASAH'
                       ? 'bg-blue-50 text-blue-800 border-blue-200'
                       : 'bg-amber-50 text-amber-800 border-amber-200'
                   }`}>
-                    {warehouseName(gudangMap[it.lineId] || 'GKERING')}
+                    {warehouseName(gudangMap[rowKey] || 'GKERING')}
                   </div>
                 </div>
                 <div className="w-24">
@@ -274,12 +337,13 @@ export default function PenerimaanPage() {
                     min={0}
                     max={it.qtyOrdered}
                     step="any"
-                    value={qtyMap[it.lineId] ?? ''}
-                    onChange={(e) => setQtyMap({ ...qtyMap, [it.lineId]: e.target.value })}
+                    value={qtyMap[rowKey] ?? ''}
+                    onChange={(e) => setQtyMap({ ...qtyMap, [rowKey]: e.target.value })}
                   />
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetail(null)}>Batal</Button>
@@ -345,9 +409,9 @@ export default function PenerimaanPage() {
                 </tr>
               </thead>
               <tbody>
-                {(doView?.items || []).map((it) => (
+                {(doView?.items || []).map((it, idx) => (
                   <tr
-                    key={it.lineId || it.vendorKode}
+                    key={itemRowKey(it, idx)}
                     className={`border-t border-slate-100 ${!it.localStokId ? 'bg-amber-50' : ''}`}
                   >
                     <td className="px-2 py-1.5 font-mono">{it.vendorKode || it.localKode || '—'}</td>
@@ -377,6 +441,17 @@ export default function PenerimaanPage() {
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDoView(null)}>Tutup</Button>
+            {doView?.status === 'POSTED' && doView?.noDO && (
+              <Button
+                variant="outline"
+                className="text-orange-700 border-orange-300"
+                disabled={replayingInvoice === doView.id}
+                onClick={() => replayInvoice(doView.id, doView.noGRN)}
+              >
+                <RefreshCw className={`w-4 h-4 mr-1 ${replayingInvoice === doView.id ? 'animate-spin' : ''}`} />
+                {doView.noInvoice ? 'Sinkron ulang faktur' : 'Buat faktur vendor'}
+              </Button>
+            )}
             {doView?.status === 'DRAFT' && (
               <Button
                 className="bg-orange-500 hover:bg-orange-600"
