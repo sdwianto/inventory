@@ -42,11 +42,11 @@ export default function PengeluaranPengadaanPage() {
 
   const exportCsv = () => {
     if (!data?.rows?.length) { toast.error('Tidak ada data'); return; }
-    const header = ['No PO', 'No SO', 'No Invoice', 'Supplier', 'Estimasi PO', 'Nilai SO', 'Invoice', 'Selisih PO→SO', 'Selisih SO→Inv', 'Disetujui'];
+    const header = ['No PO', 'No SO', 'No Invoice', 'Supplier', 'Estimasi PO', 'Nilai SO', 'Nilai GRN', 'Invoice', 'Selisih PO→SO', 'Selisih SO→Inv', 'Selisih GRN→Inv', 'Disetujui'];
     const lines = data.rows.map((r) => [
       r.noPO || '', r.noSO || '', r.noInvoice || '', r.supplierName || '',
-      r.poEstimasiTotal, r.soTotal, r.invoiceTotal,
-      r.variancePoToSo, r.varianceSoToInvoice,
+      r.poEstimasiTotal, r.soTotal, r.grnReceivedTotal || 0, r.invoiceTotal,
+      r.variancePoToSo, r.varianceSoToInvoice, r.varianceGrnToInvoice ?? (r.invoiceTotal - (r.grnReceivedTotal || 0)),
       r.approvedAt ? formatDate(r.approvedAt) : '',
     ].join(','));
     const blob = new Blob([[header.join(','), ...lines].join('\n')], { type: 'text/csv' });
@@ -136,22 +136,24 @@ export default function PengeluaranPengadaanPage() {
         )}
 
         <div className="bg-white border rounded-lg overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1100px]">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
                 <th className="px-3 py-2 text-left">No. PO</th>
                 <th className="px-3 py-2 text-left">Invoice</th>
                 <th className="px-3 py-2 text-right">Estimasi PO</th>
                 <th className="px-3 py-2 text-right">Nilai SO</th>
+                <th className="px-3 py-2 text-right">Nilai GRN</th>
                 <th className="px-3 py-2 text-right">Invoice</th>
                 <th className="px-3 py-2 text-right">Δ PO→SO</th>
                 <th className="px-3 py-2 text-right">Δ SO→Inv</th>
+                <th className="px-3 py-2 text-right">Δ GRN→Inv</th>
                 <th className="px-3 py-2 text-left">Disetujui</th>
               </tr>
             </thead>
             <tbody>
               {!data?.rows?.length && (
-                <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada tagihan disetujui dalam periode ini</td></tr>
+                <tr><td colSpan={10} className="text-center py-10 text-slate-400">Belum ada tagihan disetujui dalam periode ini</td></tr>
               )}
               {(data?.rows || []).map((r) => (
                 <tr key={r.id} className="border-t">
@@ -159,12 +161,16 @@ export default function PengeluaranPengadaanPage() {
                   <td className="px-3 py-2 font-mono text-xs">{r.noInvoice}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatIDR(r.poEstimasiTotal)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatIDR(r.soTotal)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{formatIDR(r.grnReceivedTotal || 0)}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-medium">{formatIDR(r.invoiceTotal)}</td>
                   <td className={`px-3 py-2 text-right tabular-nums ${r.variancePoToSo > 0 ? 'text-red-600' : ''}`}>
                     {formatIDR(r.variancePoToSo)}
                   </td>
                   <td className={`px-3 py-2 text-right tabular-nums ${r.varianceSoToInvoice > 0 ? 'text-red-600' : ''}`}>
                     {formatIDR(r.varianceSoToInvoice)}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${(r.varianceGrnToInvoice ?? 0) > 0 ? 'text-red-600' : ''}`}>
+                    {formatIDR(r.varianceGrnToInvoice ?? (r.invoiceTotal - (r.grnReceivedTotal || 0)))}
                   </td>
                   <td className="px-3 py-2 text-xs">{r.approvedAt ? formatDate(r.approvedAt) : '—'}</td>
                 </tr>

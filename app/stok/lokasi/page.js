@@ -6,22 +6,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { MapPin, Plus, Pencil, Trash2 } from 'lucide-react';
-import { useConfirm } from '@/components/ConfirmProvider';
+import { MapPin, Pencil } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
 import TenantScopeField, { tenantLabel } from '@/components/TenantScopeField';
 import { withActingTenantQuery } from '@/lib/tenant-api';
 import { invalidateLokasiCache } from '@/lib/lokasi-client';
 import ListExportMenu from '@/components/ListExportMenu';
-import BulkSelectionBar from '@/components/BulkSelectionBar';
-import { useListSelection } from '@/hooks/useListSelection';
 import { runListExport } from '@/lib/run-list-export';
-import { postBulkDelete } from '@/lib/bulk-delete-client';
 
 const empty = { kode: '', nama: '', keterangan: '', tenantId: '' };
 
 export default function LokasiPage() {
-  const confirm = useConfirm();
   const [user, setUser] = useState(null);
   const [tenants, setTenants] = useState([]);
   const [filterTenantId, setFilterTenantId] = useState('');
@@ -29,8 +24,6 @@ export default function LokasiPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(empty);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const selection = useListSelection();
 
   const isMaster = user?.role === 'MASTER';
 
@@ -42,7 +35,6 @@ export default function LokasiPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal memuat');
       setList(Array.isArray(data) ? data : []);
-      selection.clear();
       invalidateLokasiCache();
     } catch (e) {
       toast.error(e.message);
@@ -69,46 +61,20 @@ export default function LokasiPage() {
     if (!isMaster || filterTenantId) load(filterTenantId);
   }, [user, filterTenantId]);
 
-  const openNew = () => {
-    if (isMaster && !filterTenantId) {
-      toast.error('Pilih tenant untuk lokasi baru');
-      return;
-    }
-    setEditing(null);
-    setForm({
-      ...empty,
-      tenantId: isMaster ? filterTenantId : (user?.tenantId || ''),
-    });
-    setShowForm(true);
-  };
-
   const save = async () => {
-    if (isMaster && !editing && !form.tenantId) {
-      toast.error('Pilih tenant untuk lokasi baru');
-      return;
-    }
+    if (!editing) return;
     try {
-      const url = editing ? `/api/lokasi/${editing.id}` : '/api/lokasi';
-      const payload = { ...form };
-      if (!isMaster) delete payload.tenantId;
-      const res = await fetch(url, {
-        method: editing ? 'PUT' : 'POST',
+      const res = await fetch(`/api/lokasi/${editing.id}`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ keterangan: form.keterangan }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || 'Gagal');
-      toast.success('Tersimpan');
+      toast.success('Keterangan gudang diperbarui');
       setShowForm(false);
       load();
     } catch (e) { toast.error(e.message); }
-  };
-
-  const remove = async (id) => {
-    if (!(await confirm({ title: 'Hapus Lokasi?', description: 'Lokasi ini akan dihapus dari sistem.', confirmText: 'Hapus' }))) return;
-    await fetch(`/api/lokasi/${id}`, { method: 'DELETE' });
-    toast.success('Dihapus');
-    load();
   };
 
   const getExportColumns = () => [
@@ -125,7 +91,7 @@ export default function LokasiPage() {
       const tenantPart = filterTenantId ? `-${filterTenantId}` : '';
       await runListExport(format, {
         baseName: `lokasi${tenantPart}-${stamp}`,
-        title: 'Master Lokasi',
+        title: 'Gudang Operasional',
         columns: getExportColumns(),
         rows,
       });
@@ -135,40 +101,16 @@ export default function LokasiPage() {
     }
   };
 
-  const bulkDelete = async () => {
-    const ids = selection.ids();
-    if (ids.length === 0) return;
-    if (!(await confirm({
-      title: `Hapus ${ids.length} lokasi?`,
-      description: 'Lokasi terpilih akan dihapus permanen.',
-      confirmText: 'Hapus semua',
-    }))) return;
-    setBulkDeleting(true);
-    try {
-      const data = await postBulkDelete('/api/lokasi/bulk-delete', ids);
-      toast.success(`${data.deleted ?? ids.length} lokasi dihapus`);
-      selection.clear();
-      load();
-    } catch (e) {
-      toast.error(e.message);
-    }
-    setBulkDeleting(false);
-  };
-
-  const allSelected = list.length > 0 && selection.count === list.length;
-  const colSpan = isMaster ? 6 : 5;
-
   return (
     <AppShell>
       <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2"><MapPin className="w-6 h-6" /> Master Lokasi</h1>
-            <p className="text-sm text-slate-500">Gudang/cabang per tenant — dipakai di Pembelian, Kasir, dan stok</p>
+            <h1 className="text-2xl font-bold flex items-center gap-2"><MapPin className="w-6 h-6" /> Gudang Operasional</h1>
+            <p className="text-sm text-slate-500">Dua gudang tetap per tenant: <b>Gudang Kering</b> (GKERING) dan <b>Gudang Basah</b> (GBASAH). Penempatan produk diatur di Master Produk.</p>
           </div>
           <div className="flex gap-2">
             <ListExportMenu onExport={exportData} disabled={list.length === 0} />
-            <Button onClick={openNew} className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-2" /> Lokasi Baru</Button>
           </div>
         </div>
 
@@ -183,21 +125,10 @@ export default function LokasiPage() {
           />
         )}
 
-        <BulkSelectionBar
-          count={selection.count}
-          entityLabel="lokasi"
-          onDelete={bulkDelete}
-          onClear={selection.clear}
-          deleting={bulkDeleting}
-        />
-
         <div className="bg-white border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
-                <th className="px-3 py-2 w-10">
-                  <input type="checkbox" checked={allSelected} onChange={() => selection.toggleAll(list)} disabled={list.length === 0} aria-label="Pilih semua" />
-                </th>
                 {isMaster && <th className="px-3 py-2 text-left">Tenant</th>}
                 <th className="px-3 py-2 text-left">Kode</th>
                 <th className="px-3 py-2 text-left">Nama</th>
@@ -207,16 +138,13 @@ export default function LokasiPage() {
             </thead>
             <tbody>
               {isMaster && !filterTenantId && (
-                <tr><td colSpan={colSpan} className="text-center py-10 text-slate-400">Pilih tenant untuk melihat gudang/lokasi</td></tr>
+                <tr><td colSpan={isMaster ? 5 : 4} className="text-center py-10 text-slate-400">Pilih tenant untuk melihat gudang</td></tr>
               )}
               {(isMaster ? filterTenantId : true) && list.length === 0 && (
-                <tr><td colSpan={colSpan} className="text-center py-10 text-slate-400">Belum ada lokasi</td></tr>
+                <tr><td colSpan={isMaster ? 5 : 4} className="text-center py-10 text-slate-400">Memuat gudang…</td></tr>
               )}
               {list.map((l) => (
                 <tr key={l.id} className="border-t hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <input type="checkbox" checked={selection.isSelected(l.id)} onChange={() => selection.toggle(l.id)} aria-label={`Pilih ${l.nama}`} />
-                  </td>
                   {isMaster && (
                     <td className="px-3 py-2 text-xs">
                       <span className="px-2 py-0.5 bg-orange-50 text-orange-800 rounded font-mono">
@@ -229,8 +157,7 @@ export default function LokasiPage() {
                   <td className="px-3 py-2 text-slate-500">{l.keterangan || '-'}</td>
                   <td className="px-3 py-2">
                     <div className="flex justify-center gap-1">
-                      <button type="button" onClick={() => { setEditing(l); setForm({ ...l, tenantId: l.tenantId || '' }); setShowForm(true); }} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded"><Pencil className="w-4 h-4" /></button>
-                      <button type="button" onClick={() => remove(l.id)} className="p-1.5 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
+                      <button type="button" onClick={() => { setEditing(l); setForm({ keterangan: l.keterangan || '', tenantId: l.tenantId || '' }); setShowForm(true); }} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded" title="Edit keterangan"><Pencil className="w-4 h-4" /></button>
                     </div>
                   </td>
                 </tr>
@@ -241,21 +168,14 @@ export default function LokasiPage() {
       </div>
       <Dialog open={showForm} onOpenChange={setShowForm}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>{editing ? 'Edit Lokasi' : 'Lokasi Baru'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Edit Keterangan Gudang</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            {isMaster && !editing && (
-              <TenantScopeField
-                user={user}
-                tenants={tenants}
-                value={form.tenantId}
-                onChange={(tid) => setForm({ ...form, tenantId: tid })}
-                required
-                label="Tenant pemilik gudang"
-              />
+            {editing && (
+              <p className="text-sm text-slate-600">
+                <span className="font-mono font-semibold">{editing.kode}</span> — {editing.nama}
+              </p>
             )}
-            <div><Label>Kode</Label><Input value={form.kode} onChange={(e) => setForm({ ...form, kode: e.target.value })} placeholder="auto" disabled={!!editing} /></div>
-            <div><Label>Nama Gudang *</Label><Input value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} placeholder="Gudang Utama" /></div>
-            <div><Label>Keterangan</Label><Input value={form.keterangan} onChange={(e) => setForm({ ...form, keterangan: e.target.value })} placeholder="Nama toko / cabang" /></div>
+            <div><Label>Keterangan</Label><Input value={form.keterangan} onChange={(e) => setForm({ ...form, keterangan: e.target.value })} placeholder="Catatan tambahan gudang" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button><Button onClick={save} className="bg-orange-500 hover:bg-orange-600">Simpan</Button></DialogFooter>
         </DialogContent>

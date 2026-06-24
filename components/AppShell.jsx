@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { getUser, clearUser, syncSessionUser } from '@/lib/auth-client';
 import {
@@ -16,7 +17,11 @@ import { formatDateTime } from '@/lib/format';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { getLokasiAktif, loadLokasiForTenant } from '@/lib/lokasi-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
+import TenantScopeSelector from '@/components/TenantScopeSelector';
 import { triggerVendorCatalogAutoSync } from '@/lib/integration-auto-sync';
+import { debounce } from '@/lib/debounce';
+import { useGrnPendingCount } from '@/lib/hooks/use-goods-receipts';
+import { useHutangPendingCount } from '@/lib/hooks/use-vendor-hutang';
 
 const NAV = [
   { type: 'item', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -38,7 +43,7 @@ const NAV = [
       { href: '/stok/kartu', label: 'Kartu Stok', icon: Receipt },
       { href: '/stok/penyesuaian', label: 'Penyesuaian', icon: FileEdit },
       { href: '/stok/transfer', label: 'Transfer Stok', icon: ArrowLeftRight },
-      { href: '/stok/lokasi', label: 'Master Lokasi', icon: MapPin },
+      { href: '/stok/lokasi', label: 'Gudang Operasional', icon: MapPin },
     ],
   },
   {
@@ -65,8 +70,10 @@ const ROLE_PERMISSIONS = {
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user'],
+  OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+          '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
+          '/integrasi', '/utiliti/tenant', '/utiliti/user'],
   MASTER: '*',
-  OWNER: '*',
 };
 
 const filterByRole = (items, role) => {
@@ -96,7 +103,6 @@ export default function AppShell({ children }) {
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
   const [navBadges, setNavBadges] = useState({ hutangReview: 0, grnPending: 0 });
 
-  const GRN_PENDING_STATUSES = new Set(['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING']);
   const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 
   const refreshOperationalScope = async (synced) => {
@@ -143,62 +149,49 @@ export default function AppShell({ children }) {
     });
   }, [router]);
 
+  const queryClient = useQueryClient();
+
   useEffect(() => {
     if (!user) return undefined;
-    const onScopeChange = () => refreshOperationalScope(user);
+    const onScopeChange = () => {
+      refreshOperationalScope(user);
+      queryClient.invalidateQueries();
+    };
     window.addEventListener('erp-scope-change', onScopeChange);
     window.addEventListener('storage', onScopeChange);
     return () => {
       window.removeEventListener('erp-scope-change', onScopeChange);
       window.removeEventListener('storage', onScopeChange);
     };
-  }, [user]);
+  }, [user, queryClient]);
+
+  const showHutangBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
+  const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
+  const { data: grnPending = 0 } = useGrnPendingCount(!!showGrnBadge);
+  const { data: hutangReview = 0 } = useHutangPendingCount(!!showHutangBadge);
+
+  const debouncedBadgeRefresh = useMemo(
+    () => debounce(() => {
+      queryClient.invalidateQueries({ queryKey: ['goods-receipts', 'pending-count'] });
+      queryClient.invalidateQueries({ queryKey: ['hutang', 'pending-count'] });
+    }, 300),
+    [queryClient],
+  );
 
   useEffect(() => {
-    if (!user || !['ADMIN', 'MASTER'].includes(user.role)) return undefined;
-    const loadHutangBadge = () => {
-      fetch('/api/hutang?approvalStatus=PENDING_REVIEW')
-        .then((r) => r.json())
-        .then((list) => {
-          setNavBadges((prev) => ({
-            ...prev,
-            hutangReview: Array.isArray(list) ? list.length : 0,
-          }));
-        })
-        .catch(() => {});
-    };
-    loadHutangBadge();
-    const t = setInterval(loadHutangBadge, 60000);
-    const onHutangChange = () => loadHutangBadge();
-    window.addEventListener('erp-hutang-change', onHutangChange);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener('erp-hutang-change', onHutangChange);
-    };
-  }, [user]);
+    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview }));
+  }, [grnPending, hutangReview]);
 
   useEffect(() => {
-    if (!user || !GRN_BADGE_ROLES.has(user.role)) return undefined;
-    const loadGrnBadge = () => {
-      fetch('/api/goods-receipts')
-        .then((r) => r.json())
-        .then((list) => {
-          const count = Array.isArray(list)
-            ? list.filter((g) => GRN_PENDING_STATUSES.has(g.status)).length
-            : 0;
-          setNavBadges((prev) => ({ ...prev, grnPending: count }));
-        })
-        .catch(() => {});
-    };
-    loadGrnBadge();
-    const t = setInterval(loadGrnBadge, 60000);
-    const onGrnChange = () => loadGrnBadge();
-    window.addEventListener('erp-grn-change', onGrnChange);
+    const onGrn = () => debouncedBadgeRefresh();
+    const onHutang = () => debouncedBadgeRefresh();
+    window.addEventListener('erp-grn-change', onGrn);
+    window.addEventListener('erp-hutang-change', onHutang);
     return () => {
-      clearInterval(t);
-      window.removeEventListener('erp-grn-change', onGrnChange);
+      window.removeEventListener('erp-grn-change', onGrn);
+      window.removeEventListener('erp-hutang-change', onHutang);
     };
-  }, [user]);
+  }, [debouncedBadgeRefresh]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -259,13 +252,18 @@ export default function AppShell({ children }) {
             )}
           </div>
           <div className="min-w-0">
-            <div className="font-bold text-base leading-tight truncate">{user.tenantName || 'Kasir App'}</div>
+            <div className="font-bold text-base leading-tight truncate">{user.tenantName || 'Inventory App'}</div>
             <div className="text-xs text-slate-400">
               {user.role === 'MASTER' ? <span className="text-bgn-gold font-semibold">MASTER • Pusat</span> : `Tenant: ${user.tenantId || 'default'}`}
             </div>
           </div>
         </div>
         <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto overscroll-contain">
+          {user.role === 'MASTER' ? (
+            <div className="px-1 pb-3 mb-2 border-b border-bgn-navy-light">
+              <TenantScopeSelector />
+            </div>
+          ) : null}
           {visibleNav.map((item) => {
             if (item.type === 'item') {
               const Icon = item.icon;
@@ -369,7 +367,7 @@ export default function AppShell({ children }) {
               )}
               <span className="text-slate-300 hidden sm:inline">|</span>
               {user.role === 'MASTER' && !scopeTenantLabel ? (
-                <span className="text-amber-700 text-xs sm:text-sm">Tenant: pilih di Pembelian / Kasir / Master Data</span>
+                <span className="text-amber-700 text-xs sm:text-sm">Pilih tenant operasional di sidebar</span>
               ) : (
                 <>
                   {scopeTenantLabel && (

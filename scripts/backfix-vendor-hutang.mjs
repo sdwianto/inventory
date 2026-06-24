@@ -41,6 +41,7 @@ function needsPendingReview(h, fromPostedGrn = false) {
   if (approval === 'PENDING_REVIEW' || approval === 'REJECTED') return false;
   if (fromPostedGrn) {
     if (hasLegitimateExternalPayment(h)) return false;
+    if (hasLegitimateApproval(h)) return false;
     return true;
   }
   if (approval === 'APPROVED' && hasLegitimateApproval(h)) return false;
@@ -185,7 +186,7 @@ for (const grn of grns.sort((a, b) => new Date(b.postedAt || 0) - new Date(a.pos
       }
     }
   } else if (grn.noDO) {
-    actions.push({ action: 'missing hutang — gunakan Buat faktur di Penerimaan atau sync', noGRN: grn.noGRN, noDO: grn.noDO });
+    actions.push({ action: 'missing hutang — refresh halaman Tagihan Vendor atau klik Sync invoice', noGRN: grn.noGRN, noDO: grn.noDO });
   }
 }
 

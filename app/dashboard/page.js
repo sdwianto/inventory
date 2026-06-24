@@ -1,24 +1,25 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import DashboardProcurementCharts from '@/components/DashboardProcurementCharts';
 import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
 import { formatIDR } from '@/lib/format';
+import Link from 'next/link';
+import { fetchJson } from '@/lib/fetch-json';
+import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const [chartData, setChartData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/dashboard')
-      .then((r) => r.json())
+    fetchJson('/api/dashboard')
       .then((data) => {
         if (data?.summary) setChartData(data);
       })
-      .catch(() => {})
+      .catch((e) => toast.error(e.message || 'Gagal memuat dashboard'))
       .finally(() => setLoading(false));
   }, []);
 

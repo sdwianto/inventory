@@ -14,6 +14,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { fetchJson } from '@/lib/fetch-json';
 import {
   CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Package, Pencil, Plus, RefreshCw, Send, ShoppingBag, Trash2, XCircle,
 } from 'lucide-react';
@@ -92,26 +93,26 @@ export default function CustomerPoPage() {
   const [defaultTier, setDefaultTier] = useState('ECER');
 
   const loadProducts = useCallback(() => {
-    fetch('/api/products?limit=500&withWarehouseStock=1')
-      .then((r) => r.json())
+    fetchJson('/api/products?limit=500&withWarehouseStock=1')
       .then((data) => setProducts(Array.isArray(data) ? data : []))
-      .catch(() => setProducts([]));
+      .catch((e) => toast.error(e.message || 'Gagal memuat produk'));
   }, []);
 
   const loadVendorTiers = useCallback(() => {
-    fetch('/api/integrations/vendor-tiers')
-      .then((r) => r.json())
+    fetchJson('/api/integrations/vendor-tiers')
       .then((data) => {
         setVendorTierMap(data.tierMap || {});
         setDefaultTier(data.tierHargaDefault || 'ECER');
       })
-      .catch(() => {});
+      .catch((e) => toast.error(e.message || 'Gagal memuat tier vendor'));
   }, []);
 
-  const load = () => fetch('/api/customer-purchase-orders')
-    .then((r) => r.json())
+  const load = () => fetchJson('/api/customer-purchase-orders')
     .then((data) => setList(Array.isArray(data) ? data : []))
-    .catch(() => setList([]));
+    .catch((e) => {
+      toast.error(e.message || 'Gagal memuat PO');
+      setList([]);
+    });
   useEffect(() => {
     setUser(getUser());
     load();

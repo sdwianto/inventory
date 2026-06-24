@@ -22,11 +22,13 @@ loadEnv();
 
 const TENANT = (process.argv.find((a) => a.startsWith('--tenant=')) || '').split('=')[1] || 'sppg';
 const salesUrl = (process.env.SALES_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+const inventoryUrl = (process.env.INVENTORY_APP_URL || 'http://localhost:3001').replace(/\/$/, '');
 const apiKey = process.env.SALES_API_KEY || '';
 const vendorTenantId = process.env.SALES_VENDOR_TENANT_ID || 'default';
+const webhookSecret = process.env.WEBHOOK_SECRET || '';
 
 console.log('\n=== Verifikasi integrasi sales.app ===\n');
-console.log({ salesUrl, vendorTenantId, customerTenantId: TENANT, hasApiKey: !!apiKey });
+console.log({ salesUrl, inventoryUrl, vendorTenantId, customerTenantId: TENANT, hasApiKey: !!apiKey, hasWebhookSecret: !!webhookSecret });
 
 if (!apiKey) {
   console.error('FAIL: SALES_API_KEY tidak ada di .env.local');
@@ -52,6 +54,22 @@ async function check(name, url, opts = {}) {
   }
 }
 
+async function checkPublic(name, url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    let body = null;
+    try { body = await res.json(); } catch { body = null; }
+    const ok = res.ok;
+    console.log(`${ok ? 'OK' : 'FAIL'} ${name}: HTTP ${res.status}${body?.message ? ` — ${body.message}` : ''}`);
+    return { ok, status: res.status, body };
+  } catch (e) {
+    console.log(`FAIL ${name}: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
+await checkPublic('inventory-health', `${inventoryUrl}/api/`);
+
 await check(
   'customer-invoices',
   `${salesUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(TENANT)}`,
@@ -65,6 +83,7 @@ await check(
 const uri = process.env.MONGO_URL || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const dbName = process.env.DB_NAME || 'inventory_customer';
 const client = new MongoClient(uri);
+let productCount = 0;
 try {
   await client.connect();
   const db = client.db(dbName);
@@ -93,8 +112,27 @@ try {
     $and: [{ $or: [{ referenceType: 'VENDOR_INVOICE' }, { vendorInvoiceId: { $exists: true, $ne: null } }] }],
   });
   console.log(`Tagihan menunggu review: ${pending}`);
+  const webhookInbox = await db.collection('webhook_inbox').countDocuments({ tenantId: tidRegex });
+  console.log(`Webhook inbox (${TENANT}): ${webhookInbox} event(s)`);
+
+  productCount = await db.collection('products').countDocuments({ tenantId: tidRegex });
+  console.log(`Produk lokal: ${productCount}`);
 } finally {
   await client.close();
+}
+
+const checklist = [
+  ['WEBHOOK_SECRET di .env.local', !!webhookSecret],
+  [`SALES_VENDOR_TENANT_ID = ${vendorTenantId}`, true],
+  [`customerTenantId pelanggan di sales.app = ${TENANT}`, '— cek manual di sales.app → Pelanggan'],
+  ['Webhook delivery.shipped terdaftar di sales.app', '— cek manual di sales.app → Integrasi'],
+  ['Sync katalog awal di Master Produk', productCount > 0 ? true : '— jalankan Sync dari sales.app'],
+];
+
+console.log('\n--- Checklist integrasi ---');
+for (const [label, ok] of checklist) {
+  const mark = ok === true ? 'OK' : ok === false ? 'FAIL' : 'TODO';
+  console.log(`[${mark}] ${label}`);
 }
 
 console.log('\nPastikan di sales.app: Pelanggan B2B punya customerTenantId =', TENANT);

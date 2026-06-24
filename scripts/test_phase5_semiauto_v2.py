@@ -16,7 +16,7 @@ Prerequisites:
 
 Usage:
   python3 scripts/test_phase5_semiauto_v2.py
-  APP_URL=http://localhost:3000 python3 scripts/test_phase5_semiauto_v2.py
+  APP_URL=http://localhost:3001 python3 scripts/test_phase5_semiauto_v2.py
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ import requests
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 # Set by resolve_runtime_urls() before runner starts
-BASE_APP_URL = "http://localhost:3000"
-BASE_API_URL = "http://localhost:3000/api"
+BASE_APP_URL = "http://localhost:3001"
+BASE_API_URL = "http://localhost:3001/api"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@dawam.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 MASTER_EMAIL = os.getenv("MASTER_EMAIL", "master@dawam.com")
@@ -115,7 +115,7 @@ def probe_api(api_url: str, timeout: float = 3) -> bool:
 def resolve_runtime_urls() -> tuple[str, str]:
     """Pick first reachable APP/API base URL."""
     env_file = load_dotenv_local()
-    port = int(os.getenv("APP_PORT", "3000"))
+    port = int(os.getenv("APP_PORT", "3001"))
     candidates: list[str] = []
 
     if os.getenv("APP_URL"):

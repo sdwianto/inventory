@@ -12,6 +12,7 @@ import { formatIDR, formatDate, formatDateTime, formatNumber } from '@/lib/forma
 import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport } from '@/lib/run-list-export';
 import { toast } from 'sonner';
+import { fetchJson } from '@/lib/fetch-json';
 
 export default function KartuStokPage() {
   const [products, setProducts] = useState([]);
@@ -25,10 +26,9 @@ export default function KartuStokPage() {
   const [reconciling, setReconciling] = useState(false);
 
   useEffect(() => {
-    fetch('/api/products?limit=500')
-      .then((r) => r.json())
+    fetchJson('/api/products?limit=500')
       .then((data) => setProducts(Array.isArray(data) ? data : []))
-      .catch(() => setProducts([]));
+      .catch((e) => toast.error(e.message || 'Gagal memuat produk'));
   }, []);
 
   const load = async (productId) => {

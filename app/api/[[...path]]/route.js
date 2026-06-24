@@ -38,7 +38,7 @@ async function handleRoute(request, context) {
       body = await request.json().catch(() => ({}));
     }
 
-    const auth = await resolveRequestContext(request);
+    const auth = await resolveRequestContext(request, db);
     if (!isPublic) {
       const denied = requireAuth(auth);
       if (denied) return denied;

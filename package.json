@@ -9,7 +9,7 @@
         "build": "next build",
         "start": "next start --port 3001",
         "migrate:tenant": "node scripts/migrate-add-tenantId.js",
-        "test:phase5": "python3 scripts/test_phase5_semiauto_v2.py",
+        "test:phase5": "APP_URL=http://localhost:3001 APP_PORT=3001 python3 scripts/test_phase5_semiauto_v2.py",
         "test:phase5:mongo": "node scripts/phase5_mongo_integrity.mjs",
         "backfix:hutang": "node scripts/backfix-vendor-hutang.mjs --apply",
         "diag:hutang": "node scripts/backfix-vendor-hutang.mjs",

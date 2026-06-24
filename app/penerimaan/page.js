@@ -2,16 +2,25 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
+import VirtualTableBody from '@/components/VirtualTableBody';
+import { TableSkeleton } from '@/components/TableSkeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
-import { PackageCheck, FileText, Truck, Eye, RefreshCw } from 'lucide-react';
+import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
+import {
+  useGoodsReceipts,
+  useGrnInvoiceStatus,
+  useInvalidateGrn,
+  GRN_QUERY_KEY,
+} from '@/lib/hooks/use-goods-receipts';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -37,8 +46,26 @@ function itemRowKey(it, idx) {
   return `${it?.lineId || 'line'}-${idx}`;
 }
 
+function invoiceSyncLabel(row) {
+  if (row?.invoiceSyncStatus === 'PENDING' || row?.invoiceSyncStatus === 'SYNCING') {
+    return <span className="inline-flex items-center gap-1 text-blue-600 text-xs"><Loader2 className="w-3 h-3 animate-spin" /> Sync faktur…</span>;
+  }
+  if (row?.invoiceSyncStatus === 'FAILED') {
+    return <span className="text-red-600 text-xs" title={row.invoiceSyncError || ''}>Gagal faktur</span>;
+  }
+  return row?.noInvoice || '—';
+}
+
+const needsInvoiceReplay = (row) => row?.status === 'POSTED' && row?.noDO && (
+  !row?.noInvoice
+  || row?.invoiceSyncStatus === 'FAILED'
+  || row?.invoiceSyncStatus === 'PENDING'
+);
+
 export default function PenerimaanPage() {
-  const [list, setList] = useState([]);
+  const queryClient = useQueryClient();
+  const invalidateGrn = useInvalidateGrn();
+  const { data: list = [], isLoading } = useGoodsReceipts();
   const [posting, setPosting] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [detail, setDetail] = useState(null);
@@ -47,40 +74,64 @@ export default function PenerimaanPage() {
   const [doView, setDoView] = useState(null);
   const [loadingDo, setLoadingDo] = useState('');
   const [replayingInvoice, setReplayingInvoice] = useState('');
+  const [pollInvoiceGrnId, setPollInvoiceGrnId] = useState(null);
 
-  const needsInvoiceReplay = (row) => row?.status === 'POSTED' && row?.noDO && !row?.noInvoice;
+  const { data: invoicePoll } = useGrnInvoiceStatus(pollInvoiceGrnId, !!pollInvoiceGrnId);
+
+  useEffect(() => {
+    if (!invoicePoll || !pollInvoiceGrnId) return;
+    const s = invoicePoll.invoiceSyncStatus;
+    if (s === 'DONE') {
+      toast.success(`Faktur ${invoicePoll.noInvoice || ''} siap — cek Tagihan Vendor`);
+      setPollInvoiceGrnId(null);
+      invalidateGrn();
+      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+    } else if (s === 'FAILED') {
+      toast.warning(`Faktur gagal: ${invoicePoll.invoiceSyncError || 'cek sales.app'}`);
+      setPollInvoiceGrnId(null);
+      invalidateGrn();
+    } else if (s === 'SKIPPED') {
+      setPollInvoiceGrnId(null);
+      invalidateGrn();
+    }
+  }, [invoicePoll, pollInvoiceGrnId, invalidateGrn]);
 
   const replayInvoice = async (id, noGRN) => {
     setReplayingInvoice(id);
     try {
       const res = await fetch(`/api/goods-receipts/${id}/replay-invoice`, { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.invoiceSync?.error || 'Gagal buat faktur');
-      const inv = data.noInvoice || data.invoiceSync?.noInvoice;
-      const hutang = data.invoiceSync?.hutang;
-      if (data.invoiceSync?.error) {
-        toast.warning(`GRN ${noGRN}: ${data.invoiceSync.error}`);
-      } else if (hutang?.hutangId || inv) {
-        toast.success(`Faktur ${inv || ''} dibuat — cek Tagihan Vendor (menunggu review)`);
-        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-      } else {
-        toast.success(`Permintaan faktur untuk ${noGRN} terkirim ke sales.app`);
-      }
-      load();
+      if (!res.ok) throw new Error(data.error || 'Gagal buat faktur');
+      toast.success(`Faktur ${noGRN} — diproses di background`);
+      setPollInvoiceGrnId(id);
+      invalidateGrn();
     } catch (e) {
       toast.error(e.message);
     }
     setReplayingInvoice('');
   };
 
-  const load = () => fetch('/api/goods-receipts')
-    .then((r) => r.json())
-    .then((data) => {
-      setList(Array.isArray(data) ? data : []);
-      window.dispatchEvent(new CustomEvent('erp-grn-change'));
-    })
-    .catch(() => setList([]));
-  useEffect(() => { load(); }, []);
+  const syncFromSales = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/goods-receipts/sync-shipped', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal sync');
+      toast.success(`Sync DO: ${data.created} GRN baru, ${data.existing} sudah ada`);
+      await queryClient.fetchQuery({
+        queryKey: [...GRN_QUERY_KEY, { refreshProducts: true }],
+        queryFn: () => fetch(`/api/goods-receipts?refreshProducts=1`).then((r) => r.json()),
+      });
+      queryClient.setQueryData([...GRN_QUERY_KEY, { refreshProducts: false }], (old) => {
+        const fresh = queryClient.getQueryData([...GRN_QUERY_KEY, { refreshProducts: true }]);
+        return Array.isArray(fresh) ? fresh : old;
+      });
+      invalidateGrn();
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setSyncing(false);
+  };
 
   const openDoView = async (id) => {
     setLoadingDo(id);
@@ -99,20 +150,6 @@ export default function PenerimaanPage() {
     (s, it) => s + (parseFloat(it.qtyOrdered) || 0) * (parseInt(it.harga || 0, 10) || 0),
     0,
   );
-
-  const syncFromSales = async () => {
-    setSyncing(true);
-    try {
-      const res = await fetch('/api/goods-receipts/sync-shipped', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal sync');
-      toast.success(`Sync DO: ${data.created} GRN baru, ${data.existing} sudah ada`);
-      load();
-    } catch (e) {
-      toast.error(e.message);
-    }
-    setSyncing(false);
-  };
 
   const openPost = async (id) => {
     const res = await fetch(`/api/goods-receipts/${id}`);
@@ -137,7 +174,8 @@ export default function PenerimaanPage() {
 
   const postGrn = async () => {
     if (!detail) return;
-    setPosting(detail.id);
+    const grnId = detail.id;
+    setPosting(grnId);
     const items = (detail.items || []).map((it, idx) => ({
       lineId: it.lineId,
       lineIndex: idx,
@@ -145,43 +183,101 @@ export default function PenerimaanPage() {
       lokasiKode: gudangMap[itemRowKey(it, idx)] || 'GKERING',
     })).filter((it) => it.qty > 0);
 
-    const res = await fetch(`/api/goods-receipts/${detail.id}/post`, {
+    queryClient.setQueryData([...GRN_QUERY_KEY, { refreshProducts: false }], (old) => (
+      Array.isArray(old)
+        ? old.map((r) => (r.id === grnId ? { ...r, status: 'POSTED', invoiceSyncStatus: 'PENDING' } : r))
+        : old
+    ));
+
+    const res = await fetch(`/api/goods-receipts/${grnId}/post`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     });
     const data = await res.json();
-    if (!res.ok) toast.error(data.error || 'Gagal');
-    else {
+    if (!res.ok) {
+      toast.error(data.error || 'Gagal');
+      invalidateGrn();
+    } else {
       const from = supplierLabel(data);
-      const inv = data.noInvoice || data.invoiceSync?.noInvoice;
-      if (data.invoiceSync?.error) {
-        toast.warning(`Barang diterima dari ${from}, tapi faktur otomatis gagal: ${data.invoiceSync.error}`);
-      } else if (data.invoiceSync?.hutang?.hutangId) {
-        const inv = data.noInvoice || data.invoiceSync?.noInvoice || data.invoiceSync?.hutang?.noInvoice;
-        const approval = data.invoiceSync?.hutang?.approvalStatus;
-        const refreshed = data.invoiceSync?.hutang?.action === 'refreshed';
-        const isPending = refreshed || !approval || approval === 'PENDING_REVIEW'
-          || data.invoiceSync?.hutang?.action === 'created';
-        if (isPending) {
-          toast.success(`Barang diterima — faktur ${inv} masuk Tagihan Vendor (menunggu review admin)`);
-        } else {
-          toast.success(`Barang diterima — faktur ${inv} sudah ada di Tagihan Vendor`);
-        }
+      toast.success(`Barang diterima dari ${from} — stok diperbarui`);
+      if (data.invoiceSync?.async || data.invoiceSyncStatus === 'PENDING') {
+        toast.info('Faktur vendor diproses di background…');
+        setPollInvoiceGrnId(grnId);
+      } else if (data.noInvoice) {
+        toast.success(`Faktur ${data.noInvoice} siap`);
         window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-      } else if (data.invoiceSync?.hutang?.error) {
-        toast.warning(`Barang diterima, faktur dibuat tapi gagal masuk Tagihan Vendor: ${data.invoiceSync.hutang.error}`);
-      } else if (inv) {
-        toast.success(`Barang diterima dari ${from} — faktur ${inv} otomatis diposting`);
-        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-      } else {
-        toast.success(`Barang diterima dari ${from} — stok & harga beli diperbarui`);
+      } else if (data.invoiceSync?.error || data.invoiceSyncStatus === 'FAILED') {
+        toast.warning(`Faktur gagal: ${data.invoiceSync?.error || data.invoiceSyncError || 'cek sales.app'}`);
       }
       setDetail(null);
-      load();
+      invalidateGrn();
     }
     setPosting('');
   };
+
+  const renderGrnRow = (r) => (
+    <tr
+      key={r.id}
+      className="border-t cursor-pointer hover:bg-slate-50 transition-colors"
+      onClick={() => openDoView(r.id)}
+      title="Klik untuk lihat DO"
+    >
+      <td className="px-3 py-2 font-mono text-xs">{r.noGRN}</td>
+      <td className="px-3 py-2 font-mono text-xs">
+        <span className="inline-flex items-center gap-1 text-blue-700 underline-offset-2 group-hover:underline">
+          <FileText className="w-3.5 h-3.5 shrink-0" />
+          {r.noDO}
+        </span>
+      </td>
+      <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={supplierLabel(r)}>
+        {supplierLabel(r)}
+      </td>
+      <td className="px-3 py-2 font-mono text-xs">{invoiceSyncLabel(r)}</td>
+      <td className="px-3 py-2 text-xs">{formatDateTime(r.tanggal)}</td>
+      <td className="px-3 py-2 text-xs">{r.lokasi || (r.status === 'POSTED' ? '—' : '')}</td>
+      <td className="px-3 py-2 text-center">
+        <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[r.status] || 'bg-slate-100'}`}>
+          {STATUS_LABEL[r.status] || r.status}
+        </span>
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            onClick={() => openDoView(r.id)}
+            disabled={loadingDo === r.id}
+            title="Lihat DO"
+            aria-label="Lihat DO"
+            className="p-1.5 rounded text-slate-500 hover:bg-slate-100 hover:text-blue-700 disabled:opacity-50"
+          >
+            <Eye className="w-4 h-4" />
+          </button>
+          {r.status === 'DRAFT' && (
+            <Button size="sm" onClick={() => openPost(r.id)} disabled={posting === r.id}>
+              Terima Barang
+            </Button>
+          )}
+          {needsInvoiceReplay(r) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-orange-700 border-orange-300 hover:bg-orange-50"
+              disabled={replayingInvoice === r.id}
+              title="Buat ulang faktur di sales.app"
+              onClick={() => replayInvoice(r.id, r.noGRN)}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${replayingInvoice === r.id ? 'animate-spin' : ''}`} />
+              Buat faktur
+            </Button>
+          )}
+          {isUnresolvedGrn(r.status) && (
+            <Link href="/produk" className="text-amber-700 text-xs underline">Daftar di Master Produk</Link>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   return (
     <AppShell>
@@ -221,81 +317,18 @@ export default function PenerimaanPage() {
               </tr>
             </thead>
             <tbody>
-              {!list.length && <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>}
-              {(Array.isArray(list) ? list : []).map((r) => (
-                <tr
-                  key={r.id}
-                  className="border-t cursor-pointer hover:bg-slate-50 transition-colors"
-                  onClick={() => openDoView(r.id)}
-                  title="Klik untuk lihat DO"
-                >
-                  <td className="px-3 py-2 font-mono text-xs">{r.noGRN}</td>
-                  <td className="px-3 py-2 font-mono text-xs">
-                    <span className="inline-flex items-center gap-1 text-blue-700 underline-offset-2 group-hover:underline">
-                      <FileText className="w-3.5 h-3.5 shrink-0" />
-                      {r.noDO}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={supplierLabel(r)}>
-                    {supplierLabel(r)}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.noInvoice || '—'}</td>
-                  <td className="px-3 py-2 text-xs">{formatDateTime(r.tanggal)}</td>
-                  <td className="px-3 py-2 text-xs">{r.lokasi || (r.status === 'POSTED' ? '—' : '')}</td>
-                  <td className="px-3 py-2 text-center">
-                    <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[r.status] || 'bg-slate-100'}`}>
-                      {STATUS_LABEL[r.status] || r.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        onClick={() => openDoView(r.id)}
-                        disabled={loadingDo === r.id}
-                        title="Lihat DO"
-                        aria-label="Lihat DO"
-                        className="p-1.5 rounded text-slate-500 hover:bg-slate-100 hover:text-blue-700 disabled:opacity-50"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      {r.status === 'DRAFT' && (
-                        <Button size="sm" onClick={() => openPost(r.id)} disabled={posting === r.id}>
-                          Terima Barang
-                        </Button>
-                      )}
-                      {needsInvoiceReplay(r) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-orange-700 border-orange-300 hover:bg-orange-50"
-                          disabled={replayingInvoice === r.id}
-                          title="Buat ulang faktur di sales.app dan masukkan ke Tagihan Vendor"
-                          onClick={() => replayInvoice(r.id, r.noGRN)}
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 mr-1 ${replayingInvoice === r.id ? 'animate-spin' : ''}`} />
-                          Buat faktur
-                        </Button>
-                      )}
-                      {r.status === 'POSTED' && r.noInvoice && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-slate-600"
-                          disabled={replayingInvoice === r.id}
-                          title="Sinkron ulang faktur dari sales.app"
-                          onClick={() => replayInvoice(r.id, r.noGRN)}
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${replayingInvoice === r.id ? 'animate-spin' : ''}`} />
-                        </Button>
-                      )}
-                      {isUnresolvedGrn(r.status) && (
-                        <Link href="/produk" className="text-amber-700 text-xs underline">Daftar di Master Produk</Link>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {isLoading && <TableSkeleton rows={8} cols={8} />}
+              {!isLoading && !list.length && (
+                <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>
+              )}
+              {!isLoading && list.length > 0 && (
+                <VirtualTableBody
+                  rows={list}
+                  maxHeight={520}
+                  emptyRow={null}
+                  renderRow={(r) => renderGrnRow(r)}
+                />
+              )}
             </tbody>
           </table>
         </div>
@@ -348,7 +381,7 @@ export default function PenerimaanPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetail(null)}>Batal</Button>
             <Button onClick={postGrn} disabled={!!posting} className="bg-orange-500 hover:bg-orange-600">
-              {posting ? 'Memproses...' : 'Konfirmasi Terima'}
+              {posting ? 'Menyimpan stok…' : 'Konfirmasi Terima'}
             </Button>
           </DialogFooter>
         </DialogContent>

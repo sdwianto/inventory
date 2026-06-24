@@ -1,5 +1,5 @@
 // Simple service worker for offline-first caching
-const CACHE_NAME = 'kasir-app-v1';
+const CACHE_NAME = 'inventory-app-v1';
 const urlsToCache = ['/manifest.json', '/'];
 
 self.addEventListener('install', (event) => {

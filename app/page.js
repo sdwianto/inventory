@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Store, ShoppingCart, Package, BarChart3, Loader2 } from 'lucide-react';
+import { Store, Package, BarChart3, Loader2, Truck, Warehouse } from 'lucide-react';
 import { toast } from 'sonner';
 import { setUser, getUser, syncSessionUser } from '@/lib/auth-client';
 
@@ -23,13 +23,19 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const loginRedirect = () => {
+    if (typeof window === 'undefined') return '/dashboard';
+    const next = new URLSearchParams(window.location.search).get('next');
+    return next && next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard';
+  };
+
   useEffect(() => {
     if (getUser()) {
-      router.replace('/dashboard');
+      router.replace(loginRedirect());
       return;
     }
     syncSessionUser().then((u) => {
-      if (u) router.replace('/dashboard');
+      if (u) router.replace(loginRedirect());
     });
   }, [router]);
 
@@ -47,7 +53,7 @@ export default function LoginPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal login');
       setUser(data.user);
       toast.success(`Selamat datang, ${data.user.name}!`);
-      router.replace('/dashboard');
+      router.replace(loginRedirect());
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -75,43 +81,43 @@ export default function LoginPage() {
             sales.app — Otomatis via Webhook
           </h2>
           <p className='text-slate-300 leading-relaxed'>
-            Aplikasi kasir lengkap dengan keyboard shortcut, multi-antrian,
-            cetak struk thermal, dan laporan penjualan real-time.
+            Kelola penerimaan barang (GRN), stok gudang kering & basah, PO ke vendor,
+            release inventory, dan integrasi otomatis dengan sales.app.
           </p>
           <div className='grid grid-cols-2 gap-4 pt-4'>
             <div className='flex items-start gap-3'>
-              <ShoppingCart className='w-5 h-5 text-orange-400 mt-0.5' />
+              <Truck className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>POS Cepat</div>
+                <div className='font-semibold text-sm'>Penerimaan GRN</div>
                 <div className='text-xs text-slate-400'>
-                  Shortcut F1-F12, scan barcode
+                  Webhook dari sales.app
+                </div>
+              </div>
+            </div>
+            <div className='flex items-start gap-3'>
+              <Warehouse className='w-5 h-5 text-orange-400 mt-0.5' />
+              <div>
+                <div className='font-semibold text-sm'>Gudang Kering & Basah</div>
+                <div className='text-xs text-slate-400'>
+                  Saldo & release per gudang
                 </div>
               </div>
             </div>
             <div className='flex items-start gap-3'>
               <Package className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>Manajemen Stok</div>
+                <div className='font-semibold text-sm'>PO & Hutang Vendor</div>
                 <div className='text-xs text-slate-400'>
-                  Auto-decrement & alert
+                  Approval & 3-way match
                 </div>
               </div>
             </div>
             <div className='flex items-start gap-3'>
               <BarChart3 className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>Laporan Real-time</div>
+                <div className='font-semibold text-sm'>Dashboard Pengadaan</div>
                 <div className='text-xs text-slate-400'>
-                  KPI & grafik penjualan
-                </div>
-              </div>
-            </div>
-            <div className='flex items-start gap-3'>
-              <Store className='w-5 h-5 text-orange-400 mt-0.5' />
-              <div>
-                <div className='font-semibold text-sm'>Struk Thermal</div>
-                <div className='text-xs text-slate-400'>
-                  58mm / 80mm support
+                  KPI & grafik stok
                 </div>
               </div>
             </div>

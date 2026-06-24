@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VendorInvoiceDetail from '@/components/VendorInvoiceDetail';
+import VirtualTableBody from '@/components/VirtualTableBody';
+import { TableSkeleton } from '@/components/TableSkeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -11,6 +13,12 @@ import { toast } from 'sonner';
 import { Banknote, CircleCheck, Eye, RefreshCw } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useConfirm } from '@/components/ConfirmProvider';
+import { debounce } from '@/lib/debounce';
+import {
+  useVendorHutangList,
+  useHutangPendingCount,
+  useInvalidateHutang,
+} from '@/lib/hooks/use-vendor-hutang';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -40,8 +48,10 @@ const CAN_MARK_PAID = new Set(['APPROVED', 'OUTSTANDING', 'PARTIAL']);
 
 export default function HutangVendorPage() {
   const confirm = useConfirm();
-  const [list, setList] = useState([]);
+  const invalidateHutang = useInvalidateHutang();
   const [tab, setTab] = useState('PENDING_REVIEW');
+  const { data: list = [], isLoading, refetch } = useVendorHutangList(tab);
+  const { data: pendingCount = 0 } = useHutangPendingCount();
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState('');
   const [acting, setActing] = useState('');
@@ -49,32 +59,17 @@ export default function HutangVendorPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
 
-  const loadPendingCount = useCallback(() => {
-    fetch('/api/hutang?approvalStatus=PENDING_REVIEW')
-      .then((r) => r.json())
-      .then((data) => setPendingCount(Array.isArray(data) ? data.length : 0))
-      .catch(() => {});
-  }, []);
-
-  const load = useCallback(() => {
-    const q = tab ? `?approvalStatus=${encodeURIComponent(tab)}` : '';
-    return fetch(`/api/hutang${q}`).then((r) => r.json()).then((data) => {
-      setList(Array.isArray(data) ? data : []);
-    });
-  }, [tab]);
-
-  useEffect(() => { load(); loadPendingCount(); }, [load, loadPendingCount]);
+  const debouncedRefresh = useMemo(
+    () => debounce(() => invalidateHutang(), 300),
+    [invalidateHutang],
+  );
 
   useEffect(() => {
-    const onHutangChange = () => {
-      load();
-      loadPendingCount();
-    };
-    window.addEventListener('erp-hutang-change', onHutangChange);
-    return () => window.removeEventListener('erp-hutang-change', onHutangChange);
-  }, [load, loadPendingCount]);
+    const onChange = () => debouncedRefresh();
+    window.addEventListener('erp-hutang-change', onChange);
+    return () => window.removeEventListener('erp-hutang-change', onChange);
+  }, [debouncedRefresh]);
 
   const openDetail = async (id) => {
     setLoadingDetail(id);
@@ -104,8 +99,7 @@ export default function HutangVendorPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal menyetujui');
       toast.success('Tagihan disetujui');
       setDetail(null);
-      load();
-      loadPendingCount();
+      invalidateHutang();
     } catch (e) {
       toast.error(e.message);
     }
@@ -126,8 +120,7 @@ export default function HutangVendorPage() {
       toast.success('Tagihan ditolak');
       setShowReject(false);
       setDetail(null);
-      load();
-      loadPendingCount();
+      invalidateHutang();
     } catch (e) {
       toast.error(e.message);
     }
@@ -154,8 +147,7 @@ export default function HutangVendorPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success('Ditandai lunas (bayar luar sistem)');
       if (detail?.id === id) setDetail(null);
-      load();
-      loadPendingCount();
+      invalidateHutang();
     } catch (e) {
       toast.error(e.message);
     }
@@ -185,8 +177,9 @@ export default function HutangVendorPage() {
         toast.warning(`Gagal buat faktur di sales: ${data.reconcile.salesErrors[0]?.error || 'cek pelanggan B2B'}`);
       } else if ((data.created || 0) > 0) {
         toast.success(`Sync: ${data.created} tagihan baru, ${data.existing || 0} sudah ada`);
-      } else if ((data.reconcile?.created || 0) > 0) {
-        toast.success(`${data.reconcile.created} tagihan dipulihkan dari GRN yang sudah diposting`);
+      } else if ((data.reconcile?.localCreated || 0) > 0 || (data.reconcile?.created || 0) > 0) {
+        const n = (data.reconcile?.localCreated || 0) + (data.reconcile?.created || 0);
+        toast.success(`${n} tagihan dibuat dari GRN yang sudah diposting`);
       } else if (data.errors?.length) {
         toast.warning(`Sync: ${data.errors.length} gagal — ${data.errors[0]?.error || 'cek GRN/invoice'}`);
       } else if (data.total === 0) {
@@ -194,8 +187,7 @@ export default function HutangVendorPage() {
       } else {
         toast.success(`Sync: ${data.existing || 0} sudah ada, tidak ada yang baru`);
       }
-      load();
-      loadPendingCount();
+      invalidateHutang();
     } catch (e) {
       toast.error(e.message);
     }
@@ -251,62 +243,68 @@ export default function HutangVendorPage() {
               </tr>
             </thead>
             <tbody>
-              {!allList.length && (
+              {isLoading && <TableSkeleton rows={8} cols={8} />}
+              {!isLoading && !allList.length && (
                 <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada tagihan</td></tr>
               )}
-              {allList.map((h) => {
-                const a = h.approvalStatus || h.status;
-                return (
-                  <tr key={h.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => openDetail(h.id)}>
-                    <td className="px-3 py-2 font-mono text-xs text-orange-700">{h.noInvoice}</td>
-                    <td className="px-3 py-2 text-xs max-w-[160px] truncate" title={h.supplierName}>
-                      {h.supplierName || h.vendorBillingSnapshot?.companyName || '—'}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{h.noPO || '—'}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{h.noDO || '—'}</td>
-                    <td className="px-3 py-2 text-xs">{formatDate(h.tanggal)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">{formatIDR(h.total)}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={`px-2 py-0.5 rounded text-xs ${APPROVAL_BADGE[a] || 'bg-slate-100'}`}>
-                        {APPROVAL_LABELS[a] || a}
-                      </span>
-                      {h.matchStatus === 'EXCEPTION' && (
-                        <span
-                          className="ml-1 px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-800 cursor-help"
-                          title={h.matchError || '3-way match exception — buka detail untuk override'}
-                        >
-                          !
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                      <div className="inline-flex items-center justify-center gap-0.5">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={loadingDetail === h.id}
-                          title="Lihat faktur"
-                          onClick={() => openDetail(h.id)}
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        {CAN_MARK_PAID.has(a) && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-green-700 hover:text-green-800 hover:bg-green-50"
-                            disabled={acting === `paid-${h.id}`}
-                            title="Tandai lunas (bayar luar sistem)"
-                            onClick={() => markPaidById(h.id, h.noInvoice)}
-                          >
-                            <CircleCheck className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+              {!isLoading && allList.length > 0 && (
+                <VirtualTableBody
+                  rows={allList}
+                  renderRow={(h) => {
+                    const a = h.approvalStatus || h.status;
+                    return (
+                      <tr key={h.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => openDetail(h.id)}>
+                        <td className="px-3 py-2 font-mono text-xs text-orange-700">{h.noInvoice}</td>
+                        <td className="px-3 py-2 text-xs max-w-[160px] truncate" title={h.supplierName}>
+                          {h.supplierName || h.vendorBillingSnapshot?.companyName || '—'}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">{h.noPO || '—'}</td>
+                        <td className="px-3 py-2 font-mono text-xs">{h.noDO || '—'}</td>
+                        <td className="px-3 py-2 text-xs">{formatDate(h.tanggal)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-medium">{formatIDR(h.total)}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`px-2 py-0.5 rounded text-xs ${APPROVAL_BADGE[a] || 'bg-slate-100'}`}>
+                            {APPROVAL_LABELS[a] || a}
+                          </span>
+                          {h.matchStatus === 'EXCEPTION' && (
+                            <span
+                              className="ml-1 px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-800 cursor-help"
+                              title={h.matchError || '3-way match exception — buka detail untuk override'}
+                            >
+                              !
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="inline-flex items-center justify-center gap-0.5">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={loadingDetail === h.id}
+                              title="Lihat faktur"
+                              onClick={() => openDetail(h.id)}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            {CAN_MARK_PAID.has(a) && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-green-700 hover:text-green-800 hover:bg-green-50"
+                                disabled={acting === `paid-${h.id}`}
+                                title="Tandai lunas (bayar luar sistem)"
+                                onClick={() => markPaidById(h.id, h.noInvoice)}
+                              >
+                                <CircleCheck className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }}
+                />
+              )}
             </tbody>
           </table>
         </div>

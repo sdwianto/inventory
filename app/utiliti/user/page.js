@@ -279,6 +279,7 @@ export default function UserManagementPage() {
                 <option value="GUDANG">GUDANG (staff gudang — terima barang, release, buat PO)</option>
                 <option value="SUPERVISOR">SUPERVISOR (supervisor — approve release & ajukan PO)</option>
                 <option value="ADMIN">ADMIN (akses penuh dalam tenant)</option>
+                <option value="OWNER">OWNER (pemilik tenant — setara ADMIN)</option>
                 {currentUser?.role === 'MASTER' && <option value="MASTER">MASTER (lintas tenant)</option>}
               </select>
             </div>
