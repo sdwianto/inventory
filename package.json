@@ -3,10 +3,20 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "NODE_OPTIONS='--max-old-space-size=512' next dev --hostname 0.0.0.0 --port 3001",
+        "predev": "node scripts/ensure-node-version.mjs && node scripts/ensure-dev-cache.mjs",
+        "dev": "NODE_OPTIONS='--max-old-space-size=1024' next dev --hostname 0.0.0.0 --port 3001",
+        "dev:reset": "rm -rf .next && npm run dev",
         "dev:no-reload": "next dev --hostname 0.0.0.0 --port 3001",
-        "dev:webpack": "NODE_OPTIONS='--max-old-space-size=512' next dev --webpack --hostname 0.0.0.0 --port 3001",
-        "build": "next build",
+        "dev:webpack": "NODE_OPTIONS='--max-old-space-size=1024' next dev --webpack --hostname 0.0.0.0 --port 3001",
+        "build": "node scripts/ensure-node-version.mjs && next build",
+        "typecheck": "node scripts/ensure-node-version.mjs && tsc --noEmit",
+        "typecheck:strict": "node scripts/ensure-node-version.mjs && tsc -p tsconfig.strict.json --noEmit",
+        "ci": "npm run typecheck && npm run test:unit && npm run build",
+        "test:unit": "vitest run",
+        "test:unit:watch": "vitest",
+        "test:e2e": "playwright install chromium && playwright test",
+        "test": "npm run test:unit && npm run test:e2e",
+        "typecheck:migrate-bulk": "node scripts/ts-fix-complete.mjs && node scripts/ts-migrate-usestate.mjs && node scripts/ts-migrate-json-state.mjs",
         "start": "next start --port 3001",
         "migrate:tenant": "node scripts/migrate-add-tenantId.js",
         "test:phase5": "APP_URL=http://localhost:3001 APP_PORT=3001 python3 scripts/test_phase5_semiauto_v2.py",
@@ -14,6 +24,9 @@
         "backfix:hutang": "node scripts/backfix-vendor-hutang.mjs --apply",
         "diag:hutang": "node scripts/backfix-vendor-hutang.mjs",
         "verify:sales": "node scripts/verify-sales-integration.mjs"
+    },
+    "engines": {
+        "node": ">=22.0.0"
     },
     "dependencies": {
         "@hookform/resolvers": "5.1.1",
@@ -63,7 +76,7 @@
         "lodash": "4.18.1",
         "lucide-react": "0.516.0",
         "mongodb": "6.6.0",
-        "next": "^16.2.7",
+        "next": "^16.2.9",
         "next-themes": "0.4.6",
         "react": "18.3.1",
         "react-day-picker": "9.7.0",
@@ -72,7 +85,6 @@
         "react-resizable-panels": "3.0.3",
         "recharts": "2.15.3",
         "sonner": "2.0.5",
-        "swr": "2.3.8",
         "tailwind-merge": "3.3.1",
         "tailwindcss-animate": "1.0.7",
         "uuid": "^14.0.0",
@@ -81,11 +93,19 @@
         "zod": "3.25.67"
     },
     "devDependencies": {
+        "@playwright/test": "^1.52.0",
+        "@types/bcryptjs": "^2.4.6",
         "@types/lodash": "4.17.24",
+        "@types/node": "^22.15.0",
+        "@types/react": "^18.3.0",
+        "@types/react-dom": "^18.3.0",
+        "@types/uuid": "^10.0.0",
         "autoprefixer": "10.4.19",
         "globals": "16.2.0",
         "postcss": "8",
-        "tailwindcss": "3.4.1"
+        "tailwindcss": "3.4.1",
+        "typescript": "^5.8.3",
+        "vitest": "^3.2.4"
     },
     "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

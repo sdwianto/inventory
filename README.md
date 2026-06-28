@@ -24,7 +24,7 @@ npm run dev
 
 - URL: http://localhost:3001
 - Login: akun dibuat via **User Management** (role GUDANG / SUPERVISOR / ADMIN / OWNER)
-- Halaman app dilindungi **proxy** (`proxy.js`) — tanpa session cookie akan diarahkan ke login
+- Halaman app dilindungi **proxy** (`proxy.ts`) — tanpa session cookie akan diarahkan ke login
 
 ## Integrasi sales.app
 
@@ -67,6 +67,12 @@ npm run verify:sales -- --tenant=sppg
 |--------|--------|
 | `npm run dev` | Dev server port 3001 |
 | `npm run verify:sales` | Cek koneksi sales.app + status GRN/hutang |
+| `npm run typecheck` | TypeScript check (seluruh proyek) |
+| `npm run typecheck:strict` | Typecheck ketat (`noImplicitAny`) untuk modul inti |
+| `npm run ci` | Typecheck + unit tests + build (lokal / pre-push) |
+| `npm run test:unit` | Unit tests (Vitest) |
+| `npm run test:e2e` | E2E tests (Playwright) |
+| `npm run test` | Unit + E2E |
 | `npm run test:phase5` | Regression semi-auto (default port 3001) |
 | `npm run backfix:hutang` | Backfix hutang dari GRN posted |
 | `npm run diag:hutang` | Diagnostik hutang (dry-run) |
@@ -79,6 +85,40 @@ Setiap tenant memiliki **dua gudang tetap**:
 - **GBASAH** — Gudang Basah
 
 Satu SKU hanya boleh di satu gudang. Transfer antar GKERING ↔ GBASAH tidak diizinkan.
+
+## MongoDB transactions (production)
+
+Operasi kritis (GRN post, hutang, penyesuaian stok, transfer stok) memakai MongoDB transaction bila replica set tersedia. Untuk production, jalankan MongoDB sebagai replica set; di dev standalone, app otomatis fallback tanpa transaction.
+
+Contoh dev dengan replica set (Docker):
+
+```bash
+docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0
+docker exec mongo-rs mongosh --eval "rs.initiate()"
+# MONGO_URL=mongodb://127.0.0.1:27017/?replicaSet=rs0
+```
+
+## Enterprise checklist
+
+| Area | Status |
+|------|--------|
+| MongoDB transactions (GRN, hutang, penyesuaian, transfer) | ✅ dengan fallback dev |
+| Audit trail (`audit_log`) | ✅ GRN, hutang, stok, release |
+| Structured logging | ✅ `lib/api/logger.ts` |
+| Unit + E2E tests | ✅ Vitest + Playwright |
+| CI/CD | ✅ `.github/workflows/ci.yml` |
+| CORS + session proxy | ✅ `CORS_ORIGINS`, `proxy.ts` |
+| Type safety gradual | ✅ `tsconfig.strict.json` (modul inti) + `typecheck:strict` |
+| Domain types | ✅ `types/integration.ts`, handler helpers |
+
+## Testing
+
+```bash
+cp .env.example .env.local
+npm install
+npm run test:unit
+npm run test:e2e   # butuh server — CI menjalankan build+start otomatis
+```
 
 ## Push GitHub
 

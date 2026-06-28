@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
+  "include": [
+    "types/**/*.ts",
+    "lib/api/transaction.ts",
+    "lib/api/audit-log.ts",
+    "lib/api/logger.ts",
+    "lib/api/tenant-scope.ts",
+    "lib/api/three-way-match.ts",
+    "tests/unit/transaction.test.ts",
+    "tests/unit/three-way-match.test.ts",
+    "tests/unit/tenant-scope.test.ts"
+  ]
+}
