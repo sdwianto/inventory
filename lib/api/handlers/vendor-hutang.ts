@@ -69,6 +69,12 @@ function vendorInvoiceFilter(extra: Record<string, unknown> = {}): Record<string
   return { $and: [base, extra] };
 }
 
+function payableHutangFilter(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const maintenance = { referenceType: 'MAINTENANCE_SERVICE', ...extra };
+  const vendor = vendorInvoiceFilter(extra);
+  return { $or: [maintenance, vendor] };
+}
+
 function approvalStatusFilter(approvalStatus: string): Record<string, unknown> {
   if (!approvalStatus) return {};
   if (approvalStatus === 'PENDING_REVIEW') {
@@ -198,7 +204,7 @@ export async function handleVendorHutang({
   if (route === '/hutang/pending-count' && method === 'GET') {
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
-    const filter = withTenantFilter(scopeAuth, vendorInvoiceFilter(approvalStatusFilter('PENDING_REVIEW')));
+    const filter = withTenantFilter(scopeAuth, payableHutangFilter(approvalStatusFilter('PENDING_REVIEW')));
     const count = await db.collection('hutang').countDocuments(filter);
     return ok({ count });
   }
@@ -208,9 +214,9 @@ export async function handleVendorHutang({
     if (denied) return denied;
     const status = url.searchParams.get('status') || '';
     const approvalStatus = url.searchParams.get('approvalStatus') || '';
-    let filter: Record<string, unknown> = vendorInvoiceFilter(approvalStatusFilter(approvalStatus));
+    let filter: Record<string, unknown> = payableHutangFilter(approvalStatusFilter(approvalStatus));
     if (!approvalStatus && status) {
-      filter = vendorInvoiceFilter({
+      filter = payableHutangFilter({
         $or: [
           { approvalStatus: status },
           { status, approvalStatus: { $exists: false } },

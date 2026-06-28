@@ -24,6 +24,8 @@ import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/
 import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
+import { vendorPoWriteFields } from '@/lib/api/po-channel';
+import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 
 interface CustomerPoBody extends Record<string, unknown> {
   items?: JsonObject[];
@@ -33,6 +35,8 @@ interface CustomerPoBody extends Record<string, unknown> {
   catatan?: string;
   paymentTerms?: string;
   reason?: string;
+  maintenanceRequestId?: string | null;
+  assetId?: string | null;
 }
 
 interface ActorInput {
@@ -475,11 +479,28 @@ export async function handleCustomerPo({
       estimasiTotal: sumPoEstimasi(poItems),
       catatan: poBody.catatan || '',
       paymentTerms: poBody.paymentTerms || 'KREDIT',
+      ...vendorPoWriteFields({
+        maintenanceRequestId: poBody.maintenanceRequestId || null,
+        assetId: poBody.assetId || null,
+      }),
       createdBy: await actorSnapshot(db, auth),
       createdAt: now,
       updatedAt: now,
     };
     await db.collection('customer_purchase_orders').insertOne(doc);
+
+    if (poBody.maintenanceRequestId) {
+      const wr = await loadWrById(db, scopeAuth, String(poBody.maintenanceRequestId));
+      const block = assertWrResolvable(wr, 'PO');
+      if (!block && wr && !wr.linkedPoId) {
+        await applyWrResolutionLink(db, wr, {
+          resolutionType: 'PO',
+          linkedPoId: doc.id,
+          linkedPoNo: noPO,
+        });
+      }
+    }
+
     return ok(await enrichOnePo(db, doc));
   }
 

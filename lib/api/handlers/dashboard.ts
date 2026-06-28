@@ -2,8 +2,10 @@
 
 import type { NextResponse } from 'next/server';
 import { ok } from '@/lib/api/db';
-import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
+import { resolveOperationalScope, withTenantFilter, tenantIdForWrite } from '@/lib/api/tenant-master';
 import { warehouseLabel, WAREHOUSE_CODES } from '@/lib/api/warehouses';
+import { fetchMaintenanceDashboardStats } from '@/lib/api/maintenance-dashboard-stats';
+import { processDueMaintenanceSchedules } from '@/lib/api/maintenance-schedule-engine';
 import type { HandlerContext } from '@/types/api/handler';
 
 const PO_STATUS_LABELS: Record<string, string> = {
@@ -229,6 +231,10 @@ export async function handleDashboard({
 
   const approvedMonthRow = approvedMonthAgg[0] as { total?: number } | undefined;
 
+  const tenantId = tenantIdForWrite(scopeAuth, {});
+  const pmRun = await processDueMaintenanceSchedules(db, tenantId, now);
+  const maintenance = await fetchMaintenanceDashboardStats(db, scopeAuth, now);
+
   return ok({
     summary: {
       grn: grnList.length,
@@ -241,5 +247,6 @@ export async function handleDashboard({
     poByStatus,
     inventoryByWarehouse,
     spendingByMonth,
+    maintenance: { ...maintenance, pmRun },
   });
 }

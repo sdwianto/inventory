@@ -17,8 +17,20 @@ import { handleCustomerPo } from '@/lib/api/handlers/customer-po';
 import { handleIntegrations } from '@/lib/api/handlers/integrations';
 import { handleInventoryReleases } from '@/lib/api/handlers/inventory-releases';
 import { handleBgJobs } from '@/lib/api/handlers/bg-jobs';
+import { handleLocalPurchaseOrders } from '@/lib/api/handlers/local-purchase-orders';
+import { handleAssets } from '@/lib/api/handlers/assets';
+import { handleMaintenanceRequests } from '@/lib/api/handlers/maintenance-requests';
+import { handleMaintenanceServiceOrders } from '@/lib/api/handlers/maintenance-service-orders';
+import { handleMaintenanceSchedules } from '@/lib/api/handlers/maintenance-schedules';
+import { handleMaintenanceReports } from '@/lib/api/handlers/maintenance-reports';
 
 const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
+  assets: handleAssets,
+  'maintenance-requests': handleMaintenanceRequests,
+  'maintenance-service-orders': handleMaintenanceServiceOrders,
+  'maintenance-schedules': handleMaintenanceSchedules,
+  'maintenance-reports': handleMaintenanceReports,
+  'local-purchase-orders': handleLocalPurchaseOrders,
   integrations: handleIntegrations,
   auth: handleAuth,
   dashboard: handleDashboard,
@@ -41,6 +53,12 @@ const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
 };
 
 const FALLBACK: ApiHandler[] = [
+  handleMaintenanceRequests,
+  handleMaintenanceServiceOrders,
+  handleMaintenanceSchedules,
+  handleMaintenanceReports,
+  handleAssets,
+  handleLocalPurchaseOrders,
   handleIntegrations,
   handleWebhooks,
   handleGoodsReceipts,

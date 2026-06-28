@@ -3,6 +3,7 @@
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { startOfMonth } from 'date-fns';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -54,6 +55,9 @@ export default function CustomerPoPage() {
   const autoSyncBusy = useRef(false);
   const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
   const [defaultTier, setDefaultTier] = useState('ECER');
+  const searchParams = useSearchParams();
+  const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
+  const wrPrefillDone = useRef(false);
 
   const loadVendorTiers = useCallback(() => {
     fetchJson('/api/integrations/vendor-tiers')
@@ -77,6 +81,26 @@ export default function CustomerPoPage() {
     window.addEventListener('vendor-catalog-synced', onCatalogSynced);
     return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
   }, [reloadList, reloadProducts, loadVendorTiers]);
+
+  useEffect(() => {
+    const wrId = searchParams.get('wrId');
+    if (!wrId || wrPrefillDone.current) return;
+    wrPrefillDone.current = true;
+    fetchJson<JsonObject>(`/api/maintenance-requests/${wrId}/resolve-prefill`)
+      .then((data) => {
+        if (!data.canResolvePo) {
+          toast.error('Permintaan tidak bisa dibuatkan PO');
+          return;
+        }
+        setWrMeta(data);
+        setCatatan(str(data.poCatatan));
+        setCreateDate(new Date());
+        setLines([emptyPoLine()]);
+        setCreateOpen(true);
+        toast.info(`PO untuk maintenance ${str(data.noWR)}`);
+      })
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
+  }, [searchParams]);
 
   const canCreate = (PO_CAN_CREATE as readonly string[]).includes(String(user?.role || ''));
   const canRequest = (PO_CAN_REQUEST as readonly string[]).includes(String(user?.role || ''));
@@ -251,6 +275,8 @@ export default function CustomerPoPage() {
           items,
           catatan,
           tanggalKedatangan: toDateInputValue(createDate),
+          maintenanceRequestId: wrMeta?.id || null,
+          assetId: wrMeta?.assetId || null,
         }),
       });
       const data = await res.json();
@@ -258,6 +284,7 @@ export default function CustomerPoPage() {
       toast.success(`PO ${data.noPO} dibuat untuk ${formatDate(createDate)}`);
       setCreateOpen(false);
       setEditingPo(null);
+      setWrMeta(null);
       setSelectedDate(createDate ? toDateInputValue(createDate) : null);
       setShowAll(false);
       setExpandedId(data.id);

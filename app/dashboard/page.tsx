@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import DashboardProcurementCharts from '@/components/DashboardProcurementCharts';
+import DashboardMaintenanceSection from '@/components/DashboardMaintenanceSection';
 import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
 import { formatIDR } from '@/lib/format';
 import Link from 'next/link';
@@ -57,7 +58,7 @@ export default function DashboardPage() {
       <div className="p-4 md:p-6 space-y-5">
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-sm text-slate-500">Penerimaan barang & belanja pengadaan</p>
+          <p className="text-sm text-slate-500">Penerimaan barang, belanja pengadaan & maintenance aset</p>
         </div>
         <OperationalScopeBar />
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -98,7 +99,10 @@ export default function DashboardPage() {
             ))}
           </div>
         ) : (
-          <DashboardProcurementCharts data={chartData as JsonObject | null} />
+          <>
+            <DashboardProcurementCharts data={chartData as JsonObject | null} />
+            <DashboardMaintenanceSection data={chartData as JsonObject | null} />
+          </>
         )}
       </div>
     </AppShell>

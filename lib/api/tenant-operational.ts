@@ -30,6 +30,9 @@ export const OPERATIONAL_COLLECTIONS = [
   'tutup_buku_log',
   'goods_receipts',
   'customer_purchase_orders',
+  'local_purchase_orders',
+  'maintenance_requests',
+  'maintenance_service_orders',
   'inventory_releases',
 ];
 

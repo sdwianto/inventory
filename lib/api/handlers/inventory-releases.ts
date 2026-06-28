@@ -19,6 +19,8 @@ import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import type { AuthContext } from '@/types/auth';
+import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
+import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -35,6 +37,8 @@ interface ReleaseBody extends Record<string, unknown> {
   submit?: boolean;
   note?: string;
   reason?: string;
+  maintenanceRequestId?: string;
+  assetId?: string;
 }
 
 interface ReleaseLineItem {
@@ -165,12 +169,27 @@ export async function handleInventoryReleases({
       lokasiNama: warehouseLabel(lokasiKode),
       keperluan: String(releaseBody.keperluan).trim(),
       keterangan: releaseBody.keterangan || '',
+      maintenanceRequestId: releaseBody.maintenanceRequestId || null,
+      assetId: releaseBody.assetId || null,
       items: lineItems,
       createdBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
       submittedAt: submitNow ? now : null,
       createdAt: now,
     });
     await db.collection('inventory_releases').insertOne(doc);
+
+    if (releaseBody.maintenanceRequestId) {
+      const wr = await loadWrById(db, scopeAuth, String(releaseBody.maintenanceRequestId));
+      const block = assertWrResolvable(wr, 'INTERNAL');
+      if (!block && wr && !wr.linkedReleaseId) {
+        await applyWrResolutionLink(db, wr, {
+          resolutionType: 'INTERNAL',
+          linkedReleaseId: doc.id,
+          linkedReleaseNo: doc.noRelease,
+        });
+      }
+    }
+
     return ok(clean(doc));
   }
 
@@ -256,7 +275,9 @@ export async function handleInventoryReleases({
       userName: auth.name || auth.email || 'System',
       metadata: { noRelease: doc.noRelease, lokasiKode, itemCount: (doc.items || []).length },
     });
-    return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
+    const posted = await loadRelease(db, scopeAuth, doc.id);
+    const wrLoop = await tryAutoCompleteWrFromRelease(db, posted || doc);
+    return ok(clean({ ...(posted || doc), wrLoop }));
   }
 
   if (path[0] === 'inventory-releases' && path[2] === 'reject' && method === 'POST') {

@@ -13,7 +13,7 @@ import {
   Boxes, FileEdit, Factory, ChevronDown, ChevronRight, Users, UserCircle,
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
-  MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer
+  MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
@@ -26,12 +26,15 @@ import { debounce } from '@/lib/debounce';
 import { useGrnPendingCount } from '@/lib/hooks/use-goods-receipts';
 import { useHutangPendingCount } from '@/lib/hooks/use-vendor-hutang';
 
-type NavBadgeKey = 'grnPending' | 'hutangReview';
+import { useWrPendingCount, usePmDueCount } from '@/lib/hooks/use-maintenance';
+
+type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
 
 interface NavLeaf {
   href: string;
   label: string;
   icon: LucideIcon;
+  badgeKey?: NavBadgeKey;
 }
 
 interface NavItem extends NavLeaf {
@@ -60,6 +63,15 @@ const NAV: NavEntry[] = [
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
   { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
+  {
+    type: 'group', key: 'maintenance', label: 'Maintenance', icon: Wrench,
+    items: [
+      { href: '/maintenance/permintaan', label: 'Permintaan (WR)', icon: Wrench, badgeKey: 'wrPending' },
+      { href: '/maintenance/jadwal', label: 'Jadwal PM', icon: CalendarClock, badgeKey: 'pmOverdue' },
+      { href: '/maintenance/aset', label: 'Register Aset', icon: Cog },
+      { href: '/maintenance/laporan', label: 'Laporan', icon: BarChart3 },
+    ],
+  },
   {
     type: 'group', key: 'master', label: 'Master Data', icon: Database,
     items: [
@@ -94,13 +106,17 @@ const DEFAULT_EXPANDED: Record<string, boolean> = Object.fromEntries(
 
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+          '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+          '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user'],
   MASTER: '*',
@@ -131,7 +147,9 @@ export default function AppShell({ children }: AppShellProps) {
   const [tenantLogo, setTenantLogo] = useState('');
   const [lokasiLabel, setLokasiLabel] = useState('');
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
-  const [navBadges, setNavBadges] = useState<Record<NavBadgeKey, number>>({ hutangReview: 0, grnPending: 0 });
+  const [navBadges, setNavBadges] = useState<Record<NavBadgeKey, number>>({
+    hutangReview: 0, grnPending: 0, wrPending: 0, pmOverdue: 0,
+  });
 
   const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 
@@ -197,29 +215,38 @@ export default function AppShell({ children }: AppShellProps) {
 
   const showHutangBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
+  const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
+  const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const { data: grnPending = 0 } = useGrnPendingCount(!!showGrnBadge);
   const { data: hutangReview = 0 } = useHutangPendingCount(!!showHutangBadge);
+  const { data: wrPending = 0 } = useWrPendingCount(!!showWrBadge);
+  const { data: pmOverdue = 0 } = usePmDueCount(!!showPmBadge);
 
   const debouncedBadgeRefresh = useMemo(
     () => debounce(() => {
       queryClient.invalidateQueries({ queryKey: ['goods-receipts', 'pending-count'] });
       queryClient.invalidateQueries({ queryKey: ['hutang', 'pending-count'] });
+      queryClient.invalidateQueries({ queryKey: ['maintenance-requests', 'pending-count'] });
+      queryClient.invalidateQueries({ queryKey: ['maintenance-schedules', 'due-count'] });
     }, 300),
     [queryClient],
   );
 
   useEffect(() => {
-    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview }));
-  }, [grnPending, hutangReview]);
+    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue }));
+  }, [grnPending, hutangReview, wrPending, pmOverdue]);
 
   useEffect(() => {
     const onGrn = () => debouncedBadgeRefresh();
     const onHutang = () => debouncedBadgeRefresh();
+    const onMaintenance = () => debouncedBadgeRefresh();
     window.addEventListener('erp-grn-change', onGrn);
     window.addEventListener('erp-hutang-change', onHutang);
+    window.addEventListener('erp-maintenance-change', onMaintenance);
     return () => {
       window.removeEventListener('erp-grn-change', onGrn);
       window.removeEventListener('erp-hutang-change', onHutang);
+      window.removeEventListener('erp-maintenance-change', onMaintenance);
     };
   }, [debouncedBadgeRefresh]);
 
@@ -239,6 +266,7 @@ export default function AppShell({ children }: AppShellProps) {
     if (pathname?.startsWith('/akunting')) next.akunting = true;
     if (pathname?.startsWith('/retur')) next.retur = true;
     if (pathname?.startsWith('/utiliti')) next.utiliti = true;
+    if (pathname?.startsWith('/maintenance')) next.maintenance = true;
     setExpanded((s) => ({ ...s, ...next }));
   }, [pathname]);
 
@@ -320,7 +348,11 @@ export default function AppShell({ children }: AppShellProps) {
             if (item.type === 'group') {
               const Icon = item.icon;
               const isOpen = !!expanded[item.key];
-              const groupActive = item.items.some((c) => pathname?.startsWith(c.href));
+              const groupActive = item.items.some((c) => pathname === c.href || pathname?.startsWith(`${c.href}/`));
+              const groupBadge = item.items.reduce(
+                (sum, c) => sum + (c.badgeKey ? navBadges[c.badgeKey] : 0),
+                0,
+              );
               return (
                 <div key={item.key}>
                   <button
@@ -331,6 +363,11 @@ export default function AppShell({ children }: AppShellProps) {
                   >
                     <Icon className="w-4 h-4" />
                     <span className="flex-1 text-left">{item.label}</span>
+                    {groupBadge > 0 && (
+                      <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full bg-orange-500 text-white text-xs font-bold flex items-center justify-center">
+                        {groupBadge}
+                      </span>
+                    )}
                     {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                   </button>
                   {isOpen && (
@@ -338,6 +375,7 @@ export default function AppShell({ children }: AppShellProps) {
                       {item.items.map((c) => {
                         const CIcon = c.icon;
                         const cActive = pathname === c.href || pathname?.startsWith(`${c.href}/`);
+                        const cBadge = c.badgeKey ? navBadges[c.badgeKey] : 0;
                         return (
                           <Link
                             key={c.href}
@@ -348,7 +386,12 @@ export default function AppShell({ children }: AppShellProps) {
                             }`}
                           >
                             <CIcon className="w-3.5 h-3.5" />
-                            <span>{c.label}</span>
+                            <span className="flex-1">{c.label}</span>
+                            {c.badgeKey && cBadge > 0 && (
+                              <span className="min-w-[1.125rem] h-4 px-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center">
+                                {cBadge}
+                              </span>
+                            )}
                           </Link>
                         );
                       })}

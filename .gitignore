@@ -87,3 +87,6 @@ node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 credentials.json
 *.key
 .credentials
+
+# Windows accidental redirect artifact (e.g. `command > nul` run from wrong shell)
+/nul

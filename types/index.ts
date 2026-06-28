@@ -7,6 +7,21 @@ export type {
 } from './api/handler';
 export * from './client';
 export type {
+  AssetStatus,
+  AssetDoc,
+  MaintenancePriority,
+  MaintenanceRequestStatus,
+  MaintenanceRequestDoc,
+} from './maintenance';
+export type {
+  PoChannel,
+  LocalPoStatus,
+  LocalPoItem,
+  LocalPurchaseOrderDoc,
+  VendorPurchaseOrderDoc,
+} from './purchase-order';
+export { PO_CHANNEL_LOCAL, PO_CHANNEL_VENDOR } from './purchase-order';
+export type {
   VendorInvoicePayload,
   VendorInvoiceLine,
   ThreeWayMatchOptions,

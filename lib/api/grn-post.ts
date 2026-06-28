@@ -10,6 +10,7 @@ import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { tryAutoCompleteWrFromGrn } from '@/lib/api/maintenance-wr-loop';
 import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
 
@@ -107,6 +108,7 @@ export async function postGoodsReceipt(
   if (!posted) return { error: 'GRN tidak ditemukan setelah posting' };
 
   const cpoSync = await syncCpoOnGrnPosted(db, posted);
+  const wrLoop = await tryAutoCompleteWrFromGrn(db, posted);
 
   let invoiceSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;
@@ -145,6 +147,7 @@ export async function postGoodsReceipt(
   return {
     ...enriched,
     cpoSync,
+    wrLoop,
     invoiceSync,
     invoiceSyncStatus: posted.invoiceSyncStatus || enriched?.invoiceSyncStatus,
   };

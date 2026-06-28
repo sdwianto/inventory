@@ -2,7 +2,8 @@
 
 import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from 'sonner';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
+import { fetchJson } from '@/lib/fetch-json';
 import { WAREHOUSES } from '@/lib/warehouses-client';
 import { ArrowUpFromLine, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
 
@@ -38,13 +40,19 @@ export default function ReleaseInventoryPage() {
     lokasiKode: string;
     keperluan: string;
     keterangan: string;
+    maintenanceRequestId: string;
+    assetId: string;
     items: JsonObject[];
   }>({
     lokasiKode: 'GKERING',
     keperluan: '',
     keterangan: '',
+    maintenanceRequestId: '',
+    assetId: '',
     items: [],
   });
+  const searchParams = useSearchParams();
+  const wrPrefillDone = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
 
@@ -54,6 +62,29 @@ export default function ReleaseInventoryPage() {
     setUser(getUser());
     load();
   }, []);
+
+  useEffect(() => {
+    const wrId = searchParams.get('wrId');
+    if (!wrId || wrPrefillDone.current) return;
+    wrPrefillDone.current = true;
+    fetchJson<JsonObject>(`/api/maintenance-requests/${wrId}/resolve-prefill`)
+      .then((data) => {
+        if (!data.canResolveInternal) {
+          toast.error('Permintaan tidak bisa release stok');
+          return;
+        }
+        setForm((f) => ({
+          ...f,
+          keperluan: str(data.releaseKeperluan),
+          keterangan: `[${str(data.noWR)}] ${str(data.judul)}`.trim(),
+          maintenanceRequestId: str(data.id),
+          assetId: str(data.assetId),
+        }));
+        setShowForm(true);
+        toast.info(`Release stok untuk ${str(data.noWR)}`);
+      })
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
+  }, [searchParams]);
 
   useEffect(() => {
     if (showForm || pickerOpen) {
@@ -155,7 +186,14 @@ export default function ReleaseInventoryPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(submit ? 'Pengajuan release dikirim ke supervisor' : 'Draft release disimpan');
       setShowForm(false);
-      setForm({ lokasiKode: 'GKERING', keperluan: '', keterangan: '', items: [] });
+      setForm({
+        lokasiKode: 'GKERING',
+        keperluan: '',
+        keterangan: '',
+        maintenanceRequestId: '',
+        assetId: '',
+        items: [],
+      });
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
