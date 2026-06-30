@@ -14,6 +14,14 @@ type SupplierDoc = Record<string, unknown> & {
   createdAt: Date;
 };
 
+function isPlaceholderSupplierName(nama: string | null | undefined, vtid: string): boolean {
+  const n = String(nama || '').trim();
+  if (!n) return true;
+  if (n.toLowerCase() === 'sales.app vendor') return true;
+  if (n === `Vendor ${vtid}`) return true;
+  return false;
+}
+
 export async function ensureVendorSupplier(
   db: Db,
   tenantId: string | null | undefined,
@@ -23,14 +31,24 @@ export async function ensureVendorSupplier(
   const tid = tenantId || 'default';
   const vtid = vendorTenantId || 'vendor';
   const kode = `V-${String(vtid).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16)}`;
+  const nextName = String(vendorName || '').trim() || `Vendor ${vtid}`;
   const existing = await db.collection('supplier').findOne({ tenantId: tid, kode });
-  if (existing) return existing as unknown as SupplierDoc;
+  if (existing) {
+    if (isPlaceholderSupplierName(existing.nama as string, vtid) && nextName !== existing.nama) {
+      await db.collection('supplier').updateOne(
+        { id: existing.id },
+        { $set: { nama: nextName, updatedAt: new Date() } },
+      );
+      return { ...(existing as unknown as SupplierDoc), nama: nextName };
+    }
+    return existing as unknown as SupplierDoc;
+  }
 
   const sup: SupplierDoc = {
     id: uuidv4(),
     tenantId: tid,
     kode,
-    nama: vendorName || `Vendor ${vtid}`,
+    nama: nextName,
     vendorTenantId: vtid,
     vendorSource: 'sales.app',
     aktif: true,

@@ -148,6 +148,7 @@ export async function handleIntegrations({
       tenantId,
       ...config,
       salesApiKey: config.salesApiKey ? `${config.salesApiKey.slice(0, 12)}…` : '',
+      webhookSecret: config.webhookSecret ? `${config.webhookSecret.slice(0, 8)}…` : '',
       catalogReachable: catalogOk,
       catalogCount,
       vendorTenantCount,
@@ -161,8 +162,12 @@ export async function handleIntegrations({
   }
 
   if (route === '/integrations/pair' && method === 'POST') {
+    const setupToken = getSetupToken();
+    if (!setupToken) {
+      return err('INTEGRATION_SETUP_TOKEN belum di-set di environment production', 503);
+    }
     const token = String(intBody.setupToken || '');
-    if (token !== getSetupToken()) return err('Setup token tidak valid', 403);
+    if (token !== setupToken) return err('Setup token tidak valid', 403);
 
     const customerTenantId = String(intBody.customerTenantId || '').trim().toLowerCase();
     if (!customerTenantId) return err('customerTenantId wajib', 400);

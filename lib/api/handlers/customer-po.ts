@@ -282,7 +282,8 @@ function canEditPo(auth: AuthContext, po: JsonObject) {
   const status = String(po.status || '');
   if (!['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
   if (auth.isMaster || auth.role === 'ADMIN') return true;
-  if (status === 'DRAFT' && ['SUPERVISOR', 'GUDANG'].includes(auth.role)) {
+  if (status === 'DRAFT' && auth.role === 'SUPERVISOR') return true;
+  if (status === 'DRAFT' && auth.role === 'GUDANG') {
     return String(asObject(po.createdBy).userId || '') === auth.userId;
   }
   return false;
@@ -553,7 +554,7 @@ export async function handleCustomerPo({
     if (po.status !== 'DRAFT') return err('Hanya PO DRAFT yang bisa diajukan', 400);
     if (!po.items?.length) return err('PO kosong', 400);
     if (
-      ['SUPERVISOR', 'GUDANG'].includes(scopeAuth!.role)
+      scopeAuth!.role === 'GUDANG'
       && po.createdBy?.userId !== scopeAuth!.userId
       && !scopeAuth!.isMaster
     ) {

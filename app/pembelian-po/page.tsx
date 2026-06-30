@@ -2,7 +2,7 @@
 
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { startOfMonth } from 'date-fns';
 import AppShell from '@/components/AppShell';
@@ -37,7 +37,7 @@ import {
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
 
-export default function CustomerPoPage() {
+function CustomerPoPageContent() {
   const [user, setUser] = useState<JsonObject | null>(null);
   const { list, reload: reloadList, setList } = useCustomerPoList();
   const { products, reloadProducts } = useCustomerPoProducts();
@@ -170,8 +170,9 @@ export default function CustomerPoPage() {
     const status = str(po.status);
     if (!po || !['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
     if (canApprove) return true;
+    if (status === 'DRAFT' && user?.role === 'SUPERVISOR') return true;
     const createdBy = asObject(po.createdBy);
-    if (status === 'DRAFT' && ['SUPERVISOR', 'GUDANG'].includes(String(user?.role || ''))) {
+    if (status === 'DRAFT' && user?.role === 'GUDANG') {
       return str(createdBy.userId) === str(user?.id);
     }
     return false;
@@ -541,9 +542,7 @@ export default function CustomerPoPage() {
                           </Button>
                         )}
                         {poStatus === 'DRAFT' && canRequest && (
-                          ['SUPERVISOR', 'GUDANG'].includes(String(user?.role || ''))
-                            ? str(createdBy.userId) === str(user?.id)
-                            : true
+                          user?.role !== 'GUDANG' || str(createdBy.userId) === str(user?.id)
                         ) && (
                           <Button
                             size="sm"
@@ -715,5 +714,19 @@ export default function CustomerPoPage() {
         onCancel={() => { setCreateOpen(false); setEditingPo(null); }}
       />
     </AppShell>
+  );
+}
+
+export default function CustomerPoPage() {
+  return (
+    <Suspense
+      fallback={(
+        <AppShell>
+          <div className="p-6 text-sm text-slate-500">Memuat pembelian PO…</div>
+        </AppShell>
+      )}
+    >
+      <CustomerPoPageContent />
+    </Suspense>
   );
 }

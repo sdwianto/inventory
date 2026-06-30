@@ -113,16 +113,16 @@ export async function tryAutoCompleteWrFromGrn(
   let po: { maintenanceRequestId?: string; noPO?: string } | null = null;
 
   if (grn.customerPoId) {
-    po = await db.collection('customer_purchase_orders').findOne(
+    po = (await db.collection('customer_purchase_orders').findOne(
       { tenantId, id: grn.customerPoId },
       { projection: { maintenanceRequestId: 1, noPO: 1 } },
-    );
+    )) as { maintenanceRequestId?: string; noPO?: string } | null;
   }
   if (!po?.maintenanceRequestId && grn.noPO) {
-    po = await db.collection('customer_purchase_orders').findOne(
+    po = (await db.collection('customer_purchase_orders').findOne(
       { tenantId, noPO: grn.noPO },
       { projection: { maintenanceRequestId: 1, noPO: 1 } },
-    );
+    )) as { maintenanceRequestId?: string; noPO?: string } | null;
   }
   if (!po?.maintenanceRequestId) {
     return { action: 'skipped', reason: 'not_maintenance_po' };

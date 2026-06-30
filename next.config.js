@@ -25,18 +25,39 @@ const nextConfig = {
     pagesBufferLength: 2,
   },
   async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          { key: "X-Frame-Options", value: "SAMEORIGIN" },
-          { key: "Content-Security-Policy", value: "frame-ancestors 'self';" },
-          { key: "Access-Control-Allow-Origin", value: process.env.CORS_ORIGINS || "*" },
-          { key: "Access-Control-Allow-Methods", value: "GET, POST, PUT, DELETE, OPTIONS" },
-          { key: "Access-Control-Allow-Headers", value: "*" },
-        ],
-      },
+    const isProd = process.env.NODE_ENV === 'production';
+    const corsOrigins = (process.env.CORS_ORIGINS || '').trim();
+    const allowFraming = process.env.ALLOW_FRAMING === '1';
+    const frameAncestors = allowFraming || !isProd ? '*' : "'self'";
+
+    const headers = [
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+      { key: 'Content-Security-Policy', value: `frame-ancestors ${frameAncestors};` },
+      { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+      { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, x-api-key' },
     ];
+
+    if (!allowFraming && isProd) {
+      headers.push({ key: 'X-Frame-Options', value: 'SAMEORIGIN' });
+    } else {
+      headers.push({ key: 'X-Frame-Options', value: 'ALLOWALL' });
+    }
+
+    if (isProd && process.env.ENABLE_HSTS !== '0') {
+      headers.push({
+        key: 'Strict-Transport-Security',
+        value: 'max-age=31536000; includeSubDomains',
+      });
+    }
+
+    // CORS: di production hanya set jika CORS_ORIGINS dikonfigurasi (fail closed).
+    const allowOrigin = corsOrigins ? corsOrigins.split(',')[0].trim() : isProd ? '' : '*';
+    if (allowOrigin) {
+      headers.push({ key: 'Access-Control-Allow-Origin', value: allowOrigin });
+    }
+
+    return [{ source: '/(.*)', headers }];
   },
 };
 

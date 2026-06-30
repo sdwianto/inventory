@@ -26,6 +26,18 @@ export interface VendorInvoicePayload extends JsonObject {
   jatuhTempo?: string | Date;
   postedAt?: string | Date;
   vendorName?: string;
+  vendorCompanyName?: string;
+  vendorAddress?: string;
+  vendorPhone?: string;
+  vendorNPWP?: string;
+  vendorLogoBase64?: string;
+  vendor?: {
+    companyName?: string;
+    companyAddress?: string;
+    companyPhone?: string;
+    companyNPWP?: string;
+    logoBase64?: string;
+  };
   pelangganName?: string;
   customerName?: string;
   userName?: string;

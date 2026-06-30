@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -33,7 +36,7 @@ jobs:
         run: npm run build
         env:
           MONGO_URL: mongodb://127.0.0.1:27017
-          SESSION_SECRET: ci-session-secret-min-16-chars
+          SESSION_SECRET: ci-session-secret-min-32-characters-xx
 
   e2e:
     runs-on: ubuntu-latest
@@ -59,4 +62,4 @@ jobs:
           APP_HOST: 127.0.0.1
           APP_PORT: '3001'
           MONGO_URL: mongodb://127.0.0.1:27017
-          SESSION_SECRET: ci-session-secret-min-16-chars
+          SESSION_SECRET: ci-session-secret-min-32-characters-xx

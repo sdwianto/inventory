@@ -10,6 +10,7 @@ import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
 import { poEstimasiFromDoc, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
 import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { vendorBillingFromPayload } from '@/lib/api/hutang-detail-enrich';
+import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal } from '@/lib/api/journal';
 import { buildVendorHutangJournalLines } from '@/lib/api/journal-lines';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
@@ -17,6 +18,29 @@ import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
 import type { HutangDoc } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
+
+async function resolveVendorBillingForHutang(
+  db: Db,
+  tid: string,
+  payload: VendorInvoicePayload,
+  vendorTenantId: string | null | undefined,
+) {
+  const vid = vendorTenantId || payload.vendorTenantId || null;
+  const displayName = await resolveVendorDisplayName(db, tid, vid, payload);
+  const billing = vendorBillingFromPayload(payload, vid);
+  if (billing && !billing.companyName) {
+    billing.companyName = displayName;
+  }
+  const billingSnap = billing || {
+    vendorTenantId: vid,
+    companyName: displayName,
+    companyAddress: '',
+    companyPhone: '',
+    companyNPWP: '',
+    logoBase64: '',
+  };
+  return { vid, billingSnap, displayName };
+}
 
 async function loadPoVarianceContext(
   db: Db,
@@ -158,9 +182,39 @@ async function syncExistingVendorHutangFromPayload(
   const totalMismatch = total > 0 && Math.abs((existing.total || 0) - total) > 1;
   const invoiceMismatch = payload.noInvoice && existing.noInvoice !== payload.noInvoice;
 
-  if (!staleStatus && !totalMismatch && !invoiceMismatch) {
+  const { billingSnap, displayName, vid } = await resolveVendorBillingForHutang(
+    db,
+    tid,
+    payload,
+    vendorTenantId,
+  );
+  const vendorNameStale = !!displayName
+    && String(existing.supplierName || '').trim().toLowerCase() === 'sales.app vendor'
+    && displayName.toLowerCase() !== 'sales.app vendor';
+
+  if (!staleStatus && !totalMismatch && !invoiceMismatch && !vendorNameStale) {
     return {
       action: 'exists',
+      hutangId: existing.id,
+      noHutang: existing.noHutang,
+      approvalStatus: existing.approvalStatus || existing.status,
+    };
+  }
+
+  if (vendorNameStale && !staleStatus && !totalMismatch && !invoiceMismatch) {
+    await ensureVendorSupplier(db, tid, vid || existing.vendorTenantId, displayName);
+    await db.collection('hutang').updateOne(
+      { id: existing.id },
+      {
+        $set: {
+          supplierName: displayName,
+          vendorBillingSnapshot: billingSnap,
+          updatedAt: new Date(),
+        },
+      },
+    );
+    return {
+      action: 'refreshed',
       hutangId: existing.id,
       noHutang: existing.noHutang,
       approvalStatus: existing.approvalStatus || existing.status,
@@ -179,6 +233,8 @@ async function syncExistingVendorHutangFromPayload(
       $set: {
         tenantId: tid,
         referenceType: 'VENDOR_INVOICE',
+        supplierName: displayName,
+        vendorBillingSnapshot: billingSnap,
         noInvoice: payload.noInvoice || existing.noInvoice,
         noDO: payload.noDO || existing.noDO || null,
         noSO: payload.noSO || existing.noSO || null,
@@ -275,18 +331,14 @@ export async function createHutangFromVendorInvoice(
   const soTotal = varianceCtx.soTotal;
   const varianceSoToInvoice = total - soTotal;
 
-  const vendorBillingSnapshot = vendorBillingFromPayload(payload, vendorTenantId);
-  const billingSnap = { ...vendorBillingSnapshot };
-
-  const sup = await ensureVendorSupplier(
+  const { vid, billingSnap, displayName } = await resolveVendorBillingForHutang(
     db,
     tid,
+    payload,
     vendorTenantId,
-    billingSnap.companyName || payload.vendorName || 'sales.app Vendor',
   );
-  if (!billingSnap.companyName) {
-    billingSnap.companyName = sup.nama;
-  }
+
+  const sup = await ensureVendorSupplier(db, tid, vid, displayName);
 
   const now = new Date();
   const jatuhTempo = payload.jatuhTempo ? new Date(payload.jatuhTempo) : new Date(now.getTime() + 30 * 86400000);

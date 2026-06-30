@@ -15,6 +15,8 @@ import { backfillAllProductGudang } from './product-warehouse';
 
 export { REKENING_DEFAULTS, DEMO_PRODUCTS };
 
+const DEFAULT_BOOTSTRAP_PASSWORD = 'master123';
+
 export interface DemoUserSeed {
   email: string;
   password: string;
@@ -24,29 +26,45 @@ export interface DemoUserSeed {
   tenantName: string;
 }
 
-/** Akun bootstrap lintas-tenant; tidak ditampilkan di UI login. */
-export const DEMO_USERS: DemoUserSeed[] = [
-  {
-    email: 'master@dawam.com',
-    password: 'master123',
-    name: 'Master Operator',
-    role: 'MASTER',
-    tenantId: 'master',
-    tenantName: 'Pusat',
-  },
-];
+/**
+ * Satu akun bootstrap; tidak ditampilkan di UI login.
+ * Di production wajib override via MASTER_BOOTSTRAP_EMAIL / MASTER_BOOTSTRAP_PASSWORD.
+ */
+export function getBootstrapUsers(): DemoUserSeed[] {
+  return [
+    {
+      email: process.env.MASTER_BOOTSTRAP_EMAIL || 'master@dawam.com',
+      password: process.env.MASTER_BOOTSTRAP_PASSWORD || DEFAULT_BOOTSTRAP_PASSWORD,
+      name: 'Master Operator',
+      role: 'MASTER',
+      tenantId: 'master',
+      tenantName: 'Pusat',
+    },
+  ];
+}
+
+/** @deprecated gunakan getBootstrapUsers() — tetap diekspor untuk kompatibilitas. */
+export const DEMO_USERS = getBootstrapUsers();
 
 export async function ensureDemoUsers(db: Db): Promise<void> {
   const usersCol = db.collection('users');
-  for (const demo of DEMO_USERS) {
-    const passwordHash = await hashPassword(demo.password);
+  const bootstrapUsers = getBootstrapUsers();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  for (const demo of bootstrapUsers) {
+    if (isProd && demo.password === DEFAULT_BOOTSTRAP_PASSWORD) {
+      throw new Error(
+        'Bootstrap master pakai password default di production. Set MASTER_BOOTSTRAP_PASSWORD (& MASTER_BOOTSTRAP_EMAIL) yang kuat di environment.',
+      );
+    }
+
     const existing = await usersCol.findOne({ email: demo.email });
     if (existing) {
+      // Jangan timpa password yang sudah diubah operator; hanya selaraskan identitas.
       await usersCol.updateOne(
         { email: demo.email },
         {
           $set: {
-            password: passwordHash,
             name: demo.name,
             role: demo.role,
             tenantId: demo.tenantId,
@@ -58,7 +76,7 @@ export async function ensureDemoUsers(db: Db): Promise<void> {
       await usersCol.insertOne({
         id: uuidv4(),
         email: demo.email,
-        password: passwordHash,
+        password: await hashPassword(demo.password),
         name: demo.name,
         role: demo.role,
         tenantId: demo.tenantId,

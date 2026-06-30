@@ -48,7 +48,14 @@ function buildInvoicePayloadFromSales(data, grn) {
     })),
     postedAt: data.invoicePayload?.postedAt || grn.postedAt || new Date(),
     pelangganName: data.invoicePayload?.pelangganName || null,
+    vendorTenantId: data.invoicePayload?.vendorTenantId || data.vendorTenantId || null,
     vendorName: data.invoicePayload?.vendorName || null,
+    vendorCompanyName: data.invoicePayload?.vendorCompanyName || null,
+    vendorAddress: data.invoicePayload?.vendorAddress || null,
+    vendorPhone: data.invoicePayload?.vendorPhone || null,
+    vendorNPWP: data.invoicePayload?.vendorNPWP || null,
+    vendorLogoBase64: data.invoicePayload?.vendorLogoBase64 || null,
+    vendor: data.invoicePayload?.vendor || null,
   };
 }
 

@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.github
+coverage
+*.md
+.env*
+!.env.example
+npm-debug.log*
+.DS_Store
+tests
+scripts
+.emergent
+playwright-report
+test-results

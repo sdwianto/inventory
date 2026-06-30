@@ -2,7 +2,7 @@
 
 import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -30,7 +30,7 @@ const STATUS_STYLE: Record<string, string> = {
 const CAN_CREATE = ['GUDANG', 'ADMIN', 'MASTER'];
 const CAN_APPROVE = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
-export default function ReleaseInventoryPage() {
+function ReleaseInventoryPageContent() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [list, setList] = useState<JsonObject[]>([]);
   const [products, setProducts] = useState<JsonObject[]>([]);
@@ -400,5 +400,19 @@ export default function ReleaseInventoryPage() {
         </DialogContent>
       </Dialog>
     </AppShell>
+  );
+}
+
+export default function ReleaseInventoryPage() {
+  return (
+    <Suspense
+      fallback={(
+        <AppShell>
+          <div className="p-6 text-sm text-slate-500">Memuat release inventory…</div>
+        </AppShell>
+      )}
+    >
+      <ReleaseInventoryPageContent />
+    </Suspense>
   );
 }

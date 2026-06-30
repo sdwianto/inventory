@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import type { Db } from 'mongodb';
 import { ok, err, cors } from '@/lib/api/db';
 import { isHashed, hashPassword, verifyPassword } from '@/lib/api/auth-helpers';
-import { ensureDemoUsers, DEMO_USERS } from '@/lib/api/seed';
+import { ensureDemoUsers, getBootstrapUsers } from '@/lib/api/seed';
 import {
   SESSION_COOKIE,
   ACTING_TENANT_COOKIE,
@@ -77,7 +77,7 @@ export async function handleAuth({
     const loginBody = (body || {}) as LoginBody;
     const { email, password } = loginBody;
     if (!email || !password) return err('Email dan password wajib diisi');
-    const isDemoEmail = DEMO_USERS.some((d) => d.email === email);
+    const isDemoEmail = getBootstrapUsers().some((d) => d.email === email);
     let user = await db.collection<DbUserDoc>('users').findOne({ email });
     if (!user && isDemoEmail) {
       await ensureDemoUsers(db);
@@ -147,6 +147,9 @@ export async function handleAuth({
   if (route === '/auth/seed' && method === 'POST') {
     const denied = requireMaster(auth);
     if (denied) return denied;
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_AUTH_SEED !== '1') {
+      return err('Endpoint /auth/seed dinonaktifkan di production', 403);
+    }
     await ensureDemoUsers(db as Db);
     return ok({ message: 'Akun master diperbarui' });
   }

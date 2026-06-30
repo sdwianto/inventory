@@ -36,6 +36,10 @@ export async function getIntegrationConfig(db: Db, tenantId: string | null | und
   };
 }
 
-export function getSetupToken(): string {
-  return process.env.INTEGRATION_SETUP_TOKEN || 'dev_pair_token_local_only';
+export function getSetupToken(): string | null {
+  const configured = (process.env.INTEGRATION_SETUP_TOKEN || '').trim();
+  if (configured) return configured;
+  // Production wajib token eksplisit; jangan pernah pakai default (fail closed).
+  if (process.env.NODE_ENV === 'production') return null;
+  return 'dev_pair_token_local_only';
 }

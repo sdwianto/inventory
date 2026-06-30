@@ -426,6 +426,11 @@ export default function PenerimaanPage() {
             <div>
               <p className="text-[11px] uppercase tracking-wide text-slate-400">No. Invoice</p>
               <p className="font-mono font-medium">{str(doView?.noInvoice) || '—'}</p>
+              {!str(doView?.noInvoice) && str(doView?.status) === 'DRAFT' && (
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Dibuat otomatis setelah klik Terima Barang (GRN POSTED).
+                </p>
+              )}
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-wide text-slate-400">Tanggal kirim</p>

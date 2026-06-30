@@ -16,11 +16,12 @@ type RequestWithCookies = Request & {
 
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET;
-  if (secret && secret.length >= 16) return secret;
+  const minLen = process.env.NODE_ENV === 'production' ? 32 : 16;
+  if (secret && secret.length >= minLen) return secret;
   if (process.env.NODE_ENV === 'development') {
     return 'dev-only-change-SESSION_SECRET-in-env-local';
   }
-  throw new Error('SESSION_SECRET wajib di-set di .env.local (min 16 karakter)');
+  throw new Error(`SESSION_SECRET wajib di-set (min ${minLen} karakter di production)`);
 }
 
 function b64urlEncode(buf: Buffer | string): string {

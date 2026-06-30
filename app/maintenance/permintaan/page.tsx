@@ -4,7 +4,7 @@ import type { JsonObject } from '@/types/json';
 import { str, asObject, asArray, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import type { MaintenancePriority, MaintenanceRequestStatus } from '@/types/maintenance';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -47,7 +47,7 @@ import ServiceOrderDialog from '@/components/maintenance/ServiceOrderDialog';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-export default function MaintenancePermintaanPage() {
+function MaintenancePermintaanPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const invalidate = useInvalidateMaintenance();
@@ -536,5 +536,19 @@ export default function MaintenancePermintaanPage() {
         />
       </div>
     </AppShell>
+  );
+}
+
+export default function MaintenancePermintaanPage() {
+  return (
+    <Suspense
+      fallback={(
+        <AppShell>
+          <div className="p-6 text-sm text-slate-500">Memuat permintaan maintenance…</div>
+        </AppShell>
+      )}
+    >
+      <MaintenancePermintaanPageContent />
+    </Suspense>
   );
 }

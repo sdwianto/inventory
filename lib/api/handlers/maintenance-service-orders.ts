@@ -192,7 +192,7 @@ export async function handleMaintenanceServiceOrders({
       ...auditActor(auth),
     });
 
-    const updated = await db.collection(SERVICE_ORDERS_COLLECTION).findOne({ id: so.id });
+    const updated = await db.collection(SERVICE_ORDERS_COLLECTION).findOne({ id: so.id }) as MaintenanceServiceOrderDoc | null;
     const wrLoop = await tryAutoCompleteWrFromServiceOrder(db, updated || so);
     return ok(clean({ ...updated, hutangNo: noHutang, wrLoop }));
   }
