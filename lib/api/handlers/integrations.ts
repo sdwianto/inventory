@@ -120,6 +120,16 @@ export async function handleIntegrations({
   const intBody = parseHandlerBody(body);
   const scopeOpts = { url, body: intBody, request };
 
+  if (route === '/integrations/public-info' && method === 'GET') {
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+    const proto = request.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
+    const originFromRequest = host ? `${proto}://${host.split(',')[0].trim()}` : '';
+    return ok({
+      webhookUrl: getInventoryWebhookUrl(originFromRequest || undefined),
+      pairUrl: getInventoryPairUrl(originFromRequest || undefined),
+    });
+  }
+
   if (route === '/integrations/setup-info' && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
