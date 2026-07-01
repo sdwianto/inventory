@@ -22,6 +22,8 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tenantPick, setTenantPick] = useState([]);
+  const [selectedTenantId, setSelectedTenantId] = useState('');
 
   const loginRedirect = () => {
     if (typeof window === 'undefined') return '/dashboard';
@@ -39,18 +41,28 @@ export default function LoginPage() {
     });
   }, [router]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const submitLogin = async (tenantId) => {
     setLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          email,
+          password,
+          ...(tenantId ? { tenantId } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal login');
+      if (data.needsTenantPick && Array.isArray(data.tenants) && data.tenants.length > 0) {
+        setTenantPick(data.tenants);
+        setSelectedTenantId(data.tenants[0]?.tenantId || '');
+        toast.message('Pilih tenant untuk melanjutkan login');
+        return;
+      }
+      setTenantPick([]);
       setUser(data.user);
       toast.success(`Selamat datang, ${data.user.name}!`);
       router.replace(loginRedirect());
@@ -59,6 +71,11 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    await submitLogin(tenantPick.length > 0 ? selectedTenantId : undefined);
   };
 
   return (
@@ -155,6 +172,23 @@ export default function LoginPage() {
                   autoComplete='current-password'
                 />
               </div>
+              {tenantPick.length > 0 && (
+                <div className='space-y-2'>
+                  <Label htmlFor='tenant'>Tenant</Label>
+                  <select
+                    id='tenant'
+                    className='flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                    value={selectedTenantId}
+                    onChange={(e) => setSelectedTenantId(e.target.value)}
+                  >
+                    {tenantPick.map((t) => (
+                      <option key={t.tenantId} value={t.tenantId}>
+                        {t.tenantName} ({t.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <Button
                 type='submit'
                 className='w-full bg-orange-500 hover:bg-orange-600'

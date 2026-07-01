@@ -7,6 +7,7 @@ import { hashPassword } from '@/lib/api/auth-helpers';
 import { requireAuth } from '@/lib/api/require-auth';
 import { tenantFilterFromAuth, assertDocTenant } from '@/lib/api/tenant-scope';
 import type { HandlerContext } from '@/types/api/handler';
+import { assertEmailAvailableInTenant, normalizeUserEmail } from '@/lib/api/user-email';
 
 const TENANT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER'];
 const ALL_ROLES = [...TENANT_ROLES, 'MASTER'];
@@ -87,18 +88,18 @@ export async function handleUsers({
     if (!createBody.email || !createBody.password || !createBody.name) {
       return err('Email, password, nama wajib');
     }
-    const existing = await db.collection('users').findOne({ email: createBody.email });
-    if (existing) return err('Email sudah terdaftar');
     const role = normalizeRole(createBody.role, userAuth.isMaster);
     if (!role) return err('Role tidak valid', 400);
     const tenantId = userAuth.isMaster ? (createBody.tenantId || 'default') : userAuth.tenantId;
+    const emailCheck = await assertEmailAvailableInTenant(db, createBody.email, tenantId);
+    if (!emailCheck.ok) return err(emailCheck.message);
     const tenantName = userAuth.isMaster
       ? (createBody.tenantName || createBody.tenantId || '—')
       : userAuth.tenantName;
     const hashedPwd = await hashPassword(createBody.password);
     const doc: UserDoc = {
       id: uuidv4(),
-      email: createBody.email,
+      email: normalizeUserEmail(createBody.email),
       password: hashedPwd,
       name: createBody.name,
       role,
@@ -136,6 +137,17 @@ export async function handleUsers({
         const nextRole = normalizeRole(updateBody.role, true);
         if (!nextRole) return err('Role tidak valid', 400);
         update.role = nextRole;
+      }
+      const nextTenantId = String(update.tenantId ?? existing.tenantId ?? '');
+      if (updateBody.email !== undefined) {
+        update.email = normalizeUserEmail(String(updateBody.email));
+        const emailCheck = await assertEmailAvailableInTenant(
+          db,
+          String(update.email),
+          nextTenantId,
+          existing.id,
+        );
+        if (!emailCheck.ok) return err(emailCheck.message);
       }
       if (!updateBody.password) delete update.password;
       else update.password = await hashPassword(updateBody.password);

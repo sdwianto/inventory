@@ -12,6 +12,7 @@ import { migrateStokLokasiFromProducts } from './stok-lokasi';
 import { ensureDefaultRenamedToSppg } from './migrate-tenant-sppg';
 import { ensureAllTenantsWarehouses } from './warehouses';
 import { backfillAllProductGudang } from './product-warehouse';
+import { normalizeUserEmail } from './user-email';
 
 export { REKENING_DEFAULTS, DEMO_PRODUCTS };
 
@@ -58,11 +59,12 @@ export async function ensureDemoUsers(db: Db): Promise<void> {
       );
     }
 
-    const existing = await usersCol.findOne({ email: demo.email });
+    const email = normalizeUserEmail(demo.email);
+    const existing = await usersCol.findOne({ email, tenantId: demo.tenantId });
     if (existing) {
       // Jangan timpa password yang sudah diubah operator; hanya selaraskan identitas.
       await usersCol.updateOne(
-        { email: demo.email },
+        { id: existing.id },
         {
           $set: {
             name: demo.name,
@@ -75,7 +77,7 @@ export async function ensureDemoUsers(db: Db): Promise<void> {
     } else {
       await usersCol.insertOne({
         id: uuidv4(),
-        email: demo.email,
+        email,
         password: await hashPassword(demo.password),
         name: demo.name,
         role: demo.role,

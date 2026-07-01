@@ -61,7 +61,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
   { collection: 'vendor_tenants', index: { tenantId: 1, vendorTenantId: 1 }, name: 'uniq_vendor_tenants', unique: true },
-  { collection: 'users', index: { email: 1 }, name: 'uniq_users_email', unique: true },
+  { collection: 'users', index: { email: 1, tenantId: 1 }, name: 'uniq_users_email_tenant', unique: true },
   { collection: 'tenant_settings', index: { tenantId: 1 }, name: 'uniq_tenant_settings', unique: true },
   { collection: 'produk_grup', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_grup', unique: true },
   { collection: 'produk_satuan', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_satuan', unique: true },
@@ -85,6 +85,11 @@ async function safeCreateIndex(
 
 export async function ensureOperationalIndexes(db: Db): Promise<void> {
   if (operationalIndexesEnsured) return;
+  try {
+    await db.collection('users').dropIndex('uniq_users_email');
+  } catch {
+    /* index lama mungkin sudah tidak ada */
+  }
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

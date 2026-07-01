@@ -3,7 +3,7 @@
 import { NextResponse } from 'next/server';
 import type { Db } from 'mongodb';
 import { ok, err, cors } from '@/lib/api/db';
-import { isHashed, hashPassword, verifyPassword } from '@/lib/api/auth-helpers';
+import { isHashed, hashPassword } from '@/lib/api/auth-helpers';
 import { ensureDemoUsers, getBootstrapUsers } from '@/lib/api/seed';
 import {
   SESSION_COOKIE,
@@ -17,10 +17,12 @@ import { requireAuth, requireMaster } from '@/lib/api/require-auth';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import type { HandlerContext } from '@/types/api/handler';
 import type { SessionUser } from '@/types/auth';
+import { findUsersByEmail, resolveLoginUser } from '@/lib/api/user-email';
 
 interface LoginBody {
   email?: string;
   password?: string;
+  tenantId?: string;
 }
 
 interface DbUserDoc {
@@ -75,17 +77,22 @@ export async function handleAuth({
 }: HandlerContext): Promise<NextResponse | null> {
   if (route === '/auth/login' && method === 'POST') {
     const loginBody = (body || {}) as LoginBody;
-    const { email, password } = loginBody;
+    const { email, password, tenantId } = loginBody;
     if (!email || !password) return err('Email dan password wajib diisi');
-    const isDemoEmail = getBootstrapUsers().some((d) => d.email === email);
-    let user = await db.collection<DbUserDoc>('users').findOne({ email });
-    if (!user && isDemoEmail) {
+    const isDemoEmail = getBootstrapUsers().some(
+      (d) => d.email.toLowerCase() === String(email).trim().toLowerCase(),
+    );
+    let candidates = await findUsersByEmail(db, email);
+    if (candidates.length === 0 && isDemoEmail) {
       await ensureDemoUsers(db);
-      user = await db.collection<DbUserDoc>('users').findOne({ email });
+      candidates = await findUsersByEmail(db, email);
     }
-    if (!user) return err('Email atau password salah', 401);
-    const valid = await verifyPassword(password, user.password);
-    if (!valid) return err('Email atau password salah', 401);
+    const loginResult = await resolveLoginUser(db, email, password, tenantId);
+    if (loginResult.kind === 'pick_tenant') {
+      return ok({ needsTenantPick: true, tenants: loginResult.tenants });
+    }
+    if (loginResult.kind === 'invalid') return err('Email atau password salah', 401);
+    const user = loginResult.user as DbUserDoc;
     if (!isHashed(user.password)) {
       const newHash = await hashPassword(password);
       await db.collection<DbUserDoc>('users').updateOne({ id: user.id }, { $set: { password: newHash } });
