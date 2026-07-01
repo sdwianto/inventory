@@ -92,7 +92,8 @@ export async function handleAuth({
       return ok({ needsTenantPick: true, tenants: loginResult.tenants });
     }
     if (loginResult.kind === 'invalid') return err('Email atau password salah', 401);
-    const user = loginResult.user as DbUserDoc;
+    if (loginResult.kind !== 'user') return err('Email atau password salah', 401);
+    const user = loginResult.user as unknown as DbUserDoc;
     if (!isHashed(user.password)) {
       const newHash = await hashPassword(password);
       await db.collection<DbUserDoc>('users').updateOne({ id: user.id }, { $set: { password: newHash } });

@@ -51,6 +51,9 @@ export default function IntegrasiPage() {
     { ok: (num(status?.localProductCount) || 0) > 0, label: `Produk lokal (${num(status?.localProductCount)})`, hint: 'Klik Sync Katalog' },
     { ok: !!status?.webhookSecret, label: 'Webhook secret', hint: 'Otomatis saat pairing' },
   ];
+  const vendorLinks = Array.isArray(status?.vendorLinks)
+    ? (status.vendorLinks as Array<{ vendorTenantId?: string; vendorName?: string }>)
+    : [];
 
   return (
     <AppShell>
@@ -60,7 +63,7 @@ export default function IntegrasiPage() {
             <Settings className="w-6 h-6" /> Integrasi Sales.app
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Konfigurasi otomatis dari sales.app — tidak perlu salin manual ke .env.local.
+            Registry multi-vendor — tiap vendor di sales.app ditambahkan tanpa menimpa vendor lain.
           </p>
         </div>
 
@@ -69,7 +72,7 @@ export default function IntegrasiPage() {
           <ol className="text-sm text-slate-600 space-y-2 list-decimal list-inside">
             <li>Buka <strong>sales.app → Pengaturan → Integrasi API</strong></li>
             <li>Isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{str(status?.tenantId, 'sppg')}</code> — semua produk dari semua tenant sales.app akan di-sync</li>
-            <li>Klik <strong>Setup &amp; Hubungkan Inventory</strong></li>
+            <li>Klik <strong>Setup &amp; Hubungkan Inventory</strong> — ulangi untuk setiap vendor baru</li>
           </ol>
         </section>
 
@@ -96,7 +99,16 @@ export default function IntegrasiPage() {
                 </li>
               ))}
             </ul>
-            {status.vendorName ? (
+            {vendorLinks.length > 0 && (
+              <ul className="text-xs text-slate-600 space-y-1">
+                {vendorLinks.map((v) => (
+                  <li key={v.vendorTenantId}>
+                    Vendor: <strong>{v.vendorName || v.vendorTenantId}</strong> ({v.vendorTenantId})
+                  </li>
+                ))}
+              </ul>
+            )}
+            {status.vendorName && vendorLinks.length === 0 ? (
               <p className="text-xs text-slate-600">Vendor: {str(status.vendorName)} ({str(status.vendorTenantId)})</p>
             ) : null}
             {status.tierHargaDefault ? (

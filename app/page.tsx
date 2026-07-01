@@ -16,13 +16,14 @@ import {
 import { Store, Package, BarChart3, Loader2, Truck, Warehouse } from 'lucide-react';
 import { toast } from 'sonner';
 import { setUser, getUser, syncSessionUser } from '@/lib/auth-client';
+import type { LoginTenantOption } from '@/lib/api/user-email';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [tenantPick, setTenantPick] = useState([]);
+  const [tenantPick, setTenantPick] = useState<LoginTenantOption[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState('');
 
   const loginRedirect = () => {

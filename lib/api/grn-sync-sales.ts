@@ -1,5 +1,5 @@
 import type { Db } from 'mongodb';
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
 import type { JsonObject } from '@/types/json';
 
@@ -10,14 +10,14 @@ interface SyncErrorRow {
 
 export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: string) {
   const tid = String(customerTenantId || 'default').trim().toLowerCase();
-  const config = await getIntegrationConfig(db, tid);
-  if (!config.salesApiKey) {
+  const access = await resolveSalesApiAccess(db, tid);
+  if (!access) {
     return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi' };
   }
 
-  const headers = { 'X-Api-Key': config.salesApiKey };
+  const headers = { 'X-Api-Key': access.salesApiKey };
   const res = await fetch(
-    `${config.salesAppUrl}/api/integrations/customer-shipments?customerTenantId=${encodeURIComponent(tid)}`,
+    `${access.salesAppUrl}/api/integrations/customer-shipments?customerTenantId=${encodeURIComponent(tid)}`,
     { headers, signal: AbortSignal.timeout(30000) },
   );
   const data = await res.json() as JsonObject;

@@ -6,6 +6,11 @@ import type { Db } from 'mongodb';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { getIntegrationConfig, getSetupToken } from '@/lib/api/integration-config';
+import {
+  listActiveLinksForCustomer,
+  upsertIntegrationLink,
+  getSalesApiKeyForVendor,
+} from '@/lib/api/integration-links';
 import { upsertProductFromVendor } from '@/lib/api/product-sync';
 import {
   upsertVendorTenant,
@@ -33,8 +38,9 @@ function salesFetchErrorMessage(err, salesUrl) {
 }
 
 async function runCatalogSync(db: Db, tenantId, config) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (config.salesApiKey) headers['X-Api-Key'] = config.salesApiKey;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const apiKey = await getSalesApiKeyForVendor(db, tenantId);
+  if (apiKey) headers['X-Api-Key'] = apiKey;
 
   let res;
   try {
@@ -115,6 +121,7 @@ export async function handleIntegrations({
   if (route === '/integrations/status' && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
+    if (!tenantId) return err('Tenant operasional wajib', 400);
     const config = await getIntegrationConfig(db, tenantId);
 
     let catalogOk = false;
@@ -122,7 +129,9 @@ export async function handleIntegrations({
     let vendorTenantCount = 0;
     if (config.salesApiKey) {
       try {
-        const headers = { 'X-Api-Key': config.salesApiKey };
+        const apiKey = await getSalesApiKeyForVendor(db, tenantId);
+        const headers: Record<string, string> = {};
+        if (apiKey) headers['X-Api-Key'] = apiKey;
         const res = await fetch(
           `${config.salesAppUrl}/api/integrations/catalog?allTenants=true`,
           { headers, signal: AbortSignal.timeout(15000) },
@@ -143,6 +152,7 @@ export async function handleIntegrations({
     const productCount = await db.collection('products').countDocuments({ tenantId, aktif: { $ne: false } });
     const syncedCount = await db.collection('products').countDocuments({ tenantId, syncSource: 'sales.app' });
     const webhookInbox = await db.collection('webhook_inbox').countDocuments({ tenantId });
+    const vendorLinks = await listActiveLinksForCustomer(db, tenantId);
 
     return ok({
       tenantId,
@@ -151,13 +161,19 @@ export async function handleIntegrations({
       webhookSecret: config.webhookSecret ? `${config.webhookSecret.slice(0, 8)}…` : '',
       catalogReachable: catalogOk,
       catalogCount,
-      vendorTenantCount,
+      vendorTenantCount: Math.max(vendorTenantCount, vendorLinks.length),
+      vendorLinks: vendorLinks.map((l) => ({
+        vendorTenantId: l.vendorTenantId,
+        vendorName: l.vendorName,
+        tierHargaDefault: l.tierHargaDefault,
+        pairedAt: l.pairedAt,
+      })),
       localProductCount: productCount,
       syncedProductCount: syncedCount,
       webhookEventsReceived: webhookInbox,
       tierHargaDefault: config.tierHargaDefault || 'ECER',
       lastCatalogSyncAt: config.lastCatalogSyncAt || null,
-      ready: !!config.salesApiKey && !!config.webhookSecret && catalogOk && syncedCount > 0,
+      ready: vendorLinks.length > 0 && !!config.salesApiKey && catalogOk && syncedCount > 0,
     });
   }
 
@@ -179,44 +195,54 @@ export async function handleIntegrations({
     if (!salesApiKey || !webhookSecret) return err('salesApiKey dan webhookSecret wajib', 400);
 
     const now = new Date();
-    const doc = {
-      tenantId: customerTenantId,
+    const link = await upsertIntegrationLink(db, {
       customerTenantId,
+      vendorTenantId,
       salesAppUrl,
       salesApiKey,
-      vendorTenantId,
       webhookSecret,
       vendorName: String(intBody.vendorName || '').trim(),
       tierHargaDefault: String(intBody.tierHargaDefault || 'ECER').toUpperCase(),
-      pairedAt: now,
-      updatedAt: now,
-    };
-
-    await db.collection('integration_settings').updateOne(
-      { tenantId: customerTenantId },
-      { $set: doc, $setOnInsert: { createdAt: now } },
-      { upsert: true },
-    );
+    });
 
     let catalogSync: Record<string, unknown> | null = null;
     if (intBody.autoSyncCatalog !== false) {
-      const config = await getIntegrationConfig(db, customerTenantId);
+      const config = await getIntegrationConfig(db, customerTenantId, vendorTenantId);
       await upsertVendorTenant(
         db,
         customerTenantId,
         vendorTenantId,
-        doc.vendorName || vendorTenantId,
-        doc.tierHargaDefault as string | undefined,
+        link.vendorName || vendorTenantId,
+        link.tierHargaDefault,
       );
       catalogSync = await runCatalogSync(db, customerTenantId, config);
     }
 
     return ok({
-      message: 'Pairing berhasil — katalog global di-sync ke inventory',
+      message: 'Pairing berhasil — vendor ditambahkan ke registry integrasi multi-vendor',
       tenantId: customerTenantId,
       vendorTenantId,
-      vendorName: doc.vendorName,
+      vendorName: link.vendorName,
+      vendorLinkCount: (await listActiveLinksForCustomer(db, customerTenantId)).length,
       catalogSync: catalogSync?.error ? { error: catalogSync.error } : catalogSync,
+    });
+  }
+
+  if (route === '/integrations/links' && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Tenant operasional wajib', 400);
+    const links = await listActiveLinksForCustomer(db, tenantId);
+    return ok({
+      tenantId,
+      count: links.length,
+      links: links.map((l) => clean({
+        vendorTenantId: l.vendorTenantId,
+        vendorName: l.vendorName,
+        tierHargaDefault: l.tierHargaDefault,
+        pairedAt: l.pairedAt,
+        salesAppUrl: l.salesAppUrl,
+      })),
     });
   }
 

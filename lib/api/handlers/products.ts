@@ -117,7 +117,11 @@ export async function handleProducts({
     const metaCheck = await validateProdukGrupSatuan(db, tenantId, grup, satuan);
     if ('error' in metaCheck) return err(metaCheck.error, 400);
 
-    const existing = await db.collection('products').findOne({ tenantId, kode: productBody.kode });
+    const existing = await db.collection('products').findOne({
+      tenantId,
+      kode: productBody.kode,
+      $or: [{ syncSource: { $exists: false } }, { syncSource: { $ne: 'sales.app' } }],
+    });
     if (existing) return err('Kode sudah ada di tenant ini');
 
     const draft = { grup, nama: productBody.nama };

@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 // Beritahu sales.app bahwa GRN sudah POSTED → auto-create & post invoice B2B + record hutang lokal.
 
 import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
@@ -132,10 +133,12 @@ function buildFallbackDeliverySnapshot(grn) {
 
 export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
   const tid = normalizeTenantId(grn?.tenantId || tenantId);
-  const config = await getIntegrationConfig(db, tid);
-  if (!config.salesApiKey) {
+  const vendorId = grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined;
+  const salesApiKey = await getSalesApiKeyForVendor(db, tid, vendorId);
+  if (!salesApiKey) {
     return { skipped: true, reason: 'not_paired' };
   }
+  const config = await getIntegrationConfig(db, tid, vendorId);
   if (!grn?.noDO && !grn?.vendorDeliveryId) {
     return { skipped: true, reason: 'no_do_or_delivery_id' };
   }
@@ -163,13 +166,16 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
   };
 
   const url = `${config.salesAppUrl}/api/integrations/grn-posted`;
+  if (!salesApiKey) {
+    return { skipped: true, reason: 'not_paired' };
+  }
   let res;
   try {
     res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Key': config.salesApiKey,
+        'X-Api-Key': salesApiKey,
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(60000),

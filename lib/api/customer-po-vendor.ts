@@ -23,7 +23,10 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     }
     if (!prod && (it.kode || it.vendorKode)) {
       const kode = it.vendorKode || it.kode;
-      prod = await db.collection('products').findOne({ tenantId: tid, kode, aktif: { $ne: false } }) as ProductDoc | null;
+      const itemVendor = String(it.vendorTenantId || '').trim();
+      const filter: Record<string, unknown> = { tenantId: tid, kode, aktif: { $ne: false } };
+      if (itemVendor) filter.vendorTenantId = itemVendor;
+      prod = await db.collection('products').findOne(filter) as ProductDoc | null;
     }
 
     const vendorStokId = prod?.vendorStokId || it.vendorStokId || '';

@@ -222,10 +222,20 @@ export default function AppShell({ children }: AppShellProps) {
   const { data: wrPending = 0 } = useWrPendingCount(!!showWrBadge);
   const { data: pmOverdue = 0 } = usePmDueCount(!!showPmBadge);
 
-  const debouncedBadgeRefresh = useMemo(
+  const debouncedGrnBadgeRefresh = useMemo(
     () => debounce(() => {
       queryClient.invalidateQueries({ queryKey: ['goods-receipts', 'pending-count'] });
+    }, 300),
+    [queryClient],
+  );
+  const debouncedHutangBadgeRefresh = useMemo(
+    () => debounce(() => {
       queryClient.invalidateQueries({ queryKey: ['hutang', 'pending-count'] });
+    }, 300),
+    [queryClient],
+  );
+  const debouncedMaintenanceBadgeRefresh = useMemo(
+    () => debounce(() => {
       queryClient.invalidateQueries({ queryKey: ['maintenance-requests', 'pending-count'] });
       queryClient.invalidateQueries({ queryKey: ['maintenance-schedules', 'due-count'] });
     }, 300),
@@ -233,13 +243,9 @@ export default function AppShell({ children }: AppShellProps) {
   );
 
   useEffect(() => {
-    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue }));
-  }, [grnPending, hutangReview, wrPending, pmOverdue]);
-
-  useEffect(() => {
-    const onGrn = () => debouncedBadgeRefresh();
-    const onHutang = () => debouncedBadgeRefresh();
-    const onMaintenance = () => debouncedBadgeRefresh();
+    const onGrn = () => debouncedGrnBadgeRefresh();
+    const onHutang = () => debouncedHutangBadgeRefresh();
+    const onMaintenance = () => debouncedMaintenanceBadgeRefresh();
     window.addEventListener('erp-grn-change', onGrn);
     window.addEventListener('erp-hutang-change', onHutang);
     window.addEventListener('erp-maintenance-change', onMaintenance);
@@ -248,7 +254,11 @@ export default function AppShell({ children }: AppShellProps) {
       window.removeEventListener('erp-hutang-change', onHutang);
       window.removeEventListener('erp-maintenance-change', onMaintenance);
     };
-  }, [debouncedBadgeRefresh]);
+  }, [debouncedGrnBadgeRefresh, debouncedHutangBadgeRefresh, debouncedMaintenanceBadgeRefresh]);
+
+  useEffect(() => {
+    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue }));
+  }, [grnPending, hutangReview, wrPending, pmOverdue]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);

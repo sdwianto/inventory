@@ -6,7 +6,7 @@ import { applyGrnStockPosting } from '@/lib/api/grn-post-stock';
 import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
@@ -38,8 +38,12 @@ export async function postGoodsReceipt(
   db: Db,
   { grn, tenantId, body, asyncInvoice = true }: PostGoodsReceiptParams,
 ): Promise<Record<string, unknown> & { error?: string }> {
-  const config = await getIntegrationConfig(db, tenantId);
-  const canSyncInvoice = !!(config.salesApiKey && (grn.noDO || grn.vendorDeliveryId));
+  const salesApiKey = await getSalesApiKeyForVendor(
+    db,
+    tenantId,
+    grn.vendorTenantId ? String(grn.vendorTenantId) : undefined,
+  );
+  const canSyncInvoice = !!(salesApiKey && (grn.noDO || grn.vendorDeliveryId));
 
   const txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
     const stock = await applyGrnStockPosting(
@@ -63,7 +67,7 @@ export async function postGoodsReceipt(
 
     if (canSyncInvoice) {
       invoicePatch.invoiceSyncStatus = asyncInvoice ? 'PENDING' : 'SYNCING';
-    } else if (!config.salesApiKey) {
+    } else if (!salesApiKey) {
       invoicePatch.invoiceSyncStatus = 'SKIPPED';
       invoicePatch.invoiceSyncError = 'not_paired';
     }

@@ -2,6 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { getVendorTenantNameMap } from '@/lib/api/vendor-tenants';
+import { listActiveLinksForCustomer } from '@/lib/api/integration-links';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 
 type GrnRow = Record<string, unknown> & {
@@ -23,8 +24,12 @@ export async function resolveVendorTenantName(
   const row = await db.collection('vendor_tenants').findOne({ tenantId: tid, vendorTenantId: vid });
   if (row?.vendorTenantName) return String(row.vendorTenantName);
 
-  const integ = await db.collection('integration_settings').findOne({ tenantId: tid });
-  if (integ?.vendorTenantId === vid && integ?.vendorName) return String(integ.vendorName);
+  const link = await db.collection('integration_links').findOne({
+    customerTenantId: tid,
+    vendorTenantId: vid,
+    status: 'ACTIVE',
+  });
+  if (link?.vendorName) return String(link.vendorName);
 
   return vid;
 }
@@ -38,7 +43,10 @@ export async function enrichGrnList(
   if (!grns?.length) return [];
 
   const nameMap = await getVendorTenantNameMap(db, tid);
-  const integ = await db.collection('integration_settings').findOne({ tenantId: tid });
+  const links = await listActiveLinksForCustomer(db, tid);
+  const linkNameByVid = Object.fromEntries(
+    links.map((l) => [l.vendorTenantId, l.vendorName]),
+  ) as Record<string, string>;
 
   const noDOs = [...new Set(grns.map((g) => g.noDO).filter(Boolean))] as string[];
   const hutangRows = noDOs.length
@@ -55,7 +63,7 @@ export async function enrichGrnList(
   return grns.map((grn) => {
     const vid = grn.vendorTenantId;
     let vendorTenantName = vid ? nameMap[vid] : undefined;
-    if (!vendorTenantName && integ && integ.vendorTenantId === vid) vendorTenantName = String(integ.vendorName || '');
+    if (!vendorTenantName && vid) vendorTenantName = linkNameByVid[vid];
     if (!vendorTenantName) vendorTenantName = vid || '';
     const noInvoice = grn.noInvoice || invoiceByDo[String(grn.noDO || '')] || null;
 

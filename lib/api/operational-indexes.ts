@@ -9,6 +9,7 @@ interface IndexSpec {
   index: Record<string, number>;
   name: string;
   unique?: boolean;
+  partialFilterExpression?: Record<string, unknown>;
 }
 
 const INDEX_SPECS: IndexSpec[] = [
@@ -57,9 +58,14 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'webhook_inbox', index: { dedupeKey: 1 }, name: 'uniq_webhook_dedupe', unique: true },
   { collection: 'audit_log', index: { tenantId: 1, createdAt: -1 }, name: 'idx_audit_tenant_created' },
   { collection: 'audit_log', index: { entityType: 1, entityId: 1 }, name: 'idx_audit_entity' },
-  { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_kode', unique: true },
+  { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, kode: 1 }, name: 'uniq_products_tenant_vendor_kode', unique: true, partialFilterExpression: { syncSource: 'sales.app' } },
+  { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, vendorStokId: 1 }, name: 'uniq_products_tenant_vendor_stok', unique: true, partialFilterExpression: { syncSource: 'sales.app', vendorStokId: { $exists: true, $type: 'string' } } },
+  { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_local_kode', unique: true, partialFilterExpression: { syncSource: { $ne: 'sales.app' } } },
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
+  { collection: 'integration_links', index: { customerTenantId: 1, vendorTenantId: 1 }, name: 'uniq_integration_link', unique: true },
+  { collection: 'integration_links', index: { webhookSecret: 1, status: 1 }, name: 'idx_integration_link_secret' },
+  { collection: 'integration_links', index: { customerTenantId: 1, status: 1 }, name: 'idx_integration_link_customer' },
   { collection: 'vendor_tenants', index: { tenantId: 1, vendorTenantId: 1 }, name: 'uniq_vendor_tenants', unique: true },
   { collection: 'users', index: { email: 1, tenantId: 1 }, name: 'uniq_users_email_tenant', unique: true },
   { collection: 'tenant_settings', index: { tenantId: 1 }, name: 'uniq_tenant_settings', unique: true },
@@ -90,9 +96,15 @@ export async function ensureOperationalIndexes(db: Db): Promise<void> {
   } catch {
     /* index lama mungkin sudah tidak ada */
   }
+  try {
+    await db.collection('products').dropIndex('uniq_products_tenant_kode');
+  } catch {
+    /* index lama mungkin sudah tidak ada */
+  }
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;
+    if (spec.partialFilterExpression) opts.partialFilterExpression = spec.partialFilterExpression;
     await safeCreateIndex(db, spec.collection, spec.index, opts);
   }
   operationalIndexesEnsured = true;

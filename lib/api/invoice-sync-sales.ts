@@ -1,7 +1,7 @@
 // Tarik invoice posted dari sales.app (fallback jika webhook terlewat).
 
 import type { Db } from 'mongodb';
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { reconcileVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
 import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
@@ -18,23 +18,23 @@ export async function syncPostedInvoicesFromSales(
   { reconcileSales = false } = {},
 ) {
   const tid = normalizeTenantId(customerTenantId || 'default');
-  const config = await getIntegrationConfig(db, tid);
-  if (!config.salesApiKey) {
+  const access = await resolveSalesApiAccess(db, tid);
+  if (!access) {
     return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi' };
   }
 
-  const headers = { 'X-Api-Key': config.salesApiKey };
+  const headers = { 'X-Api-Key': access.salesApiKey };
   let res: Response;
   try {
     res = await fetch(
-      `${config.salesAppUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(tid)}`,
+      `${access.salesAppUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(tid)}`,
       { headers, signal: AbortSignal.timeout(30000) },
     );
   } catch (e) {
     const err = e as { cause?: { code?: string }; code?: string; message?: string };
     const code = err?.cause?.code || err?.code;
     if (code === 'ECONNREFUSED') {
-      return { error: `Sales.app tidak dapat dihubungi di ${config.salesAppUrl}` };
+      return { error: `Sales.app tidak dapat dihubungi di ${access.salesAppUrl}` };
     }
     return { error: err.message || 'Gagal menghubungi sales.app' };
   }
@@ -67,7 +67,7 @@ export async function syncPostedInvoicesFromSales(
   for (const row of invoices) {
     try {
       const payload = (row.payload || row) as JsonObject;
-      const vendorTenantId = row.vendorTenantId || config.vendorTenantId;
+      const vendorTenantId = row.vendorTenantId || null;
       const before = payload.invoiceId
         ? await db.collection('hutang').findOne({
           vendorInvoiceId: payload.invoiceId,

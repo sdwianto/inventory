@@ -46,6 +46,8 @@ export async function purgeTenantData(db: Db, tenantId, { deleteUsers = true } =
     const r = await db.collection(name).deleteMany({ tenantId: tid });
     counts[name] = r.deletedCount;
   }
+  const integLinks = await db.collection('integration_links').deleteMany({ customerTenantId: tid });
+  counts.integration_links = integLinks.deletedCount;
   if (deleteUsers) {
     const r = await db.collection('users').deleteMany({ tenantId: tid });
     counts.users = r.deletedCount;

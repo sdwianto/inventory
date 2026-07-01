@@ -50,12 +50,7 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
       tenantId: tid,
       vendorTenantId: vTenant,
       kode: snap.kode,
-    });
-  }
-  if (!existing) {
-    existing = await db.collection('products').findOne({
-      tenantId: tid,
-      kode: snap.kode,
+      syncSource: 'sales.app',
     });
   }
 

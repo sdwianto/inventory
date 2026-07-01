@@ -1,7 +1,7 @@
 import type { Db } from 'mongodb';
 // Sinkronkan referensi DO/ SO GRN dengan data terbaru di sales.app sebelum post / invoice.
 
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 
 function salesFetchErrorMessage(err, salesUrl) {
@@ -18,8 +18,8 @@ function salesFetchErrorMessage(err, salesUrl) {
  */
 export async function syncGrnDeliveryFromSales(db: Db, tenantId, grn) {
   const tid = normalizeTenantId(grn?.tenantId || tenantId);
-  const config = await getIntegrationConfig(db, tid);
-  if (!config.salesApiKey) {
+  const access = await resolveSalesApiAccess(db, tid, grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined);
+  if (!access) {
     return { grn, synced: false, reason: 'not_paired' };
   }
   if (!grn?.vendorDeliveryId && !grn?.noDO) {
@@ -34,14 +34,14 @@ export async function syncGrnDeliveryFromSales(db: Db, tenantId, grn) {
   let res;
   try {
     res = await fetch(
-      `${config.salesAppUrl}/api/integrations/delivery-lookup?${params.toString()}`,
+      `${access.salesAppUrl}/api/integrations/delivery-lookup?${params.toString()}`,
       {
-        headers: { 'X-Api-Key': config.salesApiKey },
+        headers: { 'X-Api-Key': access.salesApiKey },
         signal: AbortSignal.timeout(30000),
       },
     );
   } catch (e) {
-    return { grn, synced: false, error: salesFetchErrorMessage(e, config.salesAppUrl) };
+    return { grn, synced: false, error: salesFetchErrorMessage(e, access.salesAppUrl) };
   }
 
   let data;

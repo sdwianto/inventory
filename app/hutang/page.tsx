@@ -20,6 +20,7 @@ import {
   useVendorHutangList,
   useHutangPendingCount,
   useInvalidateHutang,
+  useRefreshHutangQueries,
 } from '@/lib/hooks/use-vendor-hutang';
 
 const TABS = [
@@ -51,6 +52,7 @@ const CAN_MARK_PAID = new Set(['APPROVED', 'OUTSTANDING', 'PARTIAL']);
 export default function HutangVendorPage() {
   const confirm = useConfirm();
   const invalidateHutang = useInvalidateHutang();
+  const refreshHutangQueries = useRefreshHutangQueries();
   const [tab, setTab] = useState('PENDING_REVIEW');
   const { data: list = [], isLoading, refetch } = useVendorHutangList(tab);
   const { data: pendingCount = 0 } = useHutangPendingCount();
@@ -63,8 +65,8 @@ export default function HutangVendorPage() {
   const [overrideMatch, setOverrideMatch] = useState(false);
 
   const debouncedRefresh = useMemo(
-    () => debounce(() => invalidateHutang(), 300),
-    [invalidateHutang],
+    () => debounce(() => refreshHutangQueries(), 300),
+    [refreshHutangQueries],
   );
 
   useEffect(() => {

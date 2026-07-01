@@ -1,15 +1,17 @@
 import type { Db } from 'mongodb';
+import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 // Sinkron tier harga pelanggan per vendor dari sales.app.
 
 import { upsertVendorTenant } from '@/lib/api/vendor-tenants';
 
 export async function syncVendorTiersFromSales(db: Db, customerTenantId, config) {
-  if (!config?.salesApiKey) return { error: 'API key tidak ada' };
-
   const ctid = String(config.customerTenantId || customerTenantId || '').trim().toLowerCase();
   if (!ctid) return { error: 'customerTenantId tidak ada' };
 
-  const headers = { 'X-Api-Key': config.salesApiKey };
+  const salesApiKey = await getSalesApiKeyForVendor(db, ctid);
+  if (!salesApiKey) return { error: 'API key tidak ada' };
+
+  const headers = { 'X-Api-Key': salesApiKey };
   const url = `${config.salesAppUrl}/api/integrations/customer-profile?customerTenantId=${encodeURIComponent(ctid)}`;
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
   const data = await res.json();

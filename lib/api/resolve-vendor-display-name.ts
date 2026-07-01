@@ -29,7 +29,7 @@ export async function resolveVendorDisplayName(
   const tid = normalizeTenantId(customerTenantId);
   const vid = String(vendorTenantId || payload.vendorTenantId || '').trim();
 
-  const config = await getIntegrationConfig(db, tid);
+  const config = await getIntegrationConfig(db, tid, vid || undefined);
   if (config.vendorName?.trim() && !isPlaceholderVendorName(config.vendorName)) {
     if (!vid || config.vendorTenantId === vid) return config.vendorName.trim();
   }

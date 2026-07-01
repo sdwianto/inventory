@@ -19,6 +19,7 @@ import {
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
@@ -165,7 +166,7 @@ function salesFetchErrorMessage(err, salesUrl) {
 
 async function pushPoGroupToVendor(db: Db, { tenantId, config, po, vendorTenantId, items }) {
   const salesUrl = config.salesAppUrl;
-  const apiKey = config.salesApiKey;
+  const apiKey = await getSalesApiKeyForVendor(db, tenantId, vendorTenantId);
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['X-Api-Key'] = apiKey;
 
@@ -205,7 +206,7 @@ async function pushPoGroupToVendor(db: Db, { tenantId, config, po, vendorTenantI
 
 async function pushPoToVendor(db: Db, po, tenantId) {
   const config = await getIntegrationConfig(db, tenantId);
-  const apiKey = config.salesApiKey;
+  const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) {
     return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi atau sales.app /integrasi' };
   }

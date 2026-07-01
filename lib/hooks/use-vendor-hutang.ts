@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
@@ -28,10 +29,19 @@ export function useHutangPendingCount(enabled = true) {
   });
 }
 
-export function useInvalidateHutang() {
+/** Refresh query hutang saja — tanpa broadcast event (untuk listener cross-page). */
+export function useRefreshHutangQueries() {
   const qc = useQueryClient();
-  return () => {
+  return useCallback(() => {
     qc.invalidateQueries({ queryKey: HUTANG_QUERY_KEY });
+  }, [qc]);
+}
+
+/** Mutasi hutang: refresh cache + beri tahu komponen lain (badge sidebar, dll.). */
+export function useInvalidateHutang() {
+  const refresh = useRefreshHutangQueries();
+  return useCallback(() => {
+    refresh();
     window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-  };
+  }, [refresh]);
 }

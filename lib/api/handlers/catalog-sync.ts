@@ -3,6 +3,7 @@ import type { JsonObject } from '@/types/json';
 import { ok, err } from '@/lib/api/db';
 import { requireAuth, requireRole, PRODUCT_MANAGE_ROLES } from '@/lib/api/require-auth';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { handleIntegrations } from '@/lib/api/handlers/integrations';
 
 export async function handleCatalogSync({
@@ -14,10 +15,10 @@ export async function handleCatalogSync({
     if (denied) return denied;
 
     const tenantId = String(syncBody.customerTenantId || auth?.tenantId || 'default');
-    const config = await getIntegrationConfig(db, tenantId);
+    const vendorTenantId = syncBody.vendorTenantId ? String(syncBody.vendorTenantId) : undefined;
+    const config = await getIntegrationConfig(db, tenantId, vendorTenantId);
     const salesUrl = String(syncBody.salesAppUrl || config.salesAppUrl || '').replace(/\/$/, '');
-    const apiKey = syncBody.apiKey || config.salesApiKey;
-    const vendorTenantId = syncBody.vendorTenantId || config.vendorTenantId;
+    const apiKey = syncBody.apiKey || await getSalesApiKeyForVendor(db, tenantId, vendorTenantId);
 
     if (!apiKey) {
       return err('Belum terhubung ke sales.app — jalankan pairing dari sales.app /integrasi', 400);

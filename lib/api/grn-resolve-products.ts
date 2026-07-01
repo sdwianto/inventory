@@ -13,27 +13,35 @@ export function isUnresolvedGrnStatus(status: string) {
 type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string };
 type ProductMaps = { kodeMap: Map<string, ProductDoc>; stokMap: Map<string, ProductDoc> };
 
+function kodeMapKey(vendorTenantId: string | null, kode: string) {
+  return `${vendorTenantId || ''}:${kode}`;
+}
+
 export async function loadProductMaps(db: Db, tenantId: string, vendorTenantId: string | null, items: JsonObject[]) {
   const tid = tenantId || 'default';
+  const vid = String(vendorTenantId || '').trim();
   const kodes = [...new Set((items || []).map((it) => String(it.vendorKode || it.kode || '').trim()).filter(Boolean))];
   const stokIds = [...new Set((items || []).map((it) => String(it.vendorStokId || it.stokId || '')).filter(Boolean))];
 
+  const kodeFilter: Record<string, unknown> = { tenantId: tid, kode: { $in: kodes }, aktif: { $ne: false } };
+  if (vid) kodeFilter.vendorTenantId = vid;
+
   const [byKode, byVendorStok] = await Promise.all([
     kodes.length
-      ? db.collection('products').find({ tenantId: tid, kode: { $in: kodes }, aktif: { $ne: false } }).toArray()
+      ? db.collection('products').find(kodeFilter).toArray()
       : [],
-    stokIds.length && vendorTenantId
+    stokIds.length && vid
       ? db.collection('products').find({
         tenantId: tid,
         vendorStokId: { $in: stokIds },
-        vendorTenantId,
+        vendorTenantId: vid,
         aktif: { $ne: false },
       }).toArray()
       : [],
   ]);
 
   const kodeMap = new Map<string, ProductDoc>(
-    byKode.map((p) => [String(p.kode), p as ProductDoc] as [string, ProductDoc]),
+    byKode.map((p) => [kodeMapKey(String(p.vendorTenantId || vid || ''), String(p.kode)), p as ProductDoc] as [string, ProductDoc]),
   );
   const stokMap = new Map<string, ProductDoc>(
     byVendorStok.map((p) => [String(p.vendorStokId), p as ProductDoc] as [string, ProductDoc]),
@@ -43,9 +51,10 @@ export async function loadProductMaps(db: Db, tenantId: string, vendorTenantId: 
 
 export function resolveFromMaps(maps: ProductMaps, vendorTenantId: string | null, item: JsonObject) {
   const kode = String(item.vendorKode || item.kode || '').trim();
-  let prod = kode ? maps.kodeMap.get(kode) : null;
+  const vid = String(vendorTenantId || item.vendorTenantId || '').trim();
+  let prod = kode ? maps.kodeMap.get(kodeMapKey(vid, kode)) : null;
   const stokId = String(item.vendorStokId || item.stokId || '');
-  if (!prod && stokId && vendorTenantId) {
+  if (!prod && stokId && vid) {
     prod = maps.stokMap.get(stokId) || null;
   }
   if (!prod) {
@@ -73,8 +82,8 @@ export async function resolveGrnItemProduct(
   item: JsonObject,
 ) {
   const resolved = await resolveProductByKode(db, tenantId, vendorTenantId, {
-    kode: item.vendorKode || item.kode,
-    stokId: item.vendorStokId || item.stokId,
+    kode: String(item.vendorKode || item.kode || ''),
+    stokId: item.vendorStokId || item.stokId ? String(item.vendorStokId || item.stokId) : undefined,
   });
 
   if (!resolved.localStokId) {

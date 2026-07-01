@@ -1,7 +1,7 @@
 import type { Db } from 'mongodb';
 // Enrichment detail tagihan vendor — profil penagih & baris item lengkap.
 
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { resolveSalesApiAccess, findLinkForVendorCustomer } from '@/lib/api/integration-links';
 import { loadStoreSnapshot } from '@/lib/api/store-snapshot';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { asArray, str, num, type JsonObject } from '@/types/json';
@@ -18,12 +18,12 @@ function pickStoreFields(src: Record<string, unknown> = {}) {
   });
 }
 
-async function fetchVendorProfileFromSales(config, vendorTenantId) {
-  if (!config?.salesApiKey || !config?.salesAppUrl || !vendorTenantId) return null;
-  const headers = { 'X-Api-Key': config.salesApiKey };
+async function fetchVendorProfileFromSales(salesAppUrl: string, salesApiKey: string, vendorTenantId: string) {
+  if (!salesApiKey || !salesAppUrl || !vendorTenantId) return null;
+  const headers = { 'X-Api-Key': salesApiKey };
   const urls = [
-    `${config.salesAppUrl}/api/integrations/vendor-profile?tenantId=${encodeURIComponent(vendorTenantId)}`,
-    `${config.salesAppUrl}/api/integrations/vendor-store?tenantId=${encodeURIComponent(vendorTenantId)}`,
+    `${salesAppUrl}/api/integrations/vendor-profile?tenantId=${encodeURIComponent(vendorTenantId)}`,
+    `${salesAppUrl}/api/integrations/vendor-store?tenantId=${encodeURIComponent(vendorTenantId)}`,
   ];
   for (const url of urls) {
     try {
@@ -45,28 +45,30 @@ const VENDOR_PROFILE_CACHE_MS = 24 * 60 * 60 * 1000;
 export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorTenantId) {
   const tid = customerTenantId || 'default';
   const vid = String(vendorTenantId || '').trim() || 'default';
-  const config = await getIntegrationConfig(db, tid);
+  const link = vid !== 'default' ? await findLinkForVendorCustomer(db, tid, vid) : null;
 
-  const [vt, integ, supplier] = await Promise.all([
+  const [vt, supplier] = await Promise.all([
     db.collection('vendor_tenants').findOne({ tenantId: tid, vendorTenantId: vid }),
-    db.collection('integration_settings').findOne({ tenantId: tid }),
     db.collection('supplier').findOne({ tenantId: tid, vendorTenantId: vid }),
   ]);
 
   let profile = {
     ...pickStoreFields({
-      companyName: vt?.vendorTenantName || integ?.vendorName || supplier?.nama || `Vendor ${vid}`,
-      companyAddress: vt?.companyAddress || integ?.vendorAddress || '',
-      companyPhone: vt?.companyPhone || integ?.vendorPhone || '',
-      companyNPWP: vt?.companyNPWP || integ?.vendorNPWP || '',
-      logoBase64: vt?.logoBase64 || integ?.vendorLogoBase64 || '',
+      companyName: vt?.vendorTenantName || link?.vendorName || `Vendor ${vid}`,
+      companyAddress: vt?.companyAddress || '',
+      companyPhone: vt?.companyPhone || '',
+      companyNPWP: vt?.companyNPWP || '',
+      logoBase64: vt?.logoBase64 || '',
     }),
     vendorTenantId: vid,
   };
 
   const syncedAt = vt?.profileSyncedAt ? new Date(vt.profileSyncedAt).getTime() : 0;
   const cacheFresh = syncedAt > 0 && (Date.now() - syncedAt) < VENDOR_PROFILE_CACHE_MS;
-  const remote = cacheFresh ? null : await fetchVendorProfileFromSales(config, vid);
+  const access = cacheFresh ? null : await resolveSalesApiAccess(db, tid, vid !== 'default' ? vid : undefined);
+  const remote = cacheFresh || !access
+    ? null
+    : await fetchVendorProfileFromSales(access.salesAppUrl, access.salesApiKey, vid);
   if (remote) {
     profile = { ...profile, ...remote, vendorTenantId: vid };
     await db.collection('vendor_tenants').updateOne(
@@ -129,8 +131,11 @@ export async function enrichInvoiceItems(db: Db, customerTenantId: string, hutan
   }
 
   const kodes = [...new Set(items.map((it) => str(it.kode)).filter(Boolean))];
+  const vendorId = String(hutang.vendorTenantId || grn?.vendorTenantId || '').trim();
+  const productFilter: Record<string, unknown> = { tenantId: tid, kode: { $in: kodes } };
+  if (vendorId) productFilter.vendorTenantId = vendorId;
   const products = kodes.length
-    ? await db.collection('products').find({ tenantId: tid, kode: { $in: kodes } }).toArray()
+    ? await db.collection('products').find(productFilter).toArray()
     : [];
   const prodByKode = Object.fromEntries(products.map((p) => [p.kode, p]));
 

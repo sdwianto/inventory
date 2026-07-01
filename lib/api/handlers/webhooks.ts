@@ -39,11 +39,15 @@ export async function handleWebhooks({
 
   if (route !== '/webhooks/sales' || method !== 'POST') return null;
 
-  const v = await verifyWebhookSecret(request, db);
-  if (!v.ok) return err(v.error, 401);
-
   const event = webhookBody.event || request.headers.get('x-event') || '';
   const payload = (webhookBody.payload || {}) as JsonObject;
+  const vendorTenantIdFromEnvelope = webhookBody.tenantId ? String(webhookBody.tenantId) : undefined;
+
+  const v = await verifyWebhookSecret(request, db, {
+    customerTenantId: String(payload.customerTenantId || ''),
+    vendorTenantId: vendorTenantIdFromEnvelope || String(payload.vendorTenantId || ''),
+  });
+  if (!v.ok) return err(v.error, 401);
 
   if (!event) return err('event wajib', 400);
 
@@ -51,14 +55,17 @@ export async function handleWebhooks({
   if (!tenantId) return err('customerTenantId wajib di payload', 400);
 
   const customerTenantId = String(tenantId).trim().toLowerCase();
-  const vendorTenantId = webhookBody.tenantId ? String(webhookBody.tenantId) : undefined;
+  const vendorTenantId = vendorTenantIdFromEnvelope
+    || (v.vendorTenantId ? String(v.vendorTenantId) : undefined);
 
   if (v.tenantId && normalizeTenantId(v.tenantId) !== customerTenantId) {
     return err('customerTenantId tidak cocok dengan webhook secret tenant', 403);
   }
 
   const sourceId = dedupeSourceId(event, payload);
-  const dedupeKey = sourceId ? `${event}:${sourceId}:${customerTenantId}` : `${event}:${uuidv4()}`;
+  const dedupeKey = sourceId
+    ? `${event}:${sourceId}:${customerTenantId}:${vendorTenantId || ''}`
+    : `${event}:${uuidv4()}`;
 
   const existing = await db.collection('webhook_inbox').findOne({ dedupeKey });
   if (existing?.status === 'PROCESSED') {
