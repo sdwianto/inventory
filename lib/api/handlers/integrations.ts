@@ -19,6 +19,7 @@ import {
 } from '@/lib/api/vendor-tenants';
 import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
 import type { JsonObject } from '@/types/json';
+import { getInventoryPairUrl, getInventoryWebhookUrl } from '@/lib/integration-public-url';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -118,6 +119,21 @@ export async function handleIntegrations({
 }: HandlerContext) {
   const intBody = parseHandlerBody(body);
   const scopeOpts = { url, body: intBody, request };
+
+  if (route === '/integrations/setup-info' && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+    const proto = request.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
+    const originFromRequest = host ? `${proto}://${host.split(',')[0].trim()}` : '';
+    return ok({
+      tenantId: tenantId || '',
+      webhookUrl: getInventoryWebhookUrl(originFromRequest || undefined),
+      pairUrl: getInventoryPairUrl(originFromRequest || undefined),
+      setupTokenConfigured: !!getSetupToken(),
+    });
+  }
+
   if (route === '/integrations/status' && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;

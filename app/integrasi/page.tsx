@@ -5,13 +5,29 @@ import { useCallback, useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Settings, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Settings, CheckCircle2, AlertCircle, RefreshCw, Copy } from 'lucide-react';
 import { str, num } from '@/types/json';
 import { getUser } from '@/lib/auth-client';
+import { getInventoryWebhookUrl } from '@/lib/integration-public-url';
 
 export default function IntegrasiPage() {
   const [status, setStatus] = useState<JsonObject | null>(null);
+  const [setupInfo, setSetupInfo] = useState<JsonObject | null>(null);
   const [syncing, setSyncing] = useState(false);
+
+  const webhookUrl = setupInfo?.webhookUrl
+    ? str(setupInfo.webhookUrl)
+    : (typeof window !== 'undefined' ? getInventoryWebhookUrl(window.location.origin) : '');
+
+  const loadSetupInfo = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/setup-info');
+      const data = await res.json();
+      if (res.ok) setSetupInfo(data);
+    } catch {
+      /* optional */
+    }
+  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -27,8 +43,15 @@ export default function IntegrasiPage() {
 
   useEffect(() => {
     getUser();
+    loadSetupInfo();
     loadStatus();
-  }, [loadStatus]);
+  }, [loadSetupInfo, loadStatus]);
+
+  const copyWebhookUrl = () => {
+    if (!webhookUrl) return;
+    navigator.clipboard.writeText(webhookUrl);
+    toast.success('URL webhook disalin — tempel di sales.app /integrasi');
+  };
 
   const syncCatalog = async () => {
     setSyncing(true);
@@ -71,9 +94,26 @@ export default function IntegrasiPage() {
           <h2 className="font-semibold text-sm">Cara setup (sekali saja)</h2>
           <ol className="text-sm text-slate-600 space-y-2 list-decimal list-inside">
             <li>Buka <strong>sales.app → Pengaturan → Integrasi API</strong></li>
-            <li>Isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{str(status?.tenantId, 'sppg')}</code> — semua produk dari semua tenant sales.app akan di-sync</li>
+            <li>
+              Isi <strong>URL webhook inventory</strong> dengan URL production (bukan localhost):
+              <div className="mt-2 flex flex-wrap items-center gap-2 not-prose">
+                <code className="text-xs bg-slate-100 px-2 py-1.5 rounded font-mono break-all flex-1 min-w-[200px]">
+                  {webhookUrl || '…'}
+                </code>
+                <Button type="button" variant="outline" size="sm" onClick={copyWebhookUrl} disabled={!webhookUrl}>
+                  <Copy className="w-3.5 h-3.5 mr-1" /> Salin
+                </Button>
+              </div>
+            </li>
+            <li>Isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{str(status?.tenantId, 'sppg')}</code></li>
             <li>Klik <strong>Setup &amp; Hubungkan Inventory</strong> — ulangi untuk setiap vendor baru</li>
           </ol>
+          {setupInfo && !setupInfo.setupTokenConfigured ? (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">
+              <strong>INTEGRATION_SETUP_TOKEN</strong> belum di-set di Vercel inventory — pairing dari sales.app akan gagal.
+              Set nilai yang sama di kedua project (sales.app &amp; inventory), lalu redeploy.
+            </p>
+          ) : null}
         </section>
 
         {status && (
