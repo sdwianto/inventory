@@ -1,0 +1,17 @@
+﻿import { MongoClient } from 'mongodb';
+import fs from 'fs';
+const env = Object.fromEntries(fs.readFileSync('.env.local','utf8').split('\n').filter(l=>l.includes('=')&&!l.startsWith('#')).map(l=>{const i=l.indexOf('=');return[l.slice(0,i),l.slice(i+1)]}));
+const c = new MongoClient(env.MONGO_URL); await c.connect();
+const s = await c.db(env.DB_NAME).collection('integration_settings').findOne({tenantId:'sppg'});
+const key = s?.salesApiKey || '';
+const res = await fetch('http://localhost:3000/api/integrations/catalog?allTenants=true', {headers:{'X-Api-Key':key}, signal: AbortSignal.timeout(10000)});
+const data = await res.json();
+console.log('DB key catalog test:', res.status, data.count || data.error);
+const salesDb = c.db('kasir_db');
+const pel = await salesDb.collection('pelanggan').find({customerTenantId:'sppg'}).project({nama:1,tenantId:1,customerTenantId:1}).toArray();
+const pel2 = await salesDb.collection('pelanggan_profiles').find({customerTenantId:'sppg'}).limit(3).toArray();
+const subs = await salesDb.collection('webhook_subscriptions').find({tenantId:'uddawam',aktif:{$ne:false}}).project({event:1}).toArray();
+console.log('pelanggan sppg:', JSON.stringify(pel));
+console.log('profiles sppg:', pel2.length);
+console.log('webhooks uddawam:', subs.map(s=>s.event));
+await c.close();
