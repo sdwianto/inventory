@@ -14,6 +14,7 @@ export async function handleBgJobs({
   path,
   auth,
   request,
+  url,
 }: HandlerContext): Promise<NextResponse | null> {
   if (isWorkerProcessRoute(method, route)) {
     const workerOk = verifyWorkerOrCronSecret(request);

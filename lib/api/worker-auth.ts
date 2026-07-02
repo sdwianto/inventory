@@ -4,7 +4,8 @@ export function isWorkerProcessRoute(method: string, route: string): boolean {
   return route === '/bg-jobs/process' && (method === 'POST' || method === 'GET');
 }
 
-export function verifyWorkerOrCronSecret(request: Request): boolean {
+export function verifyWorkerOrCronSecret(request: Request | undefined): boolean {
+  if (!request) return false;
   const workerSecret = (process.env.WORKER_SECRET || '').trim();
   const cronSecret = (process.env.CRON_SECRET || '').trim();
 
