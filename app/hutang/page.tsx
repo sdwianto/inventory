@@ -16,12 +16,9 @@ import { Banknote, CircleCheck, Eye, RefreshCw } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { debounce } from '@/lib/debounce';
-import {
-  useVendorHutangList,
-  useHutangPendingCount,
-  useInvalidateHutang,
-  useRefreshHutangQueries,
-} from '@/lib/hooks/use-vendor-hutang';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
+import { useNavBadges } from '@/lib/hooks/use-nav-badges';
+import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -51,11 +48,19 @@ const CAN_MARK_PAID = new Set(['APPROVED', 'OUTSTANDING', 'PARTIAL']);
 
 export default function HutangVendorPage() {
   const confirm = useConfirm();
-  const invalidateHutang = useInvalidateHutang();
-  const refreshHutangQueries = useRefreshHutangQueries();
   const [tab, setTab] = useState('PENDING_REVIEW');
-  const { data: list = [], isLoading, refetch } = useVendorHutangList(tab);
-  const { data: pendingCount = 0 } = useHutangPendingCount();
+  const hutangUrl = tab ? `/api/hutang?approvalStatus=${encodeURIComponent(tab)}` : '/api/hutang';
+  const {
+    items: list,
+    loading: isLoading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    reload,
+    error,
+  } = useCursorList<JsonObject>(hutangUrl, { limit: 100 });
+  const { data: badges } = useNavBadges();
+  const pendingCount = badges?.hutangReview ?? 0;
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [loadingDetail, setLoadingDetail] = useState('');
   const [acting, setActing] = useState('');
@@ -64,9 +69,11 @@ export default function HutangVendorPage() {
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
 
+  const refreshAfterMutation = useHutangPageRefresh(() => reload({ silent: true }));
+
   const debouncedRefresh = useMemo(
-    () => debounce(() => refreshHutangQueries(), 300),
-    [refreshHutangQueries],
+    () => debounce(() => reload({ silent: true }), 300),
+    [reload],
   );
 
   useEffect(() => {
@@ -103,7 +110,7 @@ export default function HutangVendorPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal menyetujui');
       toast.success('Tagihan disetujui');
       setDetail(null);
-      invalidateHutang();
+      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -124,7 +131,7 @@ export default function HutangVendorPage() {
       toast.success('Tagihan ditolak');
       setShowReject(false);
       setDetail(null);
-      invalidateHutang();
+      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -151,7 +158,7 @@ export default function HutangVendorPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success('Ditandai lunas (bayar luar sistem)');
       if (detail?.id === id) setDetail(null);
-      invalidateHutang();
+      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -168,9 +175,16 @@ export default function HutangVendorPage() {
     try {
       const res = await fetch('/api/hutang/sync-pending', { method: 'POST' });
       const data = await res.json();
+      if (res.status === 202) {
+        toast.info('Sync hutang berjalan di background…');
+        await refreshAfterMutation();
+        return;
+      }
       if (!res.ok && !data.skipped) throw new Error(data.error || 'Gagal sync');
       if (data.skipped) toast.info(data.error || 'Endpoint sync belum tersedia di sales.app');
-      else if ((data.reconcile?.replayed || 0) > 0 && (data.reconcile?.created || 0) > 0) {
+      else if (data.fetchIncomplete || data.warning) {
+        toast.warning(String(data.warning || 'Sync invoice tidak lengkap — coba lagi'));
+      } else if ((data.reconcile?.replayed || 0) > 0 && (data.reconcile?.created || 0) > 0) {
         toast.success(`${data.reconcile.created} faktur dibuat ulang di sales.app`);
       } else if ((data.refreshed || 0) > 0 || (data.reconcile?.fixed || 0) > 0) {
         const n = (data.refreshed || 0) + (data.reconcile?.fixed || 0);
@@ -191,7 +205,7 @@ export default function HutangVendorPage() {
       } else {
         toast.success(`Sync: ${data.existing || 0} sudah ada, tidak ada yang baru`);
       }
-      invalidateHutang();
+      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -231,6 +245,13 @@ export default function HutangVendorPage() {
             </button>
           ))}
         </div>
+
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void reload()}>Coba lagi</Button>
+          </div>
+        )}
 
         <div className="bg-white border rounded-lg overflow-x-auto">
           <table className="w-full text-sm min-w-[900px]">
@@ -312,6 +333,13 @@ export default function HutangVendorPage() {
               )}
             </tbody>
           </table>
+          {hasMore && (
+            <div className="p-3 border-t text-center">
+              <Button variant="outline" size="sm" onClick={() => loadMore()} disabled={loadingMore}>
+                {loadingMore ? 'Memuat…' : 'Muat lebih banyak'}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 

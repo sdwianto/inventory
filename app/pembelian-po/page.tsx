@@ -27,7 +27,6 @@ import {
   PO_CAN_CREATE,
   PO_CAN_DIRECT_SUBMIT,
   PO_CAN_REQUEST,
-  AUTO_VENDOR_SYNC_MS,
 } from '@/lib/pembelian-po/constants';
 import {
   toDateInputValue,
@@ -121,15 +120,19 @@ function CustomerPoPageContent() {
       const res = await fetch('/api/customer-purchase-orders/sync-pending', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) return;
+      if (res.status === 202) {
+        toast.info('PO antrian dikirim ke background');
+        return;
+      }
       if (data.synced?.length > 0) {
         await reloadList();
-        const labels = data.synced.map((s) => s.noPO).join(', ');
+        const labels = data.synced.map((s: { noPO?: string }) => s.noPO).join(', ');
         toast.success(`${data.synced.length} PO terkirim otomatis ke vendor`, {
           description: labels,
         });
       }
     } catch {
-      /* sales.app belum online — coba lagi nanti */
+      /* sales.app belum online */
     } finally {
       autoSyncBusy.current = false;
     }
@@ -138,8 +141,7 @@ function CustomerPoPageContent() {
   useEffect(() => {
     if (!user || pendingVendorSyncCount === 0) return undefined;
     runAutoVendorSync();
-    const timer = setInterval(runAutoVendorSync, AUTO_VENDOR_SYNC_MS);
-    return () => clearInterval(timer);
+    return undefined;
   }, [user, pendingVendorSyncCount, runAutoVendorSync]);
 
   const filteredList = useMemo(() => {
@@ -440,7 +442,7 @@ function CustomerPoPageContent() {
             {pendingVendorSyncCount > 0 && (
               <p className="text-xs text-emerald-700 mt-1 flex items-center gap-1">
                 <RefreshCw className="w-3 h-3" />
-                {pendingVendorSyncCount} PO menunggu — sinkron otomatis setiap ±{Math.round(AUTO_VENDOR_SYNC_MS / 1000)} detik
+                {pendingVendorSyncCount} PO menunggu — gunakan tombol Sync Vendor untuk kirim ke sales.app
               </p>
             )}
           </div>

@@ -3,8 +3,9 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "predev": "node scripts/ensure-node-version.mjs && node scripts/ensure-dev-cache.mjs",
+        "predev": "node scripts/ensure-node-version.mjs && node scripts/ensure-dev-cache.mjs && node scripts/ensure-dev-port.mjs",
         "dev": "NODE_OPTIONS='--max-old-space-size=1024' next dev --hostname 0.0.0.0 --port 3001",
+        "dev:stop": "node scripts/ensure-dev-port.mjs --kill-only",
         "dev:reset": "rm -rf .next && npm run dev",
         "dev:no-reload": "next dev --hostname 0.0.0.0 --port 3001",
         "dev:webpack": "NODE_OPTIONS='--max-old-space-size=1024' next dev --webpack --hostname 0.0.0.0 --port 3001",
@@ -24,7 +25,10 @@
         "test:phase5:mongo": "node scripts/phase5_mongo_integrity.mjs",
         "backfix:hutang": "node scripts/backfix-vendor-hutang.mjs --apply",
         "diag:hutang": "node scripts/backfix-vendor-hutang.mjs",
-        "verify:sales": "node scripts/verify-sales-integration.mjs"
+        "verify:sales": "node scripts/verify-sales-integration.mjs",
+        "migrate:bootstrap": "node --experimental-strip-types scripts/run-bootstrap.ts",
+        "migrate:email-normalized": "node scripts/backfill-email-normalized.mjs",
+        "worker:bg-jobs": "node scripts/run-bg-worker.mjs"
     },
     "engines": {
         "node": ">=22.0.0"

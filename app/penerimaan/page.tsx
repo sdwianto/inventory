@@ -2,9 +2,8 @@
 
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VirtualTableBody from '@/components/VirtualTableBody';
@@ -17,12 +16,8 @@ import { toast } from 'sonner';
 import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
-import {
-  useGoodsReceipts,
-  useGrnInvoiceStatus,
-  useInvalidateGrn,
-  GRN_QUERY_KEY,
-} from '@/lib/hooks/use-goods-receipts';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
+import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -67,9 +62,16 @@ const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
 );
 
 export default function PenerimaanPage() {
-  const queryClient = useQueryClient();
   const invalidateGrn = useInvalidateGrn();
-  const { data: list = [], isLoading } = useGoodsReceipts();
+  const {
+    items: list,
+    loading: isLoading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    reload,
+    error,
+  } = useCursorList<JsonObject>('/api/goods-receipts', { limit: 100 });
   const [posting, setPosting] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
@@ -90,14 +92,17 @@ export default function PenerimaanPage() {
       toast.success(`Faktur ${str(poll.noInvoice)} siap — cek Tagihan Vendor`);
       setPollInvoiceGrnId(null);
       invalidateGrn();
+      reload();
       window.dispatchEvent(new CustomEvent('erp-hutang-change'));
     } else if (s === 'FAILED') {
       toast.warning(`Faktur gagal: ${str(poll.invoiceSyncError, 'cek sales.app')}`);
       setPollInvoiceGrnId(null);
       invalidateGrn();
+      reload();
     } else if (s === 'SKIPPED') {
       setPollInvoiceGrnId(null);
       invalidateGrn();
+      reload();
     }
   }, [invoicePoll, pollInvoiceGrnId, invalidateGrn]);
 
@@ -110,6 +115,7 @@ export default function PenerimaanPage() {
       toast.success(`Faktur ${noGRN} — diproses di background`);
       setPollInvoiceGrnId(id);
       invalidateGrn();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -123,15 +129,9 @@ export default function PenerimaanPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal sync');
       toast.success(`Sync DO: ${data.created} GRN baru, ${data.existing} sudah ada`);
-      await queryClient.fetchQuery({
-        queryKey: [...GRN_QUERY_KEY, { refreshProducts: true }],
-        queryFn: () => fetch(`/api/goods-receipts?refreshProducts=1`).then((r) => r.json()),
-      });
-      queryClient.setQueryData([...GRN_QUERY_KEY, { refreshProducts: false }], (old) => {
-        const fresh = queryClient.getQueryData([...GRN_QUERY_KEY, { refreshProducts: true }]);
-        return Array.isArray(fresh) ? fresh : old;
-      });
+      await fetch('/api/goods-receipts/refresh-unresolved', { method: 'POST' });
       invalidateGrn();
+      reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -161,14 +161,18 @@ export default function PenerimaanPage() {
     const data = await res.json();
     if (!res.ok) { toast.error(data.error || 'Gagal'); return; }
     setDetail(data);
-    const prodRes = await fetch('/api/products?limit=5000');
-    const products = await prodRes.json();
-    const gudangByStok = Object.fromEntries(
-      (Array.isArray(products) ? products : []).map((p) => [p.id, p.gudangKode || 'GKERING']),
-    );
+    const detailItems = asArray(data.items) as JsonObject[];
+    const stokIds = [...new Set(detailItems.map((it) => str(it.localStokId)).filter(Boolean))];
+    let gudangByStok: Record<string, string> = {};
+    if (stokIds.length) {
+      const prodRes = await fetch(`/api/products?ids=${stokIds.map(encodeURIComponent).join(',')}&limit=${stokIds.length}`);
+      const products = await prodRes.json();
+      gudangByStok = Object.fromEntries(
+        (Array.isArray(products) ? products : []).map((p) => [str(p.id), str(p.gudangKode, 'GKERING')]),
+      );
+    }
     const initQty: JsonObject = {};
     const initGudang: JsonObject = {};
-    const detailItems = asArray(data.items) as JsonObject[];
     for (const [idx, it] of detailItems.entries()) {
       const key = itemRowKey(it, idx);
       initQty[key] = it.qtyOrdered ?? 0;
@@ -190,12 +194,6 @@ export default function PenerimaanPage() {
       lokasiKode: str(gudangMap[itemRowKey(it, idx)], 'GKERING'),
     })).filter((it) => it.qty > 0);
 
-    queryClient.setQueryData([...GRN_QUERY_KEY, { refreshProducts: false }], (old) => (
-      Array.isArray(old)
-        ? old.map((r) => (r.id === grnId ? { ...r, status: 'POSTED', invoiceSyncStatus: 'PENDING' } : r))
-        : old
-    ));
-
     const res = await fetch(`/api/goods-receipts/${grnId}/post`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -205,6 +203,7 @@ export default function PenerimaanPage() {
     if (!res.ok) {
       toast.error(data.error || 'Gagal');
       invalidateGrn();
+      reload();
     } else {
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
@@ -219,6 +218,7 @@ export default function PenerimaanPage() {
       }
       setDetail(null);
       invalidateGrn();
+      reload();
     }
     setPosting('');
   };
@@ -312,6 +312,12 @@ export default function PenerimaanPage() {
             <Link href="/produk" className="underline font-medium">Master Produk</Link>.
           </div>
         )}
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void reload()}>Coba lagi</Button>
+          </div>
+        )}
         <div className="bg-white border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
@@ -341,6 +347,13 @@ export default function PenerimaanPage() {
               )}
             </tbody>
           </table>
+          {hasMore && (
+            <div className="p-3 border-t text-center">
+              <Button variant="outline" size="sm" onClick={() => loadMore()} disabled={loadingMore}>
+                {loadingMore ? 'Memuat…' : 'Muat lebih banyak'}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 

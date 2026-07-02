@@ -27,6 +27,8 @@ import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { requireRole, PRODUCT_MANAGE_ROLES, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { recordMasterProductStockChange } from '@/lib/api/stock-ledger';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
+import { parseCursorPageParams, applyAscStringIdCursor, encodeStringCursor, sliceCursorPage } from '@/lib/api/cursor-page';
+import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
@@ -80,15 +82,26 @@ export async function handleProducts({
 
     const q = (url.searchParams.get('q') || '').trim();
     const grup = url.searchParams.get('grup') || '';
-    const limit = parseInt(url.searchParams.get('limit') || '500', 10);
+    const idsParam = (url.searchParams.get('ids') || '').trim();
+    const skip = Math.max(parseInt(url.searchParams.get('skip') || '0', 10) || 0, 0);
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     if (grup) filter.grup = grup;
+    if (idsParam) {
+      const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);
+      if (ids.length) filter.id = { $in: ids };
+    }
     filter = withTenantFilter(scopeAuth, filter);
+
+    const { pageMode, limit: pageLimit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
+    const fetchLimit = pageMode ? pageLimit + 1 : pageLimit;
+    let listFilter = pageMode ? applyAscStringIdCursor(filter, cursor, 'nama') : filter;
+
     const list = await db.collection('products')
-      .find(filter)
+      .find(listFilter)
       .project(PRODUCT_LIST_PROJECTION)
-      .sort({ nama: 1 })
-      .limit(limit)
+      .sort({ nama: 1, id: 1 })
+      .skip(pageMode ? 0 : skip)
+      .limit(pageMode ? fetchLimit : pageLimit)
       .toArray();
     const tid = tenantId;
     const enriched = await enrichProductsVendorNames(db, tid, list) as ProductDoc[];
@@ -100,7 +113,18 @@ export async function handleProducts({
         (p as ProductDoc & { stokByWarehouse?: Record<string, number> }).stokByWarehouse = byWh;
       }
     }
-    return ok(enriched.map(clean));
+    const cleaned = enriched.map(clean);
+
+    if (pageMode) {
+      const { items, hasMore } = sliceCursorPage(cleaned, pageLimit);
+      const last = list[Math.min(list.length, pageLimit) - 1] as Record<string, unknown> | undefined;
+      return ok({
+        items,
+        hasMore,
+        nextCursor: hasMore && last ? encodeStringCursor(last, 'nama') : null,
+      });
+    }
+    return ok(cleaned);
   }
 
   if (route === '/products' && method === 'POST') {
@@ -165,6 +189,7 @@ export async function handleProducts({
       });
     }
     await refreshGrnsForProductKode(db, tenantId, doc.kode);
+    await invalidateDashboardSnapshot(db, tenantId);
     const saved = await db.collection('products').findOne({ id: doc.id, tenantId });
     return ok(clean(saved || doc));
   }
@@ -282,6 +307,7 @@ export async function handleProducts({
         withTenantFilter(scopeAuth, { id }),
         { $set: update },
       );
+      await invalidateDashboardSnapshot(db, tid);
       const doc = await findMasterDoc(db, 'products', auth, { id });
       return ok(clean(doc));
     }
@@ -293,6 +319,7 @@ export async function handleProducts({
         return err('Produk dari sales.app tidak bisa dihapus di inventory — nonaktifkan di vendor', 400);
       }
       await db.collection('products').deleteOne(withTenantFilter(scopeAuth, { id }));
+      await invalidateDashboardSnapshot(db, String(access.doc.tenantId || auth?.tenantId || 'default'));
       return ok({ message: 'deleted' });
     }
   }

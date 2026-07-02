@@ -18,7 +18,7 @@ export default function ReportHeader({ title, from, to, asOf, extraInfo }: Repor
   const address = settings?.companyAddress || '';
   const phone = settings?.companyPhone || '';
   const npwp = settings?.companyNPWP || '';
-  const logo = settings?.logoBase64 || '';
+  const logo = settings?.logoUrl || settings?.logoBase64 || '';
 
   return (
     <div className="report-header border-b pb-3 mb-4">

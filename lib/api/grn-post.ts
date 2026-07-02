@@ -1,7 +1,6 @@
 // Orkestrasi posting GRN — stok sync, CPO sync, invoice async.
 
 import type { Db } from 'mongodb';
-import { syncCpoOnGrnPosted } from '@/lib/api/cpo-status-sync';
 import { applyGrnStockPosting } from '@/lib/api/grn-post-stock';
 import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
@@ -10,7 +9,6 @@ import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
-import { tryAutoCompleteWrFromGrn } from '@/lib/api/maintenance-wr-loop';
 import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
 
@@ -111,8 +109,13 @@ export async function postGoodsReceipt(
   const posted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
   if (!posted) return { error: 'GRN tidak ditemukan setelah posting' };
 
-  const cpoSync = await syncCpoOnGrnPosted(db, posted);
-  const wrLoop = await tryAutoCompleteWrFromGrn(db, posted);
+  const sideFx = await enqueueJob(db, {
+    type: JOB_TYPES.GRN_POST_SIDE_EFFECTS,
+    tenantId,
+    grnId: grn.id,
+    payload: { grnId: grn.id },
+  });
+  scheduleJobProcessing(db);
 
   let invoiceSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;
@@ -150,8 +153,7 @@ export async function postGoodsReceipt(
   const enriched = await enrichGrnDoc(db, posted);
   return {
     ...enriched,
-    cpoSync,
-    wrLoop,
+    sideEffectsJobId: sideFx.jobId,
     invoiceSync,
     invoiceSyncStatus: posted.invoiceSyncStatus || enriched?.invoiceSyncStatus,
   };

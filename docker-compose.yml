@@ -1,0 +1,56 @@
+# Inventory app + background job worker
+# Usage: docker compose up -d
+
+services:
+  inventory-app:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=inventory_customer
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-min-32-chars-for-production}
+      - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-http://localhost:3001}
+      - WORKER_SECRET=${WORKER_SECRET:-dev-worker-secret}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+
+  inventory-worker:
+    build: .
+    command: ["node", "scripts/run-bg-worker.mjs"]
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=inventory_customer
+      - BG_WORKER_INTERVAL_MS=${BG_WORKER_INTERVAL_MS:-30000}
+      - BG_WORKER_BATCH=${BG_WORKER_BATCH:-5}
+      - WORKER_INTERNAL_URL=http://inventory-app:3001
+      - WORKER_SECRET=${WORKER_SECRET:-dev-worker-secret}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      inventory-app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo_data:

@@ -2,15 +2,23 @@
 
 import type { JsonObject } from '@/types/json';
 import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
-import DashboardProcurementCharts from '@/components/DashboardProcurementCharts';
-import DashboardMaintenanceSection from '@/components/DashboardMaintenanceSection';
+import { fetchJson } from '@/lib/fetch-json';
+import { toast } from 'sonner';
 import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
 import { formatIDR } from '@/lib/format';
 import Link from 'next/link';
-import { fetchJson } from '@/lib/fetch-json';
-import { toast } from 'sonner';
+
+const DashboardProcurementCharts = dynamic(
+  () => import('@/components/DashboardProcurementCharts'),
+  { ssr: false, loading: () => <div className="h-48 rounded-lg bg-slate-100 animate-pulse" /> },
+);
+const DashboardMaintenanceSection = dynamic(
+  () => import('@/components/DashboardMaintenanceSection'),
+  { ssr: false, loading: () => <div className="h-32 rounded-lg bg-slate-100 animate-pulse" /> },
+);
 
 interface DashboardSummary {
   grn: number;

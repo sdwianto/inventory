@@ -26,7 +26,7 @@ export function useCustomerPoProducts() {
   const [products, setProducts] = useState<JsonObject[]>([]);
 
   const reload = useCallback(() => {
-    return fetchJson<{ items?: JsonObject[] } | JsonObject[]>('/api/products?limit=500&withWarehouseStock=1')
+    return fetchJson<{ items?: JsonObject[] } | JsonObject[]>('/api/products?limit=200&withWarehouseStock=1')
       .then((data) => {
         const items = Array.isArray(data) ? data : (data?.items || []);
         setProducts(items);

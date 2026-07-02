@@ -1,15 +1,16 @@
 // Index operasional — inventory customer collections only.
 
-import type { Db } from 'mongodb';
+import type { Db, IndexSpecification } from 'mongodb';
 
 let operationalIndexesEnsured = false;
 
 interface IndexSpec {
   collection: string;
-  index: Record<string, number>;
+  index: Record<string, number | string>;
   name: string;
   unique?: boolean;
   partialFilterExpression?: Record<string, unknown>;
+  expireAfterSeconds?: number;
 }
 
 const INDEX_SPECS: IndexSpec[] = [
@@ -32,7 +33,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'assets', index: { tenantId: 1, kode: 1 }, name: 'uniq_assets_tenant_kode', unique: true },
   { collection: 'assets', index: { tenantId: 1, status: 1 }, name: 'idx_assets_tenant_status' },
   { collection: 'assets', index: { tenantId: 1, nama: 1 }, name: 'idx_assets_tenant_nama' },
-  { collection: 'maintenance_requests', index: { tenantId: 1, createdAt: -1 }, name: 'idx_mwr_tenant_created' },
+  { collection: 'maintenance_requests', index: { tenantId: 1, createdAt: -1, id: -1 }, name: 'idx_mwr_tenant_created_id' },
   { collection: 'maintenance_requests', index: { tenantId: 1, noWR: 1 }, name: 'uniq_mwr_tenant_nowr', unique: true },
   { collection: 'maintenance_requests', index: { tenantId: 1, status: 1 }, name: 'idx_mwr_tenant_status' },
   { collection: 'maintenance_requests', index: { tenantId: 1, assetId: 1 }, name: 'idx_mwr_tenant_asset' },
@@ -63,24 +64,36 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_local_kode', unique: true, partialFilterExpression: { syncSource: { $ne: 'sales.app' } } },
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
+  { collection: 'products', index: { tenantId: 1, nama: 1, id: 1 }, name: 'idx_products_tenant_nama_id' },
   { collection: 'integration_links', index: { customerTenantId: 1, vendorTenantId: 1 }, name: 'uniq_integration_link', unique: true },
   { collection: 'integration_links', index: { webhookSecret: 1, status: 1 }, name: 'idx_integration_link_secret' },
   { collection: 'integration_links', index: { customerTenantId: 1, status: 1 }, name: 'idx_integration_link_customer' },
   { collection: 'vendor_tenants', index: { tenantId: 1, vendorTenantId: 1 }, name: 'uniq_vendor_tenants', unique: true },
+  { collection: 'goods_receipts', index: { id: 1 }, name: 'uniq_grn_id', unique: true },
+  { collection: 'hutang', index: { id: 1 }, name: 'uniq_hutang_id', unique: true },
+  { collection: 'hutang', index: { tenantId: 1, tanggal: -1 }, name: 'idx_hutang_tenant_tanggal' },
+  { collection: 'hutang_pembayaran', index: { hutangId: 1, tanggal: -1 }, name: 'idx_hutang_bayar_hutang' },
+  { collection: 'webhook_inbox', index: { tenantId: 1, createdAt: -1 }, name: 'idx_webhook_inbox_tenant' },
+  { collection: 'integration_settings', index: { tenantId: 1 }, name: 'uniq_integration_settings_tenant', unique: true },
   { collection: 'users', index: { email: 1, tenantId: 1 }, name: 'uniq_users_email_tenant', unique: true },
   { collection: 'tenant_settings', index: { tenantId: 1 }, name: 'uniq_tenant_settings', unique: true },
   { collection: 'produk_grup', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_grup', unique: true },
   { collection: 'produk_satuan', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_satuan', unique: true },
+  { collection: 'products', index: { tenantId: 1, nama: 'text', kode: 'text', barcode: 'text' }, name: 'idx_products_text_search' },
+  { collection: 'users', index: { emailNormalized: 1, tenantId: 1 }, name: 'uniq_users_email_norm_tenant', unique: true },
+  { collection: 'transfer_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_transfer_stok_tenant_tanggal' },
+  { collection: 'inventory_releases', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_inv_release_tenant_wr' },
+  { collection: 'dashboard_snapshots', index: { expiresAt: 1 }, name: 'idx_dashboard_snapshot_expires', expireAfterSeconds: 0 },
 ];
 
 async function safeCreateIndex(
   db: Db,
   collection: string,
-  index: Record<string, number>,
+  index: Record<string, number | string>,
   options: Record<string, unknown>,
 ) {
   try {
-    await db.collection(collection).createIndex(index, options);
+    await db.collection(collection).createIndex(index as IndexSpecification, options);
   } catch (e) {
     const err = e as { code?: number; message?: string };
     if (err?.code !== 85 && err?.code !== 86) {
@@ -105,6 +118,7 @@ export async function ensureOperationalIndexes(db: Db): Promise<void> {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;
     if (spec.partialFilterExpression) opts.partialFilterExpression = spec.partialFilterExpression;
+    if (spec.expireAfterSeconds != null) opts.expireAfterSeconds = spec.expireAfterSeconds;
     await safeCreateIndex(db, spec.collection, spec.index, opts);
   }
   operationalIndexesEnsured = true;

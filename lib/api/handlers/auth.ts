@@ -74,6 +74,7 @@ export async function handleAuth({
   body,
   auth,
   request,
+  url,
 }: HandlerContext): Promise<NextResponse | null> {
   if (route === '/auth/login' && method === 'POST') {
     const loginBody = (body || {}) as LoginBody;
@@ -114,8 +115,29 @@ export async function handleAuth({
     const denied = requireAuth(auth);
     if (denied) return denied;
 
+    const refresh = url.searchParams.get('refresh') === '1';
     let tenantId = normalizeTenantId(auth!.tenantId || 'default');
     let tenantName = auth!.tenantName || '';
+
+    if (!refresh) {
+      const profile: SessionUser = {
+        id: auth!.userId,
+        email: auth!.email,
+        name: auth!.name,
+        role: auth!.role,
+        tenantId,
+        tenantName,
+      };
+      if (auth!.role === 'MASTER') {
+        const actingTenantId = readActingTenantFromRequest(request);
+        if (actingTenantId) {
+          profile.actingTenantId = actingTenantId;
+          profile.actingTenantName = actingTenantId;
+        }
+      }
+      return ok({ user: profile });
+    }
+
     const dbUser = auth!.userId
       ? await db.collection<DbUserDoc>('users').findOne({ id: auth!.userId })
       : null;

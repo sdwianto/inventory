@@ -22,9 +22,15 @@ import { handleAssets } from '@/lib/api/handlers/assets';
 import { handleMaintenanceRequests } from '@/lib/api/handlers/maintenance-requests';
 import { handleMaintenanceServiceOrders } from '@/lib/api/handlers/maintenance-service-orders';
 import { handleMaintenanceSchedules } from '@/lib/api/handlers/maintenance-schedules';
+import { handleNavBadges } from '@/lib/api/handlers/nav-badges';
+import { handleMedia } from '@/lib/api/handlers/media';
 import { handleMaintenanceReports } from '@/lib/api/handlers/maintenance-reports';
+import { handleSandbox } from '@/lib/api/handlers/sandbox';
 
 const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
+  sandbox: handleSandbox,
+  media: handleMedia,
+  'nav-badges': handleNavBadges,
   assets: handleAssets,
   'maintenance-requests': handleMaintenanceRequests,
   'maintenance-service-orders': handleMaintenanceServiceOrders,
@@ -53,6 +59,7 @@ const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
 };
 
 const FALLBACK: ApiHandler[] = [
+  handleSandbox,
   handleMaintenanceRequests,
   handleMaintenanceServiceOrders,
   handleMaintenanceSchedules,
@@ -75,6 +82,8 @@ const FALLBACK: ApiHandler[] = [
   handleTenants,
   handleUsers,
   handleBgJobs,
+  handleNavBadges,
+  handleMedia,
 ];
 
 export function handlersForRoute(route: string): ApiHandler[] {

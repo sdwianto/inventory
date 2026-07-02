@@ -3,6 +3,7 @@
 import { str, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useState } from 'react';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +19,7 @@ import ListExportMenu from '@/components/ListExportMenu';
 import BulkSelectionBar from '@/components/BulkSelectionBar';
 import { useListSelection } from '@/hooks/useListSelection';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
 import { postBulkDelete } from '@/lib/bulk-delete-client';
 
 const empty = { email: '', password: '', name: '', role: 'GUDANG', tenantId: 'default' };
@@ -34,7 +36,15 @@ const ROLE_BADGE: Record<string, string> = {
 
 export default function UserManagementPage() {
   const confirm = useConfirm();
-  const [list, setList] = useState<JsonObject[]>([]);
+  const {
+    items: list,
+    loading,
+    loadingMore,
+    hasMore,
+    reload,
+    loadMore,
+    error,
+  } = useCursorList<JsonObject>('/api/users', { limit: 100 });
   const [tenants, setTenants] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
@@ -49,15 +59,12 @@ export default function UserManagementPage() {
   useEffect(() => {
     const u = getUser();
     setCurrentUser(u);
-    load();
-    // Load tenants list for dropdown (visible only to MASTER, but always fetch)
     if (u?.role === 'MASTER') loadTenants();
   }, []);
 
-  const load = async () => {
-    const res = await fetch('/api/users');
-    setList(await res.json());
+  const refreshList = async () => {
     selection.clear();
+    await reload();
   };
 
   const loadTenants = async () => {
@@ -99,7 +106,7 @@ export default function UserManagementPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(editing ? 'User diperbarui' : 'User baru ditambahkan');
       setShowForm(false);
-      load();
+      refreshList();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };
@@ -119,7 +126,7 @@ export default function UserManagementPage() {
       if (!res.ok) throw new Error(str(asObject(data).error, 'Gagal menghapus user'));
       toast.success(`User ${str(deleteTarget.name)} dihapus`);
       setDeleteTarget(null);
-      load();
+      refreshList();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -144,7 +151,7 @@ export default function UserManagementPage() {
 
   const exportData = async (format: ListExportFormat) => {
     try {
-      const rows = [...list];
+      const rows = await fetchAllCursorPages<JsonObject>('/api/users');
       const stamp = new Date().toISOString().slice(0, 10);
       await runListExport(format, {
         baseName: `users-${stamp}`,
@@ -171,7 +178,7 @@ export default function UserManagementPage() {
       const data = await postBulkDelete('/api/users/bulk-delete', ids);
       toast.success(`${data.deleted ?? ids.length} user dihapus`);
       selection.clear();
-      load();
+      refreshList();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -192,6 +199,13 @@ export default function UserManagementPage() {
           <Button onClick={openNew} className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-2" /> User Baru</Button>
         </div>
 
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void refreshList()}>Coba lagi</Button>
+          </div>
+        )}
+
         <BulkSelectionBar
           count={selection.count}
           entityLabel="user"
@@ -210,7 +224,7 @@ export default function UserManagementPage() {
                     checked={allSelected}
                     onChange={() => selection.toggleAll(selectableList.map((u) => ({ id: str(u.id) })))}
                     disabled={selectableList.length === 0}
-                    aria-label="Pilih semua"
+                    aria-label={hasMore ? 'Pilih semua di halaman ini' : 'Pilih semua'}
                   />
                 </th>
                 <th className="px-3 py-2 text-left">Email</th>
@@ -222,7 +236,12 @@ export default function UserManagementPage() {
               </tr>
             </thead>
             <tbody>
-              {list.length === 0 && <tr><td colSpan={7} className="text-center py-10 text-slate-400">Tidak ada user</td></tr>}
+              {loading && list.length === 0 && (
+                <tr><td colSpan={7} className="text-center py-10 text-slate-400">Memuat…</td></tr>
+              )}
+              {!loading && list.length === 0 && (
+                <tr><td colSpan={7} className="text-center py-10 text-slate-400">Tidak ada user</td></tr>
+              )}
               {list.map(u => (
                 <tr key={str(u.id)} className="border-t hover:bg-slate-50">
                   <td className="px-3 py-2">
@@ -263,6 +282,13 @@ export default function UserManagementPage() {
               ))}
             </tbody>
           </table>
+          {hasMore && (
+            <div className="p-3 border-t text-center">
+              <Button variant="outline" size="sm" onClick={() => loadMore()} disabled={loadingMore}>
+                {loadingMore ? 'Memuat…' : 'Muat lebih banyak'}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -237,22 +237,56 @@ export async function countScheduleDueStats(
   now: Date,
 ): Promise<{ overdue: number; dueSoon: number; active: number }> {
   const today = startOfDay(now);
-  const active = await db.collection(MAINTENANCE_SCHEDULES_COLLECTION).countDocuments({
-    ...tenantFilter,
-    status: 'ACTIVE',
-  });
 
-  const activeSchedules = await db.collection(MAINTENANCE_SCHEDULES_COLLECTION)
-    .find({ ...tenantFilter, status: 'ACTIVE' })
-    .project({ nextDueDate: 1, leadDays: 1 })
-    .toArray() as MaintenanceScheduleDoc[];
+  const [facetResult] = await db.collection(MAINTENANCE_SCHEDULES_COLLECTION).aggregate([
+    { $match: { ...tenantFilter, status: 'ACTIVE' } },
+    {
+      $facet: {
+        active: [{ $count: 'n' }],
+        overdue: [
+          {
+            $match: {
+              nextDueDate: { $exists: true, $ne: null, $lte: today },
+            },
+          },
+          { $count: 'n' },
+        ],
+        dueSoon: [
+          {
+            $match: {
+              nextDueDate: { $exists: true, $ne: null, $gt: today },
+              $expr: {
+                $lte: [
+                  { $toDate: '$nextDueDate' },
+                  {
+                    $add: [
+                      today,
+                      {
+                        $multiply: [
+                          { $max: [0, { $ifNull: [{ $toInt: '$leadDays' }, 0] }] },
+                          86400000,
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          { $count: 'n' },
+        ],
+      },
+    },
+  ]).toArray() as Array<{
+    active: { n: number }[];
+    overdue: { n: number }[];
+    dueSoon: { n: number }[];
+  }>;
 
-  let overdue = 0;
-  let dueSoon = 0;
-  for (const s of activeSchedules) {
-    if (isScheduleDue(s.nextDueDate, today)) overdue += 1;
-    else if (isScheduleDueSoon(s.nextDueDate, s.leadDays || 0, today)) dueSoon += 1;
-  }
-
-  return { overdue, dueSoon, active };
+  const facet = facetResult || { active: [], overdue: [], dueSoon: [] };
+  return {
+    active: facet.active[0]?.n ?? 0,
+    overdue: facet.overdue[0]?.n ?? 0,
+    dueSoon: facet.dueSoon[0]?.n ?? 0,
+  };
 }

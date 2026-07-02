@@ -5,29 +5,102 @@ import type { JsonObject } from '@/types/json';
 
 type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string };
 
+async function loadProductsBatch(db: Db, tenantId: string, items: JsonObject[]) {
+  const tid = tenantId || 'default';
+  const localIds = new Set<string>();
+  const vendorPairs: { vendorTenantId: string; vendorStokId: string }[] = [];
+  const kodeLookups: { kode: string; vendorTenantId?: string }[] = [];
+
+  for (const it of items || []) {
+    if (it.localStokId) localIds.add(String(it.localStokId));
+    if (it.vendorStokId && it.vendorTenantId) {
+      vendorPairs.push({
+        vendorTenantId: String(it.vendorTenantId),
+        vendorStokId: String(it.vendorStokId),
+      });
+    }
+    if (it.kode || it.vendorKode) {
+      kodeLookups.push({
+        kode: String(it.vendorKode || it.kode),
+        vendorTenantId: it.vendorTenantId ? String(it.vendorTenantId) : undefined,
+      });
+    }
+  }
+
+  const byLocalId = new Map<string, ProductDoc>();
+  const byVendorKey = new Map<string, ProductDoc>();
+  const byKode = new Map<string, ProductDoc>();
+
+  if (localIds.size) {
+    const rows = await db.collection('products')
+      .find({ tenantId: tid, id: { $in: [...localIds] } })
+      .toArray() as ProductDoc[];
+    for (const p of rows) {
+      if (p.id) byLocalId.set(p.id, p);
+    }
+  }
+
+  if (vendorPairs.length) {
+    const rows = await db.collection('products').find({
+      tenantId: tid,
+      $or: vendorPairs.map((v) => ({
+        vendorTenantId: v.vendorTenantId,
+        vendorStokId: v.vendorStokId,
+      })),
+    }).toArray() as ProductDoc[];
+    for (const p of rows) {
+      byVendorKey.set(`${p.vendorTenantId}:${p.vendorStokId}`, p);
+    }
+  }
+
+  const uniqueKodes = [...new Set(kodeLookups.map((k) => k.kode))];
+  if (uniqueKodes.length) {
+    const rows = await db.collection('products').find({
+      tenantId: tid,
+      kode: { $in: uniqueKodes },
+      aktif: { $ne: false },
+    }).toArray() as ProductDoc[];
+    for (const p of rows) {
+      const key = p.vendorTenantId ? `${p.vendorTenantId}:${p.kode}` : String(p.kode);
+      if (!byKode.has(key)) byKode.set(key, p);
+      if (p.kode && !byKode.has(String(p.kode))) byKode.set(String(p.kode), p);
+    }
+  }
+
+  return { byLocalId, byVendorKey, byKode };
+}
+
+function resolveProduct(
+  it: JsonObject,
+  maps: Awaited<ReturnType<typeof loadProductsBatch>>,
+): ProductDoc | null {
+  if (it.localStokId) {
+    const p = maps.byLocalId.get(String(it.localStokId));
+    if (p) return p;
+  }
+  if (it.vendorStokId && it.vendorTenantId) {
+    const p = maps.byVendorKey.get(`${it.vendorTenantId}:${it.vendorStokId}`);
+    if (p) return p;
+  }
+  if (it.kode || it.vendorKode) {
+    const kode = String(it.vendorKode || it.kode);
+    const itemVendor = String(it.vendorTenantId || '').trim();
+    if (itemVendor) {
+      const p = maps.byKode.get(`${itemVendor}:${kode}`);
+      if (p) return p;
+    }
+    return maps.byKode.get(kode) || null;
+  }
+  return null;
+}
+
 export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: JsonObject[]) {
   const tid = tenantId || 'default';
+  const maps = await loadProductsBatch(db, tid, items);
   const enriched: JsonObject[] = [];
 
   for (const it of items || []) {
-    let prod: ProductDoc | null = null;
-    if (it.localStokId) {
-      prod = await db.collection('products').findOne({ tenantId: tid, id: it.localStokId }) as ProductDoc | null;
-    }
-    if (!prod && it.vendorStokId && it.vendorTenantId) {
-      prod = await db.collection('products').findOne({
-        tenantId: tid,
-        vendorTenantId: it.vendorTenantId,
-        vendorStokId: it.vendorStokId,
-      }) as ProductDoc | null;
-    }
-    if (!prod && (it.kode || it.vendorKode)) {
-      const kode = it.vendorKode || it.kode;
-      const itemVendor = String(it.vendorTenantId || '').trim();
-      const filter: Record<string, unknown> = { tenantId: tid, kode, aktif: { $ne: false } };
-      if (itemVendor) filter.vendorTenantId = itemVendor;
-      prod = await db.collection('products').findOne(filter) as ProductDoc | null;
-    }
+    const prod = resolveProduct(it, maps);
 
     const vendorStokId = prod?.vendorStokId || it.vendorStokId || '';
     const vendorKode = prod?.kode || it.vendorKode || it.kode || '';

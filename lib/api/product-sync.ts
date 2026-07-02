@@ -3,7 +3,6 @@ import type { Db } from 'mongodb';
 
 import { v4 as uuidv4 } from 'uuid';
 import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
-import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
 
 function parseVendorPrices(product) {
   return {
@@ -77,7 +76,6 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
 
   if (existing) {
     await db.collection('products').updateOne({ id: existing.id }, { $set: syncSet });
-    await refreshGrnsForProductKode(db, tid, snap.kode);
     return { action: 'updated', id: existing.id, kode: snap.kode, vendorTenantId: vTenant };
   }
 
@@ -101,7 +99,6 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
   };
   await db.collection('products').insertOne(doc);
   await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
-  await refreshGrnsForProductKode(db, tid, snap.kode);
   return { action: 'created', id: doc.id, kode: snap.kode, vendorTenantId: vTenant };
 }
 

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { productFilterById, updateProductStockScoped } from '@/lib/api/tenant-operational';
 import { normalizeWarehouseKode, WAREHOUSE_CODES, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { hasSystemFlag, setSystemFlag } from '@/lib/api/system-meta';
 
 export const DEFAULT_WAREHOUSE = 'GKERING';
 
@@ -56,12 +57,17 @@ export async function ensureStokLokasiIndexes(db: Db): Promise<void> {
 
 export async function migrateStokLokasiFromProducts(db: Db): Promise<number> {
   if (stokLokasiMigrated) return 0;
+  if (await hasSystemFlag(db, 'stok_lokasi_migrated')) {
+    stokLokasiMigrated = true;
+    return 0;
+  }
   await ensureStokLokasiIndexes(db);
   const products = await db.collection<ProductStokSeed>('products')
     .find({})
     .project({ id: 1, tenantId: 1, stok: 1, gudangKode: 1, grup: 1, nama: 1 })
     .toArray();
   if (products.length === 0) {
+    await setSystemFlag(db, 'stok_lokasi_migrated');
     stokLokasiMigrated = true;
     return 0;
   }
@@ -96,6 +102,7 @@ export async function migrateStokLokasiFromProducts(db: Db): Promise<number> {
       if (mongoErrorCode(e) !== 11000) throw e;
     }
   }
+  await setSystemFlag(db, 'stok_lokasi_migrated');
   stokLokasiMigrated = true;
   return inserted;
 }

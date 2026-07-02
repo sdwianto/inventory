@@ -14,19 +14,18 @@ import {
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
+  Eraser,
 } from 'lucide-react';
+import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { getLokasiAktif, loadLokasiForTenant } from '@/lib/lokasi-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import TenantScopeSelector from '@/components/TenantScopeSelector';
-import { triggerVendorCatalogAutoSync } from '@/lib/integration-auto-sync';
 import { debounce } from '@/lib/debounce';
-import { useGrnPendingCount } from '@/lib/hooks/use-goods-receipts';
-import { useHutangPendingCount } from '@/lib/hooks/use-vendor-hutang';
-
-import { useWrPendingCount, usePmDueCount } from '@/lib/hooks/use-maintenance';
+import { useNavBadges, NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
+import { prefetchRouteData } from '@/lib/prefetch-route';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
 
@@ -96,6 +95,9 @@ const NAV: NavEntry[] = [
       { href: '/integrasi', label: 'Integrasi Sales.app', icon: Settings },
       { href: '/utiliti/user', label: 'User Management', icon: UserCog },
       { href: '/utiliti/tenants', label: 'Daftar Tenant (MASTER)', icon: Building2 },
+      ...(isSandboxResetMenuVisible()
+        ? [{ href: '/utiliti/sandbox', label: 'Reset Sandbox (MASTER)', icon: Eraser }]
+        : []),
     ],
   },
 ];
@@ -185,13 +187,11 @@ export default function AppShell({ children }: AppShellProps) {
       }
       setUserState(synced);
       refreshOperationalScope(synced);
-      if (synced.role !== 'MASTER') {
-        triggerVendorCatalogAutoSync().catch(() => {});
-      }
       const logoTenant = synced.role === 'MASTER' ? getActingTenantId() : (synced.tenantId || 'default');
       if (synced.role !== 'MASTER' || logoTenant) {
         fetchTenantSettings(logoTenant || synced.tenantId, { bustCache: false }).then((s) => {
-          if (s?.logoBase64) setTenantLogo(s.logoBase64);
+          if (s?.logoUrl) setTenantLogo(s.logoUrl);
+          else if (s?.logoBase64) setTenantLogo(s.logoBase64);
         });
       }
     });
@@ -203,7 +203,20 @@ export default function AppShell({ children }: AppShellProps) {
     if (!user) return undefined;
     const onScopeChange = () => {
       refreshOperationalScope(user);
-      queryClient.invalidateQueries();
+      const scopeKeys = [
+        NAV_BADGES_QUERY_KEY,
+        ['goods-receipts'],
+        ['hutang'],
+        ['maintenance-requests'],
+        ['maintenance-schedules'],
+        ['customer-purchase-orders'],
+        ['products'],
+        ['dashboard'],
+        ['integrations'],
+      ] as const;
+      for (const queryKey of scopeKeys) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey] });
+      }
     };
     window.addEventListener('erp-scope-change', onScopeChange);
     window.addEventListener('storage', onScopeChange);
@@ -217,35 +230,26 @@ export default function AppShell({ children }: AppShellProps) {
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
   const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
-  const { data: grnPending = 0 } = useGrnPendingCount(!!showGrnBadge);
-  const { data: hutangReview = 0 } = useHutangPendingCount(!!showHutangBadge);
-  const { data: wrPending = 0 } = useWrPendingCount(!!showWrBadge);
-  const { data: pmOverdue = 0 } = usePmDueCount(!!showPmBadge);
+  const showNavBadges = Boolean(user);
+  const { data: badgeData } = useNavBadges(showNavBadges);
+  const grnPending = showGrnBadge ? (badgeData?.grnPending ?? 0) : 0;
+  const hutangReview = showHutangBadge ? (badgeData?.hutangReview ?? 0) : 0;
+  const wrPending = showWrBadge ? (badgeData?.wrPending ?? 0) : 0;
+  const pmOverdue = showPmBadge ? (badgeData?.pmOverdue ?? 0) : 0;
+  const pmDueSoon = showPmBadge ? (badgeData?.pmDueSoon ?? 0) : 0;
+  const pmBadgeCount = pmOverdue + pmDueSoon;
 
-  const debouncedGrnBadgeRefresh = useMemo(
+  const debouncedBadgeRefresh = useMemo(
     () => debounce(() => {
-      queryClient.invalidateQueries({ queryKey: ['goods-receipts', 'pending-count'] });
-    }, 300),
-    [queryClient],
-  );
-  const debouncedHutangBadgeRefresh = useMemo(
-    () => debounce(() => {
-      queryClient.invalidateQueries({ queryKey: ['hutang', 'pending-count'] });
-    }, 300),
-    [queryClient],
-  );
-  const debouncedMaintenanceBadgeRefresh = useMemo(
-    () => debounce(() => {
-      queryClient.invalidateQueries({ queryKey: ['maintenance-requests', 'pending-count'] });
-      queryClient.invalidateQueries({ queryKey: ['maintenance-schedules', 'due-count'] });
+      queryClient.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
     }, 300),
     [queryClient],
   );
 
   useEffect(() => {
-    const onGrn = () => debouncedGrnBadgeRefresh();
-    const onHutang = () => debouncedHutangBadgeRefresh();
-    const onMaintenance = () => debouncedMaintenanceBadgeRefresh();
+    const onGrn = () => debouncedBadgeRefresh();
+    const onHutang = () => debouncedBadgeRefresh();
+    const onMaintenance = () => debouncedBadgeRefresh();
     window.addEventListener('erp-grn-change', onGrn);
     window.addEventListener('erp-hutang-change', onHutang);
     window.addEventListener('erp-maintenance-change', onMaintenance);
@@ -254,11 +258,11 @@ export default function AppShell({ children }: AppShellProps) {
       window.removeEventListener('erp-hutang-change', onHutang);
       window.removeEventListener('erp-maintenance-change', onMaintenance);
     };
-  }, [debouncedGrnBadgeRefresh, debouncedHutangBadgeRefresh, debouncedMaintenanceBadgeRefresh]);
+  }, [debouncedBadgeRefresh]);
 
   useEffect(() => {
-    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue }));
-  }, [grnPending, hutangReview, wrPending, pmOverdue]);
+    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue: pmBadgeCount }));
+  }, [grnPending, hutangReview, wrPending, pmBadgeCount]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -341,6 +345,7 @@ export default function AppShell({ children }: AppShellProps) {
                   key={item.href}
                   href={item.href}
                   onClick={() => setOpen(false)}
+                  onMouseEnter={() => prefetchRouteData(queryClient, item.href)}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
                     active ? 'nav-active-bgn' : 'text-slate-300 hover:bg-bgn-navy-light hover:text-white'
                   } ${item.highlight && !active ? 'ring-1 ring-bgn-gold/50' : ''}`}
@@ -391,6 +396,7 @@ export default function AppShell({ children }: AppShellProps) {
                             key={c.href}
                             href={c.href}
                             onClick={() => setOpen(false)}
+                            onMouseEnter={() => prefetchRouteData(queryClient, c.href)}
                             className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors ${
                               cActive ? 'nav-active-bgn' : 'text-slate-400 hover:bg-bgn-navy-light hover:text-white'
                             }`}

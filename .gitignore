@@ -75,7 +75,8 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
-memory/test_credentials.md
+# Local media uploads (tenant logos, etc.)
+storage/media/
 
 # Mobile development
 android-sdk/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node

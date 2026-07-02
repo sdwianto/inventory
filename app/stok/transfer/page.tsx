@@ -14,15 +14,14 @@ import { getUser } from '@/lib/auth-client';
 import ListExportMenu from '@/components/ListExportMenu';
 import ListSummaryCards from '@/components/ListSummaryCards';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
+import ProductPickerSearch from '@/components/ProductPickerSearch';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 
 export default function TransferPage() {
   const [list, setList] = useState<JsonObject[]>([]);
   const [lokasi, setLokasi] = useState<JsonObject[]>([]);
-  const [products, setProducts] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerQ, setPickerQ] = useState('');
   const [form, setForm] = useState<{ lokasiAsal: string; lokasiTujuan: string; keterangan: string; items: JsonObject[] }>({
     lokasiAsal: '', lokasiTujuan: '', keterangan: '', items: [],
   });
@@ -30,7 +29,6 @@ export default function TransferPage() {
 
   const load = async () => { const r = await fetch('/api/stok/transfer'); setList(await r.json()); };
   useEffect(() => { load(); fetch('/api/lokasi').then(r => r.json()).then(d => setLokasi(Array.isArray(d) ? d : [])); }, []);
-  useEffect(() => { if (showPicker) fetch('/api/products?limit=500').then(r => r.json()).then(setProducts); }, [showPicker]);
 
   const addItem = (p: JsonObject) => {
     if (form.items.find(it => it.stokId === p.id)) { toast.error('Sudah ada'); return; }
@@ -60,8 +58,6 @@ export default function TransferPage() {
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };
-
-  const filtered = products.filter(p => !pickerQ || str(p.nama).toLowerCase().includes(pickerQ.toLowerCase()) || str(p.kode).toLowerCase().includes(pickerQ.toLowerCase()));
 
   const exportData = async (format: ListExportFormat) => {
     try {
@@ -160,13 +156,7 @@ export default function TransferPage() {
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader><DialogTitle>Pilih Produk</DialogTitle></DialogHeader>
-          <Input placeholder="Cari..." value={pickerQ} onChange={e => setPickerQ(e.target.value)} autoFocus />
-          <div className="flex-1 overflow-auto border rounded">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100 text-xs sticky top-0"><tr><th className="px-2 py-2 text-left">Kode</th><th className="px-2 py-2 text-left">Nama</th><th className="px-2 py-2 text-right">Stok</th></tr></thead>
-              <tbody>{filtered.map(p => (<tr key={str(p.id)} onClick={() => addItem(p)} className="border-t cursor-pointer hover:bg-orange-50"><td className="px-2 py-2 font-mono text-xs">{str(p.kode)}</td><td className="px-2 py-2">{str(p.nama)}</td><td className="px-2 py-2 text-right">{str(p.stok)}</td></tr>))}</tbody>
-            </table>
-          </div>
+          <ProductPickerSearch open={showPicker} onSelect={addItem} />
         </DialogContent>
       </Dialog>
     </AppShell>

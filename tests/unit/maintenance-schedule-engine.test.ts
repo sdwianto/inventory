@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addInterval,
+  countScheduleDueStats,
   formatIntervalLabel,
   isScheduleDue,
   isScheduleDueSoon,
@@ -31,5 +32,27 @@ describe('maintenance-schedule-engine', () => {
 
   it('formatIntervalLabel', () => {
     expect(formatIntervalLabel('WEEKS', 2)).toContain('2 minggu');
+  });
+
+  it('countScheduleDueStats aggregates facet counts', async () => {
+    const aggregate = vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([{
+        active: [{ n: 5 }],
+        overdue: [{ n: 2 }],
+        dueSoon: [{ n: 1 }],
+      }]),
+    });
+    const db = {
+      collection: vi.fn().mockReturnValue({ aggregate }),
+    };
+
+    const today = startOfDay(new Date(2026, 5, 28));
+    const stats = await countScheduleDueStats(db as never, { tenantId: 't1' }, today);
+
+    expect(stats).toEqual({ active: 5, overdue: 2, dueSoon: 1 });
+    expect(aggregate).toHaveBeenCalledOnce();
+    const pipeline = aggregate.mock.calls[0][0];
+    expect(pipeline[0].$match).toMatchObject({ tenantId: 't1', status: 'ACTIVE' });
+    expect(pipeline[1].$facet).toBeDefined();
   });
 });

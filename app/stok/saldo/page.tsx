@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Input } from '@/components/ui/input';
@@ -10,7 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatIDR, formatNumber } from '@/lib/format';
 import { Boxes, Search, TrendingUp } from 'lucide-react';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
-import StockTrendCharts from '@/components/StockTrendCharts';
+
+const StockTrendCharts = dynamic(
+  () => import('@/components/StockTrendCharts'),
+  { ssr: false, loading: () => <div className="h-64 rounded-lg bg-slate-100 animate-pulse" /> },
+);
 
 interface SaldoSummary {
   qtyKering?: number;

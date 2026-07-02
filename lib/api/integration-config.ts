@@ -30,9 +30,21 @@ export interface IntegrationConfig {
 
 let legacyMigrationDone = false;
 
+const LEGACY_LINKS_MIGRATION_KEY = 'integration_links_v1';
+
 async function ensureLinksMigrated(db: Db): Promise<void> {
   if (legacyMigrationDone) return;
+  const done = await db.collection('system_meta').findOne({ key: LEGACY_LINKS_MIGRATION_KEY });
+  if (done?.value) {
+    legacyMigrationDone = true;
+    return;
+  }
   await migrateLegacyIntegrationSettings(db);
+  await db.collection('system_meta').updateOne(
+    { key: LEGACY_LINKS_MIGRATION_KEY },
+    { $set: { key: LEGACY_LINKS_MIGRATION_KEY, value: true, updatedAt: new Date() } },
+    { upsert: true },
+  );
   legacyMigrationDone = true;
 }
 

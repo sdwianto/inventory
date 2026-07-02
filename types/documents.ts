@@ -58,7 +58,9 @@ export interface SalesReplayOptions {
 }
 
 export interface ReconcileOptions {
+  /** @deprecated gunakan queueSalesReplays */
   callSales?: boolean;
+  queueSalesReplays?: boolean;
   salesDoSet?: Set<string> | null;
 }
 

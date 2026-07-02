@@ -9,7 +9,7 @@ import { nextDocNumber } from '@/lib/api/document-sequence';
 import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
 import { poEstimasiFromDoc, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
 import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
-import { vendorBillingFromPayload } from '@/lib/api/hutang-detail-enrich';
+import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal } from '@/lib/api/journal';
 import { buildVendorHutangJournalLines } from '@/lib/api/journal-lines';
@@ -27,18 +27,19 @@ async function resolveVendorBillingForHutang(
 ) {
   const vid = vendorTenantId || payload.vendorTenantId || null;
   const displayName = await resolveVendorDisplayName(db, tid, vid, payload);
-  const billing = vendorBillingFromPayload(payload, vid);
-  if (billing && !billing.companyName) {
-    billing.companyName = displayName;
-  }
-  const billingSnap = billing || {
+  const payloadRec = payload as VendorInvoicePayload & Record<string, unknown>;
+  const nested = payloadRec.vendor || payloadRec.vendorStore || {};
+  const nestedObj = nested as Record<string, unknown>;
+  const billingSnap = await resolveVendorBillingForStorage(db, tid, vid, {
     vendorTenantId: vid,
-    companyName: displayName,
-    companyAddress: '',
-    companyPhone: '',
-    companyNPWP: '',
-    logoBase64: '',
-  };
+    companyName: nestedObj.companyName || payloadRec.vendorCompanyName || payloadRec.vendorName || displayName,
+    companyAddress: nestedObj.companyAddress || payloadRec.vendorAddress || '',
+    companyPhone: nestedObj.companyPhone || payloadRec.vendorPhone || '',
+    companyNPWP: nestedObj.companyNPWP || payloadRec.vendorNPWP || '',
+    logoBase64: nestedObj.logoBase64 || payloadRec.vendorLogoBase64 || '',
+    logoUrl: nestedObj.logoUrl || payloadRec.vendorLogoUrl || '',
+  });
+  if (!billingSnap.companyName) billingSnap.companyName = displayName;
   return { vid, billingSnap, displayName };
 }
 

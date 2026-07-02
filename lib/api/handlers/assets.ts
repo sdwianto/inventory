@@ -18,6 +18,8 @@ import {
 } from '@/lib/api/maintenance-helpers';
 import { ASSET_MANAGE_ROLES, ASSETS_COLLECTION } from '@/lib/maintenance/constants';
 import { validateBase64Image, validateBase64Images } from '@/lib/api/image-base64';
+import { storeBase64Image } from '@/lib/api/media-storage';
+import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AssetDoc } from '@/types/maintenance';
@@ -69,7 +71,7 @@ export async function handleAssets({
       .toArray();
     return ok(list.map((doc) => clean({
       ...doc,
-      hasFoto: !!doc.fotoBase64,
+      hasFoto: !!(doc.fotoUrl || doc.fotoBase64),
       fotoBase64: undefined,
     })));
   }
@@ -90,10 +92,20 @@ export async function handleAssets({
     if (existing) return err('Kode aset sudah ada di tenant ini');
 
     let fotoBase64: string | null = null;
+    let fotoUrl: string | undefined;
+    let fotoMediaFile: string | undefined;
     if (assetBody.fotoBase64 !== undefined) {
       const checked = validateBase64Image(assetBody.fotoBase64, 'Foto aset');
       if (checked && typeof checked === 'object' && 'error' in checked) return err(checked.error, 400);
-      fotoBase64 = checked;
+      if (checked && String(checked).startsWith('data:image')) {
+        const stored = await storeBase64Image(tenantId, String(checked), { prefix: 'asset', maxBytes: 768_000 });
+        if ('error' in stored) return err(stored.error, 400);
+        fotoUrl = stored.url;
+        fotoMediaFile = stored.filename;
+        fotoBase64 = null;
+      } else {
+        fotoBase64 = checked;
+      }
     }
 
     const now = new Date();
@@ -113,11 +125,14 @@ export async function handleAssets({
       vendorAsal: String(assetBody.vendorAsal || '').trim(),
       catatan: String(assetBody.catatan || '').trim(),
       fotoBase64,
+      fotoUrl,
+      fotoMediaFile,
       createdBy: await actorSnapshot(db, scopeAuth),
       createdAt: now,
       updatedAt: now,
     };
     await db.collection(ASSETS_COLLECTION).insertOne(doc);
+    await invalidateDashboardSnapshot(db, tenantId);
     await writeAuditLog(db, {
       tenantId,
       action: 'ASSET_CREATED',
@@ -170,7 +185,15 @@ export async function handleAssets({
       if (assetBody.fotoBase64 !== undefined) {
         const checked = validateBase64Image(assetBody.fotoBase64, 'Foto aset');
         if (checked && typeof checked === 'object' && 'error' in checked) return err(checked.error, 400);
-        update.fotoBase64 = checked;
+        if (checked && String(checked).startsWith('data:image')) {
+          const stored = await storeBase64Image(String(existing.tenantId || tenantIdForWrite(scopeAuth, assetBody)), String(checked), { prefix: 'asset', maxBytes: 768_000 });
+          if ('error' in stored) return err(stored.error, 400);
+          update.fotoUrl = stored.url;
+          update.fotoMediaFile = stored.filename;
+          update.fotoBase64 = null;
+        } else {
+          update.fotoBase64 = checked;
+        }
       }
       if (assetBody.kode !== undefined && assetBody.kode !== existing.kode) {
         const dup = await db.collection(ASSETS_COLLECTION).findOne({
@@ -186,6 +209,7 @@ export async function handleAssets({
         withTenantFilter(scopeAuth, { id }),
         { $set: update },
       );
+      await invalidateDashboardSnapshot(db, String(existing.tenantId || 'default'));
       const doc = await findMasterDoc(db, ASSETS_COLLECTION, scopeAuth, { id });
       return ok(clean(doc));
     }

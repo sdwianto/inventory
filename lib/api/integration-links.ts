@@ -197,15 +197,15 @@ export async function getSalesApiKeyForVendor(
   customerTenantId: string,
   vendorTenantId?: string,
 ): Promise<string> {
-  const platform = resolvePlatformSalesApiKey();
-  if (platform) return platform;
-
   const tid = normalizeTenantId(customerTenantId);
   const vid = String(vendorTenantId || '').trim();
   if (vid) {
     const link = await findLinkForVendorCustomer(db, tid, vid);
     if (link?.salesApiKey) return link.salesApiKey;
   }
+
+  const platform = resolvePlatformSalesApiKey();
+  if (platform) return platform;
 
   const links = await listActiveLinksForCustomer(db, tid);
   for (const link of links) {

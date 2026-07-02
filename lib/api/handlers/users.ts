@@ -7,7 +7,8 @@ import { hashPassword } from '@/lib/api/auth-helpers';
 import { requireAuth } from '@/lib/api/require-auth';
 import { tenantFilterFromAuth, assertDocTenant } from '@/lib/api/tenant-scope';
 import type { HandlerContext } from '@/types/api/handler';
-import { assertEmailAvailableInTenant, normalizeUserEmail } from '@/lib/api/user-email';
+import { assertEmailAvailableInTenant, normalizeUserEmail, userEmailFields } from '@/lib/api/user-email';
+import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 
 const TENANT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER'];
 const ALL_ROLES = [...TENANT_ROLES, 'MASTER'];
@@ -55,6 +56,7 @@ export async function handleUsers({
   path,
   body,
   auth,
+  url,
 }: HandlerContext): Promise<NextResponse | null> {
   if (path[0] !== 'users' && !route.startsWith('/users')) return null;
 
@@ -64,8 +66,19 @@ export async function handleUsers({
 
   if (route === '/users' && method === 'GET') {
     const filter = userAuth.isMaster ? {} : tenantFilterFromAuth(userAuth);
-    const list = await db.collection<UserDoc>('users').find(filter).sort({ createdAt: -1 }).toArray();
-    return ok(list.map(stripPassword));
+    const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
+    const listFilter = applyDescDateIdCursor(filter, cursor, 'createdAt');
+    const list = await db.collection<UserDoc>('users')
+      .find(listFilter)
+      .sort({ createdAt: -1, id: -1 })
+      .limit(limit)
+      .toArray();
+    const cleaned = list.map(stripPassword);
+    if (pageMode) {
+      const last = list[list.length - 1] as Record<string, unknown> | undefined;
+      return ok(cursorPageResponse(cleaned, limit, 'createdAt', last));
+    }
+    return ok(cleaned);
   }
 
   if (route === '/users/bulk-delete' && method === 'POST') {
@@ -99,7 +112,7 @@ export async function handleUsers({
     const hashedPwd = await hashPassword(createBody.password);
     const doc: UserDoc = {
       id: uuidv4(),
-      email: normalizeUserEmail(createBody.email),
+      ...userEmailFields(createBody.email),
       password: hashedPwd,
       name: createBody.name,
       role,
@@ -140,7 +153,7 @@ export async function handleUsers({
       }
       const nextTenantId = String(update.tenantId ?? existing.tenantId ?? '');
       if (updateBody.email !== undefined) {
-        update.email = normalizeUserEmail(String(updateBody.email));
+        Object.assign(update, userEmailFields(String(updateBody.email)));
         const emailCheck = await assertEmailAvailableInTenant(
           db,
           String(update.email),

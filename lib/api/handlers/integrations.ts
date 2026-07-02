@@ -11,149 +11,45 @@ import {
   upsertIntegrationLink,
   getSalesApiKeyForVendor,
 } from '@/lib/api/integration-links';
-import { upsertProductFromVendor } from '@/lib/api/product-sync';
+import { upsertVendorTenant } from '@/lib/api/vendor-tenants';
+import { runCatalogSync } from '@/lib/api/catalog-sync-run';
 import {
-  upsertVendorTenant,
-  upsertVendorTenantsFromCatalog,
-  backfillProductVendorNames,
-} from '@/lib/api/vendor-tenants';
-import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
-import type { JsonObject } from '@/types/json';
-import { getInventoryPairUrl, getInventoryWebhookUrl } from '@/lib/integration-public-url';
+  enqueueJob,
+  JOB_TYPES,
+  scheduleJobProcessing,
+  getJobById,
+} from '@/lib/api/bg-jobs';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
 
-function salesFetchErrorMessage(err, salesUrl) {
-  const cause = err?.cause || err;
-  const code = cause?.code || err?.code;
-  if (code === 'ECONNREFUSED') {
-    return `Sales.app tidak dapat dihubungi di ${salesUrl}. Pastikan sales.app sudah berjalan (port 3000).`;
-  }
-  if (code === 'ENOTFOUND') {
-    return `Alamat sales.app tidak ditemukan: ${salesUrl}`;
-  }
-  if (err?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout) — cek ${salesUrl}`;
-  }
-  return `Gagal menghubungi sales.app: ${cause?.message || err?.message || 'koneksi gagal'}`;
-}
-
-async function runCatalogSync(db: Db, tenantId, config) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const apiKey = await getSalesApiKeyForVendor(db, tenantId);
-  if (apiKey) headers['X-Api-Key'] = apiKey;
-
-  let res;
-  try {
-    // Katalog global — semua produk dari semua tenant vendor sales.app
-    res = await fetch(
-      `${config.salesAppUrl}/api/integrations/catalog?allTenants=true`,
-      { headers, signal: AbortSignal.timeout(60000) },
-    );
-  } catch (e) {
-    return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };
-  }
-
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    return { error: `Sales.app merespons HTTP ${res.status} tanpa data JSON valid` };
-  }
-  if (!res.ok) return { error: data.error || `Sales.app ${res.status}` };
-
-  const products = data.products || [];
-  if (!products.length) {
-    return { error: 'Katalog kosong di sales.app — pastikan ada produk aktif' };
-  }
-
-  await upsertVendorTenantsFromCatalog(db, tenantId, data.availableTenants || []);
-
-  const results: {
-    created: number;
-    updated: number;
-    errors: JsonObject[];
-    byVendor: Record<string, number>;
-  } = { created: 0, updated: 0, errors: [], byVendor: {} };
-  for (const p of products) {
-    const vTenant = p.vendorTenantId || p.tenantId;
-    if (!vTenant) {
-      results.errors.push({ kode: p.kode, error: 'missing vendorTenantId' });
-      continue;
-    }
-    if (p.vendorTenantName) {
-      await upsertVendorTenant(db, tenantId, vTenant, p.vendorTenantName);
-    }
-    try {
-      const r = await upsertProductFromVendor(db, tenantId, vTenant, p);
-      if (r.action === 'created') results.created += 1;
-      else results.updated += 1;
-      results.byVendor[vTenant] = (results.byVendor[vTenant] || 0) + 1;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      results.errors.push({ kode: p.kode, vendorTenantId: vTenant, error: msg });
-    }
-  }
-
-  const namesBackfilled = await backfillProductVendorNames(db, tenantId);
-  const tierSync = await syncVendorTiersFromSales(db, tenantId, config);
-  const vendorTenants = Object.keys(results.byVendor);
-  const now = new Date();
-  await db.collection('integration_settings').updateOne(
-    { tenantId },
-    { $set: { lastCatalogSyncAt: now, updatedAt: now } },
-  );
-  return {
-    ...results,
-    total: products.length,
-    allTenants: true,
-    vendorTenants,
-    vendorTenantCount: vendorTenants.length,
-    vendorNamesBackfilled: namesBackfilled,
-    tierSync: tierSync?.error ? { error: tierSync.error } : tierSync,
-  };
+async function enqueueCatalogSync(db: Db, tenantId: string) {
+  const existing = await db.collection('bg_jobs').findOne({
+    tenantId,
+    type: JOB_TYPES.CATALOG_SYNC,
+    status: { $in: ['PENDING', 'RUNNING'] },
+  });
+  if (existing) return { jobId: String(existing.id), reused: true };
+  const { jobId } = await enqueueJob(db, { type: JOB_TYPES.CATALOG_SYNC, tenantId, payload: {} });
+  scheduleJobProcessing(db, { limit: 1 });
+  return { jobId, reused: false };
 }
 
 export async function handleIntegrations({
-  db, route, method, body, auth, url, request,
+  db, route, method, body, auth, url, request, path,
 }: HandlerContext) {
   const intBody = parseHandlerBody(body);
   const scopeOpts = { url, body: intBody, request };
-
-  if (route === '/integrations/public-info' && method === 'GET') {
-    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
-    const proto = request.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
-    const originFromRequest = host ? `${proto}://${host.split(',')[0].trim()}` : '';
-    return ok({
-      webhookUrl: getInventoryWebhookUrl(originFromRequest || undefined),
-      pairUrl: getInventoryPairUrl(originFromRequest || undefined),
-    });
-  }
-
-  if (route === '/integrations/setup-info' && method === 'GET') {
-    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
-    if (denied) return denied;
-    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
-    const proto = request.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
-    const originFromRequest = host ? `${proto}://${host.split(',')[0].trim()}` : '';
-    return ok({
-      tenantId: tenantId || '',
-      webhookUrl: getInventoryWebhookUrl(originFromRequest || undefined),
-      pairUrl: getInventoryPairUrl(originFromRequest || undefined),
-      setupTokenConfigured: !!getSetupToken(),
-    });
-  }
-
   if (route === '/integrations/status' && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     if (!tenantId) return err('Tenant operasional wajib', 400);
     const config = await getIntegrationConfig(db, tenantId);
+    const probe = url.searchParams.get('probe') === '1';
 
-    let catalogOk = false;
+    let catalogOk: boolean | null = null;
     let catalogCount = 0;
     let vendorTenantCount = 0;
-    if (config.salesApiKey) {
+    if (probe && config.salesApiKey) {
       try {
         const apiKey = await getSalesApiKeyForVendor(db, tenantId);
         const headers: Record<string, string> = {};
@@ -165,20 +61,18 @@ export async function handleIntegrations({
         const data = await res.json();
         catalogOk = res.ok && (data.count || 0) > 0;
         catalogCount = data.count || 0;
-        vendorTenantCount = (data.availableTenants || []).filter((t) => t.count > 0).length;
-        if (res.ok && data.availableTenants?.length) {
-          await upsertVendorTenantsFromCatalog(db, tenantId, data.availableTenants);
-          await backfillProductVendorNames(db, tenantId);
-        }
+        vendorTenantCount = (data.availableTenants || []).filter((t: { count?: number }) => (t.count || 0) > 0).length;
       } catch {
         catalogOk = false;
       }
     }
 
-    const productCount = await db.collection('products').countDocuments({ tenantId, aktif: { $ne: false } });
-    const syncedCount = await db.collection('products').countDocuments({ tenantId, syncSource: 'sales.app' });
-    const webhookInbox = await db.collection('webhook_inbox').countDocuments({ tenantId });
-    const vendorLinks = await listActiveLinksForCustomer(db, tenantId);
+    const [productCount, syncedCount, webhookInbox, vendorLinks] = await Promise.all([
+      db.collection('products').countDocuments({ tenantId, aktif: { $ne: false } }),
+      db.collection('products').countDocuments({ tenantId, syncSource: 'sales.app' }),
+      db.collection('webhook_inbox').countDocuments({ tenantId }),
+      listActiveLinksForCustomer(db, tenantId),
+    ]);
 
     return ok({
       tenantId,
@@ -186,7 +80,8 @@ export async function handleIntegrations({
       salesApiKey: config.salesApiKey ? `${config.salesApiKey.slice(0, 12)}…` : '',
       webhookSecret: config.webhookSecret ? `${config.webhookSecret.slice(0, 8)}…` : '',
       catalogReachable: catalogOk,
-      catalogCount,
+      catalogProbed: probe,
+      catalogCount: probe ? catalogCount : undefined,
       vendorTenantCount: Math.max(vendorTenantCount, vendorLinks.length),
       vendorLinks: vendorLinks.map((l) => ({
         vendorTenantId: l.vendorTenantId,
@@ -199,7 +94,7 @@ export async function handleIntegrations({
       webhookEventsReceived: webhookInbox,
       tierHargaDefault: config.tierHargaDefault || 'ECER',
       lastCatalogSyncAt: config.lastCatalogSyncAt || null,
-      ready: vendorLinks.length > 0 && !!config.salesApiKey && catalogOk && syncedCount > 0,
+      ready: vendorLinks.length > 0 && !!config.salesApiKey && syncedCount > 0,
     });
   }
 
@@ -233,7 +128,6 @@ export async function handleIntegrations({
 
     let catalogSync: Record<string, unknown> | null = null;
     if (intBody.autoSyncCatalog !== false) {
-      const config = await getIntegrationConfig(db, customerTenantId, vendorTenantId);
       await upsertVendorTenant(
         db,
         customerTenantId,
@@ -241,7 +135,9 @@ export async function handleIntegrations({
         link.vendorName || vendorTenantId,
         link.tierHargaDefault,
       );
-      catalogSync = await runCatalogSync(db, customerTenantId, config);
+      const { jobId, reused } = await enqueueCatalogSync(db, customerTenantId);
+      catalogSync = { jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused };
+      scheduleJobProcessing(db, { limit: 1 });
     }
 
     return ok({
@@ -275,16 +171,31 @@ export async function handleIntegrations({
   if (route === '/integrations/sync-catalog' && method === 'POST') {
     const { denied, tenantId } = resolveOperationalScope(auth, scopeOpts);
     if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
     const config = await getIntegrationConfig(db, tenantId);
     if (!config.salesApiKey) return err('Belum di-pair dengan sales.app', 400);
-    const result = await runCatalogSync(db, tenantId, config);
-    if ('error' in result && result.error) return err(result.error, 400);
-    return ok(result);
+    const inline = intBody.inline === true || url.searchParams.get('inline') === '1';
+    if (inline) {
+      const result = await runCatalogSync(db, tenantId, config);
+      if ('error' in result && result.error) return err(String(result.error), 400);
+      return ok(result);
+    }
+    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
+    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
+  }
+
+  if (path[0] === 'integrations' && path[1] === 'jobs' && path[2] && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const job = await getJobById(db, path[2], tenantId);
+    if (!job) return err('Job tidak ditemukan', 404);
+    return ok(clean(job));
   }
 
   if (route === '/integrations/auto-sync' && method === 'POST') {
     const { denied, tenantId } = resolveOperationalScope(auth, scopeOpts);
     if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
     const config = await getIntegrationConfig(db, tenantId);
     if (!config.salesApiKey) {
       return ok({ skipped: true, reason: 'not_paired' });
@@ -297,15 +208,8 @@ export async function handleIntegrations({
       return ok({ skipped: true, reason: 'recent', lastCatalogSyncAt: dbRow?.lastCatalogSyncAt ?? null });
     }
 
-    const result = await runCatalogSync(db, tenantId, config);
-    if ('error' in result && result.error) {
-      // Auto-sync background — sales.app offline bukan error fatal
-      if (result.offline) {
-        return ok({ skipped: true, reason: 'sales_offline', message: result.error });
-      }
-      return err(result.error, 400);
-    }
-    return ok({ ...result, auto: true });
+    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
+    return ok({ jobId, async: true, auto: true, reused, status: reused ? 'RUNNING' : 'PENDING' }, 202);
   }
 
   if (route === '/integrations/vendor-tiers' && method === 'GET') {

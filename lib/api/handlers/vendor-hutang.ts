@@ -11,11 +11,19 @@ import { guardPosting } from '@/lib/api/period-lock';
 import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot } from '@/lib/api/hutang-approval';
 import { resolveHutangVariance } from '@/lib/api/hutang-variance-enrich';
 import { buildHutangDetailEnrichment } from '@/lib/api/hutang-detail-enrich';
-import { syncPostedInvoicesFromSales } from '@/lib/api/invoice-sync-sales';
 import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval';
 import { backfixVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
-import { createJournal } from '@/lib/api/journal';
+import { runHutangSyncPending } from '@/lib/api/hutang-sync-pending-run';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
+import {
+  payableHutangFilter,
+  approvalStatusFilter,
+  stripHutangListSnapshot,
+} from '@/lib/api/hutang-filters';
+import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { buildHutangPaymentJournalLines } from '@/lib/api/journal-lines';
+import { createJournal } from '@/lib/api/journal';
 import type { HandlerContext } from '@/types/api/handler';
 
 const HUTANG_ADMIN_ROLES = ['ADMIN', 'MASTER'];
@@ -58,36 +66,6 @@ interface ReconcileSummary {
   salesErrors: unknown[];
 }
 
-function vendorInvoiceFilter(extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = {
-    $or: [
-      { referenceType: 'VENDOR_INVOICE' },
-      { vendorInvoiceId: { $exists: true, $ne: null } },
-    ],
-  };
-  if (!extra || Object.keys(extra).length === 0) return base;
-  return { $and: [base, extra] };
-}
-
-function payableHutangFilter(extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const maintenance = { referenceType: 'MAINTENANCE_SERVICE', ...extra };
-  const vendor = vendorInvoiceFilter(extra);
-  return { $or: [maintenance, vendor] };
-}
-
-function approvalStatusFilter(approvalStatus: string): Record<string, unknown> {
-  if (!approvalStatus) return {};
-  if (approvalStatus === 'PENDING_REVIEW') {
-    return {
-      $or: [
-        { approvalStatus: 'PENDING_REVIEW' },
-        { status: 'PENDING_REVIEW', approvalStatus: { $exists: false } },
-      ],
-    };
-  }
-  return { approvalStatus };
-}
-
 function mapHutangRow(h: HutangDoc, today: Date) {
   const jt = new Date(String(h.jatuhTempo));
   const daysLate = Math.floor((today.getTime() - jt.getTime()) / 86400000);
@@ -102,13 +80,13 @@ function mapHutangRow(h: HutangDoc, today: Date) {
     else if (daysLate > 30) aging = '31-60';
     else if (daysLate > 0) aging = '1-30';
   } else aging = 'LUNAS';
-  return {
+  return stripHutangListSnapshot({
     ...clean(h),
     supplierName: h.supplierName || 'Vendor',
     approvalStatus: approval,
     aging,
     daysLate,
-  };
+  });
 }
 
 export async function handleVendorHutang({
@@ -149,46 +127,23 @@ export async function handleVendorHutang({
     if (denied) return denied;
     if (!tenantId) return err('Scope tidak valid', 400);
     const replaySales = hutangBody.replaySales === true;
-    let syncResult: Record<string, unknown> = { created: 0, existing: 0, refreshed: 0, errors: [], total: 0 };
-    const reconcile: ReconcileSummary = { created: 0, fixed: 0, linked: 0, replayed: 0, scanned: 0, salesErrors: [] };
 
-    if (replaySales) {
-      await backfixVendorHutangFromPostedGrns(db, tenantId, { replaySales: true });
-    } else {
-      await backfixVendorHutangFromPostedGrns(db, tenantId, { replaySales: false });
-    }
-    const part = await syncPostedInvoicesFromSales(db, tenantId, { reconcileSales: replaySales }) as Record<string, unknown>;
-    if (part.error && !part.skipped && !syncResult.error) syncResult = part;
-    else {
-      syncResult.created = Number(syncResult.created) + Number(part.created || 0);
-      syncResult.existing = Number(syncResult.existing) + Number(part.existing || 0);
-      syncResult.refreshed = Number(syncResult.refreshed) + Number(part.refreshed || 0);
-      syncResult.total = Number(syncResult.total) + Number(part.total || 0);
-      const partErrors = part.errors as unknown[] | undefined;
-      if (partErrors?.length) (syncResult.errors as unknown[]).push(...partErrors);
-    }
-    const partReconcile = part.reconcile as ReconcileSummary | undefined;
-    if (partReconcile) {
-      reconcile.created += Number(partReconcile.created || 0);
-      reconcile.fixed += Number(partReconcile.fixed || 0);
-      reconcile.linked += Number(partReconcile.linked || 0);
-      reconcile.replayed += Number(partReconcile.replayed || 0);
-      reconcile.scanned += Number(partReconcile.scanned || 0);
-      if (partReconcile.salesErrors?.length) {
-        reconcile.salesErrors.push(...partReconcile.salesErrors);
+    const inline = url.searchParams.get('inline') === '1';
+    if (inline) {
+      const result = await runHutangSyncPending(db, tenantId, scopeAuth, { replaySales });
+      if ('error' in result && result.error && !('skipped' in result)) {
+        return err(String(result.error), 400);
       }
+      return ok(result);
     }
 
-    if (syncResult.error && !syncResult.skipped) {
-      return err(String(syncResult.error), syncResult.skipped ? 501 : 400);
-    }
-
-    const pendingFilter = withTenantFilter(
-      scopeAuth,
-      vendorInvoiceFilter(approvalStatusFilter('PENDING_REVIEW')),
-    );
-    const pendingAfter = await db.collection('hutang').countDocuments(pendingFilter);
-    return ok({ ...syncResult, reconcile, pendingAfter });
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.HUTANG_SYNC,
+      tenantId,
+      payload: { replaySales },
+    });
+    scheduleJobProcessing(db);
+    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 
   if (route === '/hutang/migrate-legacy' && method === 'POST') {
@@ -199,14 +154,6 @@ export async function handleVendorHutang({
     if (!tenantId) return err('Scope tidak valid', 400);
     const result = await backfillLegacyVendorInvoices(db, tenantId);
     return ok(result);
-  }
-
-  if (route === '/hutang/pending-count' && method === 'GET') {
-    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
-    if (denied) return denied;
-    const filter = withTenantFilter(scopeAuth, payableHutangFilter(approvalStatusFilter('PENDING_REVIEW')));
-    const count = await db.collection('hutang').countDocuments(filter);
-    return ok({ count });
   }
 
   if (route === '/hutang' && method === 'GET') {
@@ -224,10 +171,21 @@ export async function handleVendorHutang({
       });
     }
     filter = withTenantFilter(scopeAuth, filter);
-    const list = await db.collection('hutang').find(filter).sort({ tanggal: -1, jatuhTempo: 1 }).limit(500).toArray();
+    const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
+    const listFilter = applyDescDateIdCursor(filter, cursor, 'tanggal');
+    const list = await db.collection('hutang')
+      .find(listFilter)
+      .sort({ tanggal: -1, id: -1 })
+      .limit(limit)
+      .toArray();
 
     const today = new Date();
-    return ok(list.map((h) => mapHutangRow(h as unknown as HutangDoc, today)));
+    const mapped = list.map((h) => mapHutangRow(h as unknown as HutangDoc, today));
+    if (pageMode) {
+      const last = list[list.length - 1] as Record<string, unknown> | undefined;
+      return ok(cursorPageResponse(mapped, limit, 'tanggal', last));
+    }
+    return ok(mapped);
   }
 
   if (path[0] === 'hutang' && path.length === 2 && method === 'GET') {
@@ -317,6 +275,7 @@ export async function handleVendorHutang({
     }
 
     await db.collection('hutang').updateOne({ id: hutang.id }, { $set: patch });
+    await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));
   }
@@ -347,6 +306,7 @@ export async function handleVendorHutang({
         },
       },
     );
+    await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));
   }
@@ -386,6 +346,7 @@ export async function handleVendorHutang({
         },
       },
     );
+    await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));
   }
@@ -459,6 +420,7 @@ export async function handleVendorHutang({
     }
 
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
+    await invalidateDashboardSnapshot(db, tenantId);
     return ok(clean(updated));
   }
 

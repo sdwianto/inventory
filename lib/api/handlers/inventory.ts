@@ -169,46 +169,77 @@ async function buildStockTrend(
 
   const opening = await aggregateOpeningBefore(db, tid, since);
 
-  const entries = await db.collection('stok_kartu')
-    .find({ tenantId: tid, tanggal: { $gte: since, $lte: until } })
-    .project({
-      tanggal: 1, masuk: 1, keluar: 1, hargaSatuan: 1, lokasi: 1, lokasiKode: 1,
-    })
-    .sort({ tanggal: 1 })
-    .toArray();
+  const dateFormat = granularity === 'day' ? '%Y-%m-%d' : '%Y-%m';
+  const aggRows = await db.collection('stok_kartu').aggregate([
+    { $match: { tenantId: tid, tanggal: { $gte: since, $lte: until } } },
+    {
+      $addFields: {
+        wh: {
+          $let: {
+            vars: { loc: { $toUpper: { $ifNull: ['$lokasiKode', '$lokasi'] } } },
+            in: {
+              $switch: {
+                branches: [
+                  { case: { $regexMatch: { input: '$$loc', regex: 'GKERING' } }, then: 'GKERING' },
+                  { case: { $regexMatch: { input: '$$loc', regex: 'GBASAH' } }, then: 'GBASAH' },
+                ],
+                default: 'OTHER',
+              },
+            },
+          },
+        },
+        masukN: { $toDouble: { $ifNull: ['$masuk', 0] } },
+        keluarN: { $toDouble: { $ifNull: ['$keluar', 0] } },
+        hargaN: { $toDouble: { $ifNull: ['$hargaSatuan', 0] } },
+      },
+    },
+    {
+      $group: {
+        _id: { $dateToString: { format: dateFormat, date: '$tanggal' } },
+        masukQty: { $sum: '$masukN' },
+        keluarQty: { $sum: '$keluarN' },
+        masukNilai: { $sum: { $multiply: ['$masukN', '$hargaN'] } },
+        keluarNilai: { $sum: { $multiply: ['$keluarN', '$hargaN'] } },
+        transaksi: { $sum: 1 },
+        keringMasukQty: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, '$masukN', 0] } },
+        keringKeluarQty: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, '$keluarN', 0] } },
+        basahMasukQty: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, '$masukN', 0] } },
+        basahKeluarQty: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, '$keluarN', 0] } },
+        keringMasukNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, { $multiply: ['$masukN', '$hargaN'] }, 0] } },
+        keringKeluarNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, { $multiply: ['$keluarN', '$hargaN'] }, 0] } },
+        basahMasukNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, { $multiply: ['$masukN', '$hargaN'] }, 0] } },
+        basahKeluarNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, { $multiply: ['$keluarN', '$hargaN'] }, 0] } },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]).toArray();
 
   const buckets = new Map<string, TrendBucket>();
-  for (const e of entries) {
-    const key = periodKey(e.tanggal, granularity);
-    const d = new Date(e.tanggal);
+  for (const row of aggRows) {
+    const key = String(row._id);
+    const d = new Date(`${key}${granularity === 'day' ? '' : '-01'}`);
     const label = granularity === 'day'
       ? d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })
       : d.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
-    if (!buckets.has(key)) buckets.set(key, emptyTrendBucket(key, label));
-
-    const b = buckets.get(key)!;
-    const masuk = parseFloat(e.masuk) || 0;
-    const keluar = parseFloat(e.keluar) || 0;
-    const harga = parseInt(e.hargaSatuan || 0, 10);
-    const lok = normalizeWarehouseKode(e.lokasiKode || e.lokasi || '');
-
-    b.masukQty += masuk;
-    b.keluarQty += keluar;
-    b.masukNilai += masuk * harga;
-    b.keluarNilai += keluar * harga;
-    b.transaksi += 1;
-
-    if (lok === 'GKERING') {
-      b.keringMasukQty += masuk;
-      b.keringKeluarQty += keluar;
-      b.keringMasukNilai += masuk * harga;
-      b.keringKeluarNilai += keluar * harga;
-    } else if (lok === 'GBASAH') {
-      b.basahMasukQty += masuk;
-      b.basahKeluarQty += keluar;
-      b.basahMasukNilai += masuk * harga;
-      b.basahKeluarNilai += keluar * harga;
-    }
+    buckets.set(key, {
+      period: key,
+      label,
+      masukQty: row.masukQty || 0,
+      keluarQty: row.keluarQty || 0,
+      netQty: 0,
+      masukNilai: row.masukNilai || 0,
+      keluarNilai: row.keluarNilai || 0,
+      netNilai: 0,
+      keringMasukQty: row.keringMasukQty || 0,
+      keringKeluarQty: row.keringKeluarQty || 0,
+      basahMasukQty: row.basahMasukQty || 0,
+      basahKeluarQty: row.basahKeluarQty || 0,
+      keringMasukNilai: row.keringMasukNilai || 0,
+      keringKeluarNilai: row.keringKeluarNilai || 0,
+      basahMasukNilai: row.basahMasukNilai || 0,
+      basahKeluarNilai: row.basahKeluarNilai || 0,
+      transaksi: row.transaksi || 0,
+    });
   }
 
   let runningQty = opening.total;

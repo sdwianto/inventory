@@ -3,7 +3,8 @@
 import type { JsonObject } from '@/types/json';
 import { str, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -22,7 +23,6 @@ import { getUser } from '@/lib/auth-client';
 import { fetchJson } from '@/lib/fetch-json';
 import {
   useAssets,
-  useMaintenanceSchedules,
   useInvalidateMaintenance,
 } from '@/lib/hooks/use-maintenance';
 import {
@@ -46,9 +46,21 @@ export default function MaintenanceJadwalPage() {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
 
-  const { data: list = [], isLoading, refetch } = useMaintenanceSchedules({
-    status: statusFilter === 'ALL' ? '' : statusFilter,
-  });
+  const schedUrl = useMemo(
+    () => (statusFilter === 'ALL'
+      ? '/api/maintenance-schedules'
+      : `/api/maintenance-schedules?status=${encodeURIComponent(statusFilter)}`),
+    [statusFilter],
+  );
+  const {
+    items: list,
+    loading: isLoading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    error,
+    reload,
+  } = useCursorList<JsonObject>(schedUrl, { limit: 100 });
   const { data: assets = [] } = useAssets({ enabled: showForm || list.length > 0 });
 
   const canManage = PM_MANAGE_ROLES.includes(String(user?.role || '') as typeof PM_MANAGE_ROLES[number])
@@ -118,7 +130,7 @@ export default function MaintenanceJadwalPage() {
       }
       setShowForm(false);
       invalidate();
-      await refetch();
+      await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
     } finally {
@@ -140,7 +152,7 @@ export default function MaintenanceJadwalPage() {
         toast.info('Tidak ada jadwal jatuh tempo yang perlu diproses');
       }
       invalidate();
-      await refetch();
+      await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memproses jadwal');
     } finally {
@@ -156,7 +168,7 @@ export default function MaintenanceJadwalPage() {
       });
       toast.success(status === 'PAUSED' ? 'Jadwal dijeda' : status === 'ACTIVE' ? 'Jadwal diaktifkan' : 'Jadwal diarsipkan');
       invalidate();
-      await refetch();
+      await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal mengubah status');
     }
@@ -176,7 +188,7 @@ export default function MaintenanceJadwalPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isLoading}>
+            <Button variant="outline" size="sm" onClick={() => void reload()} disabled={isLoading}>
               <RefreshCw className={`w-4 h-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
             {canManage && (
@@ -191,6 +203,13 @@ export default function MaintenanceJadwalPage() {
             )}
           </div>
         </div>
+
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void reload()}>Coba lagi</Button>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2 items-center">
           <Label className="text-sm text-slate-600">Status</Label>
@@ -290,6 +309,13 @@ export default function MaintenanceJadwalPage() {
                 </div>
               );
             })}
+            {hasMore && (
+              <div className="pt-2 text-center">
+                <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                  {loadingMore ? 'Memuat…' : `Muat lebih (${list.length} ditampilkan)`}
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

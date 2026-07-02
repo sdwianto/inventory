@@ -4,13 +4,17 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 
 export const DEFAULT_PRODUK_GRUP = [
-  'Umum',
-  'Sembako',
-  'Minuman',
-  'Makanan Ringan',
-  'Toiletries',
-  'Roti',
+  'Buah',
   'Lainnya',
+  'Makanan Ringan',
+  'Minuman',
+  'Protein Hewani',
+  'Palen',
+  'Roti',
+  'Sayuran',
+  'Sembako',
+  'Toiletries',
+  'Umum',
 ];
 
 export const DEFAULT_PRODUK_SATUAN = [
@@ -31,18 +35,7 @@ export async function ensureProdukMetaForTenant(
   const tid = tenantId || 'default';
   const now = new Date();
 
-  const grupCount = await db.collection('produk_grup').countDocuments({ tenantId: tid });
-  if (grupCount === 0) {
-    await db.collection('produk_grup').insertMany(
-      DEFAULT_PRODUK_GRUP.map((nama) => ({
-        id: uuidv4(),
-        tenantId: tid,
-        nama,
-        aktif: true,
-        createdAt: now,
-      })),
-    );
-  }
+  await seedMetaNames(db, 'produk_grup', tid, DEFAULT_PRODUK_GRUP, now);
 
   const satuanCount = await db.collection('produk_satuan').countDocuments({ tenantId: tid });
   if (satuanCount === 0) {
@@ -55,6 +48,31 @@ export async function ensureProdukMetaForTenant(
         createdAt: now,
       })),
     );
+  }
+}
+
+async function seedMetaNames(
+  db: Db,
+  collection: string,
+  tenantId: string,
+  names: string[],
+  now: Date,
+): Promise<void> {
+  for (const nama of names) {
+    const existing = await db.collection(collection).findOne({ tenantId, nama });
+    if (existing) continue;
+    try {
+      await db.collection(collection).insertOne({
+        id: uuidv4(),
+        tenantId,
+        nama,
+        aktif: true,
+        createdAt: now,
+      });
+    } catch (e: unknown) {
+      const code = (e as { code?: number })?.code;
+      if (code !== 11000) throw e;
+    }
   }
 }
 

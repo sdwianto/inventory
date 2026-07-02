@@ -3,28 +3,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
+import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 
 export const GRN_QUERY_KEY = ['goods-receipts'];
-
-export function useGoodsReceipts({ refreshProducts = false }: { refreshProducts?: boolean } = {}) {
-  const q = refreshProducts ? '?refreshProducts=1' : '';
-  return useQuery({
-    queryKey: [...GRN_QUERY_KEY, { refreshProducts }],
-    queryFn: () => fetchJson<JsonObject[]>(`/api/goods-receipts${q}`),
-    select: (data) => (Array.isArray(data) ? data : []),
-  });
-}
-
-export function useGrnPendingCount(enabled = true) {
-  return useQuery({
-    queryKey: ['goods-receipts', 'pending-count'],
-    queryFn: () => fetchJson<{ count?: number }>('/api/goods-receipts/pending-count'),
-    select: (d) => d?.count ?? 0,
-    staleTime: 30_000,
-    enabled,
-    refetchInterval: enabled ? 60_000 : false,
-  });
-}
 
 export function useGrnInvoiceStatus(grnId: string | null | undefined, enabled = false) {
   return useQuery({
@@ -36,6 +17,7 @@ export function useGrnInvoiceStatus(grnId: string | null | undefined, enabled = 
       if (s === 'PENDING' || s === 'SYNCING') return 2000;
       return false;
     },
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -43,7 +25,7 @@ export function useInvalidateGrn() {
   const qc = useQueryClient();
   return () => {
     qc.invalidateQueries({ queryKey: GRN_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: ['goods-receipts', 'pending-count'] });
+    qc.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
     window.dispatchEvent(new CustomEvent('erp-grn-change'));
   };
 }

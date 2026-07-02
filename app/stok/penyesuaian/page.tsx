@@ -14,6 +14,7 @@ import { FileEdit, Plus, Search, Trash2, Save, X, Eye } from 'lucide-react';
 import { formatNumber, formatDateTime } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
 import ListExportMenu from '@/components/ListExportMenu';
+import ProductPickerSearch from '@/components/ProductPickerSearch';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 
 const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
@@ -23,9 +24,7 @@ export default function PenyesuaianPage() {
   const [list, setList] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
-  const [products, setProducts] = useState<JsonObject[]>([]);
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerQ, setPickerQ] = useState('');
   const [keterangan, setKeterangan] = useState('');
   const [items, setItems] = useState<JsonObject[]>([]);
   const [saving, setSaving] = useState(false);
@@ -43,9 +42,6 @@ export default function PenyesuaianPage() {
     setUser(getUser());
     load();
   }, []);
-  useEffect(() => {
-    if (showPicker) fetch('/api/products?limit=500&withWarehouseStock=1').then(r => r.json()).then(setProducts);
-  }, [showPicker]);
 
   const openNew = () => {
     setItems([]); setKeterangan(''); setShowForm(true);
@@ -93,8 +89,6 @@ export default function PenyesuaianPage() {
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };
-
-  const filteredProducts = products.filter(p => !pickerQ || str(p.nama).toLowerCase().includes(pickerQ.toLowerCase()) || str(p.kode).toLowerCase().includes(pickerQ.toLowerCase()));
 
   const exportData = async (format: ListExportFormat) => {
     try {
@@ -241,23 +235,7 @@ export default function PenyesuaianPage() {
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader><DialogTitle>Pilih Produk</DialogTitle></DialogHeader>
-          <Input placeholder="Cari kode atau nama..." value={pickerQ} onChange={e => setPickerQ(e.target.value)} autoFocus />
-          <div className="flex-1 overflow-auto border rounded">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100 text-xs sticky top-0">
-                <tr><th className="px-2 py-2 text-left">Kode</th><th className="px-2 py-2 text-left">Nama</th><th className="px-2 py-2 text-right">Stok Sistem</th></tr>
-              </thead>
-              <tbody>
-                {filteredProducts.map(p => (
-                  <tr key={str(p.id)} onClick={() => addProduct(p)} className="border-t cursor-pointer hover:bg-orange-50">
-                    <td className="px-2 py-2 font-mono text-xs">{str(p.kode)}</td>
-                    <td className="px-2 py-2">{str(p.nama)}</td>
-                    <td className="px-2 py-2 text-right">{str(p.stok)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ProductPickerSearch open={showPicker} withWarehouseStock onSelect={addProduct} />
         </DialogContent>
       </Dialog>
 

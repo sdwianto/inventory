@@ -8,60 +8,107 @@ import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { syncGrnDeliveryFromSales } from '@/lib/api/grn-delivery-sync';
 
-function salesFetchErrorMessage(err, salesUrl) {
-  const cause = err?.cause;
-  const code = cause?.code || err?.code;
+function salesFetchErrorMessage(err: unknown, salesUrl: string) {
+  const e = err as { cause?: { code?: string }; code?: string; name?: string; message?: string };
+  const cause = e?.cause;
+  const code = cause?.code || e?.code;
   if (code === 'ECONNREFUSED') {
     return `Sales.app tidak dapat dihubungi di ${salesUrl}`;
   }
-  if (err?.name === 'TimeoutError' || code === 'ABORT_ERR') {
+  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
     return `Sales.app tidak merespons (timeout)`;
   }
-  return err?.message || 'Gagal menghubungi sales.app';
+  return e?.message || 'Gagal menghubungi sales.app';
 }
 
-function buildInvoicePayloadFromSales(data, grn) {
-  if (data.invoicePayload?.invoiceId) return data.invoicePayload;
+function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record<string, unknown>) {
+  if ((data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId) {
+    return data.invoicePayload as Record<string, unknown>;
+  }
 
-  const invoiceId = data.invoiceId || data.invoicePayload?.invoiceId;
+  const invoiceId = data.invoiceId || (data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId;
   if (!invoiceId) return null;
 
-  const total = parseInt(data.invoicePayload?.total || data.total || grn.receivedTotal || 0, 10);
+  const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
+  const total = parseInt(String(invPayload.total || data.total || grn.receivedTotal || 0), 10);
+  const items = (grn.items as Array<Record<string, unknown>> | undefined) || [];
   return {
     invoiceId,
-    noInvoice: data.noInvoice || data.invoicePayload?.noInvoice,
-    noDO: data.invoicePayload?.noDO || grn.noDO,
-    noPO: data.invoicePayload?.noPO || grn.noPO || null,
-    noSO: data.invoicePayload?.noSO || grn.noSO || null,
-    deliveryId: data.invoicePayload?.deliveryId || null,
-    salesOrderId: data.invoicePayload?.salesOrderId || null,
-    salesOrderTotal: parseInt(data.invoicePayload?.salesOrderTotal || 0, 10) || null,
-    salesOrderSubTotal: parseInt(data.invoicePayload?.salesOrderSubTotal || 0, 10) || null,
-    subTotal: parseInt(data.invoicePayload?.subTotal || total, 10),
-    ppn: parseInt(data.invoicePayload?.ppn || 0, 10),
+    noInvoice: data.noInvoice || invPayload.noInvoice,
+    noDO: invPayload.noDO || grn.noDO,
+    noPO: invPayload.noPO || grn.noPO || null,
+    noSO: invPayload.noSO || grn.noSO || null,
+    deliveryId: invPayload.deliveryId || null,
+    salesOrderId: invPayload.salesOrderId || null,
+    salesOrderTotal: parseInt(String(invPayload.salesOrderTotal || 0), 10) || null,
+    salesOrderSubTotal: parseInt(String(invPayload.salesOrderSubTotal || 0), 10) || null,
+    subTotal: parseInt(String(invPayload.subTotal || total), 10),
+    ppn: parseInt(String(invPayload.ppn || 0), 10),
     total,
-    paymentTerms: data.invoicePayload?.paymentTerms || 'KREDIT',
-    jatuhTempo: data.invoicePayload?.jatuhTempo || null,
-    items: data.invoicePayload?.items || (grn.items || []).map((it) => ({
+    paymentTerms: invPayload.paymentTerms || 'KREDIT',
+    jatuhTempo: invPayload.jatuhTempo || null,
+    items: invPayload.items || items.map((it) => ({
       kode: it.vendorKode || it.localKode,
       qty: it.qtyReceived ?? it.qtyOrdered ?? 0,
       harga: it.harga || it.hargaSatuan || 0,
     })),
-    postedAt: data.invoicePayload?.postedAt || grn.postedAt || new Date(),
-    pelangganName: data.invoicePayload?.pelangganName || null,
-    vendorTenantId: data.invoicePayload?.vendorTenantId || data.vendorTenantId || null,
-    vendorName: data.invoicePayload?.vendorName || null,
-    vendorCompanyName: data.invoicePayload?.vendorCompanyName || null,
-    vendorAddress: data.invoicePayload?.vendorAddress || null,
-    vendorPhone: data.invoicePayload?.vendorPhone || null,
-    vendorNPWP: data.invoicePayload?.vendorNPWP || null,
-    vendorLogoBase64: data.invoicePayload?.vendorLogoBase64 || null,
-    vendor: data.invoicePayload?.vendor || null,
+    postedAt: invPayload.postedAt || grn.postedAt || new Date(),
+    pelangganName: invPayload.pelangganName || null,
+    vendorTenantId: invPayload.vendorTenantId || data.vendorTenantId || null,
+    vendorName: invPayload.vendorName || null,
+    vendorCompanyName: invPayload.vendorCompanyName || null,
+    vendorAddress: invPayload.vendorAddress || null,
+    vendorPhone: invPayload.vendorPhone || null,
+    vendorNPWP: invPayload.vendorNPWP || null,
+    vendorLogoUrl: invPayload.vendorLogoUrl || invPayload.vendorLogoBase64 || null,
+    vendor: invPayload.vendor || null,
   };
 }
 
-async function upsertHutangFromSalesPayload(db: Db, tenantId, data, grn, config) {
-  const tid = normalizeTenantId(grn?.tenantId || tenantId);
+async function pollSalesGrnJob(
+  salesAppUrl: string,
+  salesApiKey: string,
+  jobId: string,
+  { maxWaitMs = 120_000, intervalMs = 2000 } = {},
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${salesAppUrl}/api/bg-jobs/${encodeURIComponent(jobId)}`, {
+      headers: { 'X-Api-Key': salesApiKey },
+      signal: AbortSignal.timeout(15000),
+    });
+    const job = await res.json() as Record<string, unknown>;
+    if (!res.ok) {
+      return { error: String(job.error || `Sales job poll HTTP ${res.status}`) };
+    }
+    const status = String(job.status || '');
+    if (status === 'DONE') {
+      const result = (job.result || {}) as Record<string, unknown>;
+      if (result.error) return { error: String(result.error), ...result };
+      if (result.ok) return result;
+      return result;
+    }
+    if (status === 'FAILED') {
+      return { error: String(job.lastError || resultError(job) || 'Job sales gagal') };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { error: 'Timeout menunggu job grn-posted di sales.app' };
+}
+
+function resultError(job: Record<string, unknown>) {
+  const result = job.result as Record<string, unknown> | undefined;
+  return result?.error ? String(result.error) : null;
+}
+
+async function upsertHutangFromSalesPayload(
+  db: Db,
+  tenantId: string,
+  data: Record<string, unknown>,
+  grn: Record<string, unknown>,
+  config: { vendorTenantId?: string },
+) {
+  const tid = normalizeTenantId(String(grn?.tenantId || tenantId));
   const payload = buildInvoicePayloadFromSales(data, grn);
   if (!payload?.invoiceId) {
     return { skipped: true, reason: 'no_invoice_payload' };
@@ -72,7 +119,7 @@ async function upsertHutangFromSalesPayload(db: Db, tenantId, data, grn, config)
     db,
     tid,
     payload,
-    vendorTenantId,
+    vendorTenantId ? String(vendorTenantId) : null,
   );
 
   if ('error' in result && result.error) {
@@ -102,17 +149,19 @@ async function upsertHutangFromSalesPayload(db: Db, tenantId, data, grn, config)
   };
 }
 
-function tidFromGrn(grn) {
+function tidFromGrn(grn: Record<string, unknown>) {
   return String(grn?.tenantId || 'sppg').trim().toLowerCase();
 }
 
-function buildFallbackDeliverySnapshot(grn) {
-  if (grn?.vendorDeliverySnapshot?.deliveryId || grn?.vendorDeliverySnapshot?.items?.length) {
-    const snap = { ...grn.vendorDeliverySnapshot };
-    if (!snap.customerTenantId) snap.customerTenantId = tidFromGrn(grn);
-    return snap;
+function buildFallbackDeliverySnapshot(grn: Record<string, unknown>) {
+  const snap = grn.vendorDeliverySnapshot as Record<string, unknown> | undefined;
+  if (snap?.deliveryId || (Array.isArray(snap?.items) && snap.items.length)) {
+    const out = { ...snap };
+    if (!out.customerTenantId) out.customerTenantId = tidFromGrn(grn);
+    return out;
   }
   if (!grn?.vendorDeliveryId && !grn?.noDO) return null;
+  const items = (grn.items as Array<Record<string, unknown>> | undefined) || [];
   return {
     deliveryId: grn.vendorDeliveryId || null,
     noDO: grn.noDO,
@@ -120,7 +169,7 @@ function buildFallbackDeliverySnapshot(grn) {
     noPO: grn.noPO,
     vendorTenantId: grn.vendorTenantId,
     customerTenantId: tidFromGrn(grn),
-    items: (grn.items || []).map((it) => ({
+    items: items.map((it) => ({
       lineId: it.lineId,
       kode: it.vendorKode || it.localKode,
       nama: it.vendorNama || it.localNama,
@@ -131,8 +180,20 @@ function buildFallbackDeliverySnapshot(grn) {
   };
 }
 
-export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
-  const tid = normalizeTenantId(grn?.tenantId || tenantId);
+function normalizeSalesGrnResponse(data: Record<string, unknown>) {
+  if (data.invoiceId) return data;
+  const result = (data.result || data) as Record<string, unknown>;
+  if (result?.invoiceId) {
+    return {
+      ...result,
+      invoicePayload: result.invoicePayload || result,
+    };
+  }
+  return data;
+}
+
+export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Record<string, unknown>) {
+  const tid = normalizeTenantId(String(grn?.tenantId || tenantId));
   const vendorId = grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined;
   const salesApiKey = await getSalesApiKeyForVendor(db, tid, vendorId);
   if (!salesApiKey) {
@@ -144,7 +205,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
   }
 
   const synced = await syncGrnDeliveryFromSales(db, tid, grn);
-  const currentGrn = synced.grn || grn;
+  const currentGrn = (synced.grn || grn) as Record<string, unknown>;
 
   const payload = {
     customerTenantId: tid,
@@ -158,7 +219,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
     noPO: currentGrn.noPO || null,
     postedAt: currentGrn.postedAt || new Date().toISOString(),
     receivedTotal: currentGrn.receivedTotal || 0,
-    items: (currentGrn.items || []).map((it) => ({
+    items: ((currentGrn.items as Array<Record<string, unknown>> | undefined) || []).map((it) => ({
       kode: it.vendorKode || it.localKode,
       qty: it.qtyReceived ?? it.qtyOrdered ?? 0,
       harga: it.harga || it.hargaSatuan || 0,
@@ -166,10 +227,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
   };
 
   const url = `${config.salesAppUrl}/api/integrations/grn-posted`;
-  if (!salesApiKey) {
-    return { skipped: true, reason: 'not_paired' };
-  }
-  let res;
+  let res: Response;
   try {
     res = await fetch(url, {
       method: 'POST',
@@ -178,20 +236,31 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
         'X-Api-Key': salesApiKey,
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(30000),
     });
   } catch (e) {
     return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };
   }
 
-  let data;
+  let data: Record<string, unknown>;
   try {
-    data = await res.json();
+    data = await res.json() as Record<string, unknown>;
   } catch {
     return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
   }
 
-  if (!res.ok) {
+  if (res.status === 202 && data.jobId) {
+    const polled = await pollSalesGrnJob(config.salesAppUrl, salesApiKey, String(data.jobId));
+    if (polled.error) {
+      return {
+        error: String(polled.error),
+        draftNoInvoice: polled.draftNoInvoice,
+        async: true,
+        salesJobId: data.jobId,
+      };
+    }
+    data = normalizeSalesGrnResponse(polled);
+  } else if (!res.ok) {
     const hint = data.draftNoInvoice
       ? ` — DRAFT ${data.draftNoInvoice} ada di sales.app, post manual jika perlu`
       : '';
@@ -204,7 +273,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
 
   const hutang = await upsertHutangFromSalesPayload(db, tid, data, currentGrn, config);
 
-  if (hutang.error) {
+  if ('error' in hutang && hutang.error) {
     return {
       error: hutang.error,
       invoiceId: data.invoiceId,
@@ -213,18 +282,21 @@ export async function notifyGrnPostedToSales(db: Db, tenantId, grn) {
     };
   }
 
-  if (!hutang.skipped && data.noInvoice && grn.noPO) {
+  if (!('skipped' in hutang && hutang.skipped) && data.noInvoice && grn.noPO) {
+    const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
     await syncCpoFromVendorEvent(db, tid, 'invoice.posted', {
       noPO: grn.noPO,
       noInvoice: data.noInvoice,
       invoiceId: data.invoiceId,
-      total: data.invoicePayload?.total || data.total || grn.receivedTotal,
-      postedAt: data.invoicePayload?.postedAt || grn.postedAt || new Date(),
+      total: invPayload.total || data.total || grn.receivedTotal,
+      postedAt: invPayload.postedAt || grn.postedAt || new Date(),
     });
   }
 
   return {
-    noInvoice: hutang.skipped || hutang.error ? null : (data.noInvoice || hutang.noInvoice),
+    noInvoice: ('skipped' in hutang && hutang.skipped) || ('error' in hutang && hutang.error)
+      ? null
+      : (data.noInvoice || hutang.noInvoice),
     invoiceId: data.invoiceId,
     webhookSent: data.webhookSent,
     created: data.created,

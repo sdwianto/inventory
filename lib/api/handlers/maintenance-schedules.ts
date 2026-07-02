@@ -26,6 +26,7 @@ import {
   processDueMaintenanceSchedules,
   startOfDay,
 } from '@/lib/api/maintenance-schedule-engine';
+import { parseCursorPageParams, applyAscDateIdCursor, encodeCursor, sliceCursorPage } from '@/lib/api/cursor-page';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import type { HandlerContext } from '@/types/api/handler';
 import type { MaintenanceIntervalUnit, MaintenanceScheduleDoc } from '@/types/maintenance';
@@ -106,11 +107,26 @@ export async function handleMaintenanceSchedules({
     if (assetId) filter.assetId = assetId;
     filter = withTenantFilter(scopeAuth, filter);
 
+    const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });
+    const fetchLimit = pageMode ? limit + 1 : 300;
+    const listFilter = pageMode ? applyAscDateIdCursor(filter, cursor, 'nextDueDate') : filter;
+
     const list = await db.collection(MAINTENANCE_SCHEDULES_COLLECTION)
-      .find(filter)
-      .sort({ nextDueDate: 1, judul: 1 })
-      .limit(300)
+      .find(listFilter)
+      .sort({ nextDueDate: 1, id: 1 })
+      .limit(fetchLimit)
       .toArray() as MaintenanceScheduleDoc[];
+
+    if (pageMode) {
+      const { items, hasMore } = sliceCursorPage(list, limit);
+      const enriched = items.map((row) => enrichScheduleRow(row, today));
+      const last = items[items.length - 1] as Record<string, unknown> | undefined;
+      return ok({
+        items: enriched,
+        hasMore,
+        nextCursor: hasMore && last ? encodeCursor(last, 'nextDueDate') : null,
+      });
+    }
 
     return ok(list.map((row) => enrichScheduleRow(row, today)));
   }

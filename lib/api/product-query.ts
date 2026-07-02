@@ -11,6 +11,9 @@ export function buildProductSearchFilter(q?: string | null): Filter<Record<strin
   const term = (q || '').trim();
   if (!term) return {};
   const isCodeLike = /^[A-Za-z0-9\-_.]+$/.test(term) && term.length <= 48;
+  if (!isCodeLike && term.length >= 3) {
+    return { $text: { $search: term } };
+  }
   if (isCodeLike) {
     return {
       $or: [

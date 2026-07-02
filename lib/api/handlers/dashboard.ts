@@ -2,11 +2,12 @@
 
 import type { NextResponse } from 'next/server';
 import { ok } from '@/lib/api/db';
-import { resolveOperationalScope, withTenantFilter, tenantIdForWrite } from '@/lib/api/tenant-master';
+import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { warehouseLabel, WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import { fetchMaintenanceDashboardStats } from '@/lib/api/maintenance-dashboard-stats';
-import { processDueMaintenanceSchedules } from '@/lib/api/maintenance-schedule-engine';
+import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
 import type { HandlerContext } from '@/types/api/handler';
+import { getDashboardSnapshot, setDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 
 const PO_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Draft',
@@ -58,8 +59,19 @@ interface InventoryAggRow {
   skuCount?: number;
 }
 
-interface GrnStatusDoc {
-  status?: string;
+interface GrnStatusAggRow {
+  _id?: string;
+  count?: number;
+}
+
+function grnSummaryFromAgg(rows: GrnStatusAggRow[]) {
+  const map = Object.fromEntries(rows.map((r) => [r._id || 'UNKNOWN', r.count || 0]));
+  const total = rows.reduce((s, r) => s + (r.count || 0), 0);
+  return {
+    grn: total,
+    draft: map.DRAFT || 0,
+    unknownProduct: (map.UNKNOWN_PRODUCT || 0) + (map.NEEDS_MAPPING || 0),
+  };
 }
 
 function monthLabel(ym: string): string {
@@ -99,6 +111,12 @@ export async function handleDashboard({
   if (denied) return denied;
   if (!scopeAuth) return null;
 
+  const forceRefresh = url.searchParams.get('refresh') === '1';
+  if (!forceRefresh) {
+    const cached = await getDashboardSnapshot(db, scopeAuth);
+    if (cached) return ok(cached);
+  }
+
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
@@ -114,7 +132,7 @@ export async function handleDashboard({
 
   const [
     poAgg,
-    grnList,
+    grnAgg,
     productCount,
     pendingReview,
     approvedMonthAgg,
@@ -126,10 +144,13 @@ export async function handleDashboard({
       { $group: { _id: '$status', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]).toArray(),
-    db.collection('goods_receipts').find(tenantGrn).project({ status: 1 }).toArray() as Promise<GrnStatusDoc[]>,
+    db.collection('goods_receipts').aggregate([
+      { $match: tenantGrn },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]).toArray() as Promise<GrnStatusAggRow[]>,
     db.collection('products').countDocuments(tenantProducts),
     db.collection('hutang').countDocuments(
-      withTenantFilter(scopeAuth, { referenceType: 'VENDOR_INVOICE', approvalStatus: 'PENDING_REVIEW' }),
+      withTenantFilter(scopeAuth, hutangPendingReviewFilter()),
     ),
     db.collection('hutang').aggregate([
       {
@@ -231,15 +252,12 @@ export async function handleDashboard({
 
   const approvedMonthRow = approvedMonthAgg[0] as { total?: number } | undefined;
 
-  const tenantId = tenantIdForWrite(scopeAuth, {});
-  const pmRun = await processDueMaintenanceSchedules(db, tenantId, now);
+  const grnSummary = grnSummaryFromAgg(grnAgg);
   const maintenance = await fetchMaintenanceDashboardStats(db, scopeAuth, now);
 
-  return ok({
+  const payload = {
     summary: {
-      grn: grnList.length,
-      draft: grnList.filter((g) => g.status === 'DRAFT').length,
-      unknownProduct: grnList.filter((g) => g.status === 'UNKNOWN_PRODUCT' || g.status === 'NEEDS_MAPPING').length,
+      ...grnSummary,
       produk: productCount,
       pendingReview,
       approvedMonth: approvedMonthRow?.total || 0,
@@ -247,6 +265,9 @@ export async function handleDashboard({
     poByStatus,
     inventoryByWarehouse,
     spendingByMonth,
-    maintenance: { ...maintenance, pmRun },
-  });
+    maintenance,
+  };
+
+  await setDashboardSnapshot(db, scopeAuth, payload);
+  return ok(payload);
 }

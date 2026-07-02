@@ -10,6 +10,8 @@ import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
 import { purgeTenantData } from '@/lib/api/purge-tenant';
 import { ACTING_TENANT_COOKIE, sessionCookieOptions } from '@/lib/api/session';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
+import { storeBase64Image } from '@/lib/api/media-storage';
+import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
@@ -20,6 +22,8 @@ interface TenantSettingsDoc extends Record<string, unknown> {
   companyPhone?: string;
   companyNPWP?: string;
   logoBase64?: string;
+  logoUrl?: string;
+  logoMediaFile?: string;
   updatedAt?: Date;
 }
 
@@ -30,12 +34,16 @@ interface TenantCreateBody {
   companyPhone?: string;
   companyNPWP?: string;
   logoBase64?: string;
+  logoUrl?: string;
+  logoMediaFile?: string;
   seedDemoProducts?: boolean;
 }
 
 interface TenantSettingsBody extends Record<string, unknown> {
   tenantId?: string;
   logoBase64?: string;
+  logoUrl?: string;
+  logoMediaFile?: string;
 }
 
 function effectiveTenantId(auth: AuthContext, requested: string | null | undefined): string {
@@ -125,10 +133,20 @@ export async function handleTenants({
     const update: Record<string, unknown> = { ...settingsBody, tenantId, updatedAt: new Date() };
     delete update.id;
     delete update._id;
+
     if (update.logoBase64 && String(update.logoBase64).length > 700000) {
       return err('Logo terlalu besar (max 500KB). Coba kompres dulu.', 400);
     }
+    if (update.logoBase64 && String(update.logoBase64).startsWith('data:image')) {
+      const stored = await storeBase64Image(tenantId, String(update.logoBase64), { prefix: 'logo' });
+      if ('error' in stored) return err(stored.error, 400);
+      update.logoUrl = stored.url;
+      update.logoMediaFile = stored.filename;
+      update.logoBase64 = '';
+    }
+
     await db.collection('tenant_settings').updateOne({ tenantId }, { $set: update }, { upsert: true });
+    await invalidateDashboardSnapshot(db, tenantId);
     const doc = await db.collection<TenantSettingsDoc>('tenant_settings').findOne({ tenantId });
     return ok(clean(doc));
   }
@@ -149,6 +167,7 @@ export async function handleTenants({
       companyPhone: string;
       companyNPWP: string;
       logoBase64: string;
+      logoUrl: string;
       userCount: number;
       updatedAt?: Date;
     }> = {};
@@ -161,6 +180,7 @@ export async function handleTenants({
         companyPhone: s.companyPhone || '',
         companyNPWP: s.companyNPWP || '',
         logoBase64: s.logoBase64 || '',
+        logoUrl: s.logoUrl || '',
         userCount: 0,
         updatedAt: s.updatedAt,
       };
@@ -176,6 +196,7 @@ export async function handleTenants({
           companyPhone: '',
           companyNPWP: '',
           logoBase64: '',
+          logoUrl: '',
           userCount: 0,
         };
       }
@@ -210,11 +231,20 @@ export async function handleTenants({
       receiptFooterText: 'Terima Kasih',
       showLogoOnReceipt: true,
       showLogoOnInvoice: true,
-      logoBase64: createBody.logoBase64 || '',
+      logoBase64: '',
+      logoUrl: '',
       ppnPercent: 11,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+    if (createBody.logoBase64 && String(createBody.logoBase64).startsWith('data:image')) {
+      const stored = await storeBase64Image(tenantId, String(createBody.logoBase64), { prefix: 'logo' });
+      if ('error' in stored) return err(stored.error, 400);
+      settings.logoUrl = stored.url;
+      settings.logoMediaFile = stored.filename;
+    } else if (createBody.logoBase64) {
+      settings.logoBase64 = createBody.logoBase64;
+    }
     await db.collection('tenant_settings').insertOne(settings);
     await bootstrapTenantMasterData(db, tenantId, {
       includeProducts: createBody.seedDemoProducts === true,

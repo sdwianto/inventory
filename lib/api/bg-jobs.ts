@@ -4,11 +4,24 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { notifyGrnPostedToSales } from '@/lib/api/grn-notify-sales';
+import { runCatalogSync } from '@/lib/api/catalog-sync-run';
+import { runHutangSyncPending } from '@/lib/api/hutang-sync-pending-run';
+import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
+import { processWebhookInboxEvent } from '@/lib/api/webhook-inbox-process';
+import { runGrnSyncShipped } from '@/lib/api/grn-sync-shipped-run';
+import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
+import { getIntegrationConfig } from '@/lib/api/integration-config';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
 export const JOB_TYPES = {
   GRN_INVOICE_SYNC: 'GRN_INVOICE_SYNC',
+  CATALOG_SYNC: 'CATALOG_SYNC',
+  HUTANG_SYNC: 'HUTANG_SYNC',
+  PO_VENDOR_SYNC: 'PO_VENDOR_SYNC',
+  WEBHOOK_INBOX: 'WEBHOOK_INBOX',
+  GRN_SYNC_SHIPPED: 'GRN_SYNC_SHIPPED',
+  GRN_POST_SIDE_EFFECTS: 'GRN_POST_SIDE_EFFECTS',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -36,6 +49,10 @@ export async function ensureBgJobIndexes(db: Db) {
       { grnId: 1, type: 1 },
       { name: 'idx_bg_jobs_grn_type' },
     );
+    await db.collection('bg_jobs').createIndex(
+      { type: 1, tenantId: 1, status: 1 },
+      { name: 'idx_bg_jobs_type_tenant_status' },
+    );
   } catch (e) {
     const err = e as { code?: number; message?: string };
     if (err?.code !== 85 && err?.code !== 86) console.warn('bg_jobs index:', err.message);
@@ -56,13 +73,29 @@ export async function enqueueJob(
   const tid = normalizeTenantId(tenantId || 'default');
   const now = new Date();
 
-  const existing = grnId
+  const dedupeKey = payload.dedupeKey ? String(payload.dedupeKey) : null;
+  let existing = grnId
     ? await db.collection('bg_jobs').findOne({
       type,
       grnId,
       status: { $in: ['PENDING', 'RUNNING'] },
     })
     : null;
+  if (!existing && dedupeKey) {
+    existing = await db.collection('bg_jobs').findOne({
+      type,
+      tenantId: tid,
+      status: { $in: ['PENDING', 'RUNNING'] },
+      'payload.dedupeKey': dedupeKey,
+    });
+  }
+  if (!existing && !grnId && !dedupeKey && type !== JOB_TYPES.GRN_INVOICE_SYNC) {
+    existing = await db.collection('bg_jobs').findOne({
+      type,
+      tenantId: tid,
+      status: { $in: ['PENDING', 'RUNNING'] },
+    });
+  }
   if (existing) return { jobId: String(existing.id), reused: true };
 
   const job = {
@@ -134,6 +167,74 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   return { ok: true, result };
 }
 
+async function runCatalogSyncJob(db: Db, job: BgJob) {
+  const config = await getIntegrationConfig(db, job.tenantId);
+  if (!config.salesApiKey) return { error: 'Belum di-pair dengan sales.app' };
+  const result = await runCatalogSync(db, job.tenantId, config);
+  if ('error' in result && result.error) {
+    return { error: result.error, offline: Boolean(result.offline) };
+  }
+  return result;
+}
+
+async function runHutangSyncJob(db: Db, job: BgJob) {
+  const replaySales = job.payload?.replaySales === true;
+  const scopeAuth = { tenantId: job.tenantId } as import('@/types/auth').AuthContext;
+  return runHutangSyncPending(db, job.tenantId, scopeAuth, { replaySales });
+}
+
+async function runPoVendorSyncJob(db: Db, job: BgJob) {
+  const scopeAuth = { tenantId: job.tenantId } as import('@/types/auth').AuthContext;
+  return runPoVendorSyncPending(db, scopeAuth);
+}
+
+async function runWebhookInboxJob(db: Db, job: BgJob) {
+  const { event, payload, customerTenantId, vendorTenantId, dedupeKey } = job.payload || {};
+  if (!event || !payload || !customerTenantId) {
+    return { error: 'Payload webhook tidak lengkap' };
+  }
+
+  let result: Record<string, unknown>;
+  let status = 'PROCESSED';
+  let processError: string | null = null;
+
+  try {
+    result = await processWebhookInboxEvent(db, {
+      event: String(event),
+      payload: payload as JsonObject,
+      customerTenantId: String(customerTenantId),
+      vendorTenantId: vendorTenantId ? String(vendorTenantId) : undefined,
+    });
+  } catch (e) {
+    status = 'FAILED';
+    processError = e instanceof Error ? e.message : String(e);
+    result = { error: processError };
+  }
+
+  if (dedupeKey) {
+    await db.collection('webhook_inbox').updateOne(
+      { dedupeKey: String(dedupeKey) },
+      {
+        $set: {
+          status,
+          result,
+          processError,
+          processedAt: new Date(),
+        },
+      },
+    );
+  }
+
+  if (status === 'FAILED') return { error: processError, result };
+  return { ok: true, result };
+}
+
+export async function getJobById(db: Db, jobId: string, tenantId?: string | null) {
+  const filter: Record<string, unknown> = { id: jobId };
+  if (tenantId) filter.tenantId = normalizeTenantId(tenantId);
+  return db.collection('bg_jobs').findOne(filter);
+}
+
 export async function processJob(db: Db, job: BgJob) {
   const now = new Date();
   await db.collection('bg_jobs').updateOne(
@@ -148,6 +249,18 @@ export async function processJob(db: Db, job: BgJob) {
   try {
     if (job.type === JOB_TYPES.GRN_INVOICE_SYNC) {
       outcome = await runGrnInvoiceSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.CATALOG_SYNC) {
+      outcome = await runCatalogSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.HUTANG_SYNC) {
+      outcome = await runHutangSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.PO_VENDOR_SYNC) {
+      outcome = await runPoVendorSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.WEBHOOK_INBOX) {
+      outcome = await runWebhookInboxJob(db, job);
+    } else if (job.type === JOB_TYPES.GRN_SYNC_SHIPPED) {
+      outcome = await runGrnSyncShipped(db, job.tenantId);
+    } else if (job.type === JOB_TYPES.GRN_POST_SIDE_EFFECTS) {
+      outcome = await runGrnPostSideEffects(db, job.tenantId, String(job.grnId || job.payload?.grnId || ''));
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

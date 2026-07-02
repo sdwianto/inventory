@@ -6,8 +6,8 @@ import {
   isVendorInvoiceHutang,
   vendorInvoiceNeedsPendingReview,
 } from '@/lib/api/hutang-from-vendor';
-import { notifyGrnPostedToSales } from '@/lib/api/grn-notify-sales';
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
+import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
 import type { GrnDoc, HutangDoc, ReconcileOptions, SalesErrorRow, SalesReplayOptions } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
 
@@ -250,9 +250,10 @@ function needsSalesReplay(
 export async function reconcileVendorHutangFromPostedGrns(
   db: Db,
   tenantId: string,
-  { callSales = false, salesDoSet = null }: ReconcileOptions = {},
+  { callSales = false, queueSalesReplays = false, salesDoSet = null }: ReconcileOptions = {},
 ) {
   const tid = normalizeTenantId(tenantId);
+  const queueReplays = queueSalesReplays || callSales === true;
   let fixed = await repairStaleVendorHutangs(db, tid);
 
   const grns = await db.collection('goods_receipts').find({
@@ -300,31 +301,18 @@ export async function reconcileVendorHutangFromPostedGrns(
     }
 
     const doSet = salesDoSet || new Set<string>();
-    const fullSync = callSales === true;
-    const staleSync = callSales === true || fullSync;
-    if (!staleSync || !needsSalesReplay(grn, hutang, { fullSync, salesDoSet: doSet })) continue;
+    const fullSync = queueReplays === true;
+    if (!queueReplays || !needsSalesReplay(grn, hutang, { fullSync, salesDoSet: doSet })) continue;
 
-    const sync = await notifyGrnPostedToSales(db, tid, grn) as Record<string, unknown>;
+    await enqueueJob(db, {
+      type: JOB_TYPES.GRN_INVOICE_SYNC,
+      tenantId: tid,
+      grnId: grn.id,
+    });
     replayed += 1;
-    if ('error' in sync && sync.error) {
-      salesErrors.push({ noDO: grn.noDO, noGRN: grn.noGRN, error: String(sync.error) });
-      const local = await ensureHutangForPostedGrn(db, tid, grn);
-      if (local.hutangId && local.action === 'created') created += 1;
-      else if ('error' in local && local.error) {
-        salesErrors.push({ noDO: grn.noDO, noGRN: grn.noGRN, error: `Lokal: ${local.error}` });
-      }
-      continue;
-    }
-    const syncHutang = sync.hutang as Record<string, unknown> | undefined;
-    if (syncHutang?.hutangId) {
-      if (syncHutang.action === 'created') created += 1;
-      else if (syncHutang.action === 'refreshed') fixed += 1;
-      else linked += 1;
-    } else if (!hutang) {
-      const local = await ensureHutangForPostedGrn(db, tid, grn);
-      if (local.hutangId && local.action === 'created') created += 1;
-    }
   }
+
+  if (replayed > 0) scheduleJobProcessing(db, { limit: 5 });
 
   let localCreated = 0;
   for (const grnRow of grns) {
@@ -348,7 +336,7 @@ export async function backfixVendorHutangFromPostedGrns(
 ) {
   const tid = normalizeTenantId(tenantId);
   const reconcile = await reconcileVendorHutangFromPostedGrns(db, tid, {
-    callSales: replaySales,
+    queueSalesReplays: replaySales,
   });
 
   const pending = await db.collection('hutang').countDocuments({

@@ -3,18 +3,80 @@ import type { Db } from 'mongodb';
 
 import { resolveSalesApiAccess, findLinkForVendorCustomer } from '@/lib/api/integration-links';
 import { loadStoreSnapshot } from '@/lib/api/store-snapshot';
+import { logoUrlFromSettings, storeBase64Image } from '@/lib/api/media-storage';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { asArray, str, num, type JsonObject } from '@/types/json';
 import type { HutangDoc } from '@/types/documents';
 
-function pickStoreFields(src: Record<string, unknown> = {}) {
-  return sanitizeStoreSettings({
+export type VendorBillingSnapshot = {
+  vendorTenantId: string | null;
+  companyName: string;
+  companyAddress: string;
+  companyPhone: string;
+  companyNPWP: string;
+  logoUrl: string;
+  logoBase64: string;
+  showLogoOnInvoice?: boolean;
+};
+
+function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapshot {
+  const picked = sanitizeStoreSettings({
     companyName: src.companyName || src.vendorTenantName || src.vendorName || '',
     companyAddress: src.companyAddress || src.address || '',
     companyPhone: src.companyPhone || src.phone || '',
     companyNPWP: src.companyNPWP || src.npwp || '',
     logoBase64: src.logoBase64 || src.vendorLogoBase64 || '',
+    logoUrl: src.logoUrl || src.vendorLogoUrl || '',
     showLogoOnInvoice: src.showLogoOnInvoice !== false,
+  });
+  return {
+    vendorTenantId: src.vendorTenantId != null ? String(src.vendorTenantId) : null,
+    companyName: String(picked?.companyName || ''),
+    companyAddress: String(picked?.companyAddress || ''),
+    companyPhone: String(picked?.companyPhone || ''),
+    companyNPWP: String(picked?.companyNPWP || ''),
+    logoBase64: String(picked?.logoBase64 || ''),
+    logoUrl: String(picked?.logoUrl || ''),
+    showLogoOnInvoice: src.showLogoOnInvoice !== false,
+  };
+}
+
+/** Simpan profil vendor tanpa base64 — logo via URL saja. */
+export function normalizeVendorBillingForStorage(src: Record<string, unknown> = {}): VendorBillingSnapshot {
+  const picked = pickStoreFields(src);
+  const rawLogo = String(picked.logoUrl || picked.logoBase64 || src.vendorLogoUrl || '').trim();
+  const logoUrl = rawLogo.startsWith('data:')
+    ? ''
+    : (rawLogo.startsWith('http') || rawLogo.startsWith('/api/media') ? rawLogo : String(picked.logoUrl || ''));
+  return {
+    ...picked,
+    vendorTenantId: src.vendorTenantId != null ? String(src.vendorTenantId) : picked.vendorTenantId,
+    logoUrl: logoUrl || logoUrlFromSettings(picked),
+    logoBase64: '',
+  };
+}
+
+/** Upload base64 ke media storage bila perlu, lalu normalisasi snapshot. */
+export async function resolveVendorBillingForStorage(
+  db: Db,
+  tenantId: string,
+  vendorTenantId: string | null | undefined,
+  src: Record<string, unknown> = {},
+): Promise<VendorBillingSnapshot> {
+  const picked = pickStoreFields(src);
+  const rawLogo = String(picked.logoUrl || picked.logoBase64 || src.vendorLogoUrl || '').trim();
+  let logoUrl = rawLogo.startsWith('data:') ? '' : rawLogo;
+
+  if (rawLogo.startsWith('data:')) {
+    const storageTenant = String(vendorTenantId || tenantId || 'default');
+    const stored = await storeBase64Image(storageTenant, rawLogo, { prefix: 'vendor-logo' });
+    if (!('error' in stored)) logoUrl = stored.url;
+  }
+
+  return normalizeVendorBillingForStorage({
+    ...src,
+    logoUrl,
+    logoBase64: '',
   });
 }
 
@@ -58,7 +120,8 @@ export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorT
       companyAddress: vt?.companyAddress || '',
       companyPhone: vt?.companyPhone || '',
       companyNPWP: vt?.companyNPWP || '',
-      logoBase64: vt?.logoBase64 || '',
+      logoBase64: vt?.logoUrl || vt?.logoBase64 || '',
+      logoUrl: vt?.logoUrl || '',
     }),
     vendorTenantId: vid,
   };
@@ -70,16 +133,18 @@ export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorT
     ? null
     : await fetchVendorProfileFromSales(access.salesAppUrl, access.salesApiKey, vid);
   if (remote) {
-    profile = { ...profile, ...remote, vendorTenantId: vid };
+    const normalized = await resolveVendorBillingForStorage(db, tid, vid, remote as Record<string, unknown>);
+    profile = { ...profile, ...normalized, vendorTenantId: vid };
     await db.collection('vendor_tenants').updateOne(
       { tenantId: tid, vendorTenantId: vid },
       {
         $set: {
-          vendorTenantName: remote.companyName || profile.companyName,
-          companyAddress: remote.companyAddress || profile.companyAddress,
-          companyPhone: remote.companyPhone || profile.companyPhone,
-          companyNPWP: remote.companyNPWP || profile.companyNPWP,
-          logoBase64: remote.logoBase64 || profile.logoBase64,
+          vendorTenantName: normalized.companyName || profile.companyName,
+          companyAddress: normalized.companyAddress || profile.companyAddress,
+          companyPhone: normalized.companyPhone || profile.companyPhone,
+          companyNPWP: normalized.companyNPWP || profile.companyNPWP,
+          logoUrl: normalized.logoUrl || '',
+          logoBase64: '',
           profileSyncedAt: new Date(),
           updatedAt: new Date(),
         },
@@ -91,8 +156,9 @@ export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorT
 
   return {
     ...profile,
+    logoBase64: logoUrlFromSettings(profile),
     vendorTenantId: vid,
-    source: remote ? 'sales.app' : (vt?.profileSyncedAt ? 'cache' : (vt?.logoBase64 ? 'cache' : 'local')),
+    source: remote ? 'sales.app' : (vt?.profileSyncedAt ? 'cache' : (vt?.logoUrl || vt?.logoBase64 ? 'cache' : 'local')),
   };
 }
 
@@ -168,17 +234,26 @@ export async function buildHutangDetailEnrichment(db: Db, hutang) {
 
   const snap = hutang.vendorBillingSnapshot;
   let vendorBilling;
-  if (snap?.companyName && snap?.logoBase64) {
-    vendorBilling = { ...snap, vendorTenantId, source: 'snapshot' };
+  const snapLogo = logoUrlFromSettings(snap);
+  if (snap?.companyName) {
+    vendorBilling = {
+      ...snap,
+      logoBase64: snapLogo,
+      logoUrl: snap?.logoUrl || snapLogo,
+      vendorTenantId,
+      source: 'snapshot',
+    };
   } else {
     const loaded = await loadVendorBillingProfile(db, tid, vendorTenantId);
+    const mergedLogo = logoUrlFromSettings(snap) || logoUrlFromSettings(loaded) || loaded.logoBase64;
     vendorBilling = {
       ...loaded,
       companyName: snap?.companyName || loaded.companyName,
       companyAddress: snap?.companyAddress || loaded.companyAddress,
       companyPhone: snap?.companyPhone || loaded.companyPhone,
       companyNPWP: snap?.companyNPWP || loaded.companyNPWP,
-      logoBase64: snap?.logoBase64 || loaded.logoBase64,
+      logoUrl: snap?.logoUrl || loaded.logoUrl || mergedLogo,
+      logoBase64: mergedLogo,
       source: snap?.companyName ? 'snapshot+enrich' : loaded.source,
     };
   }
@@ -206,12 +281,13 @@ export async function buildHutangDetailEnrichment(db: Db, hutang) {
 
 export function vendorBillingFromPayload(payload, vendorTenantId) {
   const nested = payload.vendor || payload.vendorStore || {};
-  return pickStoreFields({
+  return normalizeVendorBillingForStorage({
     vendorTenantId: vendorTenantId || payload.vendorTenantId || null,
     companyName: nested.companyName || payload.vendorCompanyName || payload.vendorName || '',
     companyAddress: nested.companyAddress || payload.vendorAddress || '',
     companyPhone: nested.companyPhone || payload.vendorPhone || '',
     companyNPWP: nested.companyNPWP || payload.vendorNPWP || '',
     logoBase64: nested.logoBase64 || payload.vendorLogoBase64 || '',
+    logoUrl: nested.logoUrl || payload.vendorLogoUrl || '',
   });
 }

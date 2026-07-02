@@ -1,7 +1,7 @@
 'use client';
 
 import { str, num, asObject, asArray, type JsonObject } from '@/types/json';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,26 +13,18 @@ import { formatIDR, formatDate, formatDateTime, formatNumber } from '@/lib/forma
 import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 import { toast } from 'sonner';
-import { fetchJson } from '@/lib/fetch-json';
+import ProductPickerSearch from '@/components/ProductPickerSearch';
 
 export default function KartuStokPage() {
-  const [products, setProducts] = useState<JsonObject[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<JsonObject | null>(null);
   const [data, setData] = useState<{ rows: JsonObject[]; product: JsonObject | null; ledgerSaldo: number | null }>({
     rows: [], product: null, ledgerSaldo: null,
   });
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [reconciling, setReconciling] = useState(false);
-
-  useEffect(() => {
-    fetchJson('/api/products?limit=500')
-      .then((data) => setProducts(Array.isArray(data) ? data : []))
-      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)));
-  }, []);
 
   const load = async (productId: string) => {
     if (!productId) return;
@@ -55,10 +47,6 @@ export default function KartuStokPage() {
     setShowPicker(false);
     load(str(p.id));
   };
-
-  const filtered = products.filter(p =>
-    !q || str(p.nama).toLowerCase().includes(q.toLowerCase()) || str(p.kode).toLowerCase().includes(q.toLowerCase())
-  );
 
   const totalMasuk = data.rows.reduce((s, r) => s + num(r.masuk), 0);
   const totalKeluar = data.rows.reduce((s, r) => s + num(r.keluar), 0);
@@ -231,23 +219,7 @@ export default function KartuStokPage() {
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader><DialogTitle>Pilih Produk</DialogTitle></DialogHeader>
-          <Input placeholder="Cari kode atau nama..." value={q} onChange={e => setQ(e.target.value)} autoFocus />
-          <div className="flex-1 overflow-auto border rounded">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100 text-xs sticky top-0">
-                <tr><th className="px-2 py-2 text-left">Kode</th><th className="px-2 py-2 text-left">Nama</th><th className="px-2 py-2 text-right">Stok</th></tr>
-              </thead>
-              <tbody>
-                {filtered.map(p => (
-                  <tr key={str(p.id)} onClick={() => pick(p)} className="border-t cursor-pointer hover:bg-orange-50">
-                    <td className="px-2 py-2 font-mono text-xs">{str(p.kode)}</td>
-                    <td className="px-2 py-2">{str(p.nama)}</td>
-                    <td className="px-2 py-2 text-right">{str(p.stok)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ProductPickerSearch open={showPicker} onSelect={pick} />
         </DialogContent>
       </Dialog>
     </AppShell>

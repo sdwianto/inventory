@@ -18,7 +18,7 @@ import { invalidateTenantCache } from '@/lib/tenant-client';
 const emptyForm = {
   tenantId: '', companyName: '', companyAddress: '', companyPhone: '', companyNPWP: '',
   receiptFooterText: 'Terima Kasih', showLogoOnReceipt: true, showLogoOnInvoice: true,
-  logoBase64: '', ppnPercent: 11,
+  logoBase64: '', logoUrl: '', ppnPercent: 11,
 };
 
 export default function TenantsListPage() {
@@ -210,16 +210,16 @@ export default function TenantsListPage() {
     <div className="grid lg:grid-cols-3 gap-4">
       <div className="space-y-3">
         <div className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center overflow-hidden border-2 border-dashed">
-          {form.logoBase64 ? (
+          {(form.logoBase64 || form.logoUrl) ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={form.logoBase64} alt="logo" className="max-w-full max-h-full object-contain" />
+            <img src={form.logoBase64 || form.logoUrl} alt="logo" className="max-w-full max-h-full object-contain" />
           ) : (
             <div className="text-center text-slate-400"><ImageIcon className="w-10 h-10 mx-auto mb-1" /><div className="text-xs">Belum ada logo</div></div>
           )}
         </div>
         <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
         <Button variant="outline" onClick={() => fileRef.current?.click()} className="w-full" size="sm"><Upload className="w-4 h-4 mr-1" /> Pilih Logo</Button>
-        {form.logoBase64 && <Button variant="outline" onClick={() => setForm(f => ({...f, logoBase64: ''}))} className="w-full text-red-600" size="sm"><X className="w-4 h-4 mr-1" /> Hapus</Button>}
+        {(form.logoBase64 || form.logoUrl) && <Button variant="outline" onClick={() => setForm(f => ({...f, logoBase64: '', logoUrl: ''}))} className="w-full text-red-600" size="sm"><X className="w-4 h-4 mr-1" /> Hapus</Button>}
         <div className="text-[10px] text-slate-500">PNG/JPG, max 500KB. Auto-resize 400px.</div>
       </div>
       <div className="lg:col-span-2 space-y-2">
@@ -312,9 +312,9 @@ export default function TenantsListPage() {
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="w-16 h-16 bg-slate-100 rounded-lg flex items-center justify-center overflow-hidden border">
-                    {t.logoBase64 ? (
+                    {(t.logoUrl || t.logoBase64) ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={str(t.logoBase64)} alt="logo" className="max-w-full max-h-full object-contain" />
+                      <img src={str(t.logoUrl) || str(t.logoBase64)} alt="logo" className="max-w-full max-h-full object-contain" />
                     ) : (
                       <ImageIcon className="w-7 h-7 text-slate-400" />
                     )}

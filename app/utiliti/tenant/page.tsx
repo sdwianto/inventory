@@ -17,7 +17,7 @@ export default function TenantSetupPage() {
   const [form, setForm] = useState({
     tenantId: 'default', companyName: '', companyAddress: '', companyPhone: '',
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
-    showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '',
+    showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '', logoUrl: '',
     ppnPercent: 11,
   });
   const [saving, setSaving] = useState(false);
@@ -66,7 +66,9 @@ export default function TenantSetupPage() {
     reader.readAsDataURL(file);
   };
 
-  const removeLogo = () => setForm(f => ({ ...f, logoBase64: '' }));
+  const logoSrc = form.logoBase64 || form.logoUrl || '';
+
+  const removeLogo = () => setForm(f => ({ ...f, logoBase64: '', logoUrl: '' }));
 
   const save = async () => {
     setSaving(true);
@@ -97,9 +99,9 @@ export default function TenantSetupPage() {
             <CardHeader><CardTitle className="text-base flex items-center gap-2"><ImageIcon className="w-4 h-4" /> Logo Perusahaan</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center overflow-hidden border-2 border-dashed border-slate-300">
-                {form.logoBase64 ? (
+                {logoSrc ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={form.logoBase64} alt="logo" className="max-w-full max-h-full object-contain" />
+                  <img src={logoSrc} alt="logo" className="max-w-full max-h-full object-contain" />
                 ) : (
                   <div className="text-center text-slate-400">
                     <ImageIcon className="w-12 h-12 mx-auto mb-2" />
@@ -111,7 +113,7 @@ export default function TenantSetupPage() {
               <Button variant="outline" onClick={() => fileRef.current?.click()} className="w-full">
                 <Upload className="w-4 h-4 mr-2" /> Pilih File Logo
               </Button>
-              {form.logoBase64 && (
+              {logoSrc && (
                 <Button variant="outline" onClick={removeLogo} className="w-full text-red-600">
                   <X className="w-4 h-4 mr-2" /> Hapus Logo
                 </Button>
@@ -162,9 +164,9 @@ export default function TenantSetupPage() {
             <CardContent>
               <div className="bg-slate-50 p-4 rounded">
                 <div className="bg-white shadow-md mx-auto p-4 font-mono text-xs" style={{ width: '80mm' }}>
-                  {form.showLogoOnReceipt && form.logoBase64 && (
+                  {form.showLogoOnReceipt && logoSrc && (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={form.logoBase64} alt="" className="mx-auto mb-2" style={{ maxHeight: '15mm' }} />
+                    <img src={logoSrc} alt="" className="mx-auto mb-2" style={{ maxHeight: '15mm' }} />
                   )}
                   <div className="text-center font-bold">{form.companyName}</div>
                   <div className="text-center">{form.companyAddress}</div>

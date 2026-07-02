@@ -5,6 +5,7 @@ import { str, num, asObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import type { ListExportFormat } from '@/lib/run-list-export';
 import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Search, Package, Settings2, RefreshCw } from 'lucide-react';
-import ListExportMenu from '@/components/ListExportMenu';
+const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 import BulkSelectionBar from '@/components/BulkSelectionBar';
 import { useListSelection } from '@/hooks/useListSelection';
 import { runListExport } from '@/lib/run-list-export';
@@ -28,6 +29,7 @@ import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/li
 import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib/produk/constants';
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
+import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
 
 export default function ProdukPage() {
   const confirm = useConfirm();
@@ -35,6 +37,7 @@ export default function ProdukPage() {
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [filterTenantId, setFilterTenantId] = useState('');
   const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
   const [form, setForm] = useState<JsonObject>(EMPTY_PRODUCT);
@@ -53,14 +56,18 @@ export default function ProdukPage() {
   const {
     products,
     loading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    error,
+    reload,
     grupList,
     satuanList,
-    loadProducts,
     loadMeta,
-  } = useProdukCatalog({ filterTenantId, isMaster });
+  } = useProdukCatalog({ filterTenantId, isMaster, q: debouncedQ });
 
-  const load = async (query = '', tenantId = filterTenantId) => {
-    await loadProducts(query, tenantId);
+  const load = async () => {
+    await reload();
     selection.clear();
   };
 
@@ -87,13 +94,13 @@ export default function ProdukPage() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    if (isMaster && !filterTenantId) {
-      load(q, '');
-      return;
-    }
-    if (!isMaster || filterTenantId) load(q, filterTenantId);
-  }, [user, filterTenantId]);
+    const timer = setTimeout(() => setDebouncedQ(q), q ? 300 : 0);
+    return () => clearTimeout(timer);
+  }, [q]);
+
+  useEffect(() => {
+    selection.clear();
+  }, [debouncedQ, filterTenantId]);
 
   useEffect(() => {
     const loadTiers = () => {
@@ -109,8 +116,8 @@ export default function ProdukPage() {
     loadTiers();
     const onCatalogSynced = () => {
       loadTiers();
-      if (isMaster && !filterTenantId) load(q, '');
-      else if (!isMaster || filterTenantId) load(q, filterTenantId);
+      if (isMaster && !filterTenantId) void load();
+      else if (!isMaster || filterTenantId) void load();
     };
     window.addEventListener('vendor-catalog-synced', onCatalogSynced);
     return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
@@ -229,7 +236,7 @@ export default function ProdukPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(editing ? 'Produk diperbarui' : 'Produk ditambahkan');
       setShowForm(false);
-      load(q);
+      void load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -241,7 +248,7 @@ export default function ProdukPage() {
     const data = await res.json();
     if (!res.ok) return toast.error(data.error || 'Gagal hapus');
     toast.success('Produk dihapus');
-    load(q);
+    void load();
   };
 
   const bulkDelete = async () => {
@@ -257,7 +264,7 @@ export default function ProdukPage() {
       const data = await postBulkDelete('/api/products/bulk-delete', ids);
       toast.success(`${data.deleted ?? ids.length} produk dihapus`);
       selection.clear();
-      load(q);
+      void load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -279,12 +286,10 @@ export default function ProdukPage() {
   ];
 
   const fetchExportRows = async () => {
-    let url = `/api/products?q=${encodeURIComponent(q)}&limit=5000`;
-    url = withActingTenantQuery(url, filterTenantId, isMaster);
-    const res = await fetch(url);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Gagal memuat data');
-    let rows = Array.isArray(data) ? data : [];
+    let base = `/api/products?q=${encodeURIComponent(debouncedQ)}`;
+    base = withActingTenantQuery(base, filterTenantId, isMaster);
+    const all = await fetchAllCursorPages<JsonObject>(base, { limit: 500 });
+    let rows = all;
     rows = rows.filter((p) => gudangFilter[str(p.gudangKode, 'GKERING') as keyof typeof gudangFilter]);
     if (rows.length === 0) throw new Error('Tidak ada data untuk diekspor');
     return rows;
@@ -347,7 +352,7 @@ export default function ProdukPage() {
       if (total === 0) throw new Error('Katalog kosong — cek SALES_VENDOR_TENANT_ID di .env.local (produk sales.app mungkin di tenant lain)');
       toast.success(`Sync OK: ${data.created || 0} baru, ${data.updated || 0} diperbarui (${total} dari sales.app)`);
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
-      load(q);
+      void load();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSyncing(false);
   };
@@ -411,10 +416,7 @@ export default function ProdukPage() {
             <Input
               placeholder="Cari kode, nama, atau barcode..."
               value={q}
-              onChange={(e) => {
-                setQ(e.target.value);
-                load(e.target.value);
-              }}
+              onChange={(e) => setQ(e.target.value)}
               className="pl-9"
             />
           </div>
@@ -560,6 +562,19 @@ export default function ProdukPage() {
               </tbody>
             </table>
           </div>
+          {error && (
+            <div className="mx-3 mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+              <span>{error}</span>
+              <Button variant="outline" size="sm" onClick={() => void reload()}>Coba lagi</Button>
+            </div>
+          )}
+          {!loading && hasMore && (
+            <div className="p-3 border-t text-center">
+              <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                {loadingMore ? 'Memuat…' : `Muat lebih (${products.length} ditampilkan)`}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -18,11 +18,13 @@ import {
 } from '@/lib/api/require-auth';
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
-import { getIntegrationConfig } from '@/lib/api/integration-config';
-import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
-import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
+import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
+import { pushPoToVendor, finalizePoSubmission } from '@/lib/api/customer-po-push';
+import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
+import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
-import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
@@ -149,106 +151,6 @@ async function enrichOnePo(db: Db, po) {
   return enriched;
 }
 
-function salesFetchErrorMessage(err, salesUrl) {
-  const cause = err?.cause || err;
-  const code = cause?.code || err?.code;
-  if (code === 'ECONNREFUSED') {
-    return `Sales.app tidak dapat dihubungi di ${salesUrl}. Pastikan sales.app sudah berjalan (biasanya port 3000).`;
-  }
-  if (code === 'ENOTFOUND') {
-    return `Alamat sales.app tidak ditemukan: ${salesUrl}`;
-  }
-  if (err?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout) — cek ${salesUrl}`;
-  }
-  return `Gagal menghubungi sales.app: ${cause?.message || err?.message || 'koneksi gagal'}`;
-}
-
-async function pushPoGroupToVendor(db: Db, { tenantId, config, po, vendorTenantId, items }) {
-  const salesUrl = config.salesAppUrl;
-  const apiKey = await getSalesApiKeyForVendor(db, tenantId, vendorTenantId);
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey) headers['X-Api-Key'] = apiKey;
-
-  let res;
-  try {
-    res = await fetch(`${salesUrl}/api/integrations/customer-po`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        customerTenantId: tenantId,
-        vendorTenantId,
-        noPO: po.noPO,
-        customerPoId: po.id,
-        tanggalKedatangan: po.tanggalKedatangan || po.tanggal || null,
-        items,
-        catatan: po.catatan || '',
-        paymentTerms: po.paymentTerms || 'KREDIT',
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch (e) {
-    return { error: salesFetchErrorMessage(e, salesUrl), vendorTenantId };
-  }
-
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    return {
-      error: `Sales.app merespons HTTP ${res.status} tanpa data JSON valid`,
-      vendorTenantId,
-    };
-  }
-  if (!res.ok) return { error: data.error || `Sales.app ${res.status}`, vendorTenantId };
-  return { vendorSo: data, vendorTenantId };
-}
-
-async function pushPoToVendor(db: Db, po, tenantId) {
-  const config = await getIntegrationConfig(db, tenantId);
-  const apiKey = await getSalesApiKeyForVendor(db, tenantId);
-  if (!apiKey) {
-    return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi atau sales.app /integrasi' };
-  }
-
-  const enriched = await enrichPoItemsForVendor(db, tenantId, po.items);
-  if (enriched.error) return { error: enriched.error };
-
-  const grouped = groupPoItemsByVendorTenant(enriched.items || []);
-  if (grouped.error) return { error: grouped.error };
-
-  const submissions: JsonObject[] = [];
-  try {
-    const groups = grouped.groups || [];
-    for (const { vendorTenantId, items } of groups) {
-      const pushed = await pushPoGroupToVendor(db, {
-        tenantId,
-        config,
-        po,
-        vendorTenantId,
-        items,
-      });
-      if (pushed.error) {
-        return {
-          error: pushed.error,
-          partialSubmissions: submissions,
-        };
-      }
-      submissions.push({
-        vendorTenantId,
-        vendorSoId: pushed.vendorSo?.id,
-        vendorNoSO: pushed.vendorSo?.noSO,
-        vendorSo: pushed.vendorSo || null,
-        itemCount: items.length,
-      });
-    }
-  } catch (e) {
-    return { error: salesFetchErrorMessage(e, config.salesAppUrl) };
-  }
-
-  return { submissions };
-}
-
 async function mapPoItems(db: Db, tenantId, items) {
   const mapped = await Promise.all((items || []).map(async (it) => {
     let vendorStokId = it.vendorStokId;
@@ -333,97 +235,7 @@ async function completePoWithVendorSync(db: Db, po, approverSnap) {
 }
 
 async function retryVendorSync(db: Db, po, approverSnap) {
-  const pushed = await pushPoToVendor(db, po, po.tenantId || 'default');
-  if (!pushed.submissions?.length) {
-    const now = new Date();
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
-      { $set: { vendorSyncError: pushed.error, vendorSyncAt: now, updatedAt: now } },
-    );
-    return { error: pushed.error, status: 502 };
-  }
-  const updated = await finalizePoSubmission(db, po, pushed.submissions, approverSnap || po.approvedBy);
-  return { po: updated, vendorSynced: true };
-}
-
-const VENDOR_SYNC_RETRY_COOLDOWN_MS = 30_000;
-const VENDOR_SYNC_BATCH_LIMIT = 20;
-
-/** Coba kirim semua PO APPROVED yang menunggu — dipanggil otomatis saat halaman PO terbuka. */
-async function syncPendingVendorOrders(db: Db, auth) {
-  const cutoff = new Date(Date.now() - VENDOR_SYNC_RETRY_COOLDOWN_MS);
-  let filter: Record<string, unknown> = {
-    status: 'APPROVED',
-    vendorSyncPending: { $ne: false },
-    $or: [
-      { vendorSyncAt: { $exists: false } },
-      { vendorSyncAt: { $lt: cutoff } },
-    ],
-  };
-  filter = withTenantFilter(auth, filter);
-
-  const pending = await db.collection('customer_purchase_orders')
-    .find(filter)
-    .sort({ approvedAt: 1 })
-    .limit(VENDOR_SYNC_BATCH_LIMIT)
-    .toArray();
-
-  const synced: JsonObject[] = [];
-  const failed: JsonObject[] = [];
-
-  for (const po of pending) {
-    const result = await retryVendorSync(db, po, po.approvedBy);
-    if (result.po) {
-      synced.push({
-        id: result.po.id,
-        noPO: result.po.noPO,
-        vendorNoSO: result.po.vendorNoSO,
-      });
-    } else {
-      failed.push({ id: po.id, noPO: po.noPO, error: result.error });
-      // Sales.app masih offline — hentikan batch agar tidak spam request
-      if (result.error?.includes('tidak dapat dihubungi') || result.error?.includes('ECONNREFUSED')) {
-        break;
-      }
-    }
-  }
-
-  return { attempted: pending.length, synced, failed };
-}
-
-async function finalizePoSubmission(db: Db, po, submissions, approver) {
-  const primary = submissions[0] || {};
-  const now = new Date();
-  const patch: Record<string, unknown> = {
-    status: 'SUBMITTED',
-    vendorSubmissions: submissions,
-    vendorTenantId: submissions.length === 1 ? primary.vendorTenantId : 'multi',
-    vendorSoId: primary.vendorSoId,
-    vendorNoSO: submissions.length === 1
-      ? primary.vendorNoSO
-      : submissions.map((s) => s.vendorNoSO).filter(Boolean).join(', '),
-    submittedAt: now,
-    updatedAt: now,
-    vendorSyncPending: false,
-    vendorSyncError: null,
-  };
-  if (approver) {
-    patch.approvedBy = {
-      userId: approver.userId,
-      userName: approver.userName,
-      role: approver.role,
-    };
-    patch.approvedAt = now;
-  }
-  const soSnaps = submissions.map((sub) => buildVendorSoSnapshot({
-    ...sub.vendorSo,
-    salesOrderId: sub.vendorSoId,
-    noSO: sub.vendorNoSO,
-  })).filter(Boolean);
-  const soSnap = mergeVendorSoSnapshots(soSnaps);
-  if (soSnap) patch.vendorSoSnapshot = soSnap;
-  await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
-  return db.collection('customer_purchase_orders').findOne({ id: po.id });
+  return retryVendorSyncForPo(db, po, approverSnap);
 }
 
 export async function handleCustomerPo({
@@ -448,11 +260,23 @@ export async function handleCustomerPo({
 
   // POST /customer-purchase-orders/sync-pending — antrian kirim otomatis ke sales.app
   if (route === '/customer-purchase-orders/sync-pending' && method === 'POST') {
-    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, scopeOpts);
     if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
 
-    const result = await syncPendingVendorOrders(db, scopeAuth);
-    return ok(result);
+    const inline = url.searchParams.get('inline') === '1';
+    if (inline) {
+      const result = await runPoVendorSyncPending(db, scopeAuth);
+      return ok(result);
+    }
+
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.PO_VENDOR_SYNC,
+      tenantId,
+      payload: {},
+    });
+    scheduleJobProcessing(db);
+    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 
   if (route === '/customer-purchase-orders' && method === 'POST') {
@@ -606,6 +430,7 @@ export async function handleCustomerPo({
     if ('error' in result && result.error) return err(result.error, result.status || 400);
 
     const enriched = await enrichOnePo(db, result.po);
+    await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
     return ok({ ...enriched, vendorSynced: result.vendorSynced, vendorSyncError: result.vendorSyncError });
   }
 

@@ -1,37 +1,48 @@
 import type { JsonObject } from '@/types/json';
-import { str } from '@/types/json';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { withActingTenantQuery } from '@/lib/tenant-api';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
+
+export const PRODUCT_PAGE_DEFAULT_LIMIT = 100;
 
 type UseProdukCatalogOptions = {
   filterTenantId: string;
   isMaster?: boolean;
+  pageLimit?: number;
+  q?: string;
 };
 
-export function useProdukCatalog({ filterTenantId, isMaster = false }: UseProdukCatalogOptions) {
-  const [products, setProducts] = useState<JsonObject[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useProdukCatalog({
+  filterTenantId,
+  isMaster = false,
+  pageLimit = PRODUCT_PAGE_DEFAULT_LIMIT,
+  q = '',
+}: UseProdukCatalogOptions) {
+  const baseUrl = useMemo(() => {
+    let url = `/api/products?q=${encodeURIComponent(q)}`;
+    url = withActingTenantQuery(url, filterTenantId, isMaster);
+    return url;
+  }, [q, filterTenantId, isMaster]);
+
+  const enabled = !isMaster || !!filterTenantId;
+  const {
+    items: products,
+    loading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    reload,
+    error,
+  } = useCursorList<JsonObject>(baseUrl, { limit: pageLimit, enabled });
+
   const [grupList, setGrupList] = useState<JsonObject[]>([]);
   const [satuanList, setSatuanList] = useState<JsonObject[]>([]);
 
-  const loadProducts = useCallback(async (query = '', tenantId = filterTenantId) => {
-    setLoading(true);
-    try {
-      let url = `/api/products?q=${encodeURIComponent(query)}`;
-      url = withActingTenantQuery(url, tenantId, isMaster);
-      const res = await fetch(url);
-      const data = await res.json();
-      setProducts(Array.isArray(data) ? data : []);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      toast.error('Gagal memuat');
-      setProducts([]);
-      return [];
-    } finally {
-      setLoading(false);
-    }
-  }, [filterTenantId, isMaster]);
+  const loadProducts = useCallback(async () => {
+    await reload();
+    return products;
+  }, [reload, products]);
 
   const loadMeta = useCallback(async (tenantId?: string) => {
     const tid = tenantId || '';
@@ -61,11 +72,15 @@ export function useProdukCatalog({ filterTenantId, isMaster = false }: UseProduk
 
   return {
     products,
-    setProducts,
     loading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    error,
     grupList,
     satuanList,
     loadProducts,
+    reload,
     loadMeta,
   };
 }

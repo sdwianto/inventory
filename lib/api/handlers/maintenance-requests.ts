@@ -29,6 +29,12 @@ import {
   buildReleaseKeperluanFromWr,
   loadWrById,
 } from '@/lib/api/maintenance-resolve';
+import {
+  parseCursorPageParams,
+  applyDescDateIdCursor,
+  encodeCursor,
+  sliceCursorPage,
+} from '@/lib/api/cursor-page';
 import { touchScheduleOnWrClosed } from '@/lib/api/maintenance-schedule-engine';
 import type { HandlerContext } from '@/types/api/handler';
 import type { MaintenanceRequestDoc } from '@/types/maintenance';
@@ -100,14 +106,6 @@ export async function handleMaintenanceRequests({
   const wrBody = (body || {}) as WrBody;
   const scopeOpts = { url, body: wrBody, request };
 
-  if (route === '/maintenance-requests/pending-count' && method === 'GET') {
-    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
-    if (denied) return denied;
-    const filter = withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' });
-    const count = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).countDocuments(filter);
-    return ok({ count });
-  }
-
   if (route === '/maintenance-requests' && method === 'GET') {
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
@@ -119,11 +117,27 @@ export async function handleMaintenanceRequests({
     if (assetId) filter.assetId = assetId;
     filter = withTenantFilter(scopeAuth, filter);
 
+    const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });
+    const fetchLimit = pageMode ? limit + 1 : 300;
+    const listFilter = pageMode ? applyDescDateIdCursor(filter, cursor, 'createdAt') : filter;
+
     const list = await db.collection(MAINTENANCE_REQUESTS_COLLECTION)
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(300)
+      .find(listFilter)
+      .sort({ createdAt: -1, id: -1 })
+      .limit(fetchLimit)
       .toArray() as MaintenanceRequestDoc[];
+
+    if (pageMode) {
+      const { items, hasMore } = sliceCursorPage(list, limit);
+      const enriched = await enrichWrList(db, items);
+      const last = items[items.length - 1] as Record<string, unknown> | undefined;
+      return ok({
+        items: enriched,
+        hasMore,
+        nextCursor: hasMore && last ? encodeCursor(last, 'createdAt') : null,
+      });
+    }
+
     return ok(await enrichWrList(db, list));
   }
 

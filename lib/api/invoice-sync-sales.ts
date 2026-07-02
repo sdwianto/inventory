@@ -1,9 +1,10 @@
 // Tarik invoice posted dari sales.app (fallback jika webhook terlewat).
 
 import type { Db } from 'mongodb';
-import { resolveSalesApiAccess } from '@/lib/api/integration-links';
+import { listActiveLinksForCustomer, resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { reconcileVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
+import { fetchPostedInvoicesFromSalesVendor } from '@/lib/api/invoice-sync-fetch';
 import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import type { JsonObject } from '@/types/json';
 
@@ -18,62 +19,81 @@ export async function syncPostedInvoicesFromSales(
   { reconcileSales = false } = {},
 ) {
   const tid = normalizeTenantId(customerTenantId || 'default');
-  const access = await resolveSalesApiAccess(db, tid);
-  if (!access) {
+  const links = await listActiveLinksForCustomer(db, tid);
+
+  const vendorsToSync: { vendorTenantId: string; salesAppUrl: string; salesApiKey: string }[] = [];
+  if (links.length) {
+    for (const link of links) {
+      const access = await resolveSalesApiAccess(db, tid, link.vendorTenantId);
+      if (access?.salesApiKey) {
+        vendorsToSync.push({
+          vendorTenantId: link.vendorTenantId,
+          salesAppUrl: access.salesAppUrl,
+          salesApiKey: access.salesApiKey,
+        });
+      }
+    }
+  } else {
+    const access = await resolveSalesApiAccess(db, tid);
+    if (access?.salesApiKey) {
+      vendorsToSync.push({
+        vendorTenantId: '',
+        salesAppUrl: access.salesAppUrl,
+        salesApiKey: access.salesApiKey,
+      });
+    }
+  }
+
+  if (!vendorsToSync.length) {
     return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi' };
   }
 
-  const headers = { 'X-Api-Key': access.salesApiKey };
-  let res: Response;
-  try {
-    res = await fetch(
-      `${access.salesAppUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(tid)}`,
-      { headers, signal: AbortSignal.timeout(30000) },
+  const invoices: JsonObject[] = [];
+  const fetchWarnings: string[] = [];
+  let fetchIncomplete = false;
+
+  for (const vendor of vendorsToSync) {
+    const fetched = await fetchPostedInvoicesFromSalesVendor(
+      vendor.salesAppUrl,
+      vendor.salesApiKey,
+      tid,
+      vendor.vendorTenantId || undefined,
     );
-  } catch (e) {
-    const err = e as { cause?: { code?: string }; code?: string; message?: string };
-    const code = err?.cause?.code || err?.code;
-    if (code === 'ECONNREFUSED') {
-      return { error: `Sales.app tidak dapat dihubungi di ${access.salesAppUrl}` };
+    if (fetched.lastError && !fetched.invoices.length && !invoices.length && vendorsToSync.length === 1) {
+      if (fetched.lastError.includes('belum tersedia')) {
+        return { error: fetched.lastError, skipped: true };
+      }
+      return { error: fetched.lastError };
     }
-    return { error: err.message || 'Gagal menghubungi sales.app' };
-  }
-
-  let data: JsonObject;
-  try {
-    data = await res.json() as JsonObject;
-  } catch {
-    if (res.status === 404) {
-      return {
-        error: 'Endpoint customer-invoices belum tersedia di sales.app — gunakan webhook invoice.posted',
-        skipped: true,
-      };
+    if (fetched.fetchIncomplete) {
+      fetchIncomplete = true;
+      if (fetched.lastError) fetchWarnings.push(fetched.lastError);
     }
-    return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
-  }
-
-  if (!res.ok) {
-    if (res.status === 404) {
-      return {
-        error: 'Endpoint customer-invoices belum tersedia di sales.app',
-        skipped: true,
-      };
-    }
-    return { error: String(data.error || `Sales.app ${res.status}`) };
+    invoices.push(...fetched.invoices);
   }
 
   const results = { created: 0, existing: 0, refreshed: 0, errors: [] as SyncErrorRow[] };
-  const invoices = Array.isArray(data.invoices) ? data.invoices as JsonObject[] : [];
+
+  const invoiceIds = invoices
+    .map((row) => {
+      const payload = (row.payload || row) as JsonObject;
+      return payload.invoiceId ? String(payload.invoiceId) : null;
+    })
+    .filter(Boolean) as string[];
+
+  const existingHutang = invoiceIds.length
+    ? await db.collection('hutang').find({
+      vendorInvoiceId: { $in: invoiceIds },
+      ...tenantIdMatchFilter(tid),
+    }).project({ vendorInvoiceId: 1 }).toArray()
+    : [];
+  const existingSet = new Set(existingHutang.map((h) => String(h.vendorInvoiceId)));
+
   for (const row of invoices) {
     try {
       const payload = (row.payload || row) as JsonObject;
       const vendorTenantId = row.vendorTenantId || null;
-      const before = payload.invoiceId
-        ? await db.collection('hutang').findOne({
-          vendorInvoiceId: payload.invoiceId,
-          ...tenantIdMatchFilter(tid),
-        })
-        : null;
+      const hadBefore = payload.invoiceId ? existingSet.has(String(payload.invoiceId)) : false;
       const result = await createHutangFromVendorInvoice(
         db,
         tid,
@@ -86,7 +106,7 @@ export async function syncPostedInvoicesFromSales(
         results.refreshed += 1;
       } else if (result.action === 'created') {
         results.created += 1;
-      } else if (result.action === 'exists' || before) {
+      } else if (result.action === 'exists' || hadBefore) {
         results.existing += 1;
       }
     } catch (e) {
@@ -106,10 +126,16 @@ export async function syncPostedInvoicesFromSales(
     ...results,
     total: invoices.length,
     customerTenantId: tid,
+    vendorsSynced: vendorsToSync.length,
     salesDoSet: [...salesDoSet],
+    fetchIncomplete,
+    fetchWarnings: fetchWarnings.length ? fetchWarnings : undefined,
+    warning: fetchIncomplete
+      ? 'Sync invoice tidak lengkap — sebagian halaman gagal diambil dari sales.app'
+      : undefined,
     reconcile: reconcileSales
-      ? await reconcileVendorHutangFromPostedGrns(db, tid, { callSales: true, salesDoSet })
-      : await reconcileVendorHutangFromPostedGrns(db, tid, { callSales: false, salesDoSet }),
+      ? await reconcileVendorHutangFromPostedGrns(db, tid, { queueSalesReplays: true, salesDoSet })
+      : await reconcileVendorHutangFromPostedGrns(db, tid, { salesDoSet }),
     hint: invoices.length === 0
       ? 'Tidak ada invoice POSTED untuk customerTenantId ini — pastikan webhook invoice.posted aktif atau gunakan Sync dengan replaySales'
       : undefined,

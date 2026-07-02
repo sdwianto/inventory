@@ -14,6 +14,7 @@ export function sanitizeStoreSettings(s) {
     receiptFooterText: s.receiptFooterText || 'Terima Kasih',
     showLogoOnReceipt: s.showLogoOnReceipt !== false,
     logoBase64: s.logoBase64 || '',
+    logoUrl: s.logoUrl || '',
   };
 }
 

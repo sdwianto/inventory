@@ -4,7 +4,8 @@ import type { JsonObject } from '@/types/json';
 import { str, asObject, asArray, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import type { MaintenancePriority, MaintenanceRequestStatus } from '@/types/maintenance';
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useMemo, useState, Suspense } from 'react';
+import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,6 @@ import { getUser } from '@/lib/auth-client';
 import { fetchJson } from '@/lib/fetch-json';
 import {
   useAssets,
-  useMaintenanceRequests,
   useInvalidateMaintenance,
 } from '@/lib/hooks/use-maintenance';
 import {
@@ -62,7 +62,19 @@ function MaintenancePermintaanPageContent() {
   const [photosCache, setPhotosCache] = useState<Record<string, string[]>>({});
   const [serviceWr, setServiceWr] = useState<JsonObject | null>(null);
 
-  const { data: list = [], refetch } = useMaintenanceRequests({ status: statusFilter });
+  const wrUrl = useMemo(
+    () => (statusFilter ? `/api/maintenance-requests?status=${encodeURIComponent(statusFilter)}` : '/api/maintenance-requests'),
+    [statusFilter],
+  );
+  const {
+    items: list,
+    loading: listLoading,
+    hasMore,
+    loadMore,
+    loadingMore,
+    error,
+    reload,
+  } = useCursorList<JsonObject>(wrUrl, { limit: 100 });
   const { data: assets = [] } = useAssets({ enabled: showForm || list.length > 0 });
 
   const canCreate = WR_CREATE_ROLES.includes(String(user?.role || '') as typeof WR_CREATE_ROLES[number])
@@ -136,7 +148,7 @@ function MaintenancePermintaanPageContent() {
       toast.success(editing ? 'Permintaan diperbarui' : 'Permintaan dibuat');
       setShowForm(false);
       invalidate();
-      void refetch();
+      void reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
     }
@@ -161,7 +173,7 @@ function MaintenancePermintaanPageContent() {
       };
       toast.success(labels[actionType] || 'Berhasil');
       invalidate();
-      void refetch();
+      void reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
     }
@@ -353,13 +365,23 @@ function MaintenancePermintaanPageContent() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="icon" onClick={() => void refetch()}>
-            <RefreshCw className="w-4 h-4" />
+          <Button variant="outline" size="icon" onClick={() => void reload()} disabled={listLoading}>
+            <RefreshCw className={`w-4 h-4 ${listLoading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
 
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void reload()}>Coba lagi</Button>
+          </div>
+        )}
+
         <div className="space-y-3">
-          {list.length === 0 && (
+          {listLoading && !list.length && (
+            <div className="text-sm text-slate-500 py-8 text-center">Memuat permintaan…</div>
+          )}
+          {!listLoading && list.length === 0 && (
             <div className="rounded-lg border bg-white p-8 text-center text-slate-500">
               Belum ada permintaan maintenance
             </div>
@@ -463,6 +485,13 @@ function MaintenancePermintaanPageContent() {
               </div>
             );
           })}
+          {hasMore && (
+            <div className="pt-2 text-center">
+              <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                {loadingMore ? 'Memuat…' : `Muat lebih (${list.length} ditampilkan)`}
+              </Button>
+            </div>
+          )}
         </div>
 
         <Dialog open={showForm} onOpenChange={setShowForm}>
@@ -531,7 +560,7 @@ function MaintenancePermintaanPageContent() {
           wr={serviceWr}
           onSuccess={() => {
             invalidate();
-            void refetch();
+            void reload();
           }}
         />
       </div>

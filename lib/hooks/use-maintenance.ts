@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
+import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 
 export const ASSETS_QUERY_KEY = ['assets'];
 export const MAINTENANCE_REQUESTS_QUERY_KEY = ['maintenance-requests'];
@@ -31,28 +32,6 @@ export function useMaintenanceRequests(params: { status?: string; enabled?: bool
     queryFn: () => fetchJson<JsonObject[]>(`/api/maintenance-requests${qs}`),
     select: (data) => (Array.isArray(data) ? data : []),
     enabled,
-  });
-}
-
-export function useWrPendingCount(enabled = true) {
-  return useQuery({
-    queryKey: ['maintenance-requests', 'pending-count'],
-    queryFn: () => fetchJson<{ count?: number }>('/api/maintenance-requests/pending-count'),
-    select: (d) => d?.count ?? 0,
-    staleTime: 30_000,
-    enabled,
-    refetchInterval: enabled ? 60_000 : false,
-  });
-}
-
-export function usePmDueCount(enabled = true) {
-  return useQuery({
-    queryKey: ['maintenance-schedules', 'due-count'],
-    queryFn: () => fetchJson<{ overdue?: number; dueSoon?: number }>('/api/maintenance-schedules/due-count'),
-    select: (d) => d?.overdue ?? 0,
-    staleTime: 30_000,
-    enabled,
-    refetchInterval: enabled ? 60_000 : false,
   });
 }
 
@@ -88,8 +67,7 @@ export function useInvalidateMaintenance() {
     qc.invalidateQueries({ queryKey: MAINTENANCE_REQUESTS_QUERY_KEY });
     qc.invalidateQueries({ queryKey: MAINTENANCE_SCHEDULES_QUERY_KEY });
     qc.invalidateQueries({ queryKey: MAINTENANCE_REPORTS_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: ['maintenance-requests', 'pending-count'] });
-    qc.invalidateQueries({ queryKey: ['maintenance-schedules', 'due-count'] });
+    qc.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
     window.dispatchEvent(new CustomEvent('erp-maintenance-change'));
   };
 }
