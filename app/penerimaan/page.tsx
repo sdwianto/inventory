@@ -18,6 +18,7 @@ import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-r
 import { warehouseName } from '@/lib/warehouses-client';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
+import { useBgJob } from '@/lib/hooks/use-bg-job';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -81,8 +82,10 @@ export default function PenerimaanPage() {
   const [loadingDo, setLoadingDo] = useState('');
   const [replayingInvoice, setReplayingInvoice] = useState('');
   const [pollInvoiceGrnId, setPollInvoiceGrnId] = useState<string | null>(null);
+  const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
 
   const { data: invoicePoll } = useGrnInvoiceStatus(pollInvoiceGrnId, !!pollInvoiceGrnId);
+  const { data: syncJob } = useBgJob(activeSyncJobId);
 
   useEffect(() => {
     if (!invoicePoll || !pollInvoiceGrnId) return;
@@ -106,6 +109,28 @@ export default function PenerimaanPage() {
     }
   }, [invoicePoll, pollInvoiceGrnId, invalidateGrn]);
 
+  useEffect(() => {
+    if (!syncJob || !activeSyncJobId) return;
+    const status = String(syncJob.status || '');
+    if (status === 'DONE') {
+      const result = asObject(syncJob.result);
+      toast.success(`Sync DO: ${num(result.created)} GRN baru, ${num(result.existing)} sudah ada`);
+      if (num(result.grnRefreshed) > 0) {
+        toast.info(`${num(result.grnRefreshed)} GRN produk diperbarui`);
+      }
+      setActiveSyncJobId(null);
+      setSyncing(false);
+      invalidateGrn();
+      reload();
+      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+    } else if (status === 'FAILED') {
+      const errMsg = String(syncJob.lastError || asObject(syncJob.result).error || 'Gagal sync DO');
+      toast.error(errMsg);
+      setActiveSyncJobId(null);
+      setSyncing(false);
+    }
+  }, [syncJob, activeSyncJobId, invalidateGrn, reload]);
+
   const replayInvoice = async (id: string, noGRN?: unknown) => {
     setReplayingInvoice(id);
     try {
@@ -128,14 +153,20 @@ export default function PenerimaanPage() {
       const res = await fetch('/api/goods-receipts/sync-shipped', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal sync');
+      if (res.status === 202 && data.jobId) {
+        toast.info('Sync DO berjalan di background…');
+        setActiveSyncJobId(String(data.jobId));
+        return;
+      }
       toast.success(`Sync DO: ${data.created} GRN baru, ${data.existing} sudah ada`);
-      await fetch('/api/goods-receipts/refresh-unresolved', { method: 'POST' });
       invalidateGrn();
       reload();
+      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+      setSyncing(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+      setSyncing(false);
     }
-    setSyncing(false);
   };
 
   const openDoView = async (id: string) => {

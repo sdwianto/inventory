@@ -11,12 +11,16 @@ import { handlersForRoute } from '@/lib/api/route-dispatch';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
+import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 
 export async function OPTIONS() {
   return cors(new NextResponse(null, { status: 200 }));
 }
 
 type RouteContext = { params: Promise<{ path?: string[] }> };
+
+/** Job processor + sync berat — perlu durasi lebih panjang di Vercel Pro. */
+export const maxDuration = 60;
 
 async function handleRoute(request: Request, context: RouteContext) {
   const { path = [] } = (await context.params) || {};
@@ -59,10 +63,15 @@ async function handleRoute(request: Request, context: RouteContext) {
 
     const db = await connectToMongo();
 
+    const isWorkerRoute = isWorkerProcessRoute(method, route);
+    const workerAuthed = isWorkerRoute && verifyWorkerOrCronSecret(request);
+
     const isPublic = isPublicRoute(method, route);
-    if (!isPublic) {
+    if (!isPublic && !workerAuthed) {
       await ensureSeeded(db);
     } else if (route === '/auth/login' && method === 'POST') {
+      await ensureSeeded(db);
+    } else if (workerAuthed) {
       await ensureSeeded(db);
     }
 
@@ -72,7 +81,7 @@ async function handleRoute(request: Request, context: RouteContext) {
     }
 
     const auth = await resolveRequestContext(request, db);
-    if (!isPublic) {
+    if (!isPublic && !workerAuthed) {
       const denied = requireAuth(auth);
       if (denied) return denied;
     }

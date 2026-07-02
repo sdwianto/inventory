@@ -28,7 +28,8 @@
         "verify:sales": "node scripts/verify-sales-integration.mjs",
         "migrate:bootstrap": "node --experimental-strip-types scripts/run-bootstrap.ts",
         "migrate:email-normalized": "node scripts/backfill-email-normalized.mjs",
-        "worker:bg-jobs": "node scripts/run-bg-worker.mjs"
+        "worker:bg-jobs": "node scripts/run-bg-worker.mjs",
+        "test:worker": "node scripts/test-bg-worker.mjs"
     },
     "engines": {
         "node": ">=22.0.0"

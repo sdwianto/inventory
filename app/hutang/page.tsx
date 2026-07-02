@@ -1,7 +1,7 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str, num, asObject } from '@/types/json';
+import { str, num, asObject, asArray } from '@/types/json';
 import { useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -19,6 +19,7 @@ import { debounce } from '@/lib/debounce';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
+import { useBgJob } from '@/lib/hooks/use-bg-job';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -65,6 +66,8 @@ export default function HutangVendorPage() {
   const [loadingDetail, setLoadingDetail] = useState('');
   const [acting, setActing] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
+  const { data: syncJob } = useBgJob(activeSyncJobId);
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
@@ -81,6 +84,41 @@ export default function HutangVendorPage() {
     window.addEventListener('erp-hutang-change', onChange);
     return () => window.removeEventListener('erp-hutang-change', onChange);
   }, [debouncedRefresh]);
+
+  useEffect(() => {
+    if (!syncJob || !activeSyncJobId) return;
+    const status = String(syncJob.status || '');
+    if (status === 'DONE') {
+      const data = asObject(syncJob.result);
+      if (data.skipped) {
+        toast.info(String(data.error || 'Sync dilewati'));
+      } else if (data.fetchIncomplete || data.warning) {
+        toast.warning(String(data.warning || 'Sync invoice tidak lengkap — coba lagi'));
+      } else if (num(asObject(data.reconcile).replayed) > 0 && num(asObject(data.reconcile).created) > 0) {
+        toast.success(`${num(asObject(data.reconcile).created)} faktur dibuat ulang di sales.app`);
+      } else if (num(data.refreshed) > 0 || num(asObject(data.reconcile).fixed) > 0) {
+        const n = num(data.refreshed) + num(asObject(data.reconcile).fixed);
+        toast.success(`${n} tagihan dipulihkan — cek tab Menunggu review`);
+      } else if (num(data.pendingAfter) > 0) {
+        toast.success(`${num(data.pendingAfter)} tagihan menunggu review admin`);
+      } else if (asArray(asObject(data.reconcile).salesErrors).length) {
+        const first = asObject(asArray(asObject(data.reconcile).salesErrors)[0]);
+        toast.warning(`Gagal buat faktur di sales: ${str(first.error, 'cek pelanggan B2B')}`);
+      } else if (num(data.created) > 0) {
+        toast.success(`Sync: ${num(data.created)} tagihan baru, ${num(data.existing)} sudah ada`);
+      } else {
+        toast.success('Sync hutang selesai');
+      }
+      setActiveSyncJobId(null);
+      setSyncing(false);
+      void refreshAfterMutation();
+    } else if (status === 'FAILED') {
+      const errMsg = String(syncJob.lastError || asObject(syncJob.result).error || 'Gagal sync');
+      toast.error(errMsg);
+      setActiveSyncJobId(null);
+      setSyncing(false);
+    }
+  }, [syncJob, activeSyncJobId, refreshAfterMutation]);
 
   const openDetail = async (id: string) => {
     setLoadingDetail(id);
@@ -175,12 +213,12 @@ export default function HutangVendorPage() {
     try {
       const res = await fetch('/api/hutang/sync-pending', { method: 'POST' });
       const data = await res.json();
-      if (res.status === 202) {
+      if (!res.ok && !data.skipped) throw new Error(data.error || 'Gagal sync');
+      if (res.status === 202 && data.jobId) {
         toast.info('Sync hutang berjalan di background…');
-        await refreshAfterMutation();
+        setActiveSyncJobId(String(data.jobId));
         return;
       }
-      if (!res.ok && !data.skipped) throw new Error(data.error || 'Gagal sync');
       if (data.skipped) toast.info(data.error || 'Endpoint sync belum tersedia di sales.app');
       else if (data.fetchIncomplete || data.warning) {
         toast.warning(String(data.warning || 'Sync invoice tidak lengkap — coba lagi'));
@@ -206,10 +244,11 @@ export default function HutangVendorPage() {
         toast.success(`Sync: ${data.existing || 0} sudah ada, tidak ada yang baru`);
       }
       await refreshAfterMutation();
+      setSyncing(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+      setSyncing(false);
     }
-    setSyncing(false);
   };
 
   const allList = Array.isArray(list) ? list : [];

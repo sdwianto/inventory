@@ -35,6 +35,7 @@ import {
   emptyPoLine,
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
+import { useBgJob } from '@/lib/hooks/use-bg-job';
 
 function CustomerPoPageContent() {
   const [user, setUser] = useState<JsonObject | null>(null);
@@ -52,6 +53,8 @@ function CustomerPoPageContent() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const autoSyncBusy = useRef(false);
+  const [vendorSyncJobId, setVendorSyncJobId] = useState<string | null>(null);
+  const { data: vendorSyncJob } = useBgJob(vendorSyncJobId);
   const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
   const [defaultTier, setDefaultTier] = useState('ECER');
   const searchParams = useSearchParams();
@@ -113,15 +116,38 @@ function CustomerPoPageContent() {
     [list],
   );
 
+  useEffect(() => {
+    if (!vendorSyncJob || !vendorSyncJobId) return;
+    const status = String(vendorSyncJob.status || '');
+    if (status === 'DONE') {
+      const result = asObject(vendorSyncJob.result);
+      const synced = asArray(result.synced) as JsonObject[];
+      if (synced.length > 0) {
+        void reloadList();
+        const labels = synced.map((s) => str(s.noPO)).filter(Boolean).join(', ');
+        toast.success(`${synced.length} PO terkirim otomatis ke vendor`, { description: labels });
+      }
+      setVendorSyncJobId(null);
+      autoSyncBusy.current = false;
+    } else if (status === 'FAILED') {
+      toast.warning(String(vendorSyncJob.lastError || asObject(vendorSyncJob.result).error || 'Sync PO vendor gagal'));
+      setVendorSyncJobId(null);
+      autoSyncBusy.current = false;
+    }
+  }, [vendorSyncJob, vendorSyncJobId, reloadList]);
+
   const runAutoVendorSync = useCallback(async () => {
     if (autoSyncBusy.current) return;
     autoSyncBusy.current = true;
+    let startedAsyncJob = false;
     try {
       const res = await fetch('/api/customer-purchase-orders/sync-pending', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) return;
-      if (res.status === 202) {
+      if (res.status === 202 && data.jobId) {
         toast.info('PO antrian dikirim ke background');
+        setVendorSyncJobId(String(data.jobId));
+        startedAsyncJob = true;
         return;
       }
       if (data.synced?.length > 0) {
@@ -134,7 +160,7 @@ function CustomerPoPageContent() {
     } catch {
       /* sales.app belum online */
     } finally {
-      autoSyncBusy.current = false;
+      if (!startedAsyncJob) autoSyncBusy.current = false;
     }
   }, [reloadList]);
 

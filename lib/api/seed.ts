@@ -133,6 +133,12 @@ export async function ensureSeeded(db: Db): Promise<void> {
     bootstrapDone = true;
     return;
   }
+  const existingMaster = await db.collection('users').findOne({ tenantId: 'master' });
+  if (existingMaster) {
+    await setSystemFlag(db, BOOTSTRAP_FLAG);
+    bootstrapDone = true;
+    return;
+  }
   if (!bootstrapPromise) {
     bootstrapPromise = runBootstrap(db).catch((e) => {
       bootstrapPromise = null;
