@@ -42,7 +42,7 @@ import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 function CustomerPoPageContent() {
   const [user, setUser] = useState<JsonObject | null>(null);
   const { list, reload: reloadList, setList } = useCustomerPoList();
-  const poMutations = usePoMutations(setList, () => reloadList());
+  const poMutations = usePoMutations(setList, async () => { await reloadList(); });
   const { products, reloadProducts } = useCustomerPoProducts();
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);

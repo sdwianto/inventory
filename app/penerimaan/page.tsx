@@ -19,7 +19,9 @@ import { warehouseName } from '@/lib/warehouses-client';
 import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
 import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
+import { useGrnMutations } from '@/lib/hooks/use-grn-mutations';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -65,6 +67,7 @@ const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
 
 export default function PenerimaanPage() {
   const invalidateGrn = useInvalidateGrn();
+  const listKey = queryKeys.pages.penerimaan();
   const {
     items: list,
     loading: isLoading,
@@ -74,9 +77,14 @@ export default function PenerimaanPage() {
     reload,
     error,
   } = useCursorQuery<JsonObject>(
-    queryKeys.pages.penerimaan(),
+    listKey,
     '/api/pages/penerimaan',
     { limit: 100 },
+  );
+  const { postGrn: postGrnMutation, replayInvoice: replayInvoiceMutation, syncFromSales: syncFromSalesMutation } = useGrnMutations(
+    listKey,
+    reload,
+    invalidateGrn,
   );
   const [posting, setPosting] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -139,15 +147,15 @@ export default function PenerimaanPage() {
   const replayInvoice = async (id: string, noGRN?: unknown) => {
     setReplayingInvoice(id);
     try {
-      const res = await fetch(`/api/goods-receipts/${id}/replay-invoice`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal buat faktur');
+      await replayInvoiceMutation(id);
       toast.success(`Faktur ${noGRN} — diproses di background`);
       setPollInvoiceGrnId(id);
-      invalidateGrn();
-      reload();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) {
+        toast.info('Replay faktur disimpan offline — akan disinkron saat online');
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
     }
     setReplayingInvoice('');
   };
@@ -155,9 +163,7 @@ export default function PenerimaanPage() {
   const syncFromSales = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/goods-receipts/sync-shipped', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal sync');
+      const { res, data } = await syncFromSalesMutation();
       if (res.status === 202 && data.jobId) {
         toast.info('Sync DO berjalan di background…');
         setActiveSyncJobId(String(data.jobId));
@@ -169,7 +175,11 @@ export default function PenerimaanPage() {
       window.dispatchEvent(new CustomEvent('erp-hutang-change'));
       setSyncing(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) {
+        toast.info('Sync DO disimpan offline — akan disinkron saat online');
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
       setSyncing(false);
     }
   };
@@ -222,17 +232,8 @@ export default function PenerimaanPage() {
       lokasiKode: str(gudangMap[itemRowKey(it, idx)], 'GKERING'),
     })).filter((it) => it.qty > 0);
 
-    const res = await fetch(`/api/goods-receipts/${grnId}/post`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast.error(data.error || 'Gagal');
-      invalidateGrn();
-      reload();
-    } else {
+    try {
+      const data = await postGrnMutation(grnId, items);
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
       if (data.invoiceSync?.async || data.invoiceSyncStatus === 'PENDING') {
@@ -245,8 +246,15 @@ export default function PenerimaanPage() {
         toast.warning(`Faktur gagal: ${data.invoiceSync?.error || data.invoiceSyncError || 'cek sales.app'}`);
       }
       setDetail(null);
-      invalidateGrn();
-      reload();
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) {
+        toast.info('Penerimaan disimpan offline — akan disinkron saat online');
+        setDetail(null);
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+        invalidateGrn();
+        reload();
+      }
     }
     setPosting('');
   };

@@ -20,6 +20,7 @@ import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
 import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
+import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
 import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
