@@ -1,9 +1,15 @@
 import type { Db } from 'mongodb';
+import type { AnyBulkWriteOperation } from 'mongodb';
 import { resolveSalesApiAccess } from '@/lib/api/integration-links';
-import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
+import { nextDocNumber } from '@/lib/api/document-sequence';
+import {
+  buildGrnInsertDoc,
+  grnUpdateFieldsFromPayload,
+} from '@/lib/api/grn-from-webhook';
 import type { JsonObject } from '@/types/json';
 
-const SYNC_CONCURRENCY = 5;
+const BULK_CHUNK = 100;
+const BUILD_CONCURRENCY = 5;
 
 async function mapWithConcurrency<T>(
   items: T[],
@@ -19,6 +25,18 @@ async function mapWithConcurrency<T>(
 interface SyncErrorRow {
   noDO?: unknown;
   error: string;
+}
+
+async function flushBulkOps(
+  db: Db,
+  ops: AnyBulkWriteOperation<JsonObject>[],
+): Promise<void> {
+  for (let i = 0; i < ops.length; i += BULK_CHUNK) {
+    const chunk = ops.slice(i, i + BULK_CHUNK);
+    if (chunk.length) {
+      await db.collection('goods_receipts').bulkWrite(chunk, { ordered: false });
+    }
+  }
 }
 
 export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: string) {
@@ -50,21 +68,40 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
     ? await db.collection('goods_receipts').find({
       tenantId: tid,
       vendorDeliveryId: { $in: deliveryIds },
-    }).project({ vendorDeliveryId: 1 }).toArray()
+    }).toArray()
     : [];
-  const existingSet = new Set(existingGrns.map((g) => String(g.vendorDeliveryId)));
+  const existingByDeliveryId = new Map(
+    existingGrns.map((g) => [String(g.vendorDeliveryId), g as JsonObject]),
+  );
 
-  await mapWithConcurrency(deliveries, SYNC_CONCURRENCY, async (row) => {
+  const insertOps: AnyBulkWriteOperation<JsonObject>[] = [];
+  const updateOps: AnyBulkWriteOperation<JsonObject>[] = [];
+
+  await mapWithConcurrency(deliveries, BUILD_CONCURRENCY, async (row) => {
     const payload = (row.payload || row) as JsonObject;
     const deliveryId = payload?.deliveryId ? String(payload.deliveryId) : '';
-    const hadBefore = deliveryId ? existingSet.has(deliveryId) : false;
+    const vendorTenantId = row.vendorTenantId ? String(row.vendorTenantId) : null;
+
     try {
-      await createGrnFromDelivery(db, tid, payload, row.vendorTenantId ? String(row.vendorTenantId) : null);
-      if (hadBefore) results.existing += 1;
-      else {
-        results.created += 1;
-        if (deliveryId) existingSet.add(deliveryId);
+      const existing = deliveryId ? existingByDeliveryId.get(deliveryId) : null;
+      if (existing?.id) {
+        updateOps.push({
+          updateOne: {
+            filter: { id: existing.id },
+            update: {
+              $set: grnUpdateFieldsFromPayload(payload, vendorTenantId, existing),
+            },
+          },
+        });
+        results.existing += 1;
+        return;
       }
+
+      const noGRN = await nextDocNumber(db, tid, 'GRN', 'GRN');
+      const doc = await buildGrnInsertDoc(db, tid, payload, vendorTenantId, noGRN);
+      insertOps.push({ insertOne: { document: doc } });
+      if (deliveryId) existingByDeliveryId.set(deliveryId, doc);
+      results.created += 1;
     } catch (e) {
       results.errors.push({
         noDO: payload?.noDO,
@@ -73,9 +110,13 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
     }
   });
 
+  await flushBulkOps(db, updateOps);
+  await flushBulkOps(db, insertOps);
+
   return {
     ...results,
     total: deliveries.length,
     customerTenantId: tid,
+    bulkWritten: insertOps.length + updateOps.length,
   };
 }

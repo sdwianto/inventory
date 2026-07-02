@@ -21,38 +21,30 @@ type GrnLineDraft = JsonObject & {
   mapStatus: string;
 };
 
-export async function createGrnFromDelivery(
+export function grnUpdateFieldsFromPayload(
+  payload: JsonObject,
+  vendorTenantId: string | null | undefined,
+  existing: JsonObject,
+): Record<string, unknown> {
+  return {
+    noDO: payload.noDO || existing.noDO,
+    noSO: payload.noSO || existing.noSO,
+    noPO: payload.noPO || existing.noPO,
+    vendorTenantId: vendorTenantId || existing.vendorTenantId,
+    vendorDeliverySnapshot: payload,
+    updatedAt: new Date(),
+  };
+}
+
+export async function buildGrnInsertDoc(
   db: Db,
   tenantId: string | null | undefined,
   payload: JsonObject,
   vendorTenantId: string | null | undefined,
+  noGRN: string,
 ): Promise<JsonObject> {
   const tid = tenantId || 'default';
-  if (payload.deliveryId) {
-    const existing = await db.collection('goods_receipts').findOne({
-      tenantId: tid,
-      vendorDeliveryId: payload.deliveryId,
-    });
-    if (existing) {
-      await db.collection('goods_receipts').updateOne(
-        { id: existing.id },
-        {
-          $set: {
-            noDO: payload.noDO || existing.noDO,
-            noSO: payload.noSO || existing.noSO,
-            noPO: payload.noPO || existing.noPO,
-            vendorTenantId: vendorTenantId || existing.vendorTenantId,
-            vendorDeliverySnapshot: payload,
-            updatedAt: new Date(),
-          },
-        },
-      );
-      return { ...existing, vendorDeliverySnapshot: payload } as JsonObject;
-    }
-  }
-
   const now = new Date();
-  const noGRN = await nextDocNumber(db, tenantId, 'GRN', 'GRN');
   const rawItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
   const maps = await loadProductMaps(db, tid, vendorTenantId ?? null, rawItems);
   const items: GrnLineDraft[] = [];
@@ -85,7 +77,7 @@ export async function createGrnFromDelivery(
   const vendorTenantName = await resolveVendorTenantName(db, tid, vendorTenantId ?? null);
   const { items: uniqueItems } = ensureUniqueLineIds(items);
 
-  const doc: JsonObject = {
+  return {
     id: uuidv4(),
     tenantId: tid,
     noGRN,
@@ -106,6 +98,31 @@ export async function createGrnFromDelivery(
     createdAt: now,
     invoiceSyncStatus: 'NONE',
   };
+}
+
+export async function createGrnFromDelivery(
+  db: Db,
+  tenantId: string | null | undefined,
+  payload: JsonObject,
+  vendorTenantId: string | null | undefined,
+): Promise<JsonObject> {
+  const tid = tenantId || 'default';
+  if (payload.deliveryId) {
+    const existing = await db.collection('goods_receipts').findOne({
+      tenantId: tid,
+      vendorDeliveryId: payload.deliveryId,
+    });
+    if (existing) {
+      await db.collection('goods_receipts').updateOne(
+        { id: existing.id },
+        { $set: grnUpdateFieldsFromPayload(payload, vendorTenantId ?? null, existing as JsonObject) },
+      );
+      return { ...existing, vendorDeliverySnapshot: payload } as JsonObject;
+    }
+  }
+
+  const noGRN = await nextDocNumber(db, tenantId, 'GRN', 'GRN');
+  const doc = await buildGrnInsertDoc(db, tenantId, payload, vendorTenantId, noGRN);
   await db.collection('goods_receipts').insertOne(doc);
   return doc;
 }

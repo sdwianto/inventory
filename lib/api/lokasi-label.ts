@@ -6,13 +6,14 @@ import { withTenantFilter } from '@/lib/api/tenant-master';
 import type { AuthContext } from '@/types/auth';
 import {
   buildCacheKey,
+  cacheDelByPattern,
   cacheDelMany,
   cacheGetJson,
   cacheSetJson,
   clearLocalMemoryCache,
 } from '@/lib/api/app-cache';
 
-const CACHE_TTL_SEC = 5 * 60;
+const CACHE_TTL_SEC = 15 * 60;
 
 function cacheKeyForAuth(auth: AuthContext | null): string {
   if (!auth) return 'anon';
@@ -26,6 +27,7 @@ function lokasiCacheRedisKey(scopeKey: string): string {
 
 export async function invalidateLokasiLabelCache(tenantId?: string | null): Promise<void> {
   if (!tenantId) {
+    await cacheDelByPattern(buildCacheKey('lokasi', '*'));
     clearLocalMemoryCache();
     return;
   }

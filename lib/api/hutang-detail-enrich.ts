@@ -104,7 +104,12 @@ async function fetchVendorProfileFromSales(salesAppUrl: string, salesApiKey: str
 
 const VENDOR_PROFILE_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 
-export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorTenantId) {
+export async function loadVendorBillingProfile(
+  db: Db,
+  customerTenantId,
+  vendorTenantId,
+  { forceRefresh = false }: { forceRefresh?: boolean } = {},
+) {
   const tid = customerTenantId || 'default';
   const vid = String(vendorTenantId || '').trim() || 'default';
   const link = vid !== 'default' ? await findLinkForVendorCustomer(db, tid, vid) : null;
@@ -127,7 +132,7 @@ export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorT
   };
 
   const syncedAt = vt?.profileSyncedAt ? new Date(vt.profileSyncedAt).getTime() : 0;
-  const cacheFresh = syncedAt > 0 && (Date.now() - syncedAt) < VENDOR_PROFILE_CACHE_MS;
+  const cacheFresh = !forceRefresh && syncedAt > 0 && (Date.now() - syncedAt) < VENDOR_PROFILE_CACHE_MS;
   const access = cacheFresh ? null : await resolveSalesApiAccess(db, tid, vid !== 'default' ? vid : undefined);
   const remote = cacheFresh || !access
     ? null
@@ -228,14 +233,18 @@ export async function enrichInvoiceItems(db: Db, customerTenantId: string, hutan
   });
 }
 
-export async function buildHutangDetailEnrichment(db: Db, hutang) {
+export async function buildHutangDetailEnrichment(
+  db: Db,
+  hutang,
+  { forceRefresh = false }: { forceRefresh?: boolean } = {},
+) {
   const tid = hutang.tenantId || 'default';
   const vendorTenantId = hutang.vendorTenantId || hutang.vendorBillingSnapshot?.vendorTenantId;
 
   const snap = hutang.vendorBillingSnapshot;
   let vendorBilling;
   const snapLogo = logoUrlFromSettings(snap);
-  if (snap?.companyName) {
+  if (snap?.companyName && !forceRefresh) {
     vendorBilling = {
       ...snap,
       logoBase64: snapLogo,
@@ -244,7 +253,7 @@ export async function buildHutangDetailEnrichment(db: Db, hutang) {
       source: 'snapshot',
     };
   } else {
-    const loaded = await loadVendorBillingProfile(db, tid, vendorTenantId);
+    const loaded = await loadVendorBillingProfile(db, tid, vendorTenantId, { forceRefresh });
     const mergedLogo = logoUrlFromSettings(snap) || logoUrlFromSettings(loaded) || loaded.logoBase64;
     vendorBilling = {
       ...loaded,

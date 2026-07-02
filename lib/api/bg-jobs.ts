@@ -23,6 +23,7 @@ export const JOB_TYPES = {
   GRN_SYNC_SHIPPED: 'GRN_SYNC_SHIPPED',
   GRN_POST_SIDE_EFFECTS: 'GRN_POST_SIDE_EFFECTS',
   GRN_RESOLVE_PRODUCTS: 'GRN_RESOLVE_PRODUCTS',
+  HUTANG_REPAIR: 'HUTANG_REPAIR',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -277,6 +278,9 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.GRN_RESOLVE_PRODUCTS) {
       const { runGrnResolveProducts } = await import('@/lib/api/grn-resolve-products-run');
       outcome = await runGrnResolveProducts(db, job.tenantId);
+    } else if (job.type === JOB_TYPES.HUTANG_REPAIR) {
+      const { runHutangRepairJob } = await import('@/lib/api/hutang-repair-run');
+      outcome = await runHutangRepairJob(db, job);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

@@ -3,7 +3,7 @@ import type { Db } from 'mongodb';
 
 import type { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { ok, err, clean } from '@/lib/api/db';
+import { ok, err, clean, okCached } from '@/lib/api/db';
 import {
   withTenantFilter,
   tenantIdForWrite,
@@ -675,7 +675,7 @@ export async function handleInventory({
     await ensureWarehousesForTenant(db, tenantId);
     const filter = withTenantFilter(scopeAuth, { kode: { $in: WAREHOUSE_CODES } });
     const list = await db.collection('lokasi').find(filter).sort({ kode: 1 }).toArray();
-    return ok(list.map(clean));
+    return okCached(list.map(clean), { maxAge: 120 });
   }
   if (route === '/lokasi' && method === 'POST') {
     return err('Gudang tetap GKERING & GBASAH — tidak bisa menambah lokasi baru. Edit keterangan via PUT jika perlu.', 400);

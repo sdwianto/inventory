@@ -245,15 +245,22 @@ export async function ensureHutangForPostedGrn(
 }
 
 /** Perbaiki tagihan vendor stale — termasuk yang ter-link GRN tapi tenantId/referenceType salah. */
-export async function repairStaleVendorHutangs(db: Db, tenantId: string): Promise<number> {
+export async function repairStaleVendorHutangs(
+  db: Db,
+  tenantId: string,
+  { grnSkip = 0, grnLimit = 500 }: { grnSkip?: number; grnLimit?: number } = {},
+): Promise<{ fixed: number; processed: number; hasMore: boolean }> {
   const tid = normalizeTenantId(tenantId);
   const seen = new Set<string>();
   let fixed = 0;
 
-  const grns = await db.collection('goods_receipts').find({
+  const grnBatch = await db.collection('goods_receipts').find({
     ...tenantIdMatchFilter(tid),
     status: 'POSTED',
-  }).sort({ postedAt: -1 }).limit(500).toArray();
+  }).sort({ postedAt: -1 }).skip(grnSkip).limit(grnLimit + 1).toArray();
+
+  const hasMore = grnBatch.length > grnLimit;
+  const grns = hasMore ? grnBatch.slice(0, grnLimit) : grnBatch;
 
   const hutangMaps = await buildHutangLookupMaps(db, tid, grns as GrnDoc[]);
 
@@ -265,21 +272,23 @@ export async function repairStaleVendorHutangs(db: Db, tenantId: string): Promis
     if (await fixHutangApprovalIfNeeded(db, hutang, grn)) fixed += 1;
   }
 
-  const rows = await db.collection('hutang').find({
-    $or: [
-      { referenceType: 'VENDOR_INVOICE', ...tenantIdMatchFilter(tid) },
-      { vendorInvoiceId: { $exists: true, $ne: null }, ...tenantIdMatchFilter(tid) },
-    ],
-  }).toArray();
+  if (grnSkip === 0) {
+    const rows = await db.collection('hutang').find({
+      $or: [
+        { referenceType: 'VENDOR_INVOICE', ...tenantIdMatchFilter(tid) },
+        { vendorInvoiceId: { $exists: true, $ne: null }, ...tenantIdMatchFilter(tid) },
+      ],
+    }).toArray();
 
-  for (const hutangRow of rows) {
-    const hutang = hutangRow as HutangDoc;
-    if (!hutang.id || seen.has(hutang.id)) continue;
-    seen.add(hutang.id);
-    if (await fixHutangApprovalIfNeeded(db, hutang)) fixed += 1;
+    for (const hutangRow of rows) {
+      const hutang = hutangRow as HutangDoc;
+      if (!hutang.id || seen.has(hutang.id)) continue;
+      seen.add(hutang.id);
+      if (await fixHutangApprovalIfNeeded(db, hutang)) fixed += 1;
+    }
   }
 
-  return fixed;
+  return { fixed, processed: grns.length, hasMore };
 }
 
 function needsSalesReplay(
@@ -306,7 +315,20 @@ export async function reconcileVendorHutangFromPostedGrns(
 ) {
   const tid = normalizeTenantId(tenantId);
   const queueReplays = queueSalesReplays || callSales === true;
-  let fixed = await repairStaleVendorHutangs(db, tid);
+  const repairResult = await repairStaleVendorHutangs(db, tid);
+  let fixed = repairResult.fixed;
+
+  if (repairResult.hasMore) {
+    await enqueueJob(db, {
+      type: JOB_TYPES.HUTANG_REPAIR,
+      tenantId: tid,
+      payload: {
+        grnSkip: repairResult.processed,
+        dedupeKey: `hutang-repair:${tid}:${repairResult.processed}`,
+      },
+    });
+    scheduleJobProcessing(db, { limit: 2 });
+  }
 
   const grns = await db.collection('goods_receipts').find({
     ...tenantIdMatchFilter(tid),

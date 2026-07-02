@@ -193,10 +193,11 @@ export async function handleVendorHutang({
     if (denied) return denied;
     const doc = await db.collection('hutang').findOne(withTenantFilter(scopeAuth, { id: path[1] })) as HutangDoc | null;
     if (!doc) return err('Tidak ditemukan', 404);
+    const forceRefresh = url.searchParams.get('forceRefresh') === '1';
     const [pembayaran, detail, billing, variance] = await Promise.all([
       db.collection('hutang_pembayaran').find({ hutangId: doc.id }).sort({ tanggal: -1 }).toArray(),
       enrichHutangDetail(db, doc),
-      buildHutangDetailEnrichment(db, doc),
+      buildHutangDetailEnrichment(db, doc, { forceRefresh }),
       resolveHutangVariance(db, doc),
     ]);
     if (

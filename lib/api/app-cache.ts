@@ -105,6 +105,30 @@ export async function cacheDelMany(keys: string[]): Promise<void> {
   for (const key of unique) memory.delete(key);
 }
 
+/** Hapus entri in-memory lokal (Redis mengandalkan TTL). */
 export function clearLocalMemoryCache(): void {
   memory.clear();
+}
+
+/** Hapus semua key Redis yang cocok pola (mis. `inventory:lokasi:*`). */
+export async function cacheDelByPattern(pattern: string): Promise<void> {
+  const match = pattern.includes(':') ? pattern : buildCacheKey(pattern);
+  if (redisConfigured()) {
+    try {
+      let cursor = '0';
+      do {
+        const result = await redisCommand(['SCAN', cursor, 'MATCH', match, 'COUNT', 100]);
+        if (!Array.isArray(result) || result.length < 2) break;
+        cursor = String(result[0]);
+        const keys = Array.isArray(result[1]) ? result[1].map(String) : [];
+        if (keys.length) await cacheDelMany(keys);
+      } while (cursor !== '0');
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const key of [...memory.keys()]) {
+    const glob = match.replace(/\*/g, '.*');
+    if (new RegExp(`^${glob}$`).test(key)) memory.delete(key);
+  }
 }
