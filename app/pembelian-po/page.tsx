@@ -36,10 +36,13 @@ import {
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { usePoMutations } from '@/lib/hooks/use-po-mutations';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 function CustomerPoPageContent() {
   const [user, setUser] = useState<JsonObject | null>(null);
   const { list, reload: reloadList, setList } = useCustomerPoList();
+  const poMutations = usePoMutations(setList, () => reloadList());
   const { products, reloadProducts } = useCustomerPoProducts();
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -357,23 +360,20 @@ function CustomerPoPageContent() {
 
   const requestApproval = async (id: string) => {
     setSubmitting(id);
-    const res = await fetch(`/api/customer-purchase-orders/${id}/request-approval`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) toast.error(data.error || 'Gagal mengajukan');
-    else toast.success('PO diajukan — menunggu persetujuan Admin');
-    reloadList();
+    try {
+      await poMutations.requestApproval(id);
+      toast.success('PO diajukan — menunggu persetujuan Admin');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
     setSubmitting('');
   };
 
   const approvePo = async (id: string) => {
     setSubmitting(id);
     try {
-      const res = await fetch(`/api/customer-purchase-orders/${id}/approve`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Gagal menyetujui PO');
-        return;
-      }
+      const data = await poMutations.approve(id);
       if (data.vendorSynced === false || data.status === 'APPROVED') {
         toast.success('PO disetujui', {
           description: data.vendorSyncError
@@ -381,13 +381,13 @@ function CustomerPoPageContent() {
             : 'Menunggu pengiriman ke sales.app',
         });
       } else if (data.vendorSubmissions?.length > 1) {
-        toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s) => s.vendorNoSO).join(', ')}`);
+        toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s: { vendorNoSO?: string }) => s.vendorNoSO).join(', ')}`);
       } else {
         toast.success(`Disetujui & dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
       }
-      reloadList();
-    } catch {
-      toast.error('Gagal menyetujui — tidak dapat menghubungi server');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal menyetujui — tidak dapat menghubungi server');
     }
     setSubmitting('');
   };
@@ -395,43 +395,31 @@ function CustomerPoPageContent() {
   const syncVendorPo = async (id: string) => {
     setSubmitting(id);
     try {
-      const res = await fetch(`/api/customer-purchase-orders/${id}/sync-vendor`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Gagal kirim ke sales.app');
-        return;
-      }
+      const data = await poMutations.syncVendor(id);
       toast.success(`Dikirim ke vendor → SO ${data.vendorNoSO || data.vendorSoId || ''}`);
-      reloadList();
-    } catch {
-      toast.error('Gagal kirim — tidak dapat menghubungi server');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
     }
     setSubmitting('');
   };
 
   const rejectPo = async (id: string) => {
     setSubmitting(id);
-    const res = await fetch(`/api/customer-purchase-orders/${id}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'Ditolak admin' }),
-    });
-    const data = await res.json();
-    if (!res.ok) toast.error(data.error || 'Gagal menolak');
-    else toast.success('PO ditolak');
-    reloadList();
+    try {
+      await poMutations.reject(id);
+      toast.success('PO ditolak');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
     setSubmitting('');
   };
 
   const submitPo = async (id: string) => {
     setSubmitting(id);
     try {
-      const res = await fetch(`/api/customer-purchase-orders/${id}/submit`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Gagal kirim ke sales.app');
-        return;
-      }
+      const data = await poMutations.submit(id);
       if (data.vendorSynced === false || data.status === 'APPROVED') {
         toast.success('PO dikirim (disetujui)', {
           description: data.vendorSyncError
@@ -439,13 +427,13 @@ function CustomerPoPageContent() {
             : 'Menunggu sales.app',
         });
       } else if (data.vendorSubmissions?.length > 1) {
-        toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s) => s.vendorNoSO).join(', ')}`);
+        toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s: { vendorNoSO?: string }) => s.vendorNoSO).join(', ')}`);
       } else {
         toast.success(`Dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
       }
-      reloadList();
-    } catch {
-      toast.error('Gagal kirim — tidak dapat menghubungi server');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
     }
     setSubmitting('');
   };
