@@ -184,6 +184,17 @@ export async function handleIntegrations({
     return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 
+  if (path[0] === 'integrations' && path[1] === 'jobs' && path[2] && path[3] === 'stream' && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const jobId = path[2];
+    const { createBgJobStreamResponse } = await import('@/lib/api/bg-job-stream');
+    return createBgJobStreamResponse(async () => {
+      const job = await getJobById(db, jobId, tenantId);
+      return job as Record<string, unknown> | null;
+    });
+  }
+
   if (path[0] === 'integrations' && path[1] === 'jobs' && path[2] && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;

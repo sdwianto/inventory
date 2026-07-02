@@ -5,7 +5,7 @@ import { resolveOperationalScope, tenantIdForWrite, withTenantFilter } from '@/l
 import { guardPosting } from '@/lib/api/period-lock';
 import { syncShippedDeliveriesFromSales } from '@/lib/api/grn-sync-sales';
 import { isUnresolvedGrnStatus, refreshGrnProducts, refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
-import { enrichGrnList, enrichGrnDoc } from '@/lib/api/grn-enrich';
+import { enrichGrnList, enrichGrnDocWithProducts } from '@/lib/api/grn-enrich';
 import { postGoodsReceipt, replayGrnInvoiceAsync, type GrnDoc } from '@/lib/api/grn-post';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection';
@@ -34,8 +34,21 @@ export async function handleGoodsReceipts({
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     if (!tenantId) return err('Scope tidak valid', 400);
-    const refreshed = await refreshUnresolvedGrnsForTenant(db, tenantId);
-    return ok({ refreshed });
+
+    const inline = url.searchParams.get('inline') === '1';
+    if (inline) {
+      const refreshed = await refreshUnresolvedGrnsForTenant(db, tenantId);
+      await invalidateDashboardSnapshot(db, tenantId);
+      return ok({ refreshed });
+    }
+
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.GRN_RESOLVE_PRODUCTS,
+      tenantId,
+      payload: { dedupeKey: 'grn-resolve-products' },
+    });
+    scheduleJobProcessing(db);
+    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 
   if (route === '/goods-receipts' && method === 'GET') {
@@ -137,7 +150,7 @@ export async function handleGoodsReceipts({
 
     doc = await refreshGrnProducts(db, doc as import('@/types/documents').GrnDoc) as GrnDoc;
 
-    doc = await enrichGrnDoc(db, doc) as GrnDoc;
+    doc = await enrichGrnDocWithProducts(db, doc) as GrnDoc;
 
     return ok(clean(doc));
   }

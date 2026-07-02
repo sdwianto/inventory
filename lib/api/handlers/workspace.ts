@@ -1,0 +1,157 @@
+import type { Db } from 'mongodb';
+import type { NextResponse } from 'next/server';
+import { ok, clean, okCached } from '@/lib/api/db';
+import { sanitizeStoreSettings } from '@/lib/receipt-doc';
+import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
+import { requireMaster } from '@/lib/api/require-auth';
+import { countScheduleDueStats, startOfDay } from '@/lib/api/maintenance-schedule-engine';
+import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
+import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
+import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
+import type { HandlerContext } from '@/types/api/handler';
+import type { AuthContext } from '@/types/auth';
+
+function okPrivate(data: unknown): NextResponse {
+  return okCached(data, { maxAge: 30 });
+}
+
+async function loadTenantSettings(db: Db, tenantId: string): Promise<Record<string, unknown> | null> {
+  const settings = await db.collection('tenant_settings').findOne({ tenantId });
+  if (!settings) return null;
+  const doc = clean(settings) as Record<string, unknown>;
+  return { ...doc, ...sanitizeStoreSettings(doc) };
+}
+
+async function loadLokasi(db: Db, scopeAuth: AuthContext | null, tenantId: string) {
+  if (!scopeAuth || !tenantId) return [];
+  const filter = withTenantFilter(scopeAuth, {});
+  let list = await db.collection('lokasi').find(filter).sort({ kode: 1 }).toArray();
+  if (list.length === 0 && !scopeAuth.isMaster) {
+    await bootstrapTenantMasterData(db, tenantId, { includeProducts: false }).catch(() => {});
+    list = await db.collection('lokasi').find(filter).sort({ kode: 1 }).toArray();
+  }
+  return list.map((row) => clean(row));
+}
+
+async function loadTenants(db: Db) {
+  const [allSettings, users] = await Promise.all([
+    db.collection('tenant_settings').find({}).toArray(),
+    db.collection('users').find({}).toArray(),
+  ]);
+  const tenantMap: Record<string, Record<string, unknown>> = {};
+  for (const s of allSettings) {
+    tenantMap[s.tenantId] = {
+      tenantId: s.tenantId,
+      tenantName: s.companyName || s.tenantId,
+      companyName: s.companyName || '-',
+      userCount: 0,
+    };
+  }
+  for (const u of users) {
+    const tid = u.tenantId || 'default';
+    if (!tenantMap[tid]) {
+      tenantMap[tid] = {
+        tenantId: tid,
+        tenantName: u.tenantName || tid,
+        companyName: u.tenantName || tid,
+        userCount: 0,
+      };
+    }
+    tenantMap[tid].userCount = Number(tenantMap[tid].userCount || 0) + 1;
+  }
+  return Object.values(tenantMap).filter(
+    (t) => t.tenantId !== 'default' && t.tenantId !== 'master',
+  );
+}
+
+export async function handleWorkspace({
+  db,
+  route,
+  method,
+  url,
+  auth,
+  request,
+}: HandlerContext): Promise<NextResponse | null> {
+  if (route !== '/workspace/bootstrap' || method !== 'GET') return null;
+
+  const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
+  if (denied) return denied;
+
+  const brandTenantId = auth?.tenantId || 'default';
+  const today = startOfDay(new Date());
+  const tenantFilter = tenantId ? withTenantFilter(scopeAuth, {}) : {};
+
+  const [brandSettings, scopeSettings, lokasi, tenants, grnPending, hutangReview, wrPending, pmStats] =
+    await Promise.all([
+      loadTenantSettings(db, brandTenantId),
+      tenantId ? loadTenantSettings(db, tenantId) : Promise.resolve(null),
+      tenantId && scopeAuth ? loadLokasi(db, scopeAuth, tenantId) : Promise.resolve([]),
+      auth?.isMaster
+        ? (async () => {
+            const masterDenied = requireMaster(auth);
+            if (masterDenied) return [];
+            return loadTenants(db);
+          })()
+        : Promise.resolve([]),
+      tenantId
+        ? db.collection('goods_receipts').countDocuments(
+            withTenantFilter(scopeAuth, {
+              status: { $in: ['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING'] },
+            }),
+          )
+        : Promise.resolve(0),
+      tenantId
+        ? db.collection('hutang').countDocuments(
+            withTenantFilter(scopeAuth, hutangPendingReviewFilter()),
+          )
+        : Promise.resolve(0),
+      tenantId
+        ? db.collection(MAINTENANCE_REQUESTS_COLLECTION).countDocuments(
+            withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' }),
+          )
+        : Promise.resolve(0),
+      tenantId
+        ? countScheduleDueStats(db, tenantFilter, today)
+        : Promise.resolve({ overdue: 0, dueSoon: 0 }),
+    ]);
+
+  return okPrivate({
+    scope: {
+      tenantId: tenantId || '',
+      tenantLabel:
+        (scopeSettings?.companyName as string)
+        || (scopeSettings?.tenantName as string)
+        || tenantId
+        || '',
+      lokasiList: lokasi,
+    },
+    branding: {
+      tenantId: brandTenantId,
+      companyName:
+        (brandSettings?.companyName as string)
+        || auth?.tenantName
+        || 'Inventory App',
+      logoUrl: (brandSettings?.logoUrl as string) || '',
+      logoBase64: (brandSettings?.logoBase64 as string) || '',
+    },
+    badges: {
+      grnPending: Number(grnPending) || 0,
+      hutangReview: Number(hutangReview) || 0,
+      wrPending: Number(wrPending) || 0,
+      pmOverdue: Number(pmStats?.overdue || 0),
+      pmDueSoon: Number(pmStats?.dueSoon || 0),
+    },
+    tenants,
+    user: auth
+      ? {
+          id: auth.userId,
+          email: auth.email,
+          name: auth.name,
+          role: auth.role,
+          tenantId: auth.tenantId,
+          tenantName: auth.tenantName,
+          isMaster: auth.isMaster,
+        }
+      : null,
+  });
+}

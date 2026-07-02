@@ -19,14 +19,20 @@ import {
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
-import { fetchTenantSettings } from '@/lib/tenant-client';
-import { getLokasiAktif, loadLokasiForTenant } from '@/lib/lokasi-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import TenantScopeSelector from '@/components/TenantScopeSelector';
 import { debounce } from '@/lib/debounce';
-import { useNavBadges, NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 import { useVendorCatalogAutoSync } from '@/lib/hooks/use-vendor-catalog-auto-sync';
+import {
+  applyWorkspaceLokasi,
+  useWorkspaceBootstrap,
+} from '@/lib/hooks/use-workspace-bootstrap';
+import { queryKeys } from '@/lib/query-keys';
+import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 import { prefetchRouteData } from '@/lib/prefetch-route';
+import { prefetchByRole } from '@/lib/prefetch-by-role';
+import { prefetchRouteFlow } from '@/lib/prefetch-flow';
+import { fetchTenantSettings } from '@/lib/tenant-client';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
 
@@ -154,31 +160,33 @@ export default function AppShell({ children }: AppShellProps) {
     hutangReview: 0, grnPending: 0, wrPending: 0, pmOverdue: 0,
   });
 
+  const {
+    scopeId,
+    tenantLabel: wsTenantLabel,
+    lokasiList,
+    branding,
+    badges: wsBadges,
+    invalidate: invalidateWorkspace,
+  } = useWorkspaceBootstrap(Boolean(user));
+
   useVendorCatalogAutoSync(user);
 
   const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 
   const refreshOperationalScope = async (synced: SessionUser) => {
-    if (!synced) return;
-    const isMaster = synced.role === 'MASTER';
-    const actingId = isMaster ? getActingTenantId() : '';
-    const scopeId = isMaster ? actingId : (synced.tenantId || 'default');
-
-    if (isMaster && !actingId) {
-      setScopeTenantLabel('');
-      setLokasiLabel('');
-      return;
-    }
-
-    const settings = await fetchTenantSettings(scopeId, { bustCache: false }).catch(() => null);
-    setScopeTenantLabel(settings?.companyName || settings?.tenantName || scopeId);
-
-    const lok = await loadLokasiForTenant(scopeId, {
-      actingTenantId: isMaster ? actingId : undefined,
-      isMaster,
-    });
-    setLokasiLabel(lok.lokasiAktif || getLokasiAktif(scopeId) || '');
+    invalidateWorkspace();
   };
+
+  useEffect(() => {
+    if (!user) return;
+    setScopeTenantLabel(wsTenantLabel || '');
+    setLokasiLabel(applyWorkspaceLokasi(scopeId, lokasiList) || '');
+    if (branding) {
+      if (branding.logoUrl) setTenantLogo(branding.logoUrl);
+      else if (branding.logoBase64) setTenantLogo(branding.logoBase64);
+      else setTenantLogo('');
+    }
+  }, [user, wsTenantLabel, scopeId, lokasiList, branding]);
 
   useEffect(() => {
     const u = getUser();
@@ -203,10 +211,16 @@ export default function AppShell({ children }: AppShellProps) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
+    if (!user) return;
+    prefetchByRole(queryClient, user.role);
+  }, [user, queryClient]);
+
+  useEffect(() => {
     if (!user) return undefined;
     const onScopeChange = () => {
       refreshOperationalScope(user);
       const scopeKeys = [
+        queryKeys.workspace.all,
         NAV_BADGES_QUERY_KEY,
         ['goods-receipts'],
         ['hutang'],
@@ -233,14 +247,13 @@ export default function AppShell({ children }: AppShellProps) {
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
   const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
-  const showNavBadges = Boolean(user);
-  const { data: badgeData } = useNavBadges(showNavBadges);
-  const grnPending = showGrnBadge ? (badgeData?.grnPending ?? 0) : 0;
-  const hutangReview = showHutangBadge ? (badgeData?.hutangReview ?? 0) : 0;
-  const wrPending = showWrBadge ? (badgeData?.wrPending ?? 0) : 0;
-  const pmOverdue = showPmBadge ? (badgeData?.pmOverdue ?? 0) : 0;
-  const pmDueSoon = showPmBadge ? (badgeData?.pmDueSoon ?? 0) : 0;
-  const pmBadgeCount = pmOverdue + pmDueSoon;
+  const showNavBadges = false;
+  const pmBadgeCount = showPmBadge
+    ? (Number(wsBadges?.pmOverdue) || 0) + (Number(wsBadges?.pmDueSoon) || 0)
+    : 0;
+  const grnPending = showGrnBadge ? (Number(wsBadges?.grnPending) || 0) : 0;
+  const hutangReview = showHutangBadge ? (Number(wsBadges?.hutangReview) || 0) : 0;
+  const wrPending = showWrBadge ? (Number(wsBadges?.wrPending) || 0) : 0;
 
   const debouncedBadgeRefresh = useMemo(
     () => debounce(() => {
@@ -266,6 +279,11 @@ export default function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue: pmBadgeCount }));
   }, [grnPending, hutangReview, wrPending, pmBadgeCount]);
+
+  useEffect(() => {
+    if (!user || !pathname) return;
+    prefetchRouteFlow(queryClient, pathname);
+  }, [user, pathname, queryClient]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);

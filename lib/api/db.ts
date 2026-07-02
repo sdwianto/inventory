@@ -78,6 +78,15 @@ export function ok<T>(data: T, status = 200): NextResponse {
   return cors(NextResponse.json(data, { status }));
 }
 
+export function okCached<T>(
+  data: T,
+  { maxAge = 60, status = 200 }: { maxAge?: number; status?: number } = {},
+): NextResponse {
+  const res = NextResponse.json(data, { status });
+  res.headers.set('Cache-Control', `private, max-age=${maxAge}`);
+  return cors(res);
+}
+
 export function err(msg: string, status = 400): NextResponse {
   return cors(NextResponse.json({ error: msg }, { status }));
 }

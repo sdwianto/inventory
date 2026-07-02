@@ -102,7 +102,7 @@ async function fetchVendorProfileFromSales(salesAppUrl: string, salesApiKey: str
   return null;
 }
 
-const VENDOR_PROFILE_CACHE_MS = 24 * 60 * 60 * 1000;
+const VENDOR_PROFILE_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function loadVendorBillingProfile(db: Db, customerTenantId, vendorTenantId) {
   const tid = customerTenantId || 'default';

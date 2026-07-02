@@ -28,12 +28,32 @@ export async function handleBgJobs({
     });
   }
 
+  if (path[0] === 'bg-jobs' && path.length === 3 && path[2] === 'stream' && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const jobId = path[1];
+    const { createBgJobStreamResponse } = await import('@/lib/api/bg-job-stream');
+    return createBgJobStreamResponse(async () => {
+      const job = await getJobById(db, jobId, tenantId);
+      return job as Record<string, unknown> | null;
+    });
+  }
+
   if (path[0] === 'bg-jobs' && path.length === 2 && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     const job = await getJobById(db, path[1], tenantId);
     if (!job) return err('Job tidak ditemukan', 404);
-    return ok(clean(job));
+    return ok(clean({
+      id: job.id,
+      type: job.type,
+      status: job.status,
+      progress: job.progress,
+      result: job.result,
+      lastError: job.lastError,
+      createdAt: job.createdAt,
+      finishedAt: job.finishedAt,
+    }));
   }
 
   return null;

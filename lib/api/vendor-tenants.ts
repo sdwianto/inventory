@@ -38,10 +38,46 @@ export async function upsertVendorTenantsFromCatalog(
   customerTenantId: string | null | undefined,
   availableTenants: VendorTenantRef[] = [],
 ): Promise<void> {
-  for (const t of availableTenants) {
-    if (!t?.tenantId) continue;
-    await upsertVendorTenant(db, customerTenantId, t.tenantId, t.tenantName || t.tenantId);
-  }
+  if (!availableTenants.length) return;
+  const tid = customerTenantId || 'default';
+  const now = new Date();
+  const ops = availableTenants
+    .filter((t) => t?.tenantId)
+    .map((t) => ({
+      updateOne: {
+        filter: { tenantId: tid, vendorTenantId: String(t.tenantId) },
+        update: {
+          $set: {
+            vendorTenantName: String(t.tenantName || t.tenantId).trim() || String(t.tenantId),
+            updatedAt: now,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        upsert: true,
+      },
+    }));
+  if (ops.length) await db.collection('vendor_tenants').bulkWrite(ops, { ordered: false });
+}
+
+export async function bulkUpsertVendorTenantNames(
+  db: Db,
+  customerTenantId: string | null | undefined,
+  vendors: Map<string, string>,
+): Promise<void> {
+  if (!vendors.size) return;
+  const tid = customerTenantId || 'default';
+  const now = new Date();
+  const ops = [...vendors.entries()].map(([vendorTenantId, vendorTenantName]) => ({
+    updateOne: {
+      filter: { tenantId: tid, vendorTenantId },
+      update: {
+        $set: { vendorTenantName, updatedAt: now },
+        $setOnInsert: { createdAt: now },
+      },
+      upsert: true,
+    },
+  }));
+  await db.collection('vendor_tenants').bulkWrite(ops, { ordered: false });
 }
 
 export async function getVendorTenantNameMap(

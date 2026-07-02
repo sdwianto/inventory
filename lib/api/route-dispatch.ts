@@ -23,6 +23,8 @@ import { handleMaintenanceRequests } from '@/lib/api/handlers/maintenance-reques
 import { handleMaintenanceServiceOrders } from '@/lib/api/handlers/maintenance-service-orders';
 import { handleMaintenanceSchedules } from '@/lib/api/handlers/maintenance-schedules';
 import { handleNavBadges } from '@/lib/api/handlers/nav-badges';
+import { handleWorkspace } from '@/lib/api/handlers/workspace';
+import { handlePages } from '@/lib/api/handlers/pages';
 import { handleMedia } from '@/lib/api/handlers/media';
 import { handleMaintenanceReports } from '@/lib/api/handlers/maintenance-reports';
 import { handleSandbox } from '@/lib/api/handlers/sandbox';
@@ -56,6 +58,8 @@ const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
   tenants: handleTenants,
   users: handleUsers,
   'bg-jobs': handleBgJobs,
+  workspace: handleWorkspace,
+  pages: handlePages,
 };
 
 const FALLBACK: ApiHandler[] = [
@@ -83,6 +87,8 @@ const FALLBACK: ApiHandler[] = [
   handleUsers,
   handleBgJobs,
   handleNavBadges,
+  handleWorkspace,
+  handlePages,
   handleMedia,
 ];
 

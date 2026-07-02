@@ -16,7 +16,8 @@ import { toast } from 'sonner';
 import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
-import { useCursorList } from '@/lib/hooks/use-cursor-list';
+import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
+import { queryKeys } from '@/lib/query-keys';
 import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
 
@@ -72,7 +73,11 @@ export default function PenerimaanPage() {
     loadingMore,
     reload,
     error,
-  } = useCursorList<JsonObject>('/api/goods-receipts', { limit: 100 });
+  } = useCursorQuery<JsonObject>(
+    queryKeys.pages.penerimaan(),
+    '/api/pages/penerimaan',
+    { limit: 100 },
+  );
   const [posting, setPosting] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
@@ -193,21 +198,13 @@ export default function PenerimaanPage() {
     if (!res.ok) { toast.error(data.error || 'Gagal'); return; }
     setDetail(data);
     const detailItems = asArray(data.items) as JsonObject[];
-    const stokIds = [...new Set(detailItems.map((it) => str(it.localStokId)).filter(Boolean))];
-    let gudangByStok: Record<string, string> = {};
-    if (stokIds.length) {
-      const prodRes = await fetch(`/api/products?ids=${stokIds.map(encodeURIComponent).join(',')}&limit=${stokIds.length}`);
-      const products = await prodRes.json();
-      gudangByStok = Object.fromEntries(
-        (Array.isArray(products) ? products : []).map((p) => [str(p.id), str(p.gudangKode, 'GKERING')]),
-      );
-    }
     const initQty: JsonObject = {};
     const initGudang: JsonObject = {};
     for (const [idx, it] of detailItems.entries()) {
       const key = itemRowKey(it, idx);
       initQty[key] = it.qtyOrdered ?? 0;
-      initGudang[key] = gudangByStok[str(it.localStokId)] || 'GKERING';
+      const embedded = it.product as JsonObject | undefined;
+      initGudang[key] = str(it.gudangKode || embedded?.gudangKode, 'GKERING');
     }
     setQtyMap(initQty);
     setGudangMap(initGudang);

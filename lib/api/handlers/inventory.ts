@@ -18,6 +18,7 @@ import {
 import { assertOperationalAccess, assertMasterAccess } from '@/lib/api/tenant-validate';
 import { requireRole, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { bulkDeleteMaster } from '@/lib/api/bulk-delete-master';
+import { invalidateLokasiLabelCache } from '@/lib/api/lokasi-label';
 import { guardPosting } from '@/lib/api/period-lock';
 import {
   parseLokasiKode,
@@ -698,6 +699,7 @@ export async function handleInventory({
         withTenantFilter(scopeAuth, { id }),
         { $set: update },
       );
+      await invalidateLokasiLabelCache(String(access.doc?.tenantId || scopeAuth?.tenantId || ''));
       return ok(clean(await findMasterDoc(db, 'lokasi', scopeAuth, { id })));
     }
     if (method === 'DELETE') {
@@ -707,13 +709,16 @@ export async function handleInventory({
         return err('Gudang utama tidak dapat dihapus', 400);
       }
       await db.collection('lokasi').deleteOne(withTenantFilter(scopeAuth, { id }));
+      await invalidateLokasiLabelCache(String(access.doc?.tenantId || scopeAuth?.tenantId || ''));
       return ok({ message: 'deleted' });
     }
   }
   if (route === '/lokasi/bulk-delete' && method === 'POST') {
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: invBody, request });
     if (denied) return denied;
-    return bulkDeleteMaster(db, scopeAuth, 'lokasi', invBody?.ids);
+    const result = await bulkDeleteMaster(db, scopeAuth, 'lokasi', invBody?.ids);
+    await invalidateLokasiLabelCache(String(scopeAuth?.tenantId || ''));
+    return result;
   }
 
   // ---------- TRANSFER STOK ----------

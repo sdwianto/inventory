@@ -22,6 +22,7 @@ export const JOB_TYPES = {
   WEBHOOK_INBOX: 'WEBHOOK_INBOX',
   GRN_SYNC_SHIPPED: 'GRN_SYNC_SHIPPED',
   GRN_POST_SIDE_EFFECTS: 'GRN_POST_SIDE_EFFECTS',
+  GRN_RESOLVE_PRODUCTS: 'GRN_RESOLVE_PRODUCTS',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -58,6 +59,18 @@ export async function ensureBgJobIndexes(db: Db) {
     if (err?.code !== 85 && err?.code !== 86) console.warn('bg_jobs index:', err.message);
   }
   indexesEnsured = true;
+}
+
+export async function updateJobProgress(
+  db: Db,
+  jobId: string | undefined,
+  progress: Record<string, unknown>,
+): Promise<void> {
+  if (!jobId) return;
+  await db.collection('bg_jobs').updateOne(
+    { id: jobId },
+    { $set: { progress, updatedAt: new Date() } },
+  );
 }
 
 export async function enqueueJob(
@@ -170,7 +183,7 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
 async function runCatalogSyncJob(db: Db, job: BgJob) {
   const config = await getIntegrationConfig(db, job.tenantId);
   if (!config.salesApiKey) return { error: 'Belum di-pair dengan sales.app' };
-  const result = await runCatalogSync(db, job.tenantId, config);
+  const result = await runCatalogSync(db, job.tenantId, config, { jobId: job.id });
   if ('error' in result && result.error) {
     return { error: result.error, offline: Boolean(result.offline) };
   }
@@ -261,6 +274,9 @@ export async function processJob(db: Db, job: BgJob) {
       outcome = await runGrnSyncShipped(db, job.tenantId);
     } else if (job.type === JOB_TYPES.GRN_POST_SIDE_EFFECTS) {
       outcome = await runGrnPostSideEffects(db, job.tenantId, String(job.grnId || job.payload?.grnId || ''));
+    } else if (job.type === JOB_TYPES.GRN_RESOLVE_PRODUCTS) {
+      const { runGrnResolveProducts } = await import('@/lib/api/grn-resolve-products-run');
+      outcome = await runGrnResolveProducts(db, job.tenantId);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

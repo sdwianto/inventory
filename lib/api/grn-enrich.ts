@@ -85,3 +85,50 @@ export async function enrichGrnDoc(
   const [enriched] = await enrichGrnList(db, grn.tenantId, [grn]);
   return enriched;
 }
+
+type ProductEmbed = {
+  id?: string;
+  kode?: string;
+  nama?: string;
+  satuan?: string;
+  gudangKode?: string;
+};
+
+export async function enrichGrnDocWithProducts(
+  db: Db,
+  grn: GrnRow | null | undefined,
+): Promise<GrnRow | null | undefined> {
+  const enriched = await enrichGrnDoc(db, grn);
+  if (!enriched) return enriched;
+
+  const items = Array.isArray(enriched.items) ? enriched.items as Record<string, unknown>[] : [];
+  const stokIds = [...new Set(
+    items.map((it) => String(it.localStokId || '').trim()).filter(Boolean),
+  )];
+  if (!stokIds.length) return enriched;
+
+  const tid = String(enriched.tenantId || 'default');
+  const products = await db.collection('products').find({
+    tenantId: tid,
+    id: { $in: stokIds },
+  }).project({
+    id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1,
+  }).toArray();
+
+  const prodMap = new Map<string, ProductEmbed>(
+    products.map((p) => [String(p.id), p as ProductEmbed]),
+  );
+
+  const itemsWithProducts = items.map((it) => {
+    const localStokId = String(it.localStokId || '').trim();
+    const product = localStokId ? prodMap.get(localStokId) || null : null;
+    const gudangKode = product?.gudangKode || 'GKERING';
+    return {
+      ...it,
+      product,
+      gudangKode,
+    };
+  });
+
+  return { ...enriched, items: itemsWithProducts };
+}

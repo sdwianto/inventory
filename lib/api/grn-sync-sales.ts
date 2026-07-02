@@ -3,6 +3,19 @@ import { resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
 import type { JsonObject } from '@/types/json';
 
+const SYNC_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    await Promise.all(chunk.map(fn));
+  }
+}
+
 interface SyncErrorRow {
   noDO?: unknown;
   error: string;
@@ -41,11 +54,11 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
     : [];
   const existingSet = new Set(existingGrns.map((g) => String(g.vendorDeliveryId)));
 
-  for (const row of deliveries) {
+  await mapWithConcurrency(deliveries, SYNC_CONCURRENCY, async (row) => {
+    const payload = (row.payload || row) as JsonObject;
+    const deliveryId = payload?.deliveryId ? String(payload.deliveryId) : '';
+    const hadBefore = deliveryId ? existingSet.has(deliveryId) : false;
     try {
-      const payload = (row.payload || row) as JsonObject;
-      const deliveryId = payload?.deliveryId ? String(payload.deliveryId) : '';
-      const hadBefore = deliveryId ? existingSet.has(deliveryId) : false;
       await createGrnFromDelivery(db, tid, payload, row.vendorTenantId ? String(row.vendorTenantId) : null);
       if (hadBefore) results.existing += 1;
       else {
@@ -53,13 +66,12 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
         if (deliveryId) existingSet.add(deliveryId);
       }
     } catch (e) {
-      const payload = (row.payload || row) as JsonObject;
       results.errors.push({
         noDO: payload?.noDO,
         error: e instanceof Error ? e.message : String(e),
       });
     }
-  }
+  });
 
   return {
     ...results,

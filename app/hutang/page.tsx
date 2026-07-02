@@ -16,10 +16,12 @@ import { Banknote, CircleCheck, Eye, RefreshCw } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { debounce } from '@/lib/debounce';
-import { useCursorList } from '@/lib/hooks/use-cursor-list';
+import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
+import { queryKeys } from '@/lib/query-keys';
 import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
-import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
+import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -50,7 +52,9 @@ const CAN_MARK_PAID = new Set(['APPROVED', 'OUTSTANDING', 'PARTIAL']);
 export default function HutangVendorPage() {
   const confirm = useConfirm();
   const [tab, setTab] = useState('PENDING_REVIEW');
-  const hutangUrl = tab ? `/api/hutang?approvalStatus=${encodeURIComponent(tab)}` : '/api/hutang';
+  const hutangUrl = tab
+    ? `/api/pages/hutang?approvalStatus=${encodeURIComponent(tab)}`
+    : '/api/pages/hutang';
   const {
     items: list,
     loading: isLoading,
@@ -59,7 +63,11 @@ export default function HutangVendorPage() {
     loadingMore,
     reload,
     error,
-  } = useCursorList<JsonObject>(hutangUrl, { limit: 100 });
+  } = useCursorQuery<JsonObject>(
+    queryKeys.pages.hutang({ approvalStatus: tab }),
+    hutangUrl,
+    { limit: 100 },
+  );
   const { data: badges } = useNavBadges();
   const pendingCount = badges?.hutangReview ?? 0;
   const [detail, setDetail] = useState<JsonObject | null>(null);
@@ -68,6 +76,8 @@ export default function HutangVendorPage() {
   const [syncing, setSyncing] = useState(false);
   const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
   const { data: syncJob } = useBgJob(activeSyncJobId);
+  const syncProgress = jobProgressMessage(syncJob?.progress);
+  const { approve, reject, markPaidExternal } = useHutangMutations(tab, () => reload({ silent: true }));
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
@@ -139,16 +149,12 @@ export default function HutangVendorPage() {
     if (!detail) return;
     setActing('approve');
     try {
-      const res = await fetch(`/api/hutang/${str(detail.id)}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ overrideMatch, note: overrideMatch ? 'Disetujui dengan override match' : '' }),
+      await approve(str(detail.id), {
+        overrideMatch,
+        note: overrideMatch ? 'Disetujui dengan override match' : '',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyetujui');
       toast.success('Tagihan disetujui');
       setDetail(null);
-      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -159,17 +165,10 @@ export default function HutangVendorPage() {
     if (!detail) return;
     setActing('reject');
     try {
-      const res = await fetch(`/api/hutang/${str(detail.id)}/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: rejectReason || 'Ditolak admin' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menolak');
+      await reject(str(detail.id), rejectReason || 'Ditolak admin');
       toast.success('Tagihan ditolak');
       setShowReject(false);
       setDetail(null);
-      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -187,16 +186,9 @@ export default function HutangVendorPage() {
 
     setActing(`paid-${id}`);
     try {
-      const res = await fetch(`/api/hutang/${id}/mark-paid-external`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ note: 'Pembayaran dilakukan di luar sistem' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
+      await markPaidExternal(id, 'Pembayaran dilakukan di luar sistem');
       toast.success('Ditandai lunas (bayar luar sistem)');
       if (detail?.id === id) setDetail(null);
-      await refreshAfterMutation();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -265,7 +257,7 @@ export default function HutangVendorPage() {
           </div>
           <Button variant="outline" size="sm" onClick={syncNow} disabled={syncing}>
             <RefreshCw className={`w-4 h-4 mr-1 ${syncing ? 'animate-spin' : ''}`} />
-            Sync invoice
+            {syncProgress || 'Sync invoice'}
           </Button>
         </div>
         <OperationalScopeBar />

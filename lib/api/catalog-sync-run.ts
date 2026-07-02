@@ -4,12 +4,13 @@ import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { bulkUpsertProductsFromVendor } from '@/lib/api/product-sync-batch';
 import {
-  upsertVendorTenant,
   upsertVendorTenantsFromCatalog,
+  bulkUpsertVendorTenantNames,
   backfillProductVendorNames,
 } from '@/lib/api/vendor-tenants';
 import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
 import { refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
+import { updateJobProgress } from '@/lib/api/bg-jobs';
 import type { JsonObject } from '@/types/json';
 
 const CATALOG_PAGE_SIZE = 500;
@@ -73,7 +74,12 @@ function isLegacyCatalogPayload(data: JsonObject): boolean {
   return data.hasMore === undefined && data.nextCursor === undefined && Array.isArray(data.products);
 }
 
-export async function runCatalogSync(db: Db, tenantId: string, config: { salesAppUrl?: string }) {
+export async function runCatalogSync(
+  db: Db,
+  tenantId: string,
+  config: { salesAppUrl?: string },
+  opts: { jobId?: string } = {},
+) {
   const salesAppUrl = config.salesAppUrl || '';
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
@@ -97,6 +103,13 @@ export async function runCatalogSync(db: Db, tenantId: string, config: { salesAp
 
   for (;;) {
     page += 1;
+    await updateJobProgress(db, opts.jobId, {
+      phase: 'catalog',
+      page,
+      totalFetched,
+      message: page === 1 ? 'Mengambil katalog dari sales.app…' : `Sync halaman ${page}…`,
+    });
+
     const pageRes = await fetchCatalogPage(salesAppUrl, headers, {
       cursor,
       updatedSince: page === 1 ? lastSync : null,
@@ -135,14 +148,14 @@ export async function runCatalogSync(db: Db, tenantId: string, config: { salesAp
     }
 
     if (products.length) {
-      const vendorNamesDone = new Set<string>();
+      const vendorNames = new Map<string, string>();
       for (const p of products) {
         const vTenant = String(p.vendorTenantId || p.tenantId || '').trim();
-        if (vTenant && p.vendorTenantName && !vendorNamesDone.has(vTenant)) {
-          await upsertVendorTenant(db, tenantId, vTenant, String(p.vendorTenantName));
-          vendorNamesDone.add(vTenant);
+        if (vTenant && p.vendorTenantName) {
+          vendorNames.set(vTenant, String(p.vendorTenantName));
         }
       }
+      await bulkUpsertVendorTenantNames(db, tenantId, vendorNames);
       const batch = await bulkUpsertProductsFromVendor(db, tenantId, products);
       results.created += batch.created;
       results.updated += batch.updated;

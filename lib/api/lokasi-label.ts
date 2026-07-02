@@ -4,6 +4,38 @@ import type { Db } from 'mongodb';
 import { parseLokasiKode } from '@/lib/api/stok-lokasi';
 import { withTenantFilter } from '@/lib/api/tenant-master';
 import type { AuthContext } from '@/types/auth';
+import {
+  buildCacheKey,
+  cacheDelMany,
+  cacheGetJson,
+  cacheSetJson,
+  clearLocalMemoryCache,
+} from '@/lib/api/app-cache';
+
+const CACHE_TTL_SEC = 5 * 60;
+
+function cacheKeyForAuth(auth: AuthContext | null): string {
+  if (!auth) return 'anon';
+  if (auth.isMaster) return 'master:all';
+  return `tenant:${auth.tenantId || 'default'}`;
+}
+
+function lokasiCacheRedisKey(scopeKey: string): string {
+  return buildCacheKey('lokasi', scopeKey);
+}
+
+export async function invalidateLokasiLabelCache(tenantId?: string | null): Promise<void> {
+  if (!tenantId) {
+    clearLocalMemoryCache();
+    return;
+  }
+  const tid = tenantId || 'default';
+  await cacheDelMany([
+    lokasiCacheRedisKey(`tenant:${tid}`),
+    lokasiCacheRedisKey('master:all'),
+  ]);
+  clearLocalMemoryCache();
+}
 
 export function formatLokasiLabelFromParts(kode: string | null | undefined, nama: string | null | undefined): string {
   if (!kode) return '-';
@@ -11,6 +43,11 @@ export function formatLokasiLabelFromParts(kode: string | null | undefined, nama
 }
 
 export async function lokasiLabelMap(db: Db, auth: AuthContext | null): Promise<Map<string, string>> {
+  const scopeKey = cacheKeyForAuth(auth);
+  const redisKey = lokasiCacheRedisKey(scopeKey);
+  const cached = await cacheGetJson<Record<string, string>>(redisKey);
+  if (cached) return new Map(Object.entries(cached));
+
   const list = await db.collection('lokasi')
     .find(withTenantFilter(auth, {}))
     .project({ tenantId: 1, kode: 1, nama: 1 })
@@ -19,6 +56,7 @@ export async function lokasiLabelMap(db: Db, auth: AuthContext | null): Promise<
   for (const l of list) {
     map.set(`${l.tenantId || 'default'}:${l.kode}`, formatLokasiLabelFromParts(String(l.kode || ''), String(l.nama || '')));
   }
+  await cacheSetJson(redisKey, Object.fromEntries(map), CACHE_TTL_SEC);
   return map;
 }
 

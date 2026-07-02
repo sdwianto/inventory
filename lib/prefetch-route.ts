@@ -1,8 +1,25 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
-import { prefetchCursorList } from '@/lib/cursor-prefetch-cache';
+import { buildCursorListUrl } from '@/lib/cursor-prefetch-cache';
+import { queryKeys } from '@/lib/query-keys';
+import { buildProdukPageUrl, produkPageQueryKey } from '@/lib/produk-page-scope';
 
 const PRODUCT_LIST_LIMIT = 100;
+
+function prefetchCursorPage(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  baseUrl: string,
+  limit = 100,
+) {
+  void queryClient.prefetchInfiniteQuery({
+    queryKey,
+    queryFn: ({ pageParam }) =>
+      fetchJson(buildCursorListUrl(baseUrl, limit, (pageParam as string | null) ?? null)),
+    initialPageParam: null as string | null,
+    staleTime: 60_000,
+  });
+}
 
 /** Warm cache saat hover menu — navigasi terasa instan. */
 export function prefetchRouteData(queryClient: QueryClient, href: string) {
@@ -19,16 +36,26 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       prefetch(['dashboard'], '/api/dashboard');
       break;
     case '/penerimaan':
-      void prefetchCursorList('/api/goods-receipts', 100);
+      prefetchCursorPage(queryClient, queryKeys.pages.penerimaan(), '/api/pages/penerimaan', 100);
       break;
     case '/pembelian-po':
       prefetch(['customer-purchase-orders'], '/api/customer-purchase-orders');
       break;
     case '/hutang':
-      void prefetchCursorList('/api/hutang?approvalStatus=PENDING_REVIEW', 100);
+      prefetchCursorPage(
+        queryClient,
+        queryKeys.pages.hutang({ approvalStatus: 'PENDING_REVIEW' }),
+        '/api/pages/hutang?approvalStatus=PENDING_REVIEW',
+        100,
+      );
       break;
     case '/produk':
-      void prefetchCursorList('/api/products?q=', PRODUCT_LIST_LIMIT);
+      prefetchCursorPage(
+        queryClient,
+        produkPageQueryKey('', ''),
+        buildProdukPageUrl('', ''),
+        PRODUCT_LIST_LIMIT,
+      );
       break;
     case '/stok/saldo':
       prefetch(['stok', 'saldo'], '/api/stok/saldo');
@@ -40,16 +67,21 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       );
       break;
     case '/maintenance/permintaan':
-      void prefetchCursorList('/api/maintenance-requests', 100);
+      prefetchCursorPage(queryClient, ['maintenance-requests'], '/api/maintenance-requests', 100);
       break;
     case '/maintenance/jadwal':
-      void prefetchCursorList('/api/maintenance-schedules?status=ACTIVE', 100);
+      prefetchCursorPage(
+        queryClient,
+        ['maintenance-schedules', 'ACTIVE'],
+        '/api/maintenance-schedules?status=ACTIVE',
+        100,
+      );
       break;
     case '/utiliti/user':
-      void prefetchCursorList('/api/users', 100);
+      prefetchCursorPage(queryClient, ['users'], '/api/users', 100);
       break;
     case '/integrasi':
-      prefetch(['integrations', 'status'], '/api/integrations/status');
+      prefetch(queryKeys.integrations.status(false), '/api/integrations/status');
       break;
     default:
       break;

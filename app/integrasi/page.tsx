@@ -9,34 +9,35 @@ import { Settings, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { str, num } from '@/types/json';
 import { getUser } from '@/lib/auth-client';
 import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 export default function IntegrasiPage() {
-  const [status, setStatus] = useState<JsonObject | null>(null);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const { data: jobData } = useCatalogSyncJob(activeJobId);
+  const { data: jobData, progressMessage } = useCatalogSyncJob(activeJobId);
+
+  const { data: status, isLoading: loading, refetch: refetchStatus } = useApiQuery<JsonObject>(
+    queryKeys.integrations.status(false),
+    '/api/integrations/status',
+    { enabled: Boolean(getUser()) },
+  );
+
+  const { data: probeStatus, refetch: refetchProbe } = useApiQuery<JsonObject>(
+    queryKeys.integrations.status(true),
+    '/api/integrations/status?probe=1',
+    { enabled: false },
+  );
+
+  const displayStatus = probeStatus || status;
 
   const loadStatus = useCallback(async (probe = false) => {
-    setLoading(true);
-    try {
-      const qs = probe ? '?probe=1' : '';
-      const res = await fetch(`/api/integrations/status${qs}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat status');
-      setStatus(data);
-    } catch (e) {
-      setStatus(null);
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
+    if (probe) {
+      await refetchProbe();
+      return;
     }
-  }, []);
-
-  useEffect(() => {
-    getUser();
-    loadStatus();
-  }, [loadStatus]);
+    await refetchStatus();
+  }, [refetchProbe, refetchStatus]);
 
   useEffect(() => {
     if (!jobData || !activeJobId) return;
@@ -47,7 +48,7 @@ export default function IntegrasiPage() {
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: result }));
       setActiveJobId(null);
       setSyncing(false);
-      loadStatus(true);
+      void loadStatus(true);
     } else if (jobStatus === 'FAILED') {
       const errMsg = String(jobData.lastError || (jobData.result as JsonObject)?.error || 'Sync gagal');
       toast.error(errMsg);
@@ -69,7 +70,7 @@ export default function IntegrasiPage() {
       }
       toast.success(`Sync selesai — ${data.created} baru, ${data.updated} diperbarui dari ${data.vendorTenantCount || '?'} vendor tenant`);
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
-      loadStatus(true);
+      void loadStatus(true);
       setSyncing(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -78,13 +79,13 @@ export default function IntegrasiPage() {
   };
 
   const checklist = [
-    { ok: status?.source === 'database' || status?.source === 'env', label: 'Terhubung ke sales.app', hint: 'Jalankan Setup dari sales.app /integrasi' },
-    { ok: status?.catalogProbed ? status?.catalogReachable : (num(status?.syncedProductCount) || 0) > 0, label: status?.catalogProbed ? `Katalog sales.app (${num(status?.catalogCount)} produk, ${num(status?.vendorTenantCount)} tenant)` : `Produk tersinkron (${num(status?.syncedProductCount)})`, hint: 'Klik Sync Katalog atau refresh (ikon) untuk cek koneksi' },
-    { ok: (num(status?.localProductCount) || 0) > 0, label: `Produk lokal (${num(status?.localProductCount)})`, hint: 'Klik Sync Katalog' },
-    { ok: !!status?.webhookSecret, label: 'Webhook secret', hint: 'Otomatis saat pairing' },
+    { ok: displayStatus?.source === 'database' || displayStatus?.source === 'env', label: 'Terhubung ke sales.app', hint: 'Jalankan Setup dari sales.app /integrasi' },
+    { ok: displayStatus?.catalogProbed ? displayStatus?.catalogReachable : (num(displayStatus?.syncedProductCount) || 0) > 0, label: displayStatus?.catalogProbed ? `Katalog sales.app (${num(displayStatus?.catalogCount)} produk, ${num(displayStatus?.vendorTenantCount)} tenant)` : `Produk tersinkron (${num(displayStatus?.syncedProductCount)})`, hint: 'Klik Sync Katalog atau refresh (ikon) untuk cek koneksi' },
+    { ok: (num(displayStatus?.localProductCount) || 0) > 0, label: `Produk lokal (${num(displayStatus?.localProductCount)})`, hint: 'Klik Sync Katalog' },
+    { ok: !!displayStatus?.webhookSecret, label: 'Webhook secret', hint: 'Otomatis saat pairing' },
   ];
-  const vendorLinks = Array.isArray(status?.vendorLinks)
-    ? (status.vendorLinks as Array<{ vendorTenantId?: string; vendorName?: string }>)
+  const vendorLinks = Array.isArray(displayStatus?.vendorLinks)
+    ? (displayStatus.vendorLinks as Array<{ vendorTenantId?: string; vendorName?: string }>)
     : [];
 
   return (
@@ -99,83 +100,48 @@ export default function IntegrasiPage() {
           </p>
         </div>
 
-        <section className="bg-white border rounded-lg p-5 space-y-4">
-          <h2 className="font-semibold text-sm">Cara setup (sekali saja)</h2>
-          <ol className="text-sm text-slate-600 space-y-2 list-decimal list-inside">
-            <li>Buka <strong>sales.app → Pengaturan → Integrasi API</strong></li>
-            <li>Isi Customer Tenant ID = <code className="bg-slate-100 px-1 rounded">{str(status?.tenantId, 'sppg')}</code> — semua produk dari semua tenant sales.app akan di-sync</li>
-            <li>Klik <strong>Setup &amp; Hubungkan Inventory</strong> — ulangi untuk setiap vendor baru</li>
-          </ol>
-        </section>
-
-        {loading && !status && (
-          <section className="bg-white border rounded-lg p-5 animate-pulse space-y-3">
-            <div className="h-4 bg-slate-200 rounded w-1/3" />
-            <div className="h-3 bg-slate-100 rounded w-full" />
-            <div className="h-3 bg-slate-100 rounded w-2/3" />
-          </section>
-        )}
-
-        {status && (
-          <section className="bg-white border rounded-lg p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-sm">Status — tenant {str(status.tenantId)}</h2>
-              <Button variant="ghost" size="sm" onClick={() => loadStatus(true)}>
-                <RefreshCw className="w-4 h-4" />
-              </Button>
-            </div>
+        <div className="rounded-lg border bg-white p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">Status Integrasi</h2>
+            <Button variant="outline" size="sm" onClick={() => loadStatus(true)} disabled={loading || syncing}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          </div>
+          {loading && !displayStatus ? (
+            <p className="text-sm text-slate-500">Memuat status…</p>
+          ) : (
             <ul className="space-y-2">
-              {checklist.map((c) => (
-                <li key={c.label} className="flex items-start gap-2 text-sm">
-                  {c.ok ? (
-                    <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+              {checklist.map((item) => (
+                <li key={item.label} className="flex items-start gap-2 text-sm">
+                  {item.ok ? (
+                    <CheckCircle2 className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
                   ) : (
-                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                   )}
                   <div>
-                    <span>{c.label}</span>
-                    {!c.ok && <p className="text-[11px] text-slate-500">{c.hint}</p>}
+                    <div className={item.ok ? 'text-slate-800' : 'text-slate-600'}>{item.label}</div>
+                    {!item.ok && <div className="text-xs text-slate-400">{item.hint}</div>}
                   </div>
                 </li>
               ))}
             </ul>
-            {vendorLinks.length > 0 && (
-              <ul className="text-xs text-slate-600 space-y-1">
-                {vendorLinks.map((v) => (
-                  <li key={v.vendorTenantId}>
-                    Vendor: <strong>{v.vendorName || v.vendorTenantId}</strong> ({v.vendorTenantId})
-                  </li>
-                ))}
-              </ul>
-            )}
-            {status.vendorName && vendorLinks.length === 0 ? (
-              <p className="text-xs text-slate-600">Vendor: {str(status.vendorName)} ({str(status.vendorTenantId)})</p>
-            ) : null}
-            {status.tierHargaDefault ? (
-              <p className="text-xs text-slate-600">
-                Tier harga referensi PO: <strong>{str(status.tierHargaDefault)}</strong> (dari profil pelanggan di sales.app)
-              </p>
-            ) : null}
-            {status.lastCatalogSyncAt ? (
-              <p className="text-xs text-slate-500">
-                Sync terakhir: {new Date(str(status.lastCatalogSyncAt)).toLocaleString('id-ID')}
-              </p>
-            ) : null}
-            {status.pairedAt ? (
-              <p className="text-xs text-slate-500">Paired: {new Date(str(status.pairedAt)).toLocaleString('id-ID')}</p>
-            ) : null}
-            <p className="text-[11px] text-slate-500">
-              Sync katalog manual dari halaman ini atau jadwalkan via worker/cron server.
-            </p>
-            <Button
-              onClick={syncCatalog}
-              disabled={syncing || !status.salesApiKey}
-              className="bg-orange-500 hover:bg-orange-600"
-            >
-              {syncing ? 'Menyinkronkan…' : 'Sync Katalog dari Sales.app'}
-            </Button>
-          </section>
+          )}
+        </div>
+
+        {vendorLinks.length > 0 && (
+          <div className="rounded-lg border bg-white p-4">
+            <h2 className="font-semibold mb-2">Vendor Terhubung</h2>
+            <ul className="text-sm space-y-1">
+              {vendorLinks.map((v) => (
+                <li key={v.vendorTenantId}>{str(v.vendorName) || str(v.vendorTenantId)}</li>
+              ))}
+            </ul>
+          </div>
         )}
+
+        <Button onClick={syncCatalog} disabled={syncing || Boolean(activeJobId)} className="w-full sm:w-auto">
+          {syncing || activeJobId ? (progressMessage || 'Sync berjalan…') : 'Sync Katalog dari Sales.app'}
+        </Button>
       </div>
     </AppShell>
   );
