@@ -71,8 +71,6 @@ async function handleRoute(request: Request, context: RouteContext) {
       await ensureSeeded(db);
     } else if (route === '/auth/login' && method === 'POST') {
       await ensureSeeded(db);
-    } else if (workerAuthed) {
-      await ensureSeeded(db);
     }
 
     let body: unknown = null;

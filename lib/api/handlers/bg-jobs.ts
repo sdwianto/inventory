@@ -17,10 +17,8 @@ export async function handleBgJobs({
   url,
 }: HandlerContext): Promise<NextResponse | null> {
   if (isWorkerProcessRoute(method, route)) {
-    const workerOk = verifyWorkerOrCronSecret(request);
-    if (!workerOk) {
-      const denied = requireAuth(auth);
-      if (denied) return denied;
+    if (!verifyWorkerOrCronSecret(request)) {
+      return err('Unauthorized', 401);
     }
     const results = await processPendingJobs(db, { limit: 15 });
     return ok({

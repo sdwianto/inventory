@@ -81,8 +81,9 @@ export async function handleGoodsReceipts({
     if (inline) {
       const result = await syncShippedDeliveriesFromSales(db, tenantId);
       if ('error' in result && result.error) return err(result.error, 400);
+      const grnRefreshed = await refreshUnresolvedGrnsForTenant(db, tenantId);
       await invalidateDashboardSnapshot(db, tenantId);
-      return ok(result);
+      return ok({ ...result, grnRefreshed });
     }
 
     const { jobId, reused } = await enqueueJob(db, {

@@ -25,6 +25,7 @@ import { getActingTenantId } from '@/lib/acting-tenant-client';
 import TenantScopeSelector from '@/components/TenantScopeSelector';
 import { debounce } from '@/lib/debounce';
 import { useNavBadges, NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
+import { useVendorCatalogAutoSync } from '@/lib/hooks/use-vendor-catalog-auto-sync';
 import { prefetchRouteData } from '@/lib/prefetch-route';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
@@ -152,6 +153,8 @@ export default function AppShell({ children }: AppShellProps) {
   const [navBadges, setNavBadges] = useState<Record<NavBadgeKey, number>>({
     hutangReview: 0, grnPending: 0, wrPending: 0, pmOverdue: 0,
   });
+
+  useVendorCatalogAutoSync(user);
 
   const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 

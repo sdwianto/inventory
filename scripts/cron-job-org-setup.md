@@ -67,7 +67,7 @@ X-Worker-Secret: <WORKER_SECRET>
 
 Header sama seperti Sales.
 
-### C & D. Keep-warm (opsional, mengurangi cold start)
+### C & D. Keep-warm (disarankan — kurangi cold start Vercel)
 
 | App | URL |
 |-----|-----|
@@ -79,6 +79,8 @@ Header sama seperti Sales.
 | Schedule | Every **10** or **15** minutes |
 | Request method | `GET` |
 | Headers | *(kosong — endpoint public)* |
+
+Tanpa keep-warm, request pertama setelah idle bisa lambat 3–8 detik.
 
 ## 4. Verifikasi
 
@@ -115,7 +117,22 @@ Respon sukses contoh:
 | Deploy Vercel gagal (cron) | Masih ada `* * * * *` di vercel.json | Pastikan crons Vercel sudah dihapus (pakai cron-job.org) |
 | Sync lama | Interval cron 5+ menit | Turunkan ke 2 menit |
 
-## 6. Dev lokal (tanpa cron-job.org)
+## 6. Bootstrap production (sekali)
+
+Setelah deploy pertama atau migrasi DB lama, jalankan dari mesin dengan `MONGO_URL` production:
+
+```bash
+# Sales
+cd sales && MONGO_URL='...' DB_NAME='...' npm run migrate:bootstrap
+
+# Inventory
+cd inventory-app && MONGO_URL='...' DB_NAME='...' npm run migrate:bootstrap
+```
+
+Ini men-set flag `*_bootstrap_complete` di `system_meta` tanpa menunggu request user pertama.
+Aman dijalankan ulang — idempotent jika bootstrap sudah selesai.
+
+## 7. Dev lokal (tanpa cron-job.org)
 
 ```bash
 # Terminal 1 — app
