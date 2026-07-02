@@ -33,6 +33,7 @@ import { prefetchRouteData } from '@/lib/prefetch-route';
 import { prefetchByRole } from '@/lib/prefetch-by-role';
 import { prefetchRouteFlow } from '@/lib/prefetch-flow';
 import { fetchTenantSettings } from '@/lib/tenant-client';
+import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
 
@@ -214,6 +215,8 @@ export default function AppShell({ children }: AppShellProps) {
     if (!user) return;
     prefetchByRole(queryClient, user.role);
   }, [user, queryClient]);
+
+  useKeepWarm(Boolean(user));
 
   useEffect(() => {
     if (!user) return undefined;

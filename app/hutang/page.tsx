@@ -21,7 +21,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
 import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
-import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -156,7 +156,8 @@ export default function HutangVendorPage() {
       toast.success('Tagihan disetujui');
       setDetail(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setActing('');
   };
@@ -170,7 +171,8 @@ export default function HutangVendorPage() {
       setShowReject(false);
       setDetail(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setActing('');
   };
@@ -190,7 +192,8 @@ export default function HutangVendorPage() {
       toast.success('Ditandai lunas (bayar luar sistem)');
       if (detail?.id === id) setDetail(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setActing('');
   };

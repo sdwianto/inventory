@@ -6,6 +6,7 @@ import type { JsonObject } from '@/types/json';
 import { queryKeys } from '@/lib/query-keys';
 import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 import type { CursorPage } from '@/lib/hooks/use-cursor-query';
+import { fetchOrQueue, OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 type HutangPages = InfiniteData<CursorPage<JsonObject>>;
 
@@ -57,16 +58,18 @@ export function useHutangMutations(tab: string, reload: () => Promise<void>) {
     qc.setQueryData<HutangPages>(listKey, (old) => removeHutangFromCache(old, hutangId));
 
     try {
-      const res = await fetch(`/api/hutang/${hutangId}/approve`, {
+      const res = await fetchOrQueue(`/api/hutang/${hutangId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        offlineLabel: `Setujui hutang ${hutangId}`,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal menyetujui');
       await refreshAfterMutation();
       return data;
     } catch (e) {
+      if (e instanceof OfflineQueuedError) throw e;
       if (previous) qc.setQueryData(listKey, previous);
       throw e;
     }
@@ -77,16 +80,18 @@ export function useHutangMutations(tab: string, reload: () => Promise<void>) {
     qc.setQueryData<HutangPages>(listKey, (old) => removeHutangFromCache(old, hutangId));
 
     try {
-      const res = await fetch(`/api/hutang/${hutangId}/reject`, {
+      const res = await fetchOrQueue(`/api/hutang/${hutangId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
+        offlineLabel: `Tolak hutang ${hutangId}`,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal menolak');
       await refreshAfterMutation();
       return data;
     } catch (e) {
+      if (e instanceof OfflineQueuedError) throw e;
       if (previous) qc.setQueryData(listKey, previous);
       throw e;
     }
@@ -100,16 +105,18 @@ export function useHutangMutations(tab: string, reload: () => Promise<void>) {
     }));
 
     try {
-      const res = await fetch(`/api/hutang/${hutangId}/mark-paid-external`, {
+      const res = await fetchOrQueue(`/api/hutang/${hutangId}/mark-paid-external`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: note || 'Pembayaran dilakukan di luar sistem' }),
+        offlineLabel: `Lunas eksternal ${hutangId}`,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal');
       await refreshAfterMutation();
       return data;
     } catch (e) {
+      if (e instanceof OfflineQueuedError) throw e;
       if (previous) qc.setQueryData(listKey, previous);
       throw e;
     }
