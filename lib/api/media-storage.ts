@@ -8,10 +8,13 @@ const MAX_LOGO_BYTES = 512_000;
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 
 function isServerlessReadOnlyFs() {
+  const cwd = process.cwd();
   return Boolean(
     process.env.VERCEL
+    || process.env.VERCEL_ENV
     || process.env.AWS_LAMBDA_FUNCTION_NAME
-    || process.env.LAMBDA_TASK_ROOT,
+    || process.env.LAMBDA_TASK_ROOT
+    || cwd.startsWith('/var/task'),
   );
 }
 
