@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import AppShell from '@/components/AppShell';
+
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -144,8 +144,7 @@ export default function SaldoGudangPage() {
   const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-5">
+    <div className="p-4 md:p-6 space-y-5">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Boxes className="w-6 h-6" /> Saldo Stok per Gudang
@@ -318,6 +317,5 @@ export default function SaldoGudangPage() {
           </div>
         </div>
       </div>
-    </AppShell>
   );
 }

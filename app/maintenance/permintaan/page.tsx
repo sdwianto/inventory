@@ -7,7 +7,6 @@ import type { MaintenancePriority, MaintenanceRequestStatus } from '@/types/main
 import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -336,8 +335,7 @@ function MaintenancePermintaanPageContent() {
   };
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
         <OperationalScopeBar />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -569,7 +567,6 @@ function MaintenancePermintaanPageContent() {
           }}
         />
       </div>
-    </AppShell>
   );
 }
 
@@ -577,9 +574,7 @@ export default function MaintenancePermintaanPage() {
   return (
     <Suspense
       fallback={(
-        <AppShell>
-          <div className="p-6 text-sm text-slate-500">Memuat permintaan maintenance…</div>
-        </AppShell>
+        <div className="p-6 text-sm text-slate-500">Memuat permintaan maintenance…</div>
       )}
     >
       <MaintenancePermintaanPageContent />

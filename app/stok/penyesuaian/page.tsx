@@ -3,7 +3,6 @@
 import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -116,19 +115,17 @@ export default function PenyesuaianPage() {
 
   if (user && !canAdjust) {
     return (
-      <AppShell>
-        <div className="p-8 text-center text-slate-500">
+      <div className="p-8 text-center text-slate-500">
           <FileEdit className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="font-medium text-slate-700">Akses ditolak</p>
           <p className="text-sm mt-1">Penyesuaian stok hanya untuk Supervisor dan Admin.</p>
         </div>
-      </AppShell>
     );
   }
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><FileEdit className="w-6 h-6" /> Penyesuaian Stok</h1>
@@ -283,6 +280,6 @@ export default function PenyesuaianPage() {
           )}
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

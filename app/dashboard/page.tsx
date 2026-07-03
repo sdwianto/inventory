@@ -2,7 +2,6 @@
 
 import type { JsonObject } from '@/types/json';
 import dynamic from 'next/dynamic';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { formatIDR } from '@/lib/format';
 import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
@@ -55,8 +54,7 @@ export default function DashboardPage() {
   const stats = chartData?.summary || EMPTY_SUMMARY;
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-5">
+    <div className="p-4 md:p-6 space-y-5">
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-slate-500">Penerimaan barang, belanja pengadaan & maintenance aset</p>
@@ -106,6 +104,5 @@ export default function DashboardPage() {
           </>
         )}
       </div>
-    </AppShell>
   );
 }

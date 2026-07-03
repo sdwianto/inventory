@@ -8,6 +8,7 @@ import OfflineIndicator from '@/components/OfflineIndicator';
 import DevPerformanceErrorFilter from '@/components/DevPerformanceErrorFilter';
 import { Toaster } from '@/components/ui/sonner';
 import ApiCredentials from '@/components/ApiCredentials';
+import ClientAppLayout from '@/components/ClientAppLayout';
 import { PersistQueryProvider } from '@/lib/query-persist';
 
 function makeQueryClient() {
@@ -31,7 +32,9 @@ export function Providers({ children }: { children: ReactNode }) {
         <ApiCredentials />
         <DevPerformanceErrorFilter />
         <OfflineIndicator />
-        <ConfirmProvider>{children}</ConfirmProvider>
+        <ConfirmProvider>
+          <ClientAppLayout>{children}</ClientAppLayout>
+        </ConfirmProvider>
         <Toaster richColors position="top-right" theme="light" />
       </PersistQueryProvider>
     </QueryClientProvider>

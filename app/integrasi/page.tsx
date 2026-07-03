@@ -2,7 +2,6 @@
 
 import type { JsonObject } from '@/types/json';
 import { useCallback, useEffect, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Settings, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
@@ -95,8 +94,7 @@ export default function IntegrasiPage() {
     : [];
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-6 max-w-2xl">
+    <div className="p-4 md:p-6 space-y-6 max-w-2xl">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Settings className="w-6 h-6" /> Integrasi Sales.app
@@ -149,6 +147,5 @@ export default function IntegrasiPage() {
           {syncing || activeJobId ? (progressMessage || 'Sync berjalan…') : 'Sync Katalog dari Sales.app'}
         </Button>
       </div>
-    </AppShell>
   );
 }

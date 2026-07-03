@@ -4,7 +4,6 @@ import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VirtualTableBody from '@/components/VirtualTableBody';
 import { TableSkeleton } from '@/components/TableSkeleton';
@@ -335,8 +334,8 @@ export default function PenerimaanPage() {
   };
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><PackageCheck className="w-6 h-6" /> Penerimaan Barang (GRN)</h1>
@@ -579,6 +578,6 @@ export default function PenerimaanPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

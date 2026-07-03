@@ -3,7 +3,6 @@ import type { ChangeEvent } from 'react';
 import { str, num, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useRef, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -211,7 +210,7 @@ export default function TenantsListPage() {
   };
 
   if (user && user.role !== 'MASTER') {
-    return <AppShell><div className="p-6"><Card><CardContent className="p-6 text-center"><Building2 className="w-12 h-12 mx-auto text-slate-400 mb-2" /><div className="font-semibold">Akses Terbatas</div><div className="text-sm text-slate-500">Hanya role MASTER yang bisa melihat daftar tenant.</div></CardContent></Card></div></AppShell>;
+    return <div className="p-6"><Card><CardContent className="p-6 text-center"><Building2 className="w-12 h-12 mx-auto text-slate-400 mb-2" /><div className="font-semibold">Akses Terbatas</div><div className="text-sm text-slate-500">Hanya role MASTER yang bisa melihat daftar tenant.</div></CardContent></Card></div>;
   }
 
   // Reusable form fields renderer (NOT a component — defining a component inside
@@ -306,8 +305,8 @@ export default function TenantsListPage() {
   );
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Building2 className="w-6 h-6" /> Daftar Tenant</h1>
@@ -452,6 +451,6 @@ export default function TenantsListPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

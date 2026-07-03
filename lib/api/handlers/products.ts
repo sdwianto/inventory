@@ -144,7 +144,7 @@ export async function handleProducts({
     const existing = await db.collection('products').findOne({
       tenantId,
       kode: productBody.kode,
-      $or: [{ syncSource: { $exists: false } }, { syncSource: { $ne: 'sales.app' } }],
+      syncSource: 'local',
     });
     if (existing) return err('Kode sudah ada di tenant ini');
 
@@ -172,6 +172,7 @@ export async function handleProducts({
       stok: parseFloat(String(productBody.stok || 0)),
       minStok: parseFloat(String(productBody.minStok || 0)),
       aktif: productBody.aktif !== false,
+      syncSource: 'local',
       createdAt: new Date(),
       updatedAt: new Date(),
     };

@@ -4,7 +4,6 @@ import { str, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useState } from 'react';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/PasswordInput';
@@ -189,8 +188,8 @@ export default function UserManagementPage() {
   const allSelected = selectableList.length > 0 && selection.count === selectableList.length;
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><UserCog className="w-6 h-6" /> User Management</h1>
@@ -374,6 +373,6 @@ export default function UserManagementPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

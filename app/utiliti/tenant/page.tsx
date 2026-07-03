@@ -2,7 +2,6 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -104,8 +103,7 @@ export default function TenantSetupPage() {
   };
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4 max-w-5xl mx-auto">
+    <div className="p-4 md:p-6 space-y-4 max-w-5xl mx-auto">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Building2 className="w-6 h-6" /> Setup Tenant & Logo</h1>
           <p className="text-sm text-slate-500">Pengaturan profil toko. Logo akan otomatis muncul di struk kasir, invoice, dan semua dokumen laporan.</p>
@@ -212,6 +210,5 @@ export default function TenantSetupPage() {
           </Card>
         )}
       </div>
-    </AppShell>
   );
 }

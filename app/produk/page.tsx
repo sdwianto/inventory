@@ -6,7 +6,6 @@ import type { SessionUser } from '@/types/auth';
 import type { ListExportFormat } from '@/lib/run-list-export';
 import { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -362,8 +361,8 @@ export default function ProdukPage() {
   };
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Package className="w-6 h-6" /> Master Produk</h1>
@@ -804,6 +803,6 @@ export default function ProdukPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

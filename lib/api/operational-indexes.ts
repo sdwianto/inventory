@@ -61,7 +61,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'audit_log', index: { entityType: 1, entityId: 1 }, name: 'idx_audit_entity' },
   { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, kode: 1 }, name: 'uniq_products_tenant_vendor_kode', unique: true, partialFilterExpression: { syncSource: 'sales.app' } },
   { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, vendorStokId: 1 }, name: 'uniq_products_tenant_vendor_stok', unique: true, partialFilterExpression: { syncSource: 'sales.app', vendorStokId: { $exists: true, $type: 'string' } } },
-  { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_local_kode', unique: true, partialFilterExpression: { syncSource: { $ne: 'sales.app' } } },
+  { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_local_kode', unique: true, partialFilterExpression: { syncSource: 'local' } },
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
   { collection: 'products', index: { tenantId: 1, nama: 1, id: 1 }, name: 'idx_products_tenant_nama_id' },
@@ -80,7 +80,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'produk_grup', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_grup', unique: true },
   { collection: 'produk_satuan', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_satuan', unique: true },
   { collection: 'products', index: { tenantId: 1, nama: 'text', kode: 'text', barcode: 'text' }, name: 'idx_products_text_search' },
-  { collection: 'users', index: { emailNormalized: 1, tenantId: 1 }, name: 'uniq_users_email_norm_tenant', unique: true },
+  { collection: 'users', index: { emailNormalized: 1, tenantId: 1 }, name: 'uniq_users_email_norm_tenant', unique: true, partialFilterExpression: { emailNormalized: { $exists: true, $type: 'string' } } },
   { collection: 'transfer_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_transfer_stok_tenant_tanggal' },
   { collection: 'inventory_releases', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_inv_release_tenant_wr' },
   { collection: 'dashboard_snapshots', index: { expiresAt: 1 }, name: 'idx_dashboard_snapshot_expires', expireAfterSeconds: 0 },
@@ -102,8 +102,31 @@ async function safeCreateIndex(
   }
 }
 
+async function dropIndexIfExists(db: Db, collection: string, name: string): Promise<void> {
+  try {
+    await db.collection(collection).dropIndex(name);
+  } catch {
+    /* index mungkin belum ada */
+  }
+}
+
+async function prepareIndexData(db: Db): Promise<void> {
+  await db.collection('products').updateMany(
+    {
+      $or: [
+        { syncSource: { $exists: false } },
+        { syncSource: null },
+      ],
+    },
+    { $set: { syncSource: 'local' } },
+  );
+  const { backfillEmailNormalized } = await import('@/lib/api/backfill-email-normalized');
+  await backfillEmailNormalized(db);
+}
+
 export async function ensureOperationalIndexes(db: Db): Promise<void> {
   if (operationalIndexesEnsured) return;
+  await prepareIndexData(db);
   try {
     await db.collection('users').dropIndex('uniq_users_email');
   } catch {
@@ -114,6 +137,8 @@ export async function ensureOperationalIndexes(db: Db): Promise<void> {
   } catch {
     /* index lama mungkin sudah tidak ada */
   }
+  await dropIndexIfExists(db, 'products', 'uniq_products_tenant_local_kode');
+  await dropIndexIfExists(db, 'users', 'uniq_users_email_norm_tenant');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

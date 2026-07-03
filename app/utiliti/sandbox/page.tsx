@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -182,8 +181,7 @@ export default function SandboxResetPage() {
 
   if (user && user.role !== 'MASTER') {
     return (
-      <AppShell>
-        <div className="p-6">
+      <div className="p-6">
           <Card>
             <CardContent className="p-6 text-center">
               <ShieldAlert className="w-12 h-12 mx-auto text-slate-400 mb-2" />
@@ -192,14 +190,12 @@ export default function SandboxResetPage() {
             </CardContent>
           </Card>
         </div>
-      </AppShell>
     );
   }
 
   if (!menuVisible || (status && !status.enabled)) {
     return (
-      <AppShell>
-        <div className="p-6 max-w-2xl">
+      <div className="p-6 max-w-2xl">
           <Card>
             <CardContent className="p-6">
               <div className="font-semibold mb-2">Reset Sandbox tidak aktif</div>
@@ -217,13 +213,11 @@ export default function SandboxResetPage() {
             </CardContent>
           </Card>
         </div>
-      </AppShell>
     );
   }
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 max-w-4xl space-y-4">
+    <div className="p-4 md:p-6 max-w-4xl space-y-4">
         <div className="flex items-start gap-3">
           <Eraser className="w-8 h-8 text-amber-600 shrink-0 mt-0.5" />
           <div>
@@ -349,6 +343,5 @@ export default function SandboxResetPage() {
           </CardContent>
         </Card>
       </div>
-    </AppShell>
   );
 }

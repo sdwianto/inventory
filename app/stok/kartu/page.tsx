@@ -2,7 +2,6 @@
 
 import { str, num, asObject, asArray, type JsonObject } from '@/types/json';
 import { useMemo, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -122,8 +121,8 @@ export default function KartuStokPage() {
   };
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Receipt className="w-6 h-6" /> Kartu Stok</h1>
@@ -242,6 +241,6 @@ export default function KartuStokPage() {
           <ProductPickerSearch open={showPicker} onSelect={pick} />
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

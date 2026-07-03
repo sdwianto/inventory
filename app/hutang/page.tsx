@@ -3,7 +3,6 @@
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import { useEffect, useMemo, useState } from 'react';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VendorInvoiceDetail from '@/components/VendorInvoiceDetail';
 import VirtualTableBody from '@/components/VirtualTableBody';
@@ -264,8 +263,8 @@ export default function HutangVendorPage() {
   const allList = Array.isArray(list) ? list : [];
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Banknote className="w-6 h-6" /> Tagihan Vendor</h1>
@@ -422,6 +421,6 @@ export default function HutangVendorPage() {
           </Button>
         </DialogContent>
       </Dialog>
-    </AppShell>
+    </>
   );
 }

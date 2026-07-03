@@ -5,7 +5,6 @@ import { str, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -133,8 +132,7 @@ export default function MaintenanceAsetPage() {
   const filtered = useMemo(() => list, [list]);
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
         <OperationalScopeBar />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -338,6 +336,5 @@ export default function MaintenanceAsetPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </AppShell>
   );
 }

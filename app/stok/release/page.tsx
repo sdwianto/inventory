@@ -4,7 +4,7 @@ import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import AppShell from '@/components/AppShell';
+
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -242,8 +242,7 @@ function ReleaseInventoryPageContent() {
   });
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -418,7 +417,6 @@ function ReleaseInventoryPageContent() {
           </div>
         </DialogContent>
       </Dialog>
-    </AppShell>
   );
 }
 
@@ -426,9 +424,7 @@ export default function ReleaseInventoryPage() {
   return (
     <Suspense
       fallback={(
-        <AppShell>
-          <div className="p-6 text-sm text-slate-500">Memuat release inventory…</div>
-        </AppShell>
+        <div className="p-6 text-sm text-slate-500">Memuat release inventory…</div>
       )}
     >
       <ReleaseInventoryPageContent />

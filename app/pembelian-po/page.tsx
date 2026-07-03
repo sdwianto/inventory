@@ -5,7 +5,6 @@ import { str, num, asObject, asArray } from '@/types/json';
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { startOfMonth } from 'date-fns';
-import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import PoCalendar from '@/components/PoCalendar';
 import PoFormDialog from '@/components/pembelian-po/PoFormDialog';
@@ -470,8 +469,8 @@ function CustomerPoPageContent() {
     : `PO kedatangan ${formatDate(selectedDate)}`;
 
   return (
-    <AppShell>
-      <div className="p-4 md:p-6 space-y-4">
+    <>
+    <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -756,7 +755,7 @@ function CustomerPoPageContent() {
         onSave={editingPo ? saveEditPo : createPo}
         onCancel={() => { setCreateOpen(false); setEditingPo(null); }}
       />
-    </AppShell>
+    </>
   );
 }
 
@@ -764,9 +763,7 @@ export default function CustomerPoPage() {
   return (
     <Suspense
       fallback={(
-        <AppShell>
-          <div className="p-6 text-sm text-slate-500">Memuat pembelian PO…</div>
-        </AppShell>
+        <div className="p-6 text-sm text-slate-500">Memuat pembelian PO…</div>
       )}
     >
       <CustomerPoPageContent />
