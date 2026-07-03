@@ -7,6 +7,14 @@ import { v4 as uuidv4 } from 'uuid';
 const MAX_LOGO_BYTES = 512_000;
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 
+function isServerlessReadOnlyFs() {
+  return Boolean(
+    process.env.VERCEL
+    || process.env.AWS_LAMBDA_FUNCTION_NAME
+    || process.env.LAMBDA_TASK_ROOT,
+  );
+}
+
 function storageRoot() {
   const fromEnv = process.env.MEDIA_STORAGE_PATH?.trim();
   if (fromEnv) return fromEnv;
@@ -47,14 +55,24 @@ export async function storeBase64Image(
   }
   if (!ALLOWED_MIME.has(mime)) return { error: 'Format gambar tidak didukung' };
 
+  if (isServerlessReadOnlyFs()) {
+    // Vercel/Lambda: filesystem read-only — skip upload (hutang/GRN tidak bergantung file lokal).
+    return { error: 'Media storage tidak tersedia di serverless' };
+  }
+
   const buf = Buffer.from(data, 'base64');
   if (buf.length > maxBytes) return { error: `Gambar terlalu besar (max ${Math.round(maxBytes / 1024)}KB)` };
 
   const tid = String(tenantId || 'default').trim().toLowerCase();
   const filename = `${prefix}-${uuidv4()}.${extFromMime(mime)}`;
   const filePath = resolveMediaFilePath(tid, filename);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, buf);
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, buf);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { error: `Gagal menyimpan media: ${msg}` };
+  }
 
   return { url: mediaPublicPath(tid, filename), filename };
 }
