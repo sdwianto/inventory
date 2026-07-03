@@ -7,7 +7,7 @@ import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { ensureVendorSupplier } from '@/lib/api/vendor-supplier';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
-import { poEstimasiFromDoc, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
+import { poEstimasiForHutang, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
 import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
@@ -18,6 +18,61 @@ import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
 import type { HutangDoc } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
+import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor-match';
+
+export type HutangCreateOptions = {
+  createdVia?: 'grn-posted' | 'invoice-posted-webhook';
+};
+
+/** Skip webhook invoice.posted jika hutang sudah dibuat lewat jalur grn-posted (primary). */
+export async function hutangAlreadyFromGrnPrimaryPath(
+  db: Db,
+  customerTenantId: string,
+  payload: VendorInvoicePayload,
+  vendorTenantId?: string | null,
+) {
+  const tid = normalizeTenantId(customerTenantId || 'default');
+  const invoiceId = payload.invoiceId;
+  if (invoiceId) {
+    const existing = await findExistingVendorHutang(db, tid, invoiceId, vendorTenantId);
+    if (existing) {
+      return {
+        action: 'exists' as const,
+        hutangId: existing.id,
+        noHutang: existing.noHutang,
+        createdVia: (existing as HutangDoc).createdVia || null,
+        skippedWebhook: (existing as HutangDoc).createdVia === 'grn-posted',
+      };
+    }
+  }
+  const noDO = payload.noDO;
+  if (!noDO) return null;
+
+  const grnFilter: Record<string, unknown> = {
+    ...tenantIdMatchFilter(tid),
+    noDO,
+    status: 'POSTED',
+  };
+  const vid = hutangVendorKey(vendorTenantId);
+  if (vid) grnFilter.vendorTenantId = vid;
+
+  const grn = await db.collection('goods_receipts').findOne(grnFilter);
+  if (!grn?.hutangId && !grn?.vendorInvoiceId) return null;
+
+  if (grn.hutangId) {
+    const hutang = await db.collection('hutang').findOne({ id: grn.hutangId });
+    if (hutang) {
+      return {
+        action: 'exists' as const,
+        hutangId: hutang.id,
+        noHutang: hutang.noHutang,
+        createdVia: (hutang as HutangDoc).createdVia || 'grn-posted',
+        skippedWebhook: true,
+      };
+    }
+  }
+  return null;
+}
 
 async function resolveVendorBillingForHutang(
   db: Db,
@@ -85,7 +140,7 @@ async function loadPoVarianceContext(
     if (!soSubTotal) soSubTotal = parseInt(String(payload.salesOrderSubTotal || 0), 10) || salesOrderTotal;
   }
 
-  const poEstimasiTotal = poEstimasiFromDoc(po);
+  const poEstimasiTotal = poEstimasiForHutang(po, hutangRef);
 
   return {
     poEstimasiTotal,
@@ -141,10 +196,28 @@ export function isBogusSettledVendorHutang(hutang: HutangDoc) {
   return vendorInvoiceNeedsPendingReview(hutang);
 }
 
-async function findExistingVendorHutang(db: Db, tid: string, invoiceId: string) {
+async function findExistingVendorHutang(
+  db: Db,
+  tid: string,
+  invoiceId: string,
+  vendorTenantId?: string | null,
+) {
+  const vid = hutangVendorKey(vendorTenantId);
+  const tenantFilter = tenantIdMatchFilter(tid);
+
+  if (vid) {
+    const scoped = await db.collection('hutang').findOne({
+      vendorInvoiceId: invoiceId,
+      vendorTenantId: vid,
+      ...tenantFilter,
+    });
+    if (scoped) return scoped;
+    return null;
+  }
+
   const byTenant = await db.collection('hutang').findOne({
     vendorInvoiceId: invoiceId,
-    ...tenantIdMatchFilter(tid),
+    ...tenantFilter,
   });
   if (byTenant) return byTenant;
 
@@ -310,12 +383,13 @@ export async function createHutangFromVendorInvoice(
   customerTenantId: string,
   payload: VendorInvoicePayload,
   vendorTenantId: string | null | undefined,
+  opts: HutangCreateOptions = {},
 ) {
   const tid = normalizeTenantId(customerTenantId || 'default');
   const invoiceId = payload.invoiceId;
   if (!invoiceId) return { error: 'invoiceId wajib' };
 
-  const existing = await findExistingVendorHutang(db, tid, invoiceId);
+  const existing = await findExistingVendorHutang(db, tid, invoiceId, vendorTenantId);
   if (existing) {
     return syncExistingVendorHutangFromPayload(db, tid, existing as HutangDoc, payload, vendorTenantId);
   }
@@ -387,6 +461,7 @@ export async function createHutangFromVendorInvoice(
     soSubTotal: varianceCtx.soSubTotal,
     variancePoToSo: varianceCtx.variancePoToSo,
     varianceSoToInvoice,
+    createdVia: opts.createdVia || null,
     createdAt: now,
   });
 
@@ -419,8 +494,15 @@ export async function createHutangFromVendorInvoice(
     }
 
     if (payload.noDO) {
+      const grnFilter: Record<string, unknown> = {
+        tenantId: tid,
+        noDO: payload.noDO,
+        vendorInvoiceId: { $exists: false },
+      };
+      const vid = hutangVendorKey(vendorTenantId || hutang.vendorTenantId);
+      if (vid) grnFilter.vendorTenantId = vid;
       await txDb.collection('goods_receipts').updateMany(
-        { tenantId: tid, noDO: payload.noDO, vendorInvoiceId: { $exists: false } },
+        grnFilter,
         { $set: { vendorInvoiceId: invoiceId, noInvoice: payload.noInvoice, hutangId: hutang.id } },
         txOpts(session),
       );

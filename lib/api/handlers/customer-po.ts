@@ -21,8 +21,16 @@ import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
 import { pushPoToVendor, finalizePoSubmission } from '@/lib/api/customer-po-push';
 import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
+import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
+import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import {
+  parseCursorPageParams,
+  applyDescDateIdCursor,
+  sliceCursorPage,
+  encodeCursor,
+} from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import type { JsonObject } from '@/types/json';
@@ -225,13 +233,26 @@ async function completePoWithVendorSync(db: Db, po, approverSnap) {
   if (validation.error) return { error: validation.error, status: 400 };
 
   const pushed = await pushPoToVendor(db, po, po.tenantId || 'default');
-  if (pushed.submissions?.length) {
-    const updated = await finalizePoSubmission(db, po, pushed.submissions, approverSnap);
-    return { po: updated, vendorSynced: true };
+  if ('submissions' in pushed && pushed.submissions?.length) {
+    const updated = await finalizePoSubmission(
+      db,
+      po,
+      pushed.submissions,
+      approverSnap,
+      { partialFailures: pushed.partialFailures || [] },
+    );
+    return {
+      po: updated,
+      vendorSynced: !(pushed.partialFailures?.length),
+      vendorSyncError: pushed.partialFailures?.length
+        ? pushed.partialFailures.map((f: { vendorTenantId?: string; error?: string }) => `${f.vendorTenantId}: ${f.error}`).join('; ')
+        : null,
+    };
   }
 
-  const updated = await markPoApproved(db, po, approverSnap, pushed.error);
-  return { po: updated, vendorSynced: false, vendorSyncError: pushed.error };
+  const syncError = 'error' in pushed ? pushed.error : 'Gagal kirim ke vendor';
+  const updated = await markPoApproved(db, po, approverSnap, syncError);
+  return { po: updated, vendorSynced: false, vendorSyncError: syncError };
 }
 
 async function retryVendorSync(db: Db, po, approverSnap) {
@@ -250,6 +271,22 @@ export async function handleCustomerPo({
     const status = url.searchParams.get('status');
     let filter: Record<string, unknown> = status ? { status } : {};
     filter = withTenantFilter(scopeAuth, filter);
+    const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });
+    if (pageMode) {
+      const listFilter = applyDescDateIdCursor(filter, cursor, 'tanggal');
+      const rows = await db.collection('customer_purchase_orders')
+        .find(listFilter)
+        .sort({ tanggal: -1, id: -1 })
+        .limit(limit + 1)
+        .toArray();
+      const { items, hasMore } = sliceCursorPage(rows, limit);
+      const last = items[items.length - 1] as Record<string, unknown> | undefined;
+      return ok({
+        items: await enrichPoPeople(db, items),
+        hasMore,
+        nextCursor: hasMore && last ? encodeCursor(last, 'tanggal') : null,
+      });
+    }
     const list = await db.collection('customer_purchase_orders')
       .find(filter)
       .sort({ tanggalKedatangan: -1, tanggal: -1 })
@@ -435,7 +472,7 @@ export async function handleCustomerPo({
   }
 
   // POST /customer-purchase-orders/:id/sync-vendor — kirim ulang PO APPROVED ke sales.app
-  if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && method === 'POST') {
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && path.length === 3 && method === 'POST') {
     const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
@@ -450,6 +487,66 @@ export async function handleCustomerPo({
 
     const enriched = await enrichOnePo(db, result.po);
     return ok({ ...enriched, vendorSynced: true });
+  }
+
+  // POST /customer-purchase-orders/:id/sync-vendor/:vendorTenantId — retry satu vendor gagal
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && path.length === 4 && method === 'POST') {
+    const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+
+    const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
+    if (!po) return err('PO tidak ditemukan', 404);
+    if (!['APPROVED', 'SUBMITTED'].includes(String(po.status))) {
+      return err('Retry vendor hanya untuk PO APPROVED/SUBMITTED', 400);
+    }
+
+    const result = await retryVendorSyncForSingleVendor(db, po, path[3]);
+    if (result.error) return err(String(result.error), result.status || 502);
+
+    const enriched = await enrichOnePo(db, result.po);
+    return ok({ ...enriched, vendorSynced: result.vendorSynced });
+  }
+
+  // POST /customer-purchase-orders/:id/cancel — batalkan CPO + notify sales.app
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'cancel' && method === 'POST') {
+    const deniedRole = requireRole(auth, PO_EDIT_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+
+    const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
+    if (!po) return err('PO tidak ditemukan', 404);
+    const status = String(po.status || '');
+    if (['CANCELLED', 'REJECTED', 'RECEIVED', 'INVOICED'].includes(status)) {
+      return err(`PO status ${status} tidak bisa dibatalkan`, 400);
+    }
+    const anyReceived = (po.items || []).some((it: { qtyReceived?: number }) => (it.qtyReceived || 0) > 0);
+    if (anyReceived) return err('PO sudah ada penerimaan barang, tidak bisa dibatalkan', 400);
+
+    const now = new Date();
+    const canceller = await actorSnapshot(db, auth);
+    let salesNotify: Awaited<ReturnType<typeof notifySalesPoCancelled>> | null = null;
+    if (['SUBMITTED', 'CONFIRMED', 'APPROVED'].includes(status)) {
+      salesNotify = await notifySalesPoCancelled(db, po, poBody.reason || 'Dibatalkan customer');
+    }
+
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: po.id },
+      {
+        $set: {
+          status: 'CANCELLED',
+          cancelledBy: canceller,
+          cancelledAt: now,
+          cancelReason: poBody.reason || 'Dibatalkan',
+          updatedAt: now,
+        },
+      },
+    );
+    const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
+    return ok({ ...(await enrichOnePo(db, updated)), salesNotify });
   }
 
   // POST /customer-purchase-orders/:id/reject — Admin tolak pengajuan

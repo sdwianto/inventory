@@ -54,10 +54,13 @@ export async function enrichGrnList(
       ...tenantIdMatchFilter(tid),
       noDO: { $in: noDOs },
       referenceType: 'VENDOR_INVOICE',
-    }).project({ noDO: 1, noInvoice: 1 }).toArray()
+    }).project({ noDO: 1, noInvoice: 1, vendorTenantId: 1 }).toArray()
     : [];
-  const invoiceByDo = Object.fromEntries(
-    hutangRows.map((h) => [String(h.noDO), h.noInvoice]),
+  const invoiceByDoVendor = Object.fromEntries(
+    hutangRows.map((h) => [
+      `${String(h.noDO)}:${String(h.vendorTenantId || '')}`,
+      h.noInvoice,
+    ]),
   ) as Record<string, string | undefined>;
 
   return grns.map((grn) => {
@@ -65,7 +68,8 @@ export async function enrichGrnList(
     let vendorTenantName = vid ? nameMap[vid] : undefined;
     if (!vendorTenantName && vid) vendorTenantName = linkNameByVid[vid];
     if (!vendorTenantName) vendorTenantName = vid || '';
-    const noInvoice = grn.noInvoice || invoiceByDo[String(grn.noDO || '')] || null;
+    const doVendorKey = `${String(grn.noDO || '')}:${String(vid || '')}`;
+    const noInvoice = grn.noInvoice || invoiceByDoVendor[doVendorKey] || null;
 
     return {
       ...grn,

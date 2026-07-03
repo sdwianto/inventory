@@ -19,16 +19,19 @@ function useBgJobStream(jobId: string | null | undefined) {
   const [streamFailed, setStreamFailed] = useState(false);
   const [done, setDone] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const streamSupported = typeof EventSource !== 'undefined';
 
-  useEffect(() => {
-    if (!jobId || typeof EventSource === 'undefined') {
-      setStreamFailed(true);
-      return undefined;
-    }
-
+  // Reset saat jobId berganti — pola "adjust state during render" (bukan di effect).
+  const [lastJobId, setLastJobId] = useState(jobId);
+  if (lastJobId !== jobId) {
+    setLastJobId(jobId);
     setData(null);
     setStreamFailed(false);
     setDone(false);
+  }
+
+  useEffect(() => {
+    if (!jobId || typeof EventSource === 'undefined') return undefined;
 
     const es = new EventSource(streamUrl(jobId));
     esRef.current = es;
@@ -59,7 +62,8 @@ function useBgJobStream(jobId: string | null | undefined) {
     };
   }, [jobId, queryClient]);
 
-  return { data, streamFailed, done, streaming: !!jobId && !streamFailed && !done };
+  const failed = streamFailed || !streamSupported;
+  return { data, streamFailed: failed, done, streaming: !!jobId && !failed && !done };
 }
 
 export function useBgJob(jobId: string | null | undefined) {

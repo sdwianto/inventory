@@ -1,2 +1,2 @@
-/** Interval polling badge sidebar — invalidate on event untuk update cepat. */
-export const BADGE_POLL_MS = 5 * 60_000;
+/** Interval polling badge sidebar — cadangan jika event tidak terpicu. */
+export const BADGE_POLL_MS = 60_000;

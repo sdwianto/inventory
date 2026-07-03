@@ -20,7 +20,7 @@ import { runListExport } from '@/lib/run-list-export';
 import { postBulkDelete } from '@/lib/bulk-delete-client';
 import { formatIDR } from '@/lib/format';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUserWithTenantFilter } from '@/lib/hooks/use-session-user';
 import TenantScopeField, { tenantLabel, type TenantOption } from '@/components/TenantScopeField';
 import { withActingTenantQuery } from '@/lib/tenant-api';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
@@ -39,8 +39,7 @@ import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 export default function ProdukPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [filterTenantId, setFilterTenantId] = useState('');
+  const { user, filterTenantId, setFilterTenantId } = useSessionUserWithTenantFilter();
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -99,18 +98,13 @@ export default function ProdukPage() {
   };
 
   useEffect(() => {
-    const u = getUser();
-    setUser(u);
-    if (u?.role !== 'MASTER') setFilterTenantId(String(u?.tenantId || 'default'));
-  }, []);
-
-  useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(q), q ? 300 : 0);
     return () => clearTimeout(timer);
   }, [q]);
 
   useEffect(() => {
     selection.clear();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset bulk selection when list scope changes
   }, [debouncedQ, filterTenantId]);
 
   useEffect(() => {
@@ -122,6 +116,7 @@ export default function ProdukPage() {
     };
     window.addEventListener('vendor-catalog-synced', onCatalogSynced);
     return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load() is stable enough for catalog sync listener
   }, [user, filterTenantId, isMaster, queryClient]);
 
   const openNew = () => {

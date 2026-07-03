@@ -83,11 +83,16 @@ export async function validateInvoiceAgainstGrn(
     return { ok: false, error: '3-way match: noDO wajib pada invoice vendor' };
   }
 
-  const grns = await db.collection('goods_receipts').find({
+  const grnFilter: Record<string, unknown> = {
     noDO,
     status: 'POSTED',
     ...tenantIdMatchFilter(tenantId),
-  }).toArray() as GrnRow[];
+  };
+  if (payload.vendorTenantId) {
+    grnFilter.vendorTenantId = payload.vendorTenantId;
+  }
+
+  const grns = await db.collection('goods_receipts').find(grnFilter).toArray() as GrnRow[];
 
   if (!grns.length) {
     return {

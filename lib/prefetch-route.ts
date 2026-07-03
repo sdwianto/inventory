@@ -39,7 +39,7 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       prefetchCursorPage(queryClient, queryKeys.pages.penerimaan(), '/api/pages/penerimaan', 100);
       break;
     case '/pembelian-po':
-      prefetch(queryKeys.customerPurchaseOrders.list, '/api/customer-purchase-orders');
+      prefetchCursorPage(queryClient, queryKeys.customerPurchaseOrders.list, '/api/customer-purchase-orders', 100);
       break;
     case '/hutang':
       prefetchCursorPage(

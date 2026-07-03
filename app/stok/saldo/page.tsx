@@ -105,7 +105,10 @@ export default function SaldoGudangPage() {
   );
 
   const loading = loadingRows;
-  const rows = Array.isArray(rowData?.rows) ? rowData.rows : [];
+  const rows = useMemo(
+    () => (Array.isArray(rowData?.rows) ? rowData.rows : []),
+    [rowData],
+  );
   const summary = rowData?.summary || null;
   const trend = trendData?.trend || { periods: [], totals: {} };
 

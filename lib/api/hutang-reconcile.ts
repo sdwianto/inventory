@@ -8,13 +8,14 @@ import {
 } from '@/lib/api/hutang-from-vendor';
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
+import { hutangMatchesGrnVendor, vendorScopedKey } from '@/lib/api/hutang-vendor-match';
 import type { GrnDoc, HutangDoc, ReconcileOptions, SalesErrorRow, SalesReplayOptions } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
 
 type HutangLookupMaps = {
   byId: Map<string, HutangDoc>;
-  byInvoiceId: Map<string, HutangDoc>;
-  byNoInvoice: Map<string, HutangDoc>;
+  byInvoiceVendor: Map<string, HutangDoc>;
+  byNoInvoiceVendor: Map<string, HutangDoc>;
 };
 
 async function buildHutangLookupMaps(db: Db, tid: string, grns: GrnDoc[]): Promise<HutangLookupMaps> {
@@ -33,28 +34,36 @@ async function buildHutangLookupMaps(db: Db, tid: string, grns: GrnDoc[]): Promi
     : [];
 
   const byId = new Map<string, HutangDoc>();
-  const byInvoiceId = new Map<string, HutangDoc>();
-  const byNoInvoice = new Map<string, HutangDoc>();
+  const byInvoiceVendor = new Map<string, HutangDoc>();
+  const byNoInvoiceVendor = new Map<string, HutangDoc>();
   for (const row of rows) {
     const h = row as HutangDoc;
     if (h.id) byId.set(h.id, h);
-    if (h.vendorInvoiceId) byInvoiceId.set(String(h.vendorInvoiceId), h);
-    if (h.noInvoice) byNoInvoice.set(String(h.noInvoice), h);
+    if (h.vendorInvoiceId) {
+      byInvoiceVendor.set(vendorScopedKey(h.vendorTenantId, String(h.vendorInvoiceId)), h);
+    }
+    if (h.noInvoice) {
+      byNoInvoiceVendor.set(vendorScopedKey(h.vendorTenantId, String(h.noInvoice)), h);
+    }
   }
-  return { byId, byInvoiceId, byNoInvoice };
+  return { byId, byInvoiceVendor, byNoInvoiceVendor };
 }
 
 function findVendorHutangFromMaps(maps: HutangLookupMaps, grn: GrnDoc): HutangDoc | null {
   if (grn.hutangId) {
     const h = maps.byId.get(grn.hutangId);
-    if (h) return h;
+    if (h && hutangMatchesGrnVendor(h, grn)) return h;
   }
   if (grn.vendorInvoiceId) {
-    const h = maps.byInvoiceId.get(String(grn.vendorInvoiceId));
+    const h = maps.byInvoiceVendor.get(
+      vendorScopedKey(grn.vendorTenantId, String(grn.vendorInvoiceId)),
+    );
     if (h) return h;
   }
   if (grn.noInvoice) {
-    return maps.byNoInvoice.get(String(grn.noInvoice)) || null;
+    return maps.byNoInvoiceVendor.get(
+      vendorScopedKey(grn.vendorTenantId, String(grn.noInvoice)),
+    ) || null;
   }
   return null;
 }
@@ -70,20 +79,24 @@ async function findVendorHutang(
   const tenantFilter = tenantIdMatchFilter(tid);
   if (grn.hutangId) {
     const byId = await db.collection('hutang').findOne({ id: grn.hutangId, ...tenantFilter });
-    if (byId) return byId as HutangDoc;
+    if (byId && hutangMatchesGrnVendor(byId as HutangDoc, grn)) return byId as HutangDoc;
   }
   if (grn.vendorInvoiceId) {
-    const byInvoice = await db.collection('hutang').findOne({
+    const invoiceFilter: Record<string, unknown> = {
       vendorInvoiceId: grn.vendorInvoiceId,
       ...tenantFilter,
-    });
+    };
+    if (grn.vendorTenantId) invoiceFilter.vendorTenantId = grn.vendorTenantId;
+    const byInvoice = await db.collection('hutang').findOne(invoiceFilter);
     if (byInvoice) return byInvoice as HutangDoc;
   }
   if (grn.noInvoice) {
-    const byNo = await db.collection('hutang').findOne({
+    const noFilter: Record<string, unknown> = {
       noInvoice: grn.noInvoice,
       ...tenantFilter,
-    });
+    };
+    if (grn.vendorTenantId) noFilter.vendorTenantId = grn.vendorTenantId;
+    const byNo = await db.collection('hutang').findOne(noFilter);
     if (byNo) return byNo as HutangDoc;
   }
   return null;
@@ -340,11 +353,25 @@ export async function reconcileVendorHutangFromPostedGrns(
 
   let created = 0;
   let linked = 0;
+  let unlinked = 0;
   let replayed = 0;
   const salesErrors: SalesErrorRow[] = [];
 
   for (const grnRow of grns) {
-    const grn = grnRow as GrnDoc;
+    let grn = grnRow as GrnDoc;
+
+    if (grn.hutangId) {
+      const linkedHutang = hutangMaps.byId.get(grn.hutangId);
+      if (linkedHutang && !hutangMatchesGrnVendor(linkedHutang, grn)) {
+        await db.collection('goods_receipts').updateOne(
+          { id: grn.id },
+          { $unset: { hutangId: '', vendorInvoiceId: '', noInvoice: '' } },
+        );
+        grn = { ...grn, hutangId: undefined, vendorInvoiceId: undefined, noInvoice: undefined };
+        unlinked += 1;
+      }
+    }
+
     let hutang = await findVendorHutang(db, tid, grn, hutangMaps);
 
     if (hutang) {
@@ -401,7 +428,7 @@ export async function reconcileVendorHutangFromPostedGrns(
     }
   }
 
-  return { created, fixed, linked, replayed, scanned: grns.length, salesErrors, localCreated };
+  return { created, fixed, linked, unlinked, replayed, scanned: grns.length, salesErrors, localCreated };
 }
 
 /** One-time / manual backfix: perbaiki hutang dari GRN POSTED + optional replay sales untuk yang belum punya invoice. */

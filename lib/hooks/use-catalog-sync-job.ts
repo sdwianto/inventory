@@ -19,16 +19,19 @@ function useCatalogJobStream(jobId: string | null | undefined) {
   const [data, setData] = useState<JsonObject | null>(null);
   const [streamFailed, setStreamFailed] = useState(false);
   const [done, setDone] = useState(false);
+  const streamSupported = typeof EventSource !== 'undefined';
 
-  useEffect(() => {
-    if (!jobId || typeof EventSource === 'undefined') {
-      setStreamFailed(true);
-      return undefined;
-    }
-
+  // Reset saat jobId berganti — pola "adjust state during render" (bukan di effect).
+  const [lastJobId, setLastJobId] = useState(jobId);
+  if (lastJobId !== jobId) {
+    setLastJobId(jobId);
     setData(null);
     setStreamFailed(false);
     setDone(false);
+  }
+
+  useEffect(() => {
+    if (!jobId || typeof EventSource === 'undefined') return undefined;
 
     const es = new EventSource(streamUrl(jobId));
 
@@ -56,7 +59,8 @@ function useCatalogJobStream(jobId: string | null | undefined) {
     return () => es.close();
   }, [jobId, queryClient]);
 
-  return { data, streamFailed, done, streaming: !!jobId && !streamFailed && !done };
+  const failed = streamFailed || !streamSupported;
+  return { data, streamFailed: failed, done, streaming: !!jobId && !failed && !done };
 }
 
 export function useCatalogSyncJob(jobId: string | null | undefined) {

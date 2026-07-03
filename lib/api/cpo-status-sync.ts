@@ -47,6 +47,10 @@ export async function syncCpoFromVendorEvent(db: Db, tenantId, event, payload) {
     patch.vendorNoSO = payload.noSO || po.vendorNoSO;
     const soSnap = buildVendorSoSnapshot(payload);
     if (soSnap) patch.vendorSoSnapshot = soSnap;
+  } else if (event === 'sales_order.cancelled') {
+    patch.status = 'CANCELLED';
+    patch.cancelledAt = payload.cancelledAt ? new Date(payload.cancelledAt) : now;
+    patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
   } else if (event === 'delivery.shipped') {
     const items = (po.items || []).map((line) => {
       const shipped = (payload.items || []).find(

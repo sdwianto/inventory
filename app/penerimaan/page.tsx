@@ -18,8 +18,10 @@ import { warehouseName } from '@/lib/warehouses-client';
 import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
 import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
+import { useInvalidateHutangBadges } from '@/lib/hooks/use-nav-badges';
 import { useGrnMutations } from '@/lib/hooks/use-grn-mutations';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { fetchJson } from '@/lib/fetch-json';
@@ -69,6 +71,7 @@ const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
 export default function PenerimaanPage() {
   const queryClient = useQueryClient();
   const invalidateGrn = useInvalidateGrn();
+  const invalidateHutangBadges = useInvalidateHutangBadges();
   const listKey = queryKeys.pages.penerimaan();
   const {
     items: list,
@@ -102,49 +105,45 @@ export default function PenerimaanPage() {
   const { data: invoicePoll } = useGrnInvoiceStatus(pollInvoiceGrnId, !!pollInvoiceGrnId);
   const { data: syncJob } = useBgJob(activeSyncJobId);
 
-  useEffect(() => {
-    if (!invoicePoll || !pollInvoiceGrnId) return;
-    const poll = invoicePoll as JsonObject;
-    const s = str(poll.invoiceSyncStatus);
-    if (s === 'DONE') {
-      toast.success(`Faktur ${str(poll.noInvoice)} siap — cek Tagihan Vendor`);
-      setPollInvoiceGrnId(null);
-      invalidateGrn();
-      reload();
-      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-    } else if (s === 'FAILED') {
-      toast.warning(`Faktur gagal: ${str(poll.invoiceSyncError, 'cek sales.app')}`);
-      setPollInvoiceGrnId(null);
-      invalidateGrn();
-      reload();
-    } else if (s === 'SKIPPED') {
-      setPollInvoiceGrnId(null);
-      invalidateGrn();
-      reload();
-    }
-  }, [invoicePoll, pollInvoiceGrnId, invalidateGrn]);
-
-  useEffect(() => {
-    if (!syncJob || !activeSyncJobId) return;
-    const status = String(syncJob.status || '');
+  const invoicePollStatus = invoicePoll && pollInvoiceGrnId
+    ? str((invoicePoll as JsonObject).invoiceSyncStatus)
+    : null;
+  useOnceTerminalEffect(pollInvoiceGrnId, invoicePoll as JsonObject | null, invoicePollStatus, ['DONE', 'FAILED', 'SKIPPED'], (status, poll) => {
     if (status === 'DONE') {
-      const result = asObject(syncJob.result);
+      toast.success(`Faktur ${str(poll.noInvoice)} siap — cek Tagihan Vendor`);
+    } else if (status === 'FAILED') {
+      toast.warning(`Faktur gagal: ${str(poll.invoiceSyncError, 'cek sales.app')}`);
+    }
+    setPollInvoiceGrnId(null);
+    invalidateGrn();
+    reload();
+    if (status === 'DONE') invalidateHutangBadges();
+  });
+
+  const syncJobStatus = syncJob && activeSyncJobId ? String(syncJob.status || '') : null;
+  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, ['DONE', 'FAILED'], (status) => {
+    if (status === 'DONE') {
+      const result = asObject(syncJob?.result);
       toast.success(`Sync DO: ${num(result.created)} GRN baru, ${num(result.existing)} sudah ada`);
       if (num(result.grnRefreshed) > 0) {
         toast.info(`${num(result.grnRefreshed)} GRN produk diperbarui`);
       }
-      setActiveSyncJobId(null);
-      setSyncing(false);
       invalidateGrn();
       reload();
-      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
-    } else if (status === 'FAILED') {
-      const errMsg = String(syncJob.lastError || asObject(syncJob.result).error || 'Gagal sync DO');
+      invalidateHutangBadges();
+    } else {
+      const errMsg = String(syncJob?.lastError || asObject(syncJob?.result).error || 'Gagal sync DO');
       toast.error(errMsg);
-      setActiveSyncJobId(null);
-      setSyncing(false);
     }
-  }, [syncJob, activeSyncJobId, invalidateGrn, reload]);
+    setActiveSyncJobId(null);
+    setSyncing(false);
+  });
+
+  useEffect(() => {
+    const onGrnChange = () => { void reload(); };
+    window.addEventListener('erp-grn-change', onGrnChange);
+    return () => window.removeEventListener('erp-grn-change', onGrnChange);
+  }, [reload]);
 
   const replayInvoice = async (id: string, noGRN?: unknown) => {
     setReplayingInvoice(id);
@@ -174,7 +173,7 @@ export default function PenerimaanPage() {
       toast.success(`Sync DO: ${data.created} GRN baru, ${data.existing} sudah ada`);
       invalidateGrn();
       reload();
-      window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+      invalidateHutangBadges();
       setSyncing(false);
     } catch (e) {
       if (e instanceof OfflineQueuedError) {
@@ -249,7 +248,7 @@ export default function PenerimaanPage() {
         setPollInvoiceGrnId(grnId);
       } else if (data.noInvoice) {
         toast.success(`Faktur ${data.noInvoice} siap`);
-        window.dispatchEvent(new CustomEvent('erp-hutang-change'));
+        invalidateHutangBadges();
       } else if (data.invoiceSync?.error || data.invoiceSyncStatus === 'FAILED') {
         toast.warning(`Faktur gagal: ${data.invoiceSync?.error || data.invoiceSyncError || 'cek sales.app'}`);
       }

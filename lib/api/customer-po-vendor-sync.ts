@@ -9,19 +9,21 @@ export const VENDOR_SYNC_PARALLEL = 3;
 
 export async function retryVendorSyncForPo(db: Db, po: Record<string, unknown>, approverSnap: unknown) {
   const pushed = await pushPoToVendor(db, po, String(po.tenantId || 'default'));
-  if (!pushed.submissions?.length) {
+  if (!('submissions' in pushed) || !pushed.submissions?.length) {
+    const errMsg = 'error' in pushed ? pushed.error : 'Gagal kirim ke vendor';
     const now = new Date();
     await db.collection('customer_purchase_orders').updateOne(
       { id: po.id },
-      { $set: { vendorSyncError: pushed.error, vendorSyncAt: now, updatedAt: now } },
+      { $set: { vendorSyncError: errMsg, vendorSyncAt: now, updatedAt: now } },
     );
-    return { error: pushed.error, status: 502 };
+    return { error: errMsg, status: 502 };
   }
   const updated = await finalizePoSubmission(
     db,
     po,
     pushed.submissions,
     (approverSnap || po.approvedBy) as Record<string, unknown> | null | undefined,
+    { partialFailures: pushed.partialFailures || [] },
   );
-  return { po: updated, vendorSynced: true };
+  return { po: updated, vendorSynced: !(pushed.partialFailures?.length) };
 }

@@ -21,6 +21,7 @@ import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
 import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
 import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
+import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
@@ -101,11 +102,10 @@ export default function HutangVendorPage() {
     return () => window.removeEventListener('erp-hutang-change', onChange);
   }, [debouncedRefresh]);
 
-  useEffect(() => {
-    if (!syncJob || !activeSyncJobId) return;
-    const status = String(syncJob.status || '');
+  const syncJobStatus = syncJob && activeSyncJobId ? String(syncJob.status || '') : null;
+  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, ['DONE', 'FAILED'], (status) => {
     if (status === 'DONE') {
-      const data = asObject(syncJob.result);
+      const data = asObject(syncJob?.result);
       if (data.skipped) {
         toast.info(String(data.error || 'Sync dilewati'));
       } else if (data.fetchIncomplete || data.warning) {
@@ -125,16 +125,14 @@ export default function HutangVendorPage() {
       } else {
         toast.success('Sync hutang selesai');
       }
-      setActiveSyncJobId(null);
-      setSyncing(false);
       void refreshAfterMutation();
-    } else if (status === 'FAILED') {
-      const errMsg = String(syncJob.lastError || asObject(syncJob.result).error || 'Gagal sync');
+    } else {
+      const errMsg = String(syncJob?.lastError || asObject(syncJob?.result).error || 'Gagal sync');
       toast.error(errMsg);
-      setActiveSyncJobId(null);
-      setSyncing(false);
     }
-  }, [syncJob, activeSyncJobId, refreshAfterMutation]);
+    setActiveSyncJobId(null);
+    setSyncing(false);
+  });
 
   const openDetail = async (id: string) => {
     setLoadingDetail(id);

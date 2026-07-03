@@ -3,6 +3,7 @@ import {
   findLinksByWebhookSecret,
   resolveWebhookLink,
 } from '@/lib/api/integration-links';
+import { secureCompare } from '@/lib/api/secure-compare';
 
 export interface WebhookVerifyOk {
   ok: true;
@@ -26,7 +27,7 @@ export async function verifyWebhookSecret(
   if (!secret) return { ok: false, error: 'Webhook secret tidak valid' };
 
   const envSecret = process.env.WEBHOOK_SECRET || '';
-  if (envSecret && secret === envSecret) {
+  if (envSecret && secureCompare(secret, envSecret)) {
     return { ok: true };
   }
 

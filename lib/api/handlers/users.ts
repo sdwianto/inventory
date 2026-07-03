@@ -4,7 +4,7 @@ import type { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean } from '@/lib/api/db';
 import { hashPassword } from '@/lib/api/auth-helpers';
-import { requireAuth } from '@/lib/api/require-auth';
+import { requireAuth, requireRole } from '@/lib/api/require-auth';
 import { tenantFilterFromAuth, assertDocTenant } from '@/lib/api/tenant-scope';
 import type { HandlerContext } from '@/types/api/handler';
 import { assertEmailAvailableInTenant, normalizeUserEmail, userEmailFields } from '@/lib/api/user-email';
@@ -62,6 +62,9 @@ export async function handleUsers({
 
   const denied = requireAuth(auth);
   if (denied) return denied;
+  // Semua CRUD user hanya untuk ADMIN/OWNER/MASTER (GUDANG & SUPERVISOR ditolak).
+  const roleDenied = requireRole(auth, ['ADMIN']);
+  if (roleDenied) return roleDenied;
   const userAuth = auth!;
 
   if (route === '/users' && method === 'GET') {

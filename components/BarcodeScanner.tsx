@@ -25,7 +25,6 @@ export default function BarcodeScanner({
 
   useEffect(() => {
     if (!open) return;
-    setError('');
     const reader = new BrowserMultiFormatReader();
     readerRef.current = reader;
 
@@ -67,6 +66,7 @@ export default function BarcodeScanner({
     return () => {
       try { controlsRef.current?.stop(); } catch {}
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- scanner lifecycle tied to open state only
   }, [open]);
 
   const switchCamera = async (id: string) => {

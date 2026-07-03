@@ -2,15 +2,8 @@ import type { Db } from 'mongodb';
 // Sinkronkan referensi DO/ SO GRN dengan data terbaru di sales.app sebelum post / invoice.
 
 import { resolveSalesApiAccess } from '@/lib/api/integration-links';
+import { salesFetchErrorMessage } from '@/lib/api/integration-common';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
-
-function salesFetchErrorMessage(err, salesUrl) {
-  const cause = err?.cause;
-  const code = cause?.code || err?.code;
-  if (code === 'ECONNREFUSED') return `Sales.app tidak dapat dihubungi di ${salesUrl}`;
-  if (err?.name === 'TimeoutError' || code === 'ABORT_ERR') return 'Sales.app tidak merespons (timeout)';
-  return err?.message || 'Gagal menghubungi sales.app';
-}
 
 /**
  * Perbarui noDO / noSO / vendorTenantId / snapshot GRN dari sales.app.

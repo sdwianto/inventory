@@ -11,26 +11,11 @@ import {
 import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
 import { refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
 import { updateJobProgress } from '@/lib/api/bg-jobs';
+import { salesFetchErrorMessage } from '@/lib/api/integration-common';
 import type { JsonObject } from '@/types/json';
 
 const CATALOG_PAGE_SIZE = 500;
 const CATALOG_FETCH_TIMEOUT_MS = 60_000;
-
-function salesFetchErrorMessage(err: unknown, salesUrl: string) {
-  const e = err as { cause?: { code?: string; message?: string }; code?: string; message?: string; name?: string };
-  const cause = e?.cause;
-  const code = cause?.code || e?.code;
-  if (code === 'ECONNREFUSED') {
-    return `Sales.app tidak dapat dihubungi di ${salesUrl}. Pastikan sales.app sudah berjalan (port 3000).`;
-  }
-  if (code === 'ENOTFOUND') {
-    return `Alamat sales.app tidak ditemukan: ${salesUrl}`;
-  }
-  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout) — cek ${salesUrl}`;
-  }
-  return `Gagal menghubungi sales.app: ${cause?.message || e?.message || 'koneksi gagal'}`;
-}
 
 function buildCatalogUrl(
   baseUrl: string,

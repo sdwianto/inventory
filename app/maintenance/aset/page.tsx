@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner';
 import { formatDate, formatIDR } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { fetchAssetDetail, useAssets } from '@/lib/hooks/use-maintenance';
 import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
@@ -36,7 +37,7 @@ export default function MaintenanceAsetPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const { run: mutate, isPending: mutating } = useMaintenanceMutations();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -47,10 +48,6 @@ export default function MaintenanceAsetPage() {
   const { data: list = [], isLoading, refetch } = useAssets({ q, status: statusFilter });
   const canManage = ASSET_MANAGE_ROLES.includes(String(user?.role || '') as typeof ASSET_MANAGE_ROLES[number])
     || user?.role === 'MASTER';
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
 
   const openNew = () => {
     setEditing(null);

@@ -1,476 +1,78 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str, num, asObject, asArray } from '@/types/json';
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
-import { startOfMonth } from 'date-fns';
+import { str } from '@/types/json';
+import { Suspense } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import PoCalendar from '@/components/PoCalendar';
 import PoFormDialog from '@/components/pembelian-po/PoFormDialog';
+import PoListCard from '@/components/pembelian-po/PoListCard';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { toast } from 'sonner';
-import { fetchJson } from '@/lib/fetch-json';
 import {
-  CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Package, Pencil, Plus, RefreshCw, Send, ShoppingBag, XCircle,
+  CalendarDays, Plus, RefreshCw, ShoppingBag,
 } from 'lucide-react';
-import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
-import { getUser } from '@/lib/auth-client';
-import { poEstimasiFromProduct, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
-import {
-  dateKey, formatArrivalLabel, getPoArrivalDate, PO_STATUS_STYLE,
-} from '@/lib/po-calendar';
-import {
-  PO_CAN_APPROVE,
-  PO_CAN_CREATE,
-  PO_CAN_DIRECT_SUBMIT,
-  PO_CAN_REQUEST,
-} from '@/lib/pembelian-po/constants';
-import {
-  toDateInputValue,
-  poCreatorLabel,
-  mergeFormLinesFromPo,
-  emptyPoLine,
-} from '@/lib/pembelian-po/helpers';
-import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
-import { useBgJob } from '@/lib/hooks/use-bg-job';
-import { usePoMutations } from '@/lib/hooks/use-po-mutations';
-import { useApiMutation } from '@/lib/hooks/use-api-mutation';
-import { queryKeys } from '@/lib/query-keys';
-import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { formatArrivalLabel } from '@/lib/po-calendar';
+import { useCustomerPoPage } from '@/lib/hooks/use-customer-po-page';
 
 function CustomerPoPageContent() {
-  const [user, setUser] = useState<JsonObject | null>(null);
-  const { list, reload: reloadList, setList } = useCustomerPoList();
-  const poMutations = usePoMutations(setList, async () => { await reloadList(); });
-  const syncPendingMutation = useApiMutation([queryKeys.customerPurchaseOrders.all]);
-  const { products, reloadProducts } = useCustomerPoProducts();
-  const [month, setMonth] = useState(() => startOfMonth(new Date()));
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [editingPo, setEditingPo] = useState<JsonObject | null>(null);
-  const [createDate, setCreateDate] = useState<Date | null>(null);
-  const [lines, setLines] = useState<JsonObject[]>([emptyPoLine()]);
-  const [catatan, setCatatan] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [submitting, setSubmitting] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const autoSyncBusy = useRef(false);
-  const [vendorSyncJobId, setVendorSyncJobId] = useState<string | null>(null);
-  const { data: vendorSyncJob } = useBgJob(vendorSyncJobId);
-  const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
-  const [defaultTier, setDefaultTier] = useState('ECER');
-  const searchParams = useSearchParams();
-  const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
-  const wrPrefillDone = useRef(false);
-
-  const loadVendorTiers = useCallback(() => {
-    fetchJson('/api/integrations/vendor-tiers')
-      .then((data) => {
-        const row = data as JsonObject;
-        setVendorTierMap((row.tierMap || {}) as JsonObject);
-        setDefaultTier(String(row.tierHargaDefault || 'ECER'));
-      })
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat tier vendor'));
-  }, []);
-
-  useEffect(() => {
-    setUser(getUser() as JsonObject | null);
-    void reloadList();
-    void reloadProducts();
-    loadVendorTiers();
-    const onCatalogSynced = () => {
-      void reloadProducts();
-      loadVendorTiers();
-    };
-    window.addEventListener('vendor-catalog-synced', onCatalogSynced);
-    return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
-  }, [reloadList, reloadProducts, loadVendorTiers]);
-
-  useEffect(() => {
-    const wrId = searchParams.get('wrId');
-    if (!wrId || wrPrefillDone.current) return;
-    wrPrefillDone.current = true;
-    fetchJson<JsonObject>(`/api/maintenance-requests/${wrId}/resolve-prefill`)
-      .then((data) => {
-        if (!data.canResolvePo) {
-          toast.error('Permintaan tidak bisa dibuatkan PO');
-          return;
-        }
-        setWrMeta(data);
-        setCatatan(str(data.poCatatan));
-        setCreateDate(new Date());
-        setLines([emptyPoLine()]);
-        setCreateOpen(true);
-        toast.info(`PO untuk maintenance ${str(data.noWR)}`);
-      })
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
-  }, [searchParams]);
-
-  const canCreate = (PO_CAN_CREATE as readonly string[]).includes(String(user?.role || ''));
-  const canRequest = (PO_CAN_REQUEST as readonly string[]).includes(String(user?.role || ''));
-  const canDirectSubmit = (PO_CAN_DIRECT_SUBMIT as readonly string[]).includes(String(user?.role || ''));
-  const canApprove = (PO_CAN_APPROVE as readonly string[]).includes(String(user?.role || ''));
-
-  const synced = products.filter((p) => p.syncSource === 'sales.app');
-
-  const pendingVendorSyncCount = useMemo(
-    () => (Array.isArray(list) ? list : []).filter((p) => p.status === 'APPROVED' && p.vendorSyncPending !== false).length,
-    [list],
-  );
-
-  useEffect(() => {
-    if (!vendorSyncJob || !vendorSyncJobId) return;
-    const status = String(vendorSyncJob.status || '');
-    if (status === 'DONE') {
-      const result = asObject(vendorSyncJob.result);
-      const synced = asArray(result.synced) as JsonObject[];
-      if (synced.length > 0) {
-        void reloadList();
-        const labels = synced.map((s) => str(s.noPO)).filter(Boolean).join(', ');
-        toast.success(`${synced.length} PO terkirim otomatis ke vendor`, { description: labels });
-      }
-      setVendorSyncJobId(null);
-      autoSyncBusy.current = false;
-    } else if (status === 'FAILED') {
-      toast.warning(String(vendorSyncJob.lastError || asObject(vendorSyncJob.result).error || 'Sync PO vendor gagal'));
-      setVendorSyncJobId(null);
-      autoSyncBusy.current = false;
-    }
-  }, [vendorSyncJob, vendorSyncJobId, reloadList]);
-
-  const runAutoVendorSync = useCallback(async () => {
-    if (autoSyncBusy.current) return;
-    autoSyncBusy.current = true;
-    let startedAsyncJob = false;
-    try {
-      const data = await syncPendingMutation.mutateAsync({
-        url: '/api/customer-purchase-orders/sync-pending',
-        offlineLabel: 'Sync PO pending ke vendor',
-      }) as JsonObject;
-      if (data.jobId) {
-        toast.info('PO antrian dikirim ke background');
-        setVendorSyncJobId(String(data.jobId));
-        startedAsyncJob = true;
-        return;
-      }
-      const synced = asArray(data.synced) as JsonObject[];
-      if (synced.length > 0) {
-        await reloadList();
-        const labels = synced.map((s) => str(s.noPO)).filter(Boolean).join(', ');
-        toast.success(`${synced.length} PO terkirim otomatis ke vendor`, {
-          description: labels,
-        });
-      }
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      /* sales.app belum online */
-    } finally {
-      if (!startedAsyncJob) autoSyncBusy.current = false;
-    }
-  }, [reloadList]);
-
-  useEffect(() => {
-    if (!user || pendingVendorSyncCount === 0) return undefined;
-    runAutoVendorSync();
-    return undefined;
-  }, [user, pendingVendorSyncCount, runAutoVendorSync]);
-
-  const filteredList = useMemo(() => {
-    const rows = Array.isArray(list) ? list : [];
-    if (showAll || !selectedDate) return rows;
-    const key = dateKey(selectedDate);
-    return rows.filter((po) => dateKey(getPoArrivalDate(po)) === key);
-  }, [list, selectedDate, showAll]);
-
-  const openCreate = (date?: Date | string | null) => {
-    const d = date ? new Date(date) : selectedDate ? new Date(selectedDate) : new Date();
-    setEditingPo(null);
-    setCreateDate(d);
-    setLines([emptyPoLine()]);
-    setCatatan('');
-    setCreateOpen(true);
-  };
-
-  const openEdit = (po: JsonObject) => {
-    setEditingPo(po);
-    setCreateDate(getPoArrivalDate(po) || new Date());
-    setLines(mergeFormLinesFromPo(asArray(po.items) as JsonObject[], emptyPoLine));
-    setCatatan(str(po.catatan));
-    setCreateOpen(true);
-  };
-
-  const canEditPo = (po: JsonObject) => {
-    const status = str(po.status);
-    if (!po || !['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
-    if (canApprove) return true;
-    if (status === 'DRAFT' && user?.role === 'SUPERVISOR') return true;
-    const createdBy = asObject(po.createdBy);
-    if (status === 'DRAFT' && user?.role === 'GUDANG') {
-      return str(createdBy.userId) === str(user?.id);
-    }
-    return false;
-  };
-
-  const buildItemsPayload = () => {
-    const map = new Map();
-    for (const l of lines) {
-      const p = products.find((x) => x.id === l.localStokId);
-      if (!p || !l.qty) continue;
-      if (!p.vendorStokId && p.syncSource !== 'sales.app') continue;
-      const qty = num(l.qty);
-      const estimasiHarga = parseEstimasiHargaInput(l.estimasiHarga as string | number | null | undefined);
-      const prev = map.get(p.id);
-      if (prev) {
-        prev.qty += qty;
-        if (l.estimasiManual && estimasiHarga) prev.estimasiHarga = estimasiHarga;
-      } else {
-        map.set(p.id, {
-          localStokId: p.id,
-          vendorStokId: p.vendorStokId,
-          vendorTenantId: p.vendorTenantId,
-          vendorKode: p.kode,
-          kode: p.kode,
-          nama: p.nama,
-          satuan: p.satuan,
-          qty,
-          estimasiHarga,
-          hargaBeliReferensi: parseInt(str(p.hargaBeli), 10),
-        });
-      }
-    }
-    return [...map.values()];
-  };
-
-  const handleSelectDate = (date: Date) => {
-    setSelectedDate(dateKey(date));
-    setShowAll(false);
-    setMonth(startOfMonth(date));
-  };
-
-  const addLine = () => setLines([...lines, emptyPoLine()]);
-
-  const selectProduct = (i: number, id: string) => {
-    if (!id) {
-      updateLine(i, { localStokId: '', estimasiHarga: '', estimasiManual: false });
-      return;
-    }
-    const existingIdx = lines.findIndex((l, idx) => idx !== i && l.localStokId === id);
-    const p = synced.find((x) => x.id === id);
-    if (existingIdx >= 0) {
-      const addQty = num(lines[i].qty, 1);
-      const mergedQty = num(lines[existingIdx].qty) + addQty;
-      const next = lines
-        .map((l, idx) => (idx === existingIdx ? { ...l, qty: mergedQty } : l))
-        .filter((_, idx) => idx !== i);
-      setLines(next.length ? next : [emptyPoLine()]);
-      toast.info(`${p?.nama || 'Produk'} digabung — total qty ${mergedQty}`);
-      return;
-    }
-    updateLine(i, {
-      localStokId: id,
-      estimasiHarga: poEstimasiFromProduct(p, vendorTierMap as Record<string, string>, defaultTier) || '',
-      estimasiManual: false,
-    });
-  };
-  const removeLine = (i: number) => setLines(lines.length > 1 ? lines.filter((_, idx) => idx !== i) : lines);
-  const updateLine = (i: number, patch: JsonObject) => setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
-
-  const lineDetails = useMemo(() => lines.map((l): JsonObject & { product: JsonObject | null } => {
-    const p = synced.find((x) => x.id === l.localStokId);
-    return { ...l, product: p || null };
-  }), [lines, synced]);
-
-  const lineSummary = useMemo(() => {
-    const filled = lineDetails.filter((l) => l.product && l.qty);
-    const totalQty = filled.reduce((s, l) => s + num(l.qty), 0);
-    const totalEstimasi = filled.reduce(
-      (s, l) => s + num(l.qty) * parseEstimasiHargaInput(l.estimasiHarga as string | number | null | undefined),
-      0,
-    );
-    return { rows: filled.length, totalQty, totalEstimasi };
-  }, [lineDetails]);
-
-  const createPo = async () => {
-    const items = buildItemsPayload();
-    if (!items.length) {
-      toast.error('Pilih produk yang sudah di-sync dari sales.app');
-      return;
-    }
-    if (!createDate) {
-      toast.error('Tanggal kedatangan wajib');
-      return;
-    }
-    setSaving(true);
-    try {
-      const payload = {
-        items,
-        catatan,
-        tanggalKedatangan: toDateInputValue(createDate),
-        maintenanceRequestId: wrMeta?.id || null,
-        assetId: wrMeta?.assetId || null,
-      };
-      const optimisticRow: JsonObject = {
-        id: `temp-${Date.now()}`,
-        noPO: '…',
-        status: 'DRAFT',
-        approvalStatus: 'DRAFT',
-        tanggalKedatangan: toDateInputValue(createDate),
-        catatan,
-        totalQty: lineSummary.totalQty,
-        totalEstimasi: lineSummary.totalEstimasi,
-      };
-      const data = await poMutations.createPO(payload, optimisticRow);
-      toast.success(`PO ${data.noPO} dibuat untuk ${formatDate(createDate)}`);
-      setCreateOpen(false);
-      setEditingPo(null);
-      setWrMeta(null);
-      setSelectedDate(createDate ? toDateInputValue(createDate) : null);
-      setShowAll(false);
-      setExpandedId(String(data.id));
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) {
-        toast.info('PO disimpan offline — akan disinkron saat online');
-        setCreateOpen(false);
-        setEditingPo(null);
-        setWrMeta(null);
-      } else {
-        toast.error(e instanceof Error ? e.message : String(e));
-      }
-    }
-    setSaving(false);
-  };
-
-  const saveEditPo = async () => {
-    if (!editingPo) return;
-    const items = buildItemsPayload();
-    if (!items.length) {
-      toast.error('Pilih produk yang sudah di-sync dari sales.app');
-      return;
-    }
-    if (!createDate) {
-      toast.error('Tanggal kedatangan wajib');
-      return;
-    }
-    setSaving(true);
-    try {
-      const poId = str(editingPo.id);
-      const payload = {
-        items,
-        catatan,
-        tanggalKedatangan: toDateInputValue(createDate),
-      };
-      const data = await poMutations.updatePO(poId, payload, {
-        catatan,
-        tanggalKedatangan: toDateInputValue(createDate),
-        totalQty: lineSummary.totalQty,
-        totalEstimasi: lineSummary.totalEstimasi,
-      });
-      toast.success(`PO ${data.noPO} diperbarui`);
-      setCreateOpen(false);
-      setEditingPo(null);
-      setExpandedId(poId);
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) {
-        toast.info('Perubahan PO disimpan offline — akan disinkron saat online');
-        setCreateOpen(false);
-        setEditingPo(null);
-      } else {
-        toast.error(e instanceof Error ? e.message : String(e));
-      }
-    }
-    setSaving(false);
-  };
-
-  const requestApproval = async (id: string) => {
-    setSubmitting(id);
-    try {
-      await poMutations.requestApproval(id);
-      toast.success('PO diajukan — menunggu persetujuan Admin');
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : String(e));
-    }
-    setSubmitting('');
-  };
-
-  const approvePo = async (id: string) => {
-    setSubmitting(id);
-    try {
-      const data = await poMutations.approve(id);
-      if (data.vendorSynced === false || data.status === 'APPROVED') {
-        toast.success('PO disetujui', {
-          description: data.vendorSyncError
-            ? `Kirim ke vendor ditunda: ${data.vendorSyncError}`
-            : 'Menunggu pengiriman ke sales.app',
-        });
-      } else if (data.vendorSubmissions?.length > 1) {
-        toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s: { vendorNoSO?: string }) => s.vendorNoSO).join(', ')}`);
-      } else {
-        toast.success(`Disetujui & dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
-      }
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal menyetujui — tidak dapat menghubungi server');
-    }
-    setSubmitting('');
-  };
-
-  const syncVendorPo = async (id: string) => {
-    setSubmitting(id);
-    try {
-      const data = await poMutations.syncVendor(id);
-      toast.success(`Dikirim ke vendor → SO ${data.vendorNoSO || data.vendorSoId || ''}`);
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
-    }
-    setSubmitting('');
-  };
-
-  const rejectPo = async (id: string) => {
-    setSubmitting(id);
-    try {
-      await poMutations.reject(id);
-      toast.success('PO ditolak');
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : String(e));
-    }
-    setSubmitting('');
-  };
-
-  const submitPo = async (id: string) => {
-    setSubmitting(id);
-    try {
-      const data = await poMutations.submit(id);
-      if (data.vendorSynced === false || data.status === 'APPROVED') {
-        toast.success('PO dikirim (disetujui)', {
-          description: data.vendorSyncError
-            ? `Sinkron vendor ditunda: ${data.vendorSyncError}`
-            : 'Menunggu sales.app',
-        });
-      } else if (data.vendorSubmissions?.length > 1) {
-        toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${data.vendorSubmissions.map((s: { vendorNoSO?: string }) => s.vendorNoSO).join(', ')}`);
-      } else {
-        toast.success(`Dikirim → SO vendor ${data.vendorNoSO || data.vendorSoId || ''}`);
-      }
-    } catch (e) {
-      if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
-    }
-    setSubmitting('');
-  };
-
-  const listTitle = showAll || !selectedDate
-    ? 'Semua PO'
-    : `PO kedatangan ${formatDate(selectedDate)}`;
+  const {
+    user,
+    list,
+    canCreate,
+    canRequest,
+    canDirectSubmit,
+    canApprove,
+    pendingVendorSyncCount,
+    month,
+    setMonth,
+    selectedDate,
+    showAll,
+    setShowAll,
+    handleSelectDate,
+    listTitle,
+    filteredList,
+    expandedId,
+    setExpandedId,
+    hasMore,
+    loadMore,
+    loadingMore,
+    createOpen,
+    setCreateOpen,
+    editingPo,
+    createDate,
+    setCreateDate,
+    lines,
+    lineDetails,
+    lineSummary,
+    catatan,
+    setCatatan,
+    saving,
+    synced,
+    vendorTierMap,
+    defaultTier,
+    openCreate,
+    openEdit,
+    canEditPo,
+    addLine,
+    removeLine,
+    selectProduct,
+    updateLine,
+    createPo,
+    saveEditPo,
+    submitting,
+    requestApproval,
+    approvePo,
+    syncVendorPo,
+    syncVendorForVendorPo,
+    rejectPo,
+    submitPo,
+    vendorNameById,
+    closeFormDialog,
+  } = useCustomerPoPage();
 
   return (
     <>
-    <div className="p-4 md:p-6 space-y-4">
+      <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -542,188 +144,37 @@ function CustomerPoPageContent() {
             ) : (
               <div className="space-y-2 overflow-y-auto max-h-[520px] pr-1">
                 {filteredList.map((po: JsonObject) => {
-                  const open = expandedId === str(po.id);
-                  const arrival = getPoArrivalDate(po);
-                  const poStatus = str(po.status);
-                  const createdBy = asObject(po.createdBy);
-                  const approvedBy = asObject(po.approvedBy);
-                  const lastEditedBy = asObject(po.lastEditedBy);
-                  const poItems = asArray(po.items) as JsonObject[];
+                  const poId = str(po.id);
                   return (
-                    <div key={str(po.id)} className="border rounded-lg overflow-hidden">
-                      <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50">
-                        <button
-                          type="button"
-                          className="flex flex-1 items-center gap-2 min-w-0 text-left"
-                          onClick={() => setExpandedId(open ? null : str(po.id))}
-                        >
-                          {open ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-mono text-xs font-semibold">{str(po.noPO)}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${PO_STATUS_STYLE[poStatus as keyof typeof PO_STATUS_STYLE] || PO_STATUS_STYLE.DRAFT}`}>
-                                {poStatus}
-                              </span>
-                            </div>
-                            <div className="text-xs text-slate-500 mt-0.5">
-                              Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(str(po.tanggal))}
-                              {poCreatorLabel(po) !== 'Tidak tercatat' && ` · oleh ${poCreatorLabel(po)}`}
-                              {!!po.vendorNoSO && ` · SO: ${str(po.vendorNoSO)}`}
-                            </div>
-                          </div>
-                        </button>
-                        {canEditPo(po) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0"
-                            onClick={() => openEdit(po)}
-                          >
-                            <Pencil className="w-3 h-3 mr-1" />
-                            Edit
-                          </Button>
-                        )}
-                        {poStatus === 'DRAFT' && canRequest && (
-                          user?.role !== 'GUDANG' || str(createdBy.userId) === str(user?.id)
-                        ) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0"
-                            onClick={() => requestApproval(str(po.id))}
-                            disabled={submitting === str(po.id)}
-                          >
-                            <Send className="w-3 h-3 mr-1" />
-                            {submitting === str(po.id) ? '...' : 'Ajukan'}
-                          </Button>
-                        )}
-                        {poStatus === 'DRAFT' && canDirectSubmit && (
-                          <Button
-                            size="sm"
-                            className="shrink-0"
-                            onClick={() => submitPo(str(po.id))}
-                            disabled={submitting === str(po.id)}
-                          >
-                            <Send className="w-3 h-3 mr-1" />
-                            {submitting === str(po.id) ? '...' : 'Kirim'}
-                          </Button>
-                        )}
-                        {poStatus === 'APPROVED' && canApprove && !!po.vendorSyncPending && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0 border-emerald-300 text-emerald-800 hover:bg-emerald-50"
-                            onClick={() => syncVendorPo(str(po.id))}
-                            disabled={submitting === str(po.id)}
-                          >
-                            <RefreshCw className={`w-3 h-3 mr-1 ${submitting === str(po.id) ? 'animate-spin' : ''}`} />
-                            {submitting === str(po.id) ? '...' : 'Kirim ke vendor'}
-                          </Button>
-                        )}
-                        {poStatus === 'PENDING_APPROVAL' && canApprove && (
-                          <>
-                            <Button
-                              size="sm"
-                              className="shrink-0 bg-green-600 hover:bg-green-700"
-                              onClick={() => approvePo(str(po.id))}
-                              disabled={submitting === str(po.id)}
-                            >
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              {submitting === str(po.id) ? '...' : 'Setujui'}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              className="shrink-0"
-                              onClick={() => rejectPo(str(po.id))}
-                              disabled={submitting === str(po.id)}
-                            >
-                              <XCircle className="w-3 h-3" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                      {open && (
-                        <div className="border-t bg-slate-50/50 px-3 py-2 text-sm">
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 mb-2 pb-2 border-b border-slate-100">
-                            <span>
-                              <span className="font-medium text-slate-700">Dibuat oleh:</span>{' '}
-                              {poCreatorLabel(po)}
-                            </span>
-                            <span>
-                              <span className="font-medium text-slate-700">Waktu buat:</span>{' '}
-                              {formatDateTime(str(po.createdAt || po.tanggal))}
-                            </span>
-                            {!!po.requestedAt && (
-                              <span>
-                                <span className="font-medium text-slate-700">Diajukan:</span>{' '}
-                                {formatDateTime(str(po.requestedAt))}
-                              </span>
-                            )}
-                            {!!approvedBy.userName && (
-                              <span>
-                                <span className="font-medium text-slate-700">Disetujui:</span>{' '}
-                                {str(approvedBy.userName)}
-                                {!!po.approvedAt && ` · ${formatDateTime(str(po.approvedAt))}`}
-                              </span>
-                            )}
-                            {!!lastEditedBy.userName && (
-                              <span>
-                                <span className="font-medium text-slate-700">Terakhir diedit:</span>{' '}
-                                {str(lastEditedBy.userName)}
-                                {!!po.lastEditedAt && ` · ${formatDateTime(str(po.lastEditedAt))}`}
-                              </span>
-                            )}
-                          </div>
-                          {!!po.vendorSyncError && poStatus === 'APPROVED' && (
-                            <p className="text-xs text-amber-700 mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
-                              <span className="font-medium">Antrian kirim ke vendor:</span> {str(po.vendorSyncError)}
-                              <span className="block text-[10px] text-amber-600 mt-0.5">
-                                Akan dikirim otomatis saat sales.app online (atau klik Kirim ke vendor)
-                              </span>
-                            </p>
-                          )}
-                          {!!po.catatan && (
-                            <p className="text-xs text-slate-600 mb-2"><span className="font-medium">Catatan:</span> {str(po.catatan)}</p>
-                          )}
-                          {!!po.rejectReason && (
-                            <p className="text-xs text-red-600 mb-2"><span className="font-medium">Alasan ditolak:</span> {str(po.rejectReason)}</p>
-                          )}
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="text-slate-500 border-b">
-                                <th className="text-left py-1 pr-2">Kode</th>
-                                <th className="text-left py-1 pr-2">Produk</th>
-                                <th className="text-right py-1 pr-2">Estimasi</th>
-                                <th className="text-right py-1 pr-2">Qty</th>
-                                <th className="text-center py-1">Satuan</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {poItems.map((it: JsonObject) => (
-                                <tr key={str(it.lineId || it.kode)} className="border-b border-slate-100 last:border-0">
-                                  <td className="py-1.5 pr-2 font-mono">{str(it.kode)}</td>
-                                  <td className="py-1.5 pr-2">{str(it.nama)}</td>
-                                  <td className="py-1.5 text-right whitespace-nowrap text-slate-600">
-                                    {it.estimasiHarga ? formatIDR(num(it.estimasiHarga)) : '—'}
-                                  </td>
-                                  <td className="py-1.5 text-right whitespace-nowrap">{formatNumber(num(it.qty))}</td>
-                                  <td className="py-1.5 text-center text-slate-600">{str(it.satuan) || '—'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {(!!po.vendorNoDO || !!po.vendorNoInvoice) && (
-                            <div className="mt-2 text-xs text-slate-600">
-                              {!!po.vendorNoDO && <span className="mr-3">DO: {str(po.vendorNoDO)}</span>}
-                              {!!po.vendorNoInvoice && <span>Invoice: {str(po.vendorNoInvoice)}</span>}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    <PoListCard
+                      key={poId}
+                      po={po}
+                      expanded={expandedId === poId}
+                      onToggleExpand={() => setExpandedId(expandedId === poId ? null : poId)}
+                      vendorNameById={vendorNameById}
+                      canEdit={canEditPo(po)}
+                      canRequest={canRequest}
+                      canDirectSubmit={canDirectSubmit}
+                      canApprove={canApprove}
+                      user={user}
+                      submitting={submitting}
+                      onEdit={() => openEdit(po)}
+                      onRequestApproval={() => requestApproval(poId)}
+                      onSubmit={() => submitPo(poId)}
+                      onSyncVendor={() => syncVendorPo(poId)}
+                      onSyncVendorForVendor={(vendorTenantId) => syncVendorForVendorPo(poId, vendorTenantId)}
+                      onApprove={() => approvePo(poId)}
+                      onReject={() => rejectPo(poId)}
+                    />
                   );
                 })}
+                {hasMore && (
+                  <div className="pt-2 text-center">
+                    <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                      {loadingMore ? 'Memuat…' : 'Muat lebih banyak'}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -734,7 +185,7 @@ function CustomerPoPageContent() {
         open={createOpen}
         onOpenChange={(open) => {
           setCreateOpen(open);
-          if (!open) setEditingPo(null);
+          if (!open) closeFormDialog();
         }}
         editingPo={editingPo}
         createDate={createDate}
@@ -753,7 +204,7 @@ function CustomerPoPageContent() {
         onSelectProduct={selectProduct}
         onUpdateLine={updateLine}
         onSave={editingPo ? saveEditPo : createPo}
-        onCancel={() => { setCreateOpen(false); setEditingPo(null); }}
+        onCancel={closeFormDialog}
       />
     </>
   );

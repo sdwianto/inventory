@@ -17,7 +17,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function TenantSetupPage() {
-  const [tenantId, setTenantId] = useState('default');
+  const [tenantId, setTenantId] = useState(() => getUser()?.tenantId || 'default');
   const [form, setForm] = useState({
     tenantId: 'default', companyName: '', companyAddress: '', companyPhone: '',
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
@@ -28,12 +28,6 @@ export default function TenantSetupPage() {
   const [preview, setPreview] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    const user = getUser();
-    const tid = user?.tenantId || 'default';
-    setTenantId(tid);
-  }, []);
-
   const { data: settingsData } = useApiQuery<Record<string, unknown>>(
     queryKeys.tenantSettings.detail(tenantId),
     tenantId ? `/api/tenant/settings?tenantId=${tenantId}` : null,
@@ -41,9 +35,10 @@ export default function TenantSetupPage() {
   );
 
   useEffect(() => {
-    if (settingsData) {
+    if (!settingsData) return;
+    queueMicrotask(() => {
       setForm((f) => ({ ...f, ...settingsData, tenantId }));
-    }
+    });
   }, [settingsData, tenantId]);
 
   const saveMutation = useApiMutation([queryKeys.tenantSettings.all]);

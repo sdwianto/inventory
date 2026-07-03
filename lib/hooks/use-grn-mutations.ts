@@ -94,8 +94,9 @@ export function useGrnMutations(
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Gagal sync');
+    await refreshAfterMutation();
     return { res, data };
-  }, []);
+  }, [refreshAfterMutation]);
 
   return { postGrn, replayInvoice, syncFromSales };
 }

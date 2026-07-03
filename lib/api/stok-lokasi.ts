@@ -1,11 +1,13 @@
 // Stok per lokasi (gudang) — qty per tenant + produk + kode lokasi.
+// Semua mutasi qty atomik ($inc dengan guard di query) — aman dari race condition.
 
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { productFilterById, updateProductStockScoped } from '@/lib/api/tenant-operational';
 import { normalizeWarehouseKode, WAREHOUSE_CODES, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { hasSystemFlag, setSystemFlag } from '@/lib/api/system-meta';
+import { txOpts } from '@/lib/api/transaction';
 
 export const DEFAULT_WAREHOUSE = 'GKERING';
 
@@ -145,22 +147,19 @@ export async function setQtyStokLokasi(
   stokId: string,
   lokasiKode: string | null | undefined,
   qty: number | string,
+  session?: ClientSession,
 ): Promise<number> {
   const tid = tenantId || 'default';
   const kode = parseLokasiKode(lokasiKode);
-  const filter = { tenantId: tid, stokId, lokasiKode: kode };
   const next = parseFloat(String(qty)) || 0;
-  const existing = await db.collection('stok_lokasi').findOne(filter);
-  if (existing) {
-    await db.collection('stok_lokasi').updateOne(filter, { $set: { qty: next, updatedAt: new Date() } });
-  } else {
-    await db.collection('stok_lokasi').insertOne({
-      id: uuidv4(),
-      ...filter,
-      qty: next,
-      updatedAt: new Date(),
-    });
-  }
+  await db.collection('stok_lokasi').updateOne(
+    { tenantId: tid, stokId, lokasiKode: kode },
+    {
+      $set: { qty: next, updatedAt: new Date() },
+      $setOnInsert: { id: uuidv4() },
+    },
+    { upsert: true, ...txOpts(session) },
+  );
   return next;
 }
 
@@ -170,12 +169,17 @@ async function loadProductForWarehouse(db: Db, tenantId: string, stokId: string)
 
 export type StokLokasiAdjustResult = { qty: number } | { error: string };
 
+/**
+ * Mutasi qty atomik. Delta negatif hanya diterapkan bila qty cukup
+ * (guard `qty >= |delta|` di query — bukan cek memory).
+ */
 export async function adjustStokLokasi(
   db: Db,
   tenantId: string | null | undefined,
   stokId: string,
   lokasiKode: string | null | undefined,
   delta: number | string,
+  session?: ClientSession,
 ): Promise<StokLokasiAdjustResult> {
   const tid = tenantId || 'default';
   const kode = parseLokasiKode(lokasiKode);
@@ -185,11 +189,32 @@ export async function adjustStokLokasi(
     if (whErr) return whErr;
   }
   const d = parseFloat(String(delta)) || 0;
-  const current = parseFloat(String(await getQtyStokLokasi(db, tid, stokId, kode))) || 0;
-  const next = current + d;
-  if (next < 0) return { error: `Stok di lokasi ${kode} tidak cukup (sisa: ${current})` };
-  await setQtyStokLokasi(db, tid, stokId, kode, next);
-  return { qty: next };
+  const now = new Date();
+
+  if (d >= 0) {
+    const doc = await db.collection('stok_lokasi').findOneAndUpdate(
+      { tenantId: tid, stokId, lokasiKode: kode },
+      {
+        $inc: { qty: d },
+        $set: { updatedAt: now },
+        $setOnInsert: { id: uuidv4() },
+      },
+      { upsert: true, returnDocument: 'after', ...txOpts(session) },
+    );
+    return { qty: parseFloat(String(doc?.qty)) || 0 };
+  }
+
+  const need = -d;
+  const doc = await db.collection('stok_lokasi').findOneAndUpdate(
+    { tenantId: tid, stokId, lokasiKode: kode, qty: { $gte: need } },
+    { $inc: { qty: d }, $set: { updatedAt: now } },
+    { returnDocument: 'after', ...txOpts(session) },
+  );
+  if (!doc) {
+    const current = parseFloat(String(await getQtyStokLokasi(db, tid, stokId, kode))) || 0;
+    return { error: `Stok di lokasi ${kode} tidak cukup (sisa: ${current})` };
+  }
+  return { qty: parseFloat(String(doc.qty)) || 0 };
 }
 
 export async function getProductInventorySnapshot(
@@ -215,11 +240,14 @@ export async function syncProductStokFromLokasi(
   db: Db,
   tenantId: string | null | undefined,
   stokId: string,
+  session?: ClientSession,
 ): Promise<number> {
   const tid = tenantId || 'default';
-  const rows = await db.collection<StokLokasiDoc>('stok_lokasi').find({ tenantId: tid, stokId }).toArray();
+  const rows = await db.collection<StokLokasiDoc>('stok_lokasi')
+    .find({ tenantId: tid, stokId }, txOpts(session))
+    .toArray();
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
-  await updateProductStockScoped(db, tid, stokId, { $set: { stok: total, updatedAt: new Date() } });
+  await updateProductStockScoped(db, tid, stokId, { $set: { stok: total, updatedAt: new Date() } }, session);
   return total;
 }
 
@@ -228,24 +256,31 @@ export async function ensureStokLokasiRow(
   tenantId: string | null | undefined,
   stokId: string,
   lokasiKode: string = DEFAULT_WAREHOUSE,
+  session?: ClientSession,
 ) {
   const tid = tenantId || 'default';
-  const prod = await db.collection('products').findOne(productFilterById(tid, stokId));
+  const prod = await db.collection('products').findOne(productFilterById(tid, stokId), txOpts(session));
   const kode = parseLokasiKode(prod ? resolveProductGudangKode(prod as Record<string, unknown>) : lokasiKode);
-  let row = await db.collection('stok_lokasi').findOne({ tenantId: tid, stokId, lokasiKode: kode }) as StokLokasiDoc | null;
-  if (row) return row;
+  const existing = await db.collection('stok_lokasi').findOne(
+    { tenantId: tid, stokId, lokasiKode: kode },
+    txOpts(session),
+  ) as StokLokasiDoc | null;
+  if (existing) return existing;
   const prodDoc = prod as { stok?: number | string } | null;
   const qty = parseFloat(String(prodDoc?.stok || 0));
-  const newRow: StokLokasiDoc = {
-    id: uuidv4(),
-    tenantId: tid,
-    stokId,
-    lokasiKode: kode,
-    qty,
-    updatedAt: new Date(),
-  };
-  await db.collection('stok_lokasi').insertOne(newRow);
-  return newRow;
+  // Upsert atomik — race dengan insert paralel tidak menggandakan baris (unique index).
+  const doc = await db.collection('stok_lokasi').findOneAndUpdate(
+    { tenantId: tid, stokId, lokasiKode: kode },
+    {
+      $setOnInsert: {
+        id: uuidv4(),
+        qty,
+        updatedAt: new Date(),
+      },
+    },
+    { upsert: true, returnDocument: 'after', ...txOpts(session) },
+  );
+  return doc as unknown as StokLokasiDoc;
 }
 
 export type TransferStokResult = { ok: true } | { error: string };
@@ -257,6 +292,7 @@ export async function transferStokBetweenLokasi(
   lokasiAsal: string,
   lokasiTujuan: string,
   qty: number | string,
+  session?: ClientSession,
 ): Promise<TransferStokResult> {
   const q = parseFloat(String(qty)) || 0;
   if (q <= 0) return { error: 'Qty tidak valid' };
@@ -266,16 +302,16 @@ export async function transferStokBetweenLokasi(
   if (isValidWarehouseKode(asal) && isValidWarehouseKode(tujuan)) {
     return { error: 'Produk tidak bisa dipindah antar Gudang Kering dan Basah — item di kedua gudang berbeda' };
   }
-  await ensureStokLokasiRow(db, tenantId, stokId, asal);
-  await ensureStokLokasiRow(db, tenantId, stokId, tujuan);
-  const out = await adjustStokLokasi(db, tenantId, stokId, asal, -q);
+  await ensureStokLokasiRow(db, tenantId, stokId, asal, session);
+  await ensureStokLokasiRow(db, tenantId, stokId, tujuan, session);
+  const out = await adjustStokLokasi(db, tenantId, stokId, asal, -q, session);
   if ('error' in out) return out;
-  const inn = await adjustStokLokasi(db, tenantId, stokId, tujuan, q);
+  const inn = await adjustStokLokasi(db, tenantId, stokId, tujuan, q, session);
   if ('error' in inn) {
-    await adjustStokLokasi(db, tenantId, stokId, asal, q);
+    if (!session) await adjustStokLokasi(db, tenantId, stokId, asal, q);
     return inn;
   }
-  await syncProductStokFromLokasi(db, tenantId, stokId);
+  await syncProductStokFromLokasi(db, tenantId, stokId, session);
   return { ok: true };
 }
 

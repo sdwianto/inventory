@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { UserCog, Plus, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { formatDateTime } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { useConfirm } from '@/components/ConfirmProvider';
 import ListExportMenu from '@/components/ListExportMenu';
 import BulkSelectionBar from '@/components/BulkSelectionBar';
@@ -51,7 +52,7 @@ export default function UserManagementPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
   const [form, setForm] = useState<UserForm>(empty);
-  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
+  const currentUser = useSessionUser();
   const [deleteTarget, setDeleteTarget] = useState<JsonObject | null>(null); // user to delete
   const [deleting, setDeleting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -62,10 +63,6 @@ export default function UserManagementPage() {
   const { tenants: masterTenants } = useMasterTenants(isMaster);
   const tenants = masterTenants as JsonObject[];
   const userMutation = useApiMutation([queryKeys.users.all]);
-
-  useEffect(() => {
-    setCurrentUser(getUser());
-  }, []);
 
   const refreshList = async () => {
     selection.clear();

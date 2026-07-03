@@ -4,7 +4,7 @@ import type { Db } from 'mongodb';
 import { applyGrnStockPosting } from '@/lib/api/grn-post-stock';
 import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
-import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
+import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/lib/api/bg-jobs';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
@@ -128,6 +128,7 @@ export async function postGoodsReceipt(
       payload: { noGRN: grn.noGRN, noDO: grn.noDO },
     });
     jobId = enq.jobId;
+    void processJobById(db, enq.jobId);
     scheduleJobProcessing(db);
     invoiceSync = { async: true, jobId, status: 'PENDING' };
   } else if (canSyncInvoice && !asyncInvoice) {
@@ -173,6 +174,7 @@ export async function replayGrnInvoiceAsync(
     grnId: grn.id,
     payload: { replay: true },
   });
+  void processJobById(db, enq.jobId);
   scheduleJobProcessing(db);
   const refreshed = await db.collection('goods_receipts').findOne({ id: grn.id });
   const enriched = await enrichGrnDoc(db, refreshed as unknown as GrnDoc);

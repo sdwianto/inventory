@@ -5,8 +5,8 @@ import type { Db } from 'mongodb';
 import { ok } from '@/lib/api/db';
 import { requireRole } from '@/lib/api/require-auth';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
-import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval';
-import { backfillHutangVarianceFields, resolveHutangVariance } from '@/lib/api/hutang-variance-enrich';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { resolveHutangVariance } from '@/lib/api/hutang-variance-enrich';
 import type { HutangDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
@@ -37,8 +37,14 @@ export async function handleProcurementExpenses({
   const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
   if (denied) return denied;
 
-  await backfillLegacyVendorInvoices(db, tenantId);
-  await backfillHutangVarianceFields(db, tenantId);
+  // Backfill data lama berjalan sebagai bg job (dedupe) — GET tidak diblokir operasi tulis.
+  if (tenantId) {
+    void enqueueJob(db, {
+      type: JOB_TYPES.HUTANG_BACKFILL,
+      tenantId,
+      payload: { dedupeKey: 'hutang-backfill' },
+    }).then(() => scheduleJobProcessing(db, { limit: 1 })).catch(() => {});
+  }
 
   const from = parseDateParam(url.searchParams.get('from'));
   const to = parseDateParam(url.searchParams.get('to'), true);
@@ -102,6 +108,8 @@ export async function handleProcurementExpenses({
       noInvoice: h.noInvoice,
       noDO: h.noDO,
       supplierName: h.supplierName,
+      vendorTenantId: h.vendorTenantId,
+      hutangId: h.id,
       poEstimasiTotal: poEst,
       soTotal: so,
       grnReceivedTotal: grn,

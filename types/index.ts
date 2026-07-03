@@ -27,3 +27,10 @@ export type {
   ThreeWayMatchOptions,
   ThreeWayMatchResult,
 } from './integration';
+export type {
+  JournalDetail,
+  JournalEntry,
+  CreateJournalParams,
+  VendorHutangJournalParams,
+  HutangPaymentJournalParams,
+} from './finance';

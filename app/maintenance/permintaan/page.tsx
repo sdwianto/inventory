@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDateTime } from '@/lib/format';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import {
   fetchMaintenanceRequestDetail,
   useAssets,
@@ -53,7 +53,7 @@ function MaintenancePermintaanPageContent() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { run: mutate, isPending: mutating } = useMaintenanceMutations();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<JsonObject>(EMPTY_WR);
@@ -90,8 +90,10 @@ function MaintenancePermintaanPageContent() {
     || user?.role === 'MASTER';
 
   useEffect(() => {
-    setUser(getUser());
-  }, []);
+    const onMaintenanceChange = () => { void reload(); };
+    window.addEventListener('erp-maintenance-change', onMaintenanceChange);
+    return () => window.removeEventListener('erp-maintenance-change', onMaintenanceChange);
+  }, [reload]);
 
   const activeAssets = assets.filter((a) => str(a.status) !== 'DISPOSED');
 

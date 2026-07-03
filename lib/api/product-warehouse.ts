@@ -53,6 +53,7 @@ export async function purgeOtherWarehouseRows(
   tenantId: string | null | undefined,
   stokId: string,
   gudangKode: string,
+  session?: import('mongodb').ClientSession,
 ): Promise<void> {
   const tid = tenantId || 'default';
   const keep = normalizeWarehouseKode(gudangKode);
@@ -60,7 +61,7 @@ export async function purgeOtherWarehouseRows(
     tenantId: tid,
     stokId,
     lokasiKode: { $in: WAREHOUSE_CODES.filter((k) => k !== keep) },
-  });
+  }, session ? { session } : {});
 }
 
 export type SetWarehouseStockResult = { qty: number } | { error: string };

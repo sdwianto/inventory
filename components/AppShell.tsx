@@ -28,13 +28,15 @@ import {
   useWorkspaceBootstrap,
 } from '@/lib/hooks/use-workspace-bootstrap';
 import { queryKeys } from '@/lib/query-keys';
-import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
+import { invalidateNavBadges, useNavBadges } from '@/lib/hooks/use-nav-badges';
+import { invalidateOperationalCaches } from '@/lib/hooks/invalidate-operational';
 import { prefetchRouteData } from '@/lib/prefetch-route';
 import { prefetchRouteFlow } from '@/lib/prefetch-flow';
 import { debouncedPrefetch, prefetchNavGroupThrottled } from '@/lib/prefetch-throttle';
 import { prefetchByRole } from '@/lib/prefetch-by-role';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
+import WorkerHealthBanner from '@/components/WorkerHealthBanner';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
 
@@ -151,16 +153,13 @@ function filterByRole(items: NavEntry[], role: string): NavEntry[] {
 export default function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUserState] = useState<SessionUser | null>(null);
+  const [user, setUserState] = useState<SessionUser | null>(() => getUser());
   const [now, setNow] = useState(new Date());
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
   const [tenantLogo, setTenantLogo] = useState('');
   const [lokasiLabel, setLokasiLabel] = useState('');
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
-  const [navBadges, setNavBadges] = useState<Record<NavBadgeKey, number>>({
-    hutangReview: 0, grnPending: 0, wrPending: 0, pmOverdue: 0,
-  });
 
   const {
     scopeId,
@@ -170,6 +169,9 @@ export default function AppShell({ children }: AppShellProps) {
     badges: wsBadges,
     invalidate: invalidateWorkspace,
   } = useWorkspaceBootstrap(Boolean(user));
+
+  const { data: liveBadges } = useNavBadges(Boolean(user));
+  const badgeSource = liveBadges ?? wsBadges;
 
   useVendorCatalogAutoSync(user);
 
@@ -181,18 +183,18 @@ export default function AppShell({ children }: AppShellProps) {
 
   useEffect(() => {
     if (!user) return;
-    setScopeTenantLabel(wsTenantLabel || '');
-    setLokasiLabel(applyWorkspaceLokasi(scopeId, lokasiList) || '');
-    if (branding) {
-      if (branding.logoUrl) setTenantLogo(branding.logoUrl);
-      else if (branding.logoBase64) setTenantLogo(branding.logoBase64);
-      else setTenantLogo('');
-    }
+    queueMicrotask(() => {
+      setScopeTenantLabel(wsTenantLabel || '');
+      setLokasiLabel(applyWorkspaceLokasi(scopeId, lokasiList) || '');
+      if (branding) {
+        if (branding.logoUrl) setTenantLogo(branding.logoUrl);
+        else if (branding.logoBase64) setTenantLogo(branding.logoBase64);
+        else setTenantLogo('');
+      }
+    });
   }, [user, wsTenantLabel, scopeId, lokasiList, branding]);
 
   useEffect(() => {
-    const u = getUser();
-    if (u) setUserState(u);
     syncSessionUser().then((synced) => {
       if (!synced) {
         router.replace('/');
@@ -208,6 +210,7 @@ export default function AppShell({ children }: AppShellProps) {
         });
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- session bootstrap runs once on mount
   }, [router]);
 
   const queryClient = useQueryClient();
@@ -225,7 +228,6 @@ export default function AppShell({ children }: AppShellProps) {
       refreshOperationalScope(user);
       const scopeKeys = [
         queryKeys.workspace.all,
-        NAV_BADGES_QUERY_KEY,
         ['goods-receipts'],
         ['hutang'],
         ['maintenance-requests'],
@@ -238,6 +240,7 @@ export default function AppShell({ children }: AppShellProps) {
       for (const queryKey of scopeKeys) {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
+      invalidateNavBadges(queryClient);
     };
     window.addEventListener('erp-scope-change', onScopeChange);
     window.addEventListener('storage', onScopeChange);
@@ -245,44 +248,49 @@ export default function AppShell({ children }: AppShellProps) {
       window.removeEventListener('erp-scope-change', onScopeChange);
       window.removeEventListener('storage', onScopeChange);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- scope listener uses stable invalidate helpers
   }, [user, queryClient]);
 
   const showHutangBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
   const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
-  const showNavBadges = false;
   const pmBadgeCount = showPmBadge
-    ? (Number(wsBadges?.pmOverdue) || 0) + (Number(wsBadges?.pmDueSoon) || 0)
+    ? (Number(badgeSource?.pmOverdue) || 0) + (Number(badgeSource?.pmDueSoon) || 0)
     : 0;
-  const grnPending = showGrnBadge ? (Number(wsBadges?.grnPending) || 0) : 0;
-  const hutangReview = showHutangBadge ? (Number(wsBadges?.hutangReview) || 0) : 0;
-  const wrPending = showWrBadge ? (Number(wsBadges?.wrPending) || 0) : 0;
+  const navBadges: Record<NavBadgeKey, number> = {
+    grnPending: showGrnBadge ? (Number(badgeSource?.grnPending) || 0) : 0,
+    hutangReview: showHutangBadge ? (Number(badgeSource?.hutangReview) || 0) : 0,
+    wrPending: showWrBadge ? (Number(badgeSource?.wrPending) || 0) : 0,
+    pmOverdue: pmBadgeCount,
+  };
 
-  const debouncedBadgeRefresh = useMemo(
-    () => debounce(() => {
-      queryClient.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
-    }, 300),
+  const debouncedOperationalRefresh = useMemo(
+    () => debounce(() => invalidateOperationalCaches(queryClient), 300),
     [queryClient],
   );
 
   useEffect(() => {
-    const onGrn = () => debouncedBadgeRefresh();
-    const onHutang = () => debouncedBadgeRefresh();
-    const onMaintenance = () => debouncedBadgeRefresh();
+    const onGrn = () => debouncedOperationalRefresh();
+    const onHutang = () => debouncedOperationalRefresh();
+    const onMaintenance = () => debouncedOperationalRefresh();
+    const onOfflineReplay = () => debouncedOperationalRefresh();
     window.addEventListener('erp-grn-change', onGrn);
     window.addEventListener('erp-hutang-change', onHutang);
     window.addEventListener('erp-maintenance-change', onMaintenance);
+    window.addEventListener('erp-offline-replay-done', onOfflineReplay);
     return () => {
       window.removeEventListener('erp-grn-change', onGrn);
       window.removeEventListener('erp-hutang-change', onHutang);
       window.removeEventListener('erp-maintenance-change', onMaintenance);
+      window.removeEventListener('erp-offline-replay-done', onOfflineReplay);
     };
-  }, [debouncedBadgeRefresh]);
+  }, [debouncedOperationalRefresh]);
 
   useEffect(() => {
-    setNavBadges((prev) => ({ ...prev, grnPending, hutangReview, wrPending, pmOverdue: pmBadgeCount }));
-  }, [grnPending, hutangReview, wrPending, pmBadgeCount]);
+    if (!user) return;
+    invalidateNavBadges(queryClient);
+  }, [pathname, user, queryClient]);
 
   useEffect(() => {
     if (!user || !pathname) return;
@@ -306,7 +314,7 @@ export default function AppShell({ children }: AppShellProps) {
     if (pathname?.startsWith('/retur')) next.retur = true;
     if (pathname?.startsWith('/utiliti')) next.utiliti = true;
     if (pathname?.startsWith('/maintenance')) next.maintenance = true;
-    setExpanded((s) => ({ ...s, ...next }));
+    queueMicrotask(() => setExpanded((s) => ({ ...s, ...next })));
   }, [pathname]);
 
   const handleLogout = async () => {
@@ -527,6 +535,7 @@ export default function AppShell({ children }: AppShellProps) {
             </Button>
           </div>
         </header>
+        <WorkerHealthBanner enabled={user.role === 'MASTER'} />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

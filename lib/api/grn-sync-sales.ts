@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb';
 import type { AnyBulkWriteOperation } from 'mongodb';
-import { resolveSalesApiAccess } from '@/lib/api/integration-links';
+import { listActiveLinksForCustomer, resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import {
   buildGrnInsertDoc,
@@ -24,6 +24,7 @@ async function mapWithConcurrency<T>(
 
 interface SyncErrorRow {
   noDO?: unknown;
+  vendorTenantId?: string;
   error: string;
 }
 
@@ -39,23 +40,101 @@ async function flushBulkOps(
   }
 }
 
+async function fetchShipmentsForVendor(
+  salesAppUrl: string,
+  salesApiKey: string,
+  customerTenantId: string,
+  vendorTenantId: string,
+): Promise<{ deliveries: JsonObject[]; error?: string }> {
+  const res = await fetch(
+    `${salesAppUrl}/api/integrations/customer-shipments?customerTenantId=${encodeURIComponent(customerTenantId)}`,
+    { headers: { 'X-Api-Key': salesApiKey }, signal: AbortSignal.timeout(30000) },
+  );
+  const data = await res.json() as JsonObject;
+  if (!res.ok) {
+    return {
+      deliveries: [],
+      error: String(data.error || `Sales.app ${res.status}`),
+    };
+  }
+  const deliveries = Array.isArray(data.deliveries) ? data.deliveries as JsonObject[] : [];
+  return {
+    deliveries: deliveries.map((row) => ({
+      ...row,
+      vendorTenantId: row.vendorTenantId || vendorTenantId,
+    })),
+  };
+}
+
 export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: string) {
   const tid = String(customerTenantId || 'default').trim().toLowerCase();
-  const access = await resolveSalesApiAccess(db, tid);
-  if (!access) {
+  const links = await listActiveLinksForCustomer(db, tid);
+
+  const vendorsToSync: { vendorTenantId: string; salesAppUrl: string; salesApiKey: string }[] = [];
+  if (links.length) {
+    for (const link of links) {
+      const access = await resolveSalesApiAccess(db, tid, link.vendorTenantId);
+      if (access?.salesApiKey) {
+        vendorsToSync.push({
+          vendorTenantId: link.vendorTenantId,
+          salesAppUrl: access.salesAppUrl,
+          salesApiKey: access.salesApiKey,
+        });
+      }
+    }
+  } else {
+    const access = await resolveSalesApiAccess(db, tid);
+    if (access?.salesApiKey) {
+      vendorsToSync.push({
+        vendorTenantId: '',
+        salesAppUrl: access.salesAppUrl,
+        salesApiKey: access.salesApiKey,
+      });
+    }
+  }
+
+  if (!vendorsToSync.length) {
     return { error: 'Belum terhubung ke sales.app — jalankan pairing dari menu Integrasi' };
   }
 
-  const headers = { 'X-Api-Key': access.salesApiKey };
-  const res = await fetch(
-    `${access.salesAppUrl}/api/integrations/customer-shipments?customerTenantId=${encodeURIComponent(tid)}`,
-    { headers, signal: AbortSignal.timeout(30000) },
-  );
-  const data = await res.json() as JsonObject;
-  if (!res.ok) return { error: String(data.error || `Sales.app ${res.status}`) };
+  const results = {
+    created: 0,
+    existing: 0,
+    errors: [] as SyncErrorRow[],
+    vendorsSynced: 0,
+  };
+  const deliveries: JsonObject[] = [];
+  const seenDeliveryIds = new Set<string>();
+  const fetchErrors: string[] = [];
 
-  const results = { created: 0, existing: 0, errors: [] as SyncErrorRow[] };
-  const deliveries = Array.isArray(data.deliveries) ? data.deliveries as JsonObject[] : [];
+  for (const vendor of vendorsToSync) {
+    const fetched = await fetchShipmentsForVendor(
+      vendor.salesAppUrl,
+      vendor.salesApiKey,
+      tid,
+      vendor.vendorTenantId,
+    );
+    if (fetched.error) {
+      fetchErrors.push(
+        vendor.vendorTenantId
+          ? `${vendor.vendorTenantId}: ${fetched.error}`
+          : fetched.error,
+      );
+      continue;
+    }
+    results.vendorsSynced += 1;
+    for (const row of fetched.deliveries) {
+      const payload = (row.payload || row) as JsonObject;
+      const deliveryId = payload?.deliveryId ? String(payload.deliveryId) : '';
+      if (deliveryId && seenDeliveryIds.has(deliveryId)) continue;
+      if (deliveryId) seenDeliveryIds.add(deliveryId);
+      deliveries.push(row);
+    }
+  }
+
+  if (!deliveries.length && fetchErrors.length === vendorsToSync.length) {
+    return { error: fetchErrors[0] || 'Gagal tarik DO dari sales.app' };
+  }
 
   const deliveryIds = deliveries
     .map((row) => {
@@ -105,6 +184,7 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
     } catch (e) {
       results.errors.push({
         noDO: payload?.noDO,
+        vendorTenantId: vendorTenantId || undefined,
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -118,5 +198,6 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
     total: deliveries.length,
     customerTenantId: tid,
     bulkWritten: insertOps.length + updateOps.length,
+    fetchWarnings: fetchErrors.length ? fetchErrors : undefined,
   };
 }

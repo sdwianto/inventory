@@ -23,7 +23,9 @@ function formatLabel(row: OfflineMutation) {
 }
 
 export default function OfflineIndicator() {
-  const [online, setOnline] = useState(true);
+  const [online, setOnline] = useState(() => (
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  ));
   const [pending, setPending] = useState(0);
   const [items, setItems] = useState<OfflineMutation[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -63,7 +65,6 @@ export default function OfflineIndicator() {
   }, [refreshPending]);
 
   useEffect(() => {
-    if (typeof navigator !== 'undefined') setOnline(navigator.onLine);
     refreshPending();
 
     const handleOnline = () => {

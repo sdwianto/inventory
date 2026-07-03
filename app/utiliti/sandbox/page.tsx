@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { AlertTriangle, Eraser, Eye, Loader2, ShieldAlert } from 'lucide-react';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import type { SessionUser } from '@/types/auth';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -104,7 +104,7 @@ function renderCountRows(counts: DbPreview['counts']) {
 
 export default function SandboxResetPage() {
   const queryClient = useQueryClient();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [tenantId, setTenantId] = useState('');
   const [includeSales, setIncludeSales] = useState(true);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -126,10 +126,6 @@ export default function SandboxResetPage() {
   const tenants = masterTenants as { tenantId: string; companyName?: string }[];
 
   const resetMutation = useApiMutation([queryKeys.sandbox.all]);
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
 
   const runPreview = async () => {
     setLoadingPreview(true);

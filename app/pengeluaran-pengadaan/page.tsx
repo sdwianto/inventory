@@ -3,15 +3,19 @@
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import { useCallback, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import OperationalScopeBar from '@/components/OperationalScopeBar';
+import VendorInvoiceDetail from '@/components/VendorInvoiceDetail';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import { TrendingDown, Download } from 'lucide-react';
+import { TrendingDown, Download, Eye, Loader2 } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { fetchJson } from '@/lib/fetch-json';
 
 function monthStartISO() {
   const d = new Date();
@@ -25,6 +29,9 @@ function todayISO() {
 export default function PengeluaranPengadaanPage() {
   const [from, setFrom] = useState(monthStartISO);
   const [to, setTo] = useState(todayISO);
+  const [detail, setDetail] = useState<JsonObject | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState('');
+  const queryClient = useQueryClient();
 
   const reportUrl = `/api/procurement-expenses?${new URLSearchParams({ from, to })}`;
   const { data, isLoading: loading, refetch } = useApiQuery<JsonObject>(
@@ -35,6 +42,21 @@ export default function PengeluaranPengadaanPage() {
   const load = useCallback(async () => {
     await refetch();
   }, [refetch]);
+
+  const openDetail = async (id: string) => {
+    if (!id) return;
+    setLoadingDetail(id);
+    try {
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.hutang.detail(id),
+        queryFn: () => fetchJson<JsonObject>(`/api/hutang/${id}`),
+      });
+      setDetail(data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+    setLoadingDetail('');
+  };
 
   const exportCsv = () => {
     const rows = asArray(data?.rows) as JsonObject[];
@@ -168,8 +190,14 @@ export default function PengeluaranPengadaanPage() {
               {tableRows.map((r) => {
                 const selisih = variancePoToInvoice(r);
                 const stageNote = stageVarianceNote(r);
+                const rowId = str(r.hutangId || r.id);
+                const opening = loadingDetail === rowId;
                 return (
-                  <tr key={str(r.id)} className="border-t">
+                  <tr
+                    key={rowId}
+                    className="border-t cursor-pointer hover:bg-orange-50/60 transition-colors"
+                    onClick={() => openDetail(rowId)}
+                  >
                     <td className="px-3 py-2 font-mono text-xs">{str(r.noPO) || '—'}</td>
                     <td className="px-3 py-2 font-mono text-xs">{str(r.noInvoice)}</td>
                     <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={str(r.supplierName)}>{str(r.supplierName) || '—'}</td>
@@ -185,13 +213,31 @@ export default function PengeluaranPengadaanPage() {
                     <td className={`px-3 py-2 text-right tabular-nums font-medium ${varianceClass(selisih)}`}>
                       {formatIDR(selisih)}
                     </td>
-                    <td className="px-3 py-2 text-xs">{r.approvedAt ? formatDate(str(r.approvedAt)) : '—'}</td>
+                    <td className="px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>{r.approvedAt ? formatDate(str(r.approvedAt)) : '—'}</span>
+                        {opening
+                          ? <Loader2 className="w-4 h-4 text-orange-500 animate-spin shrink-0" />
+                          : <Eye className="w-4 h-4 text-slate-400 shrink-0" />}
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+
+        <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+          <DialogContent className="max-w-4xl max-h-[94vh] overflow-y-auto p-0 gap-0">
+            <DialogHeader className="sr-only">
+              <DialogTitle>
+                {detail ? `Detail pengeluaran ${str(detail.noInvoice)}` : 'Detail pengeluaran pengadaan'}
+              </DialogTitle>
+            </DialogHeader>
+            {detail && <VendorInvoiceDetail detail={detail} />}
+          </DialogContent>
+        </Dialog>
       </div>
   );
 }

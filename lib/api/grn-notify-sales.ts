@@ -7,19 +7,7 @@ import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { syncGrnDeliveryFromSales } from '@/lib/api/grn-delivery-sync';
-
-function salesFetchErrorMessage(err: unknown, salesUrl: string) {
-  const e = err as { cause?: { code?: string }; code?: string; name?: string; message?: string };
-  const cause = e?.cause;
-  const code = cause?.code || e?.code;
-  if (code === 'ECONNREFUSED') {
-    return `Sales.app tidak dapat dihubungi di ${salesUrl}`;
-  }
-  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout)`;
-  }
-  return e?.message || 'Gagal menghubungi sales.app';
-}
+import { salesFetchErrorMessage, integrationCorrelationId } from '@/lib/api/integration-common';
 
 function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record<string, unknown>) {
   if ((data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId) {
@@ -69,7 +57,7 @@ async function pollSalesGrnJob(
   salesAppUrl: string,
   salesApiKey: string,
   jobId: string,
-  { maxWaitMs = 120_000, intervalMs = 2000 } = {},
+  { maxWaitMs = 60_000, intervalMs = 1000 } = {},
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
@@ -120,6 +108,7 @@ async function upsertHutangFromSalesPayload(
     tid,
     payload,
     vendorTenantId ? String(vendorTenantId) : null,
+    { createdVia: 'grn-posted' },
   );
 
   if ('error' in result && result.error) {
@@ -192,6 +181,16 @@ function normalizeSalesGrnResponse(data: Record<string, unknown>) {
   return data;
 }
 
+function hasDeliverySnapshot(grn: Record<string, unknown>): boolean {
+  const snap = grn.vendorDeliverySnapshot as Record<string, unknown> | undefined;
+  const items = snap?.items;
+  return Boolean(
+    (grn.vendorDeliveryId || snap?.deliveryId)
+    && Array.isArray(items)
+    && items.length > 0,
+  );
+}
+
 export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Record<string, unknown>) {
   const tid = normalizeTenantId(String(grn?.tenantId || tenantId));
   const vendorId = grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined;
@@ -204,12 +203,16 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     return { skipped: true, reason: 'no_do_or_delivery_id' };
   }
 
-  const synced = await syncGrnDeliveryFromSales(db, tid, grn);
-  const currentGrn = (synced.grn || grn) as Record<string, unknown>;
+  let currentGrn = grn as Record<string, unknown>;
+  if (!hasDeliverySnapshot(currentGrn)) {
+    const synced = await syncGrnDeliveryFromSales(db, tid, grn);
+    currentGrn = (synced.grn || grn) as Record<string, unknown>;
+  }
 
   const payload = {
     customerTenantId: tid,
     vendorTenantId: currentGrn.vendorTenantId || config.vendorTenantId,
+    correlationId: integrationCorrelationId(null, String(currentGrn.noPO || '')),
     noDO: currentGrn.noDO,
     noSO: currentGrn.noSO || null,
     noGRN: currentGrn.noGRN,
@@ -226,7 +229,8 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     })),
   };
 
-  const url = `${config.salesAppUrl}/api/integrations/grn-posted`;
+  // inline=1: buat & post invoice di sales.app dalam satu request (tanpa job + polling ganda).
+  const url = `${config.salesAppUrl}/api/integrations/grn-posted?inline=1`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -236,7 +240,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
         'X-Api-Key': salesApiKey,
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(90_000),
     });
   } catch (e) {
     return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };

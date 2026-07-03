@@ -4,6 +4,7 @@ import type { Db } from 'mongodb';
 // Pairing & status integrasi dengan sales.app (vendor).
 
 import { ok, err, clean } from '@/lib/api/db';
+import { secureCompare } from '@/lib/api/secure-compare';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { getIntegrationConfig, getSetupToken } from '@/lib/api/integration-config';
 import {
@@ -21,6 +22,57 @@ import {
 } from '@/lib/api/bg-jobs';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
+const PROBE_REFRESH_MS = 60 * 1000;
+const PROBE_RUN_TIMEOUT_MS = 60 * 1000;
+
+/** Probe katalog berjalan di background — hasil disimpan untuk stale-while-revalidate. */
+async function refreshCatalogProbe(
+  db: Db,
+  tenantId: string,
+  config: { salesAppUrl?: string },
+): Promise<void> {
+  const coll = db.collection('integration_probe_status');
+  try {
+    const apiKey = await getSalesApiKeyForVendor(db, tenantId);
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['X-Api-Key'] = apiKey;
+    const res = await fetch(
+      `${config.salesAppUrl}/api/integrations/catalog?allTenants=true`,
+      { headers, signal: AbortSignal.timeout(15000) },
+    );
+    const data = await res.json();
+    await coll.updateOne(
+      { tenantId },
+      {
+        $set: {
+          tenantId,
+          catalogOk: res.ok && (data.count || 0) > 0,
+          catalogCount: data.count || 0,
+          vendorTenantCount: (data.availableTenants || [])
+            .filter((t: { count?: number }) => (t.count || 0) > 0).length,
+          probedAt: new Date(),
+          running: false,
+        },
+      },
+      { upsert: true },
+    );
+  } catch {
+    await coll.updateOne(
+      { tenantId },
+      {
+        $set: {
+          tenantId,
+          catalogOk: false,
+          catalogCount: 0,
+          vendorTenantCount: 0,
+          probedAt: new Date(),
+          running: false,
+        },
+      },
+      { upsert: true },
+    );
+  }
+}
 
 async function enqueueCatalogSync(db: Db, tenantId: string) {
   const existing = await db.collection('bg_jobs').findOne({
@@ -46,24 +98,41 @@ export async function handleIntegrations({
     const config = await getIntegrationConfig(db, tenantId);
     const probe = url.searchParams.get('probe') === '1';
 
+    // Stale-while-revalidate: balas dengan hasil probe tersimpan (instan),
+    // lalu jalankan probe baru di background jika sudah basi.
     let catalogOk: boolean | null = null;
     let catalogCount = 0;
     let vendorTenantCount = 0;
+    let probedAt: Date | null = null;
+    let probeRunning = false;
     if (probe && config.salesApiKey) {
-      try {
-        const apiKey = await getSalesApiKeyForVendor(db, tenantId);
-        const headers: Record<string, string> = {};
-        if (apiKey) headers['X-Api-Key'] = apiKey;
-        const res = await fetch(
-          `${config.salesAppUrl}/api/integrations/catalog?allTenants=true`,
-          { headers, signal: AbortSignal.timeout(15000) },
+      const probeColl = db.collection('integration_probe_status');
+      const cached = await probeColl.findOne({ tenantId });
+      if (cached) {
+        catalogOk = cached.catalogOk === true;
+        catalogCount = Number(cached.catalogCount || 0);
+        vendorTenantCount = Number(cached.vendorTenantCount || 0);
+        probedAt = cached.probedAt ? new Date(cached.probedAt) : null;
+      }
+      const stale = !probedAt || Date.now() - probedAt.getTime() > PROBE_REFRESH_MS;
+      const runningStuck = cached?.running === true
+        && cached?.runStartedAt
+        && Date.now() - new Date(cached.runStartedAt).getTime() > PROBE_RUN_TIMEOUT_MS;
+      if (stale && (cached?.running !== true || runningStuck)) {
+        // Klaim atomik agar hanya satu probe berjalan per tenant.
+        const claim = await probeColl.updateOne(
+          { tenantId, ...(runningStuck ? {} : { running: { $ne: true } }) },
+          { $set: { tenantId, running: true, runStartedAt: new Date() } },
+          { upsert: !cached },
         );
-        const data = await res.json();
-        catalogOk = res.ok && (data.count || 0) > 0;
-        catalogCount = data.count || 0;
-        vendorTenantCount = (data.availableTenants || []).filter((t: { count?: number }) => (t.count || 0) > 0).length;
-      } catch {
-        catalogOk = false;
+        if (claim.modifiedCount > 0 || claim.upsertedCount > 0) {
+          probeRunning = true;
+          setImmediate(() => {
+            refreshCatalogProbe(db, tenantId, config).catch(() => {});
+          });
+        }
+      } else if (cached?.running === true) {
+        probeRunning = true;
       }
     }
 
@@ -80,7 +149,9 @@ export async function handleIntegrations({
       salesApiKey: config.salesApiKey ? `${config.salesApiKey.slice(0, 12)}…` : '',
       webhookSecret: config.webhookSecret ? `${config.webhookSecret.slice(0, 8)}…` : '',
       catalogReachable: catalogOk,
-      catalogProbed: probe,
+      catalogProbed: probe && probedAt != null,
+      catalogProbedAt: probedAt,
+      catalogProbeRunning: probeRunning,
       catalogCount: probe ? catalogCount : undefined,
       vendorTenantCount: Math.max(vendorTenantCount, vendorLinks.length),
       vendorLinks: vendorLinks.map((l) => ({
@@ -98,13 +169,66 @@ export async function handleIntegrations({
     });
   }
 
+  if (route === '/integrations/platform-pair' && method === 'POST') {
+    const setupToken = getSetupToken();
+    if (!setupToken) {
+      return err('INTEGRATION_SETUP_TOKEN belum di-set di environment production', 503);
+    }
+    const token = String(intBody.setupToken || '');
+    if (!secureCompare(token, setupToken)) return err('Setup token tidak valid', 403);
+
+    const { runPlatformPair } = await import('@/lib/api/platform-pair');
+    const result = await runPlatformPair(db, {
+      customerTenantId: String(intBody.customerTenantId || ''),
+      salesAppUrl: String(intBody.salesAppUrl || 'http://localhost:3000'),
+      salesApiKey: String(intBody.salesApiKey || ''),
+      webhookSecret: String(intBody.webhookSecret || ''),
+      autoSyncCatalog: intBody.autoSyncCatalog !== false,
+      vendors: Array.isArray(intBody.vendors)
+        ? (intBody.vendors as Array<Record<string, unknown>>).map((v) => ({
+          vendorTenantId: String(v.vendorTenantId || ''),
+          vendorName: String(v.vendorName || ''),
+          tierHargaDefault: String(v.tierHargaDefault || 'GROSIR'),
+        }))
+        : [],
+    });
+    if ('error' in result && result.error) return err(String(result.error), 400);
+    return ok(result);
+  }
+
+  if (route === '/integrations/connect-sales' && method === 'POST') {
+    const { denied, tenantId } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+    if (!tenantId) return err('Tenant operasional wajib', 400);
+
+    const links = await listActiveLinksForCustomer(db, tenantId);
+    const config = await getIntegrationConfig(db, tenantId);
+    if (!links.length && !config.salesApiKey) {
+      return err(
+        'Belum terhubung — jalankan Hubungkan Platform dari sales.app (menu Integrasi, role MASTER)',
+        400,
+      );
+    }
+
+    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
+    scheduleJobProcessing(db, { limit: 1 });
+    return ok({
+      message: 'Terhubung ke sales.app — sync katalog dimulai',
+      jobId,
+      async: true,
+      reused,
+      vendorLinkCount: links.length,
+      status: reused ? 'RUNNING' : 'PENDING',
+    }, 202);
+  }
+
   if (route === '/integrations/pair' && method === 'POST') {
     const setupToken = getSetupToken();
     if (!setupToken) {
       return err('INTEGRATION_SETUP_TOKEN belum di-set di environment production', 503);
     }
     const token = String(intBody.setupToken || '');
-    if (token !== setupToken) return err('Setup token tidak valid', 403);
+    if (!secureCompare(token, setupToken)) return err('Setup token tidak valid', 403);
 
     const customerTenantId = String(intBody.customerTenantId || '').trim().toLowerCase();
     if (!customerTenantId) return err('customerTenantId wajib', 400);

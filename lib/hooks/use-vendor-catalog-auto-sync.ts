@@ -62,24 +62,28 @@ export function useVendorCatalogAutoSync(user: SessionUser | null) {
   }, [enabled, jobId]);
 
   useEffect(() => {
-    if (!jobId || !jobData) return;
-    if (completedRef.current === jobId) return;
+    if (!jobId || !jobData) return undefined;
+    if (completedRef.current === jobId) return undefined;
 
     const status = String(jobData.status || '');
-    if (status === 'PENDING' || status === 'RUNNING') return;
+    if (status === 'PENDING' || status === 'RUNNING') return undefined;
 
-    completedRef.current = jobId;
-    sessionStorage.setItem(STORAGE_KEY, String(Date.now()));
-    setJobId(null);
+    // Defer supaya setState tidak sinkron di dalam effect (react-hooks/set-state-in-effect).
+    const t = setTimeout(() => {
+      completedRef.current = jobId;
+      sessionStorage.setItem(STORAGE_KEY, String(Date.now()));
+      setJobId(null);
 
-    if (status === 'DONE') {
-      void queryClient.invalidateQueries({ queryKey: ['pages'] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.workspace.all });
-      void queryClient.invalidateQueries({ queryKey: ['products'] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all });
-      window.dispatchEvent(
-        new CustomEvent('vendor-catalog-synced', { detail: jobData.result || jobData }),
-      );
-    }
+      if (status === 'DONE') {
+        void queryClient.invalidateQueries({ queryKey: ['pages'] });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workspace.all });
+        void queryClient.invalidateQueries({ queryKey: ['products'] });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all });
+        window.dispatchEvent(
+          new CustomEvent('vendor-catalog-synced', { detail: jobData.result || jobData }),
+        );
+      }
+    }, 0);
+    return () => clearTimeout(t);
   }, [jobId, jobData, queryClient]);
 }

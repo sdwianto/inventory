@@ -12,7 +12,7 @@ const PUBLIC = [
   { method: 'POST', route: '/auth/logout' },
   { method: 'POST', route: '/webhooks/sales' },
   { method: 'POST', route: '/integrations/pair' },
-  { method: 'GET', route: '/integrations/public-info' },
+  { method: 'POST', route: '/integrations/platform-pair' },
 ];
 
 export function isPublicRoute(method: string, route: string): boolean {

@@ -5,12 +5,12 @@ import type { JsonObject } from '@/types/json';
 import type { VendorInvoicePayload } from '@/types/integration';
 import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
 import { upsertProductFromVendor, deactivateProductFromVendor } from '@/lib/api/product-sync';
-import { createHutangFromVendorInvoice, applyCreditNoteFromVendor } from '@/lib/api/hutang-from-vendor';
+import { createHutangFromVendorInvoice, applyCreditNoteFromVendor, hutangAlreadyFromGrnPrimaryPath } from '@/lib/api/hutang-from-vendor';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 
 const PRODUCT_EVENTS = new Set(['product.created', 'product.updated', 'product.deactivated']);
-const CPO_EVENTS = new Set(['sales_order.confirmed', 'delivery.shipped', 'invoice.posted']);
+const CPO_EVENTS = new Set(['sales_order.confirmed', 'sales_order.cancelled', 'delivery.shipped', 'invoice.posted']);
 
 const DASHBOARD_INVALIDATE_EVENTS = new Set([
   ...PRODUCT_EVENTS,
@@ -81,11 +81,28 @@ export async function processWebhookInboxEvent(
 
   if (event === 'invoice.posted') {
     if (!payload.invoiceId) throw new Error('invoiceId wajib');
+    const existingPrimary = await hutangAlreadyFromGrnPrimaryPath(
+      db,
+      customerTenantId,
+      payload as VendorInvoicePayload,
+      vendorTenantId,
+    );
+    if (existingPrimary?.skippedWebhook) {
+      await invalidateDashboardSnapshot(db, customerTenantId);
+      return {
+        ...result,
+        ...existingPrimary,
+        fallback: true,
+        message: 'invoice.posted skipped — hutang sudah dari grn-posted',
+        cpoStatus: (result.cpoSync as { status?: string })?.status,
+      };
+    }
     const hutang = await createHutangFromVendorInvoice(
       db,
       customerTenantId,
       payload as VendorInvoicePayload,
       vendorTenantId,
+      { createdVia: 'invoice-posted-webhook' },
     );
     if ('error' in hutang && hutang.error) throw new Error(String(hutang.error));
     await invalidateDashboardSnapshot(db, customerTenantId);

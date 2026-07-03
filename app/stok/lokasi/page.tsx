@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { MapPin, Pencil } from 'lucide-react';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUserWithTenantFilter } from '@/lib/hooks/use-session-user';
 import TenantScopeField, { tenantLabel, type TenantOption } from '@/components/TenantScopeField';
 import { withActingTenantQuery } from '@/lib/tenant-api';
 import { invalidateLokasiCache } from '@/lib/lokasi-client';
@@ -23,8 +23,7 @@ import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 const empty = { kode: '', nama: '', keterangan: '', tenantId: '' };
 
 export default function LokasiPage() {
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [filterTenantId, setFilterTenantId] = useState('');
+  const { user, filterTenantId, setFilterTenantId } = useSessionUserWithTenantFilter();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
   const [form, setForm] = useState(empty);
@@ -45,17 +44,9 @@ export default function LokasiPage() {
     lokasiUrl,
     { enabled: Boolean(lokasiUrl) },
   );
-  const list = Array.isArray(listData) ? listData : [];
+  const list = useMemo(() => (Array.isArray(listData) ? listData : []), [listData]);
 
   const saveMutation = useApiMutation([queryKeys.lokasi.all]);
-
-  useEffect(() => {
-    const u = getUser();
-    setUser(u);
-    if (u?.role !== 'MASTER') {
-      setFilterTenantId(u?.tenantId || 'default');
-    }
-  }, []);
 
   useEffect(() => {
     if (list.length >= 0) invalidateLokasiCache();

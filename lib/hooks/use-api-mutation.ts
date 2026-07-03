@@ -22,6 +22,32 @@ async function parseMutationResponse<T>(res: Response): Promise<T> {
   return data as T;
 }
 
+const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+const KEY_REUSE_WINDOW_MS = 10_000;
+const recentKeys = new Map<string, { key: string; at: number }>();
+
+/**
+ * Idempotency-Key untuk mutasi online: request identik (url+method+body)
+ * dalam jendela singkat memakai key sama — double-click submit = 1 dokumen
+ * di server. Setelah jendela lewat, duplikasi disengaja tetap bisa.
+ */
+function idempotencyKeyFor(url: string, method: string, body: string | undefined): string {
+  const sig = `${method}:${url}:${body ?? ''}`;
+  const nowMs = Date.now();
+  const hit = recentKeys.get(sig);
+  if (hit && nowMs - hit.at < KEY_REUSE_WINDOW_MS) return hit.key;
+  const key = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${nowMs}-${Math.random().toString(36).slice(2)}`;
+  recentKeys.set(sig, { key, at: nowMs });
+  if (recentKeys.size > 200) {
+    for (const [k, v] of recentKeys) {
+      if (nowMs - v.at > KEY_REUSE_WINDOW_MS) recentKeys.delete(k);
+    }
+  }
+  return key;
+}
+
 /** Mutasi API dengan invalidate cache + dukungan antrian offline. */
 export function useApiMutation<TBody = unknown, TResult = unknown>(
   invalidateKeys: QueryKey[] = [],
@@ -37,6 +63,13 @@ export function useApiMutation<TBody = unknown, TResult = unknown>(
       };
       if (body !== undefined && method !== 'GET' && method !== 'DELETE') {
         init.body = JSON.stringify(body);
+      }
+      if (MUTATION_METHODS.has(method) && !(headers && ('Idempotency-Key' in headers))) {
+        (init.headers as Record<string, string>)['Idempotency-Key'] = idempotencyKeyFor(
+          url,
+          method,
+          typeof init.body === 'string' ? init.body : undefined,
+        );
       }
       const res = await fetchOrQueue(url, init);
       return parseMutationResponse<TResult>(res);

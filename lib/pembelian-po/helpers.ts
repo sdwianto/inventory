@@ -1,5 +1,5 @@
 import type { JsonObject } from '@/types/json';
-import { str, asObject } from '@/types/json';
+import { str, asObject, asArray } from '@/types/json';
 
 export function toDateInputValue(d: string | Date | null | undefined): string {
   if (!d) return '';
@@ -47,4 +47,35 @@ export function mergeFormLinesFromPo(
 
 export function emptyPoLine(): JsonObject {
   return { localStokId: '', qty: 1, estimasiHarga: '', estimasiManual: false };
+}
+
+function vendorLabel(vendorTenantId: string, vendorNameById: Record<string, string>): string {
+  const vid = vendorTenantId.trim();
+  if (!vid) return 'Vendor';
+  return vendorNameById[vid] || vid;
+}
+
+/** Tampilan SO per vendor — mis. "Zulmy: SO2607000001 · UD Dawam: SO2607000002" */
+export function formatPoVendorSoDisplay(
+  po: JsonObject | null | undefined,
+  vendorNameById: Record<string, string> = {},
+): string {
+  if (!po) return '';
+  const subs = asArray(po.vendorSubmissions) as JsonObject[];
+  if (subs.length) {
+    return subs
+      .map((s) => {
+        const name = vendorLabel(str(s.vendorTenantId), vendorNameById);
+        const no = str(s.vendorNoSO);
+        return no ? `${name}: ${no}` : name;
+      })
+      .join(' · ');
+  }
+  const no = str(po.vendorNoSO);
+  if (!no) return '';
+  const vid = str(po.vendorTenantId);
+  if (vid && vid !== 'multi') {
+    return `${vendorLabel(vid, vendorNameById)}: ${no}`;
+  }
+  return no;
 }

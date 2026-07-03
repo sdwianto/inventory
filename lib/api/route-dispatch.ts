@@ -14,7 +14,6 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'maintenance-service-orders': async () => (await import('@/lib/api/handlers/maintenance-service-orders')).handleMaintenanceServiceOrders,
   'maintenance-schedules': async () => (await import('@/lib/api/handlers/maintenance-schedules')).handleMaintenanceSchedules,
   'maintenance-reports': async () => (await import('@/lib/api/handlers/maintenance-reports')).handleMaintenanceReports,
-  'local-purchase-orders': async () => (await import('@/lib/api/handlers/local-purchase-orders')).handleLocalPurchaseOrders,
   integrations: async () => (await import('@/lib/api/handlers/integrations')).handleIntegrations,
   auth: async () => (await import('@/lib/api/handlers/auth')).handleAuth,
   dashboard: async () => (await import('@/lib/api/handlers/dashboard')).handleDashboard,

@@ -18,6 +18,8 @@ export type HutangDoc = JsonObject & {
   salesOrderId?: string;
   vendorTenantId?: string;
   customerPoId?: string | null;
+  /** Jalur pembuatan hutang vendor — `grn-posted` (primary) atau `invoice-posted-webhook` (recovery). */
+  createdVia?: 'grn-posted' | 'invoice-posted-webhook' | string;
   poEstimasiTotal?: number;
   soTotal?: number;
   soSubTotal?: number;

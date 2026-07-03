@@ -4,7 +4,7 @@ import { useCallback } from 'react';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import type { JsonObject } from '@/types/json';
 import { queryKeys } from '@/lib/query-keys';
-import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
+import { invalidateNavBadges } from '@/lib/hooks/use-nav-badges';
 import type { CursorPage } from '@/lib/hooks/use-cursor-query';
 import { fetchOrQueue, OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
@@ -46,7 +46,9 @@ export function useHutangMutations(tab: string, reload: () => Promise<void>) {
   const listKey = queryKeys.pages.hutang({ approvalStatus: tab });
 
   const refreshAfterMutation = useCallback(async () => {
-    await qc.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
+    invalidateNavBadges(qc, { broadcast: 'hutang' });
+    void qc.invalidateQueries({ queryKey: ['pages', 'hutang'] });
+    void qc.invalidateQueries({ queryKey: queryKeys.hutang.all });
     await reload();
   }, [qc, reload]);
 

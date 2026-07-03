@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Building2, ChevronDown } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import type { SessionUser } from '@/types/auth';
 import {
   getActingTenantId,
@@ -23,15 +24,13 @@ interface TenantScopeSelectorProps {
 
 /** Pemilih tenant operasional untuk role MASTER. */
 export default function TenantScopeSelector({ className = '' }: TenantScopeSelectorProps) {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [tenants, setTenants] = useState<TenantListItem[]>([]);
   const [selected, setSelected] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const u = getUser();
-    setUser(u);
-    if (u?.role !== 'MASTER') return undefined;
+    if (user?.role !== 'MASTER') return undefined;
 
     const init = async () => {
       setLoading(true);
@@ -41,9 +40,9 @@ export default function TenantScopeSelector({ className = '' }: TenantScopeSelec
         const list = Array.isArray(data) ? data : [];
         setTenants(list);
 
-        let acting = getActingTenantId() || u.actingTenantId || '';
-        if (!acting && u.actingTenantId) {
-          acting = u.actingTenantId;
+        let acting = getActingTenantId() || user.actingTenantId || '';
+        if (!acting && user.actingTenantId) {
+          acting = user.actingTenantId;
           setActingTenantIdLocal(acting);
         }
         if (!acting && list.length > 0) {
@@ -64,7 +63,7 @@ export default function TenantScopeSelector({ className = '' }: TenantScopeSelec
     const onScope = () => setSelected(getActingTenantId());
     window.addEventListener('erp-scope-change', onScope);
     return () => window.removeEventListener('erp-scope-change', onScope);
-  }, []);
+  }, [user]);
 
   if (!user || user.role !== 'MASTER') return null;
 

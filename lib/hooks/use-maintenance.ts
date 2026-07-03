@@ -4,7 +4,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
 import { queryKeys } from '@/lib/query-keys';
-import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
+import { invalidateNavBadges } from '@/lib/hooks/use-nav-badges';
 
 /** @deprecated gunakan queryKeys.maintenance.assets.all */
 export const ASSETS_QUERY_KEY = queryKeys.maintenance.assets.all;
@@ -72,7 +72,6 @@ export function useInvalidateMaintenance() {
     qc.invalidateQueries({ queryKey: queryKeys.maintenance.schedules.all });
     qc.invalidateQueries({ queryKey: queryKeys.maintenance.reports.all });
     qc.invalidateQueries({ queryKey: queryKeys.maintenance.serviceOrders.all });
-    qc.invalidateQueries({ queryKey: NAV_BADGES_QUERY_KEY });
-    window.dispatchEvent(new CustomEvent('erp-maintenance-change'));
+    invalidateNavBadges(qc, { broadcast: 'maintenance' });
   };
 }

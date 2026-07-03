@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDateTime, formatNumber } from '@/lib/format';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { fetchJson } from '@/lib/fetch-json';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
@@ -35,7 +35,7 @@ const CAN_CREATE = ['GUDANG', 'ADMIN', 'MASTER'];
 const CAN_APPROVE = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 function ReleaseInventoryPageContent() {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<{
@@ -83,10 +83,6 @@ function ReleaseInventoryPageContent() {
   const actionMutation = useApiMutation<JsonObject, JsonObject>(
     [queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all],
   );
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
 
   useEffect(() => {
     const wrId = searchParams.get('wrId');

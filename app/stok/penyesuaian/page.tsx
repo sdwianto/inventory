@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from 'sonner';
 import { FileEdit, Plus, Search, Trash2, Save, X, Eye } from 'lucide-react';
 import { formatNumber, formatDateTime } from '@/lib/format';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import ListExportMenu from '@/components/ListExportMenu';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
@@ -22,7 +22,7 @@ import { queryKeys } from '@/lib/query-keys';
 const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 export default function PenyesuaianPage() {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [showForm, setShowForm] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [showPicker, setShowPicker] = useState(false);
@@ -41,10 +41,6 @@ export default function PenyesuaianPage() {
     { keterangan: string; userId?: string; userName?: string; items: { stokId: string; kode: string; qtyAktual: number }[] },
     { noPenyesuaian?: string; error?: string }
   >([queryKeys.penyesuaian.all, queryKeys.products.all]);
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
 
   const openNew = () => {
     setItems([]); setKeterangan(''); setShowForm(true);
@@ -72,7 +68,6 @@ export default function PenyesuaianPage() {
 
   const save = async () => {
     if (items.length === 0) { toast.error('Belum ada item'); return; }
-    const user = getUser();
     setSaving(true);
     try {
       const data = await saveMutation.mutateAsync({

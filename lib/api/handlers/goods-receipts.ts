@@ -61,15 +61,7 @@ export async function handleGoodsReceipts({
 
     filter = withTenantFilter(scopeAuth, filter);
 
-    const refreshProducts = url.searchParams.get('refreshProducts') === '1';
-    if (refreshProducts && tenantId) {
-      void enqueueJob(db, {
-        type: JOB_TYPES.GRN_RESOLVE_PRODUCTS,
-        tenantId,
-        payload: { dedupeKey: 'grn-resolve-products' },
-      }).then(() => scheduleJobProcessing(db));
-    }
-
+    // GET murni baca — resolve produk unresolved lewat POST /goods-receipts/refresh-unresolved.
     const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });
     let listFilter = applyDescDateIdCursor(filter, cursor, 'tanggal');
     const list = await db.collection('goods_receipts')

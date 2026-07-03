@@ -12,7 +12,7 @@ import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
 function okPrivate(data: unknown): NextResponse {
-  return okCached(data, { maxAge: 30 });
+  return okCached(data, { maxAge: 0 });
 }
 
 async function loadTenantSettings(db: Db, tenantId: string): Promise<Record<string, unknown> | null> {

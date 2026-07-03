@@ -50,6 +50,11 @@ export default function KartuStokPage() {
       rows: asArray(json.rows) as JsonObject[],
       product: json.product ? asObject(json.product) : null,
       ledgerSaldo: json.ledgerSaldo != null ? num(json.ledgerSaldo) : null,
+      totalMasuk: json.totalMasuk != null ? num(json.totalMasuk) : null,
+      totalKeluar: json.totalKeluar != null ? num(json.totalKeluar) : null,
+      totalRows: num(json.totalRows),
+      saldoAwal: num(json.saldoAwal),
+      truncated: json.truncated === true,
     };
   }, [kartuRaw]);
 
@@ -68,8 +73,8 @@ export default function KartuStokPage() {
     void refetch();
   };
 
-  const totalMasuk = data.rows.reduce((s, r) => s + num(r.masuk), 0);
-  const totalKeluar = data.rows.reduce((s, r) => s + num(r.keluar), 0);
+  const totalMasuk = data.totalMasuk ?? data.rows.reduce((s, r) => s + num(r.masuk), 0);
+  const totalKeluar = data.totalKeluar ?? data.rows.reduce((s, r) => s + num(r.keluar), 0);
   const saldoKartu = data.rows.length
     ? num(data.rows[data.rows.length - 1].saldo)
     : (data.ledgerSaldo ?? num(data.product?.stok));
@@ -209,6 +214,13 @@ export default function KartuStokPage() {
                 {selectedProduct && loading && <tr><td colSpan={8} className="text-center py-10 text-slate-400">Memuat...</td></tr>}
                 {selectedProduct && !loading && data.rows.length === 0 && (
                   <tr><td colSpan={8} className="text-center py-10 text-slate-400">Tidak ada mutasi pada periode ini</td></tr>
+                )}
+                {selectedProduct && !loading && data.truncated && (
+                  <tr className="bg-amber-50 border-t">
+                    <td colSpan={8} className="px-3 py-2 text-xs text-amber-800 text-center">
+                      Menampilkan {data.rows.length} mutasi terakhir dari {formatNumber(data.totalRows)} — saldo awal baris pertama {formatNumber(data.saldoAwal)}. Gunakan filter tanggal untuk periode lebih spesifik.
+                    </td>
+                  </tr>
                 )}
                 {data.rows.map((r, i) => (
                   <tr key={i} className="border-t hover:bg-slate-50">

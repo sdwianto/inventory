@@ -5,25 +5,14 @@ import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
 import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
+import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import type { JsonObject } from '@/types/json';
 
-function salesFetchErrorMessage(err: unknown, salesUrl: string) {
-  const e = err as { cause?: { code?: string; message?: string }; code?: string; name?: string; message?: string };
-  const cause = e?.cause || e;
-  const code = cause?.code || e?.code;
-  if (code === 'ECONNREFUSED') {
-    return `Sales.app tidak dapat dihubungi di ${salesUrl}. Pastikan sales.app sudah berjalan (biasanya port 3000).`;
-  }
-  if (code === 'ENOTFOUND') {
-    return `Alamat sales.app tidak ditemukan: ${salesUrl}`;
-  }
-  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout) — cek ${salesUrl}`;
-  }
-  return `Gagal menghubungi sales.app: ${cause?.message || e?.message || 'koneksi gagal'}`;
-}
+export type PushPoToVendorResult =
+  | { error: string; partialFailures?: JsonObject[] }
+  | { submissions: JsonObject[]; partialFailures?: JsonObject[] };
 
-async function pushPoGroupToVendor(
+export async function pushPoGroupToVendor(
   db: Db,
   { tenantId, config, po, vendorTenantId, items }: {
     tenantId: string;
@@ -48,6 +37,7 @@ async function pushPoGroupToVendor(
         vendorTenantId,
         noPO: po.noPO,
         customerPoId: po.id,
+        correlationId: integrationCorrelationId(String(po.id || ''), String(po.noPO || '')),
         tanggalKedatangan: po.tanggalKedatangan || po.tanggal || null,
         items,
         catatan: po.catatan || '',
@@ -72,7 +62,7 @@ async function pushPoGroupToVendor(
   return { vendorSo: data, vendorTenantId };
 }
 
-export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenantId: string) {
+export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenantId: string): Promise<PushPoToVendorResult> {
   const config = await getIntegrationConfig(db, tenantId);
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) {
@@ -86,6 +76,7 @@ export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenant
   if (grouped.error) return { error: grouped.error };
 
   const submissions: JsonObject[] = [];
+  const partialFailures: JsonObject[] = [];
   try {
     const groups = grouped.groups || [];
     for (const { vendorTenantId, items } of groups) {
@@ -97,13 +88,17 @@ export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenant
         items,
       });
       if (pushed.error) {
-        return {
+        partialFailures.push({
+          vendorTenantId,
+          status: 'FAILED',
           error: pushed.error,
-          partialSubmissions: submissions,
-        };
+          itemCount: items.length,
+        });
+        continue;
       }
       submissions.push({
         vendorTenantId,
+        status: 'SYNCED',
         vendorSoId: (pushed.vendorSo as JsonObject | undefined)?.id,
         vendorNoSO: (pushed.vendorSo as JsonObject | undefined)?.noSO,
         vendorSo: pushed.vendorSo || null,
@@ -114,7 +109,17 @@ export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenant
     return { error: salesFetchErrorMessage(e, config.salesAppUrl) };
   }
 
-  return { submissions };
+  if (!submissions.length && partialFailures.length) {
+    return {
+      error: String(partialFailures[0].error || 'Semua vendor gagal'),
+      partialFailures,
+    };
+  }
+
+  return {
+    submissions,
+    ...(partialFailures.length ? { partialFailures } : {}),
+  };
 }
 
 export async function finalizePoSubmission(
@@ -122,21 +127,26 @@ export async function finalizePoSubmission(
   po: Record<string, unknown>,
   submissions: JsonObject[],
   approver: Record<string, unknown> | null | undefined,
+  { partialFailures = [] }: { partialFailures?: JsonObject[] } = {},
 ) {
   const primary = submissions[0] || {};
   const now = new Date();
+  const allSubs = [...submissions, ...partialFailures];
+  const hasFailures = partialFailures.length > 0;
   const patch: Record<string, unknown> = {
-    status: 'SUBMITTED',
-    vendorSubmissions: submissions,
-    vendorTenantId: submissions.length === 1 ? primary.vendorTenantId : 'multi',
+    status: submissions.length ? 'SUBMITTED' : 'APPROVED',
+    vendorSubmissions: allSubs,
+    vendorTenantId: submissions.length === 1 ? primary.vendorTenantId : (submissions.length ? 'multi' : po.vendorTenantId),
     vendorSoId: primary.vendorSoId,
     vendorNoSO: submissions.length === 1
       ? primary.vendorNoSO
       : submissions.map((s) => s.vendorNoSO).filter(Boolean).join(', '),
-    submittedAt: now,
+    submittedAt: submissions.length ? now : po.submittedAt || null,
     updatedAt: now,
-    vendorSyncPending: false,
-    vendorSyncError: null,
+    vendorSyncPending: hasFailures,
+    vendorSyncError: hasFailures
+      ? partialFailures.map((f) => `${f.vendorTenantId}: ${f.error}`).join('; ')
+      : null,
   };
   if (approver) {
     patch.approvedBy = {

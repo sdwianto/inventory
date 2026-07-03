@@ -67,7 +67,7 @@ export default function MaintenanceLaporanPage() {
   });
 
   const summary = (report?.summary || {}) as JsonObject;
-  const bySource = (report?.bySource || []) as JsonObject[];
+  const bySource = useMemo(() => (report?.bySource || []) as JsonObject[], [report?.bySource]);
   const byResolution = (report?.byResolution || []) as JsonObject[];
   const costByMonth = (report?.costByMonth || []) as JsonObject[];
   const byAsset = (report?.byAsset || []) as JsonObject[];

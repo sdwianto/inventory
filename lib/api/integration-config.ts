@@ -99,9 +99,4 @@ export async function getIntegrationConfig(
   };
 }
 
-export function getSetupToken(): string | null {
-  const configured = (process.env.INTEGRATION_SETUP_TOKEN || '').trim();
-  if (configured) return configured;
-  if (process.env.NODE_ENV === 'production') return null;
-  return 'dev_pair_token_local_only';
-}
+export { getSetupToken } from '@/lib/api/integration-common';

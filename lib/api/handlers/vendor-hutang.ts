@@ -24,6 +24,7 @@ import {
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { buildHutangPaymentJournalLines } from '@/lib/api/journal-lines';
 import { createJournal } from '@/lib/api/journal';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import type { HandlerContext } from '@/types/api/handler';
 
 const HUTANG_ADMIN_ROLES = ['ADMIN', 'MASTER'];
@@ -375,52 +376,64 @@ export async function handleVendorHutang({
 
     const tenantId = hutang.tenantId || auth?.tenantId || 'default';
     const now = new Date();
-    const newTerbayar = Number(hutang.terbayar || 0) + amount;
-    const newSisa = Number(hutang.total || 0) - newTerbayar;
-    const newStatus = newSisa <= 0 ? 'PAID_EXTERNAL' : 'PARTIAL';
 
-    await db.collection('hutang').updateOne(
-      { id: hutang.id },
-      {
-        $set: {
-          terbayar: newTerbayar,
-          sisa: newSisa,
-          status: newStatus,
-          approvalStatus: newSisa <= 0 ? 'PAID_EXTERNAL' : hutang.approvalStatus,
-          updatedAt: now,
-        },
-      },
-    );
-    await db.collection('hutang_pembayaran').insertOne(stampTenantId(tenantId, {
-      id: uuidv4(),
-      hutangId: hutang.id,
-      tanggal: now,
-      amount,
-      metode: hutangBody.metode || 'TUNAI',
-      keterangan: hutangBody.keterangan || '',
-      userName: hutangBody.userName || '',
-    }));
-
+    // Saldo + pembayaran + jurnal satu unit atomik.
+    // Guard `sisa >= amount` di query — dua pembayaran bersamaan tidak bisa overpay.
+    let updated: Record<string, unknown> | null = null;
     try {
-      await createJournal(db, {
-        tanggal: now,
-        keterangan: `Pelunasan hutang ${hutang.noHutang || hutang.noInvoice}`,
-        sourceType: 'AUTO_PELUNASAN_HUTANG',
-        sourceId: hutang.id,
-        details: buildHutangPaymentJournalLines({
-          noDoc: hutang.noInvoice || hutang.noHutang,
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        updated = await txDb.collection('hutang').findOneAndUpdate(
+          { id: hutang.id, sisa: { $gte: amount } },
+          [
+            {
+              $set: {
+                terbayar: { $add: [{ $ifNull: ['$terbayar', 0] }, amount] },
+                sisa: { $subtract: [{ $ifNull: ['$sisa', 0] }, amount] },
+                updatedAt: now,
+              },
+            },
+            {
+              $set: {
+                status: { $cond: [{ $lte: ['$sisa', 0] }, 'PAID_EXTERNAL', 'PARTIAL'] },
+                approvalStatus: {
+                  $cond: [{ $lte: ['$sisa', 0] }, 'PAID_EXTERNAL', '$approvalStatus'],
+                },
+              },
+            },
+          ],
+          { returnDocument: 'after', ...txOpts(session) },
+        ) as Record<string, unknown> | null;
+        if (!updated) throw new Error('Pembayaran melebihi sisa hutang (sudah berubah — muat ulang halaman)');
+
+        await txDb.collection('hutang_pembayaran').insertOne(stampTenantId(tenantId, {
+          id: uuidv4(),
+          hutangId: hutang.id,
+          tanggal: now,
           amount,
           metode: hutangBody.metode || 'TUNAI',
-        }),
-        userName: hutangBody.userName || '',
-        tenantId,
+          keterangan: hutangBody.keterangan || '',
+          userName: hutangBody.userName || '',
+        }), txOpts(session));
+
+        await createJournal(txDb, {
+          tanggal: now,
+          keterangan: `Pelunasan hutang ${hutang.noHutang || hutang.noInvoice}`,
+          sourceType: 'AUTO_PELUNASAN_HUTANG',
+          sourceId: hutang.id,
+          details: buildHutangPaymentJournalLines({
+            noDoc: hutang.noInvoice || hutang.noHutang || String(hutang.id),
+            amount,
+            metode: hutangBody.metode || 'TUNAI',
+          }),
+          userName: hutangBody.userName || '',
+          tenantId,
+        }, session);
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Gagal posting jurnal pembayaran hutang';
-      return err(msg, 500);
+      const msg = e instanceof Error ? e.message : 'Gagal menyimpan pembayaran hutang';
+      return err(msg, 400);
     }
 
-    const updated = await db.collection('hutang').findOne({ id: hutang.id });
     await invalidateDashboardSnapshot(db, tenantId);
     return ok(clean(updated));
   }

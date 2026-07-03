@@ -18,6 +18,7 @@ import { isValidWarehouseKode, warehouseLabel, normalizeWarehouseKode } from '@/
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import type { AuthContext } from '@/types/auth';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
@@ -234,37 +235,47 @@ export async function handleInventoryReleases({
     if (!lokasiKode) return err('Gudang tidak valid', 400);
     const now = new Date();
 
-    for (const it of doc.items || []) {
-      await ensureStokLokasiRow(db, tenantId, it.stokId, lokasiKode);
-      const adj = await adjustStokLokasi(db, tenantId, it.stokId, lokasiKode, -it.qty);
-      if ('error' in adj && adj.error) return err(`${it.nama}: ${adj.error}`, 400);
-      await syncProductStokFromLokasi(db, tenantId, it.stokId);
-      await db.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
-        id: uuidv4(),
-        stokId: it.stokId,
-        lokasi: `${lokasiKode} - ${doc.lokasiNama}`,
-        tanggal: now,
-        noTransaksi: doc.noRelease,
-        keterangan: `Release operasional: ${doc.keperluan}`,
-        sourceType: 'RELEASE',
-        masuk: 0,
-        keluar: it.qty,
-        hargaSatuan: it.hargaBeli || 0,
-      }));
-    }
+    // Klaim status + stok + kartu satu unit atomik — approve ganda / partial failure aman.
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const claim = await txDb.collection('inventory_releases').updateOne(
+          { id: doc.id, status: 'PENDING_APPROVAL' },
+          {
+            $set: {
+              status: 'POSTED',
+              approvedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
+              approvedAt: now,
+              postedAt: now,
+              approveNote: releaseBody.note || '',
+            },
+          },
+          session ? { session } : {},
+        );
+        if (claim.modifiedCount === 0) throw new Error('Release sudah diproses oleh approver lain');
 
-    await db.collection('inventory_releases').updateOne(
-      { id: doc.id },
-      {
-        $set: {
-          status: 'POSTED',
-          approvedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
-          approvedAt: now,
-          postedAt: now,
-          approveNote: releaseBody.note || '',
-        },
-      },
-    );
+        for (const it of doc.items || []) {
+          await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
+          const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qty, session);
+          if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
+          await syncProductStokFromLokasi(txDb, tenantId, it.stokId, session);
+          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
+            id: uuidv4(),
+            stokId: it.stokId,
+            lokasi: `${lokasiKode} - ${doc.lokasiNama}`,
+            tanggal: now,
+            noTransaksi: doc.noRelease,
+            keterangan: `Release operasional: ${doc.keperluan}`,
+            sourceType: 'RELEASE',
+            masuk: 0,
+            keluar: it.qty,
+            hargaSatuan: it.hargaBeli || 0,
+          }), session ? { session } : {});
+        }
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Gagal approve release';
+      return err(msg, 400);
+    }
     await writeAuditLog(db, {
       tenantId,
       action: 'INVENTORY_RELEASE',

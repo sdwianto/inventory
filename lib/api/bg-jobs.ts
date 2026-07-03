@@ -24,9 +24,17 @@ export const JOB_TYPES = {
   GRN_POST_SIDE_EFFECTS: 'GRN_POST_SIDE_EFFECTS',
   GRN_RESOLVE_PRODUCTS: 'GRN_RESOLVE_PRODUCTS',
   HUTANG_REPAIR: 'HUTANG_REPAIR',
+  HUTANG_BACKFILL: 'HUTANG_BACKFILL',
+  INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE',
 } as const;
 
 const MAX_ATTEMPTS = 3;
+const BASE_RETRY_DELAY_MS = 30_000;
+
+/** Backoff eksponensial: 30s, 60s, 120s. */
+function retryDelayMs(attempts: number): number {
+  return BASE_RETRY_DELAY_MS * Math.pow(2, Math.max(0, attempts - 1));
+}
 
 let indexesEnsured = false;
 
@@ -44,8 +52,8 @@ export async function ensureBgJobIndexes(db: Db) {
   if (indexesEnsured) return;
   try {
     await db.collection('bg_jobs').createIndex(
-      { status: 1, createdAt: 1 },
-      { name: 'idx_bg_jobs_status_created' },
+      { status: 1, nextRunAt: 1, createdAt: 1 },
+      { name: 'idx_bg_jobs_status_next_created' },
     );
     await db.collection('bg_jobs').createIndex(
       { grnId: 1, type: 1 },
@@ -122,6 +130,7 @@ export async function enqueueJob(
     attempts: 0,
     lastError: null,
     result: null,
+    nextRunAt: null,
     createdAt: now,
     updatedAt: now,
     startedAt: null,
@@ -251,13 +260,17 @@ export async function getJobById(db: Db, jobId: string, tenantId?: string | null
 
 export async function processJob(db: Db, job: BgJob) {
   const now = new Date();
-  await db.collection('bg_jobs').updateOne(
-    { id: job.id },
+  // Klaim atomik — dua worker paralel tidak memproses job yang sama.
+  const claimed = await db.collection('bg_jobs').findOneAndUpdate(
+    { id: job.id, status: 'PENDING' },
     {
       $set: { status: 'RUNNING', startedAt: now, updatedAt: now },
       $inc: { attempts: 1 },
     },
+    { returnDocument: 'after' },
   );
+  if (!claimed) return { skipped: true, reason: 'job sudah diproses worker lain' };
+  const attempts = Number(claimed.attempts || 1);
 
   let outcome: Record<string, unknown>;
   try {
@@ -281,6 +294,25 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.HUTANG_REPAIR) {
       const { runHutangRepairJob } = await import('@/lib/api/hutang-repair-run');
       outcome = await runHutangRepairJob(db, job);
+    } else if (job.type === JOB_TYPES.HUTANG_BACKFILL) {
+      const { backfillLegacyVendorInvoices } = await import('@/lib/api/migrate-hutang-approval');
+      const { backfillHutangVarianceFields } = await import('@/lib/api/hutang-variance-enrich');
+      const legacy = await backfillLegacyVendorInvoices(db, job.tenantId);
+      const variance = await backfillHutangVarianceFields(db, job.tenantId);
+      outcome = { legacy, variance };
+    } else if (job.type === JOB_TYPES.INTEGRATION_RECONCILE) {
+      const { runIntegrationReconcile } = await import('@/lib/api/integration-reconcile-run');
+      const allTenants = job.payload?.allTenants === true;
+      if (allTenants) {
+        const tenants = await db.collection('tenants').find({}).project({ id: 1 }).toArray();
+        const results: Record<string, unknown>[] = [];
+        for (const t of tenants) {
+          results.push({ ...(await runIntegrationReconcile(db, String(t.id))) });
+        }
+        outcome = { tenants: results.length, results };
+      } else {
+        outcome = { ...(await runIntegrationReconcile(db, job.tenantId)) };
+      }
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }
@@ -289,20 +321,63 @@ export async function processJob(db: Db, job: BgJob) {
   }
 
   const failed = 'error' in outcome && outcome.error;
-  await db.collection('bg_jobs').updateOne(
-    { id: job.id },
-    {
-      $set: {
-        status: failed ? 'FAILED' : 'DONE',
-        lastError: failed ? ('error' in outcome ? outcome.error : null) : null,
-        result: outcome,
-        finishedAt: new Date(),
-        updatedAt: new Date(),
+  const done = new Date();
+  if (!failed) {
+    await db.collection('bg_jobs').updateOne(
+      { id: job.id },
+      {
+        $set: {
+          status: 'DONE',
+          lastError: null,
+          result: outcome,
+          nextRunAt: null,
+          finishedAt: done,
+          updatedAt: done,
+        },
       },
-    },
-  );
+    );
+  } else if (attempts >= MAX_ATTEMPTS) {
+    // Dead-letter: gagal 3x — berhenti retry, tersimpan untuk inspeksi manual.
+    await db.collection('bg_jobs').updateOne(
+      { id: job.id },
+      {
+        $set: {
+          status: 'FAILED',
+          deadLetter: true,
+          lastError: outcome.error,
+          result: outcome,
+          nextRunAt: null,
+          finishedAt: done,
+          updatedAt: done,
+        },
+      },
+    );
+  } else {
+    // Retry otomatis dengan backoff eksponensial.
+    await db.collection('bg_jobs').updateOne(
+      { id: job.id },
+      {
+        $set: {
+          status: 'PENDING',
+          lastError: outcome.error,
+          result: outcome,
+          nextRunAt: new Date(Date.now() + retryDelayMs(attempts)),
+          updatedAt: done,
+        },
+      },
+    );
+  }
 
   return outcome;
+}
+
+/** Jalankan satu job segera — dipakai GRN invoice agar tidak antri di scheduler. */
+export async function processJobById(db: Db, jobId: string) {
+  const row = await db.collection('bg_jobs').findOne({ id: jobId });
+  if (!row || row.status !== 'PENDING') return null;
+  const job = row as unknown as BgJob;
+  if ((job.attempts || 0) >= MAX_ATTEMPTS) return null;
+  return processJob(db, job);
 }
 
 export async function processPendingJobs(
@@ -310,7 +385,14 @@ export async function processPendingJobs(
   { limit = 5, types = null }: { limit?: number; types?: string[] | null } = {},
 ) {
   await ensureBgJobIndexes(db);
-  const filter: Record<string, unknown> = { status: 'PENDING' };
+  const filter: Record<string, unknown> = {
+    status: 'PENDING',
+    $or: [
+      { nextRunAt: null },
+      { nextRunAt: { $exists: false } },
+      { nextRunAt: { $lte: new Date() } },
+    ],
+  };
   if (types?.length) filter.type = { $in: types };
 
   const jobs = await db.collection('bg_jobs')
@@ -319,16 +401,17 @@ export async function processPendingJobs(
     .limit(limit)
     .toArray();
 
+  // Prioritas: invoice GRN lebih dulu (user menunggu di halaman Penerimaan).
+  jobs.sort((a, b) => {
+    const aInv = a.type === JOB_TYPES.GRN_INVOICE_SYNC ? 0 : 1;
+    const bInv = b.type === JOB_TYPES.GRN_INVOICE_SYNC ? 0 : 1;
+    if (aInv !== bInv) return aInv - bInv;
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+
   const results: Record<string, unknown>[] = [];
   for (const jobRow of jobs) {
     const job = jobRow as unknown as BgJob;
-    if ((job.attempts || 0) >= MAX_ATTEMPTS) {
-      await db.collection('bg_jobs').updateOne(
-        { id: job.id },
-        { $set: { status: 'FAILED', lastError: 'Max attempts exceeded', updatedAt: new Date() } },
-      );
-      continue;
-    }
     results.push({ jobId: job.id, ...(await processJob(db, job)) });
   }
   return results;

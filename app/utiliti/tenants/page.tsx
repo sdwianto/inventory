@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Building2, Plus, Users, ImageIcon, Upload, X, Save, Pencil, Trash2, AlertTriangle } from 'lucide-react';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { invalidateTenantCache } from '@/lib/tenant-client';
 import { fetchJson } from '@/lib/fetch-json';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -34,7 +34,7 @@ export default function TenantsListPage() {
   const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [tenantIdManual, setTenantIdManual] = useState(false);
   const [seedDemoProducts, setSeedDemoProducts] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -64,8 +64,6 @@ export default function TenantsListPage() {
   const refreshTenants = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.tenants.all });
   };
-
-  useEffect(() => { setUser(getUser()); }, []);
 
   const openEdit = async (t: JsonObject) => {
     try {

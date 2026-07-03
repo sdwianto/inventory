@@ -101,6 +101,17 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
+  const syncVendorForVendor = useCallback(async (id: string, vendorTenantId: string) => {
+    return withOptimistic(
+      id,
+      { vendorSyncStatus: 'SYNCING' },
+      () => fetchOrQueue(`/api/customer-purchase-orders/${id}/sync-vendor/${encodeURIComponent(vendorTenantId)}`, {
+        method: 'POST',
+        offlineLabel: `Sync vendor ${vendorTenantId} PO ${id}`,
+      }),
+    );
+  }, [withOptimistic]);
+
   const createPO = useCallback(async (
     payload: Record<string, unknown>,
     optimisticRow?: JsonObject,
@@ -146,5 +157,5 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
-  return { requestApproval, approve, reject, submit, syncVendor, createPO, updatePO };
+  return { requestApproval, approve, reject, submit, syncVendor, syncVendorForVendor, createPO, updatePO };
 }

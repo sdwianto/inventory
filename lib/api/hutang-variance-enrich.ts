@@ -2,7 +2,8 @@
 
 import type { Db } from 'mongodb';
 
-import { sumPoEstimasi } from '@/lib/api/po-estimasi';
+import { computeLineEstimasi, sumPoEstimasi } from '@/lib/api/po-estimasi';
+import { hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import {
   buildVendorSoSnapshot,
   mergeVendorSoSnapshots,
@@ -43,6 +44,72 @@ export function poEstimasiFromDoc(po: JsonObject | null | undefined) {
     const harga = parseInt(String(it.estimasiHarga || it.hargaBeliReferensi || it.harga || 0), 10);
     return sum + Math.round(qty * harga);
   }, 0);
+}
+
+function isMultiVendorPo(po: JsonObject): boolean {
+  const subs = asArray(po.vendorSubmissions) as JsonObject[];
+  if (subs.length > 1) return true;
+  return String(po.vendorTenantId || '') === 'multi';
+}
+
+function resolveVendorTenantForHutang(po: JsonObject, hutang: HutangDoc | null): string {
+  const vid = hutangVendorKey(hutang?.vendorTenantId);
+  if (vid) return vid;
+
+  const subs = asArray(po.vendorSubmissions) as JsonObject[];
+  if (!subs.length) return '';
+
+  const soId = hutang?.salesOrderId;
+  const noSO = hutang?.noSO;
+  if (soId) {
+    const sub = subs.find((s) => s.vendorSoId === soId);
+    if (sub?.vendorTenantId) return hutangVendorKey(String(sub.vendorTenantId));
+  }
+  if (noSO) {
+    const sub = subs.find((s) => s.vendorNoSO === noSO);
+    if (sub?.vendorTenantId) return hutangVendorKey(String(sub.vendorTenantId));
+  }
+  if (subs.length === 1 && subs[0].vendorTenantId) {
+    return hutangVendorKey(String(subs[0].vendorTenantId));
+  }
+  return '';
+}
+
+function poEstimasiFromItems(items: JsonObject[]) {
+  const enriched = items.map((it) => computeLineEstimasi(it));
+  const fromLines = sumPoEstimasi(enriched);
+  if (fromLines > 0) return fromLines;
+  return enriched.reduce((sum, it) => sum + (parseInt(String(it.estimasiJumlah || 0), 10) || 0), 0);
+}
+
+/** Estimasi PO per supplier — untuk PO multi-vendor jangan pakai total seluruh PO. */
+export function poEstimasiForHutang(po: JsonObject | null | undefined, hutang: HutangDoc | null = null) {
+  if (!po) return 0;
+  if (!isMultiVendorPo(po)) return poEstimasiFromDoc(po);
+
+  const targetVid = resolveVendorTenantForHutang(po, hutang);
+  if (!targetVid) return 0;
+
+  const items = asArray(po.items) as JsonObject[];
+  let vendorItems = items.filter((it) => hutangVendorKey(String(it.vendorTenantId ?? '')) === targetVid);
+
+  if (!vendorItems.length) {
+    const snap = resolveSoSnapshotForPo(po, hutang);
+    const snapKodes = new Set(
+      asArray(snap?.items).map((it) => String((it as JsonObject).kode || '').trim()).filter(Boolean),
+    );
+    if (snapKodes.size) {
+      vendorItems = items.filter((it) => {
+        const k = String(it.kode || it.vendorKode || '').trim();
+        return k && snapKodes.has(k);
+      });
+    }
+  }
+
+  if (vendorItems.length) {
+    return poEstimasiFromItems(vendorItems);
+  }
+  return 0;
 }
 
 function submissionToSnapshot(sub: JsonObject | null | undefined) {
@@ -99,9 +166,15 @@ export function soTotalFromPo(po: JsonObject | null | undefined, hutang: HutangD
 export async function grnReceivedTotalForHutang(db: Db, hutang: HutangDoc) {
   const tid = hutang.tenantId || 'default';
   const filter: Record<string, unknown> = { tenantId: tid, status: 'POSTED' };
-  if (hutang.noDO) filter.noDO = hutang.noDO;
-  else if (hutang.noPO) filter.noPO = hutang.noPO;
-  else return 0;
+  if (hutang.noDO) {
+    filter.noDO = hutang.noDO;
+  } else if (hutang.noPO) {
+    filter.noPO = hutang.noPO;
+    const vid = hutangVendorKey(hutang.vendorTenantId);
+    if (vid) filter.vendorTenantId = hutang.vendorTenantId;
+  } else {
+    return 0;
+  }
 
   const grns = await db.collection('goods_receipts').find(filter).toArray();
   return grns.reduce((sum, grn) => sum + (parseInt(String(grn.receivedTotal || 0), 10) || 0), 0);
@@ -133,7 +206,7 @@ export async function resolveHutangVariance(
   const linkedPo = (po || await findPoForHutang(db, hutang)) as JsonObject | null;
 
   const poEstimasiTotal = linkedPo
-    ? poEstimasiFromDoc(linkedPo)
+    ? poEstimasiForHutang(linkedPo, hutang)
     : parseInt(String(hutang.poEstimasiTotal || 0), 10);
 
   const snap = linkedPo ? resolveSoSnapshotForPo(linkedPo, hutang) : null;

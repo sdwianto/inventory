@@ -68,6 +68,12 @@ async function handleRoute(request: Request, context: RouteContext) {
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
+    if (route === '/integrations/platform-pair' && method === 'POST') {
+      const pairMax = parseInt(process.env.RATE_LIMIT_PAIR_MAX || '10', 10);
+      const rl = checkRateLimit(`platform-pair:${clientIp(request)}`, pairMax);
+      if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
+    }
+
     const db = await connectToMongo();
     void ensureOperationalIndexes(db).catch(() => {});
 

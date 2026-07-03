@@ -1,4 +1,4 @@
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
 // Operasional & akunting per tenant — migrasi, filter, stamp tenantId.
 
 import { withTenantFilter, migrateCollectionTenantId } from '@/lib/api/tenant-master';
@@ -75,7 +75,7 @@ export function stampTenantId(tenantId, doc) {
 }
 
 /** Update stok produk hanya jika id + tenant cocok. */
-export async function updateProductStockScoped(db: Db, tenantId, productId, update) {
+export async function updateProductStockScoped(db: Db, tenantId, productId, update, session?: ClientSession) {
   const tid = tenantId || 'default';
   const filter: Record<string, unknown> = { id: productId };
   if (tid === 'default') {
@@ -88,7 +88,7 @@ export async function updateProductStockScoped(db: Db, tenantId, productId, upda
   } else {
     filter.tenantId = tid;
   }
-  return db.collection('products').updateOne(filter, update);
+  return db.collection('products').updateOne(filter, update, session ? { session } : {});
 }
 
 export function productFilterById(tenantId, productId) {

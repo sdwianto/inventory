@@ -5,7 +5,7 @@ import type { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean } from '@/lib/api/db';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
-import { requireAuth, requireMaster, requireTenantAccess } from '@/lib/api/require-auth';
+import { requireAuth, requireMaster, requireRole, requireTenantAccess } from '@/lib/api/require-auth';
 import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
 import { purgeTenantData } from '@/lib/api/purge-tenant';
 import { ACTING_TENANT_COOKIE, sessionCookieOptions } from '@/lib/api/session';
@@ -121,7 +121,8 @@ export async function handleTenants({
   }
 
   if (route === '/tenant/settings' && method === 'PUT') {
-    const denied = requireAuth(auth);
+    // Ubah pengaturan tenant hanya untuk ADMIN/OWNER/MASTER.
+    const denied = requireRole(auth, ['ADMIN']);
     if (denied) return denied;
     const userAuth = auth!;
 

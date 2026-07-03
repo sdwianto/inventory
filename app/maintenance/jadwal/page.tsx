@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDate } from '@/lib/format';
-import { getUser } from '@/lib/auth-client';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { useAssets } from '@/lib/hooks/use-maintenance';
 import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
 import { queryKeys } from '@/lib/query-keys';
@@ -35,7 +35,7 @@ import Link from 'next/link';
 
 export default function MaintenanceJadwalPage() {
   const { run: mutate, isPending: mutating } = useMaintenanceMutations();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const user = useSessionUser();
   const [statusFilter, setStatusFilter] = useState('ACTIVE');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
@@ -67,8 +67,10 @@ export default function MaintenanceJadwalPage() {
     || user?.role === 'MASTER';
 
   useEffect(() => {
-    setUser(getUser());
-  }, []);
+    const onMaintenanceChange = () => { void reload(); };
+    window.addEventListener('erp-maintenance-change', onMaintenanceChange);
+    return () => window.removeEventListener('erp-maintenance-change', onMaintenanceChange);
+  }, [reload]);
 
   const activeAssets = assets.filter((a) => str(a.status) !== 'DISPOSED');
 
