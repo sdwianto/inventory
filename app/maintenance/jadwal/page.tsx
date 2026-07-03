@@ -20,11 +20,9 @@ import {
 import { toast } from 'sonner';
 import { formatDate } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
-import { fetchJson } from '@/lib/fetch-json';
-import {
-  useAssets,
-  useInvalidateMaintenance,
-} from '@/lib/hooks/use-maintenance';
+import { useAssets } from '@/lib/hooks/use-maintenance';
+import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
+import { queryKeys } from '@/lib/query-keys';
 import {
   EMPTY_PM_SCHEDULE,
   PM_INTERVAL_LABELS,
@@ -37,7 +35,7 @@ import { CalendarClock, Plus, Pencil, RefreshCw, Play, Pause, Archive } from 'lu
 import Link from 'next/link';
 
 export default function MaintenanceJadwalPage() {
-  const invalidate = useInvalidateMaintenance();
+  const { run: mutate, isPending: mutating } = useMaintenanceMutations();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [statusFilter, setStatusFilter] = useState('ACTIVE');
   const [showForm, setShowForm] = useState(false);
@@ -60,7 +58,10 @@ export default function MaintenanceJadwalPage() {
     loadingMore,
     error,
     reload,
-  } = useCursorList<JsonObject>(schedUrl, { limit: 100 });
+  } = useCursorList<JsonObject>(schedUrl, {
+    limit: 100,
+    queryKey: queryKeys.maintenance.schedules.cursor(statusFilter),
+  });
   const { data: assets = [] } = useAssets({ enabled: showForm || list.length > 0 });
 
   const canManage = PM_MANAGE_ROLES.includes(String(user?.role || '') as typeof PM_MANAGE_ROLES[number])
@@ -116,20 +117,23 @@ export default function MaintenanceJadwalPage() {
         status: str(form.status, 'ACTIVE'),
       };
       if (editing) {
-        await fetchJson(`/api/maintenance-schedules/${str(editing.id)}`, {
+        await mutate({
+          url: `/api/maintenance-schedules/${str(editing.id)}`,
           method: 'PUT',
-          body: JSON.stringify(payload),
+          body: payload,
+          offlineLabel: 'Perbarui jadwal PM',
         });
         toast.success('Jadwal diperbarui');
       } else {
-        await fetchJson('/api/maintenance-schedules', {
+        await mutate({
+          url: '/api/maintenance-schedules',
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: payload,
+          offlineLabel: 'Buat jadwal PM',
         });
         toast.success('Jadwal PM dibuat');
       }
       setShowForm(false);
-      invalidate();
       await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
@@ -141,17 +145,18 @@ export default function MaintenanceJadwalPage() {
   const runDue = async () => {
     setRunning(true);
     try {
-      const result = await fetchJson<{ generated?: number; skipped?: number; errors?: unknown[] }>(
-        '/api/maintenance-schedules/run-due',
-        { method: 'POST', body: '{}' },
-      );
+      const result = await mutate({
+        url: '/api/maintenance-schedules/run-due',
+        method: 'POST',
+        body: {},
+        offlineLabel: 'Proses jadwal PM jatuh tempo',
+      }) as { generated?: number };
       const n = result?.generated ?? 0;
       if (n > 0) {
         toast.success(`${n} permintaan preventif dibuat`);
       } else {
         toast.info('Tidak ada jadwal jatuh tempo yang perlu diproses');
       }
-      invalidate();
       await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memproses jadwal');
@@ -162,12 +167,13 @@ export default function MaintenanceJadwalPage() {
 
   const setStatus = async (row: JsonObject, status: string) => {
     try {
-      await fetchJson(`/api/maintenance-schedules/${str(row.id)}`, {
+      await mutate({
+        url: `/api/maintenance-schedules/${str(row.id)}`,
         method: 'PUT',
-        body: JSON.stringify({ status }),
+        body: { status },
+        offlineLabel: 'Ubah status jadwal PM',
       });
       toast.success(status === 'PAUSED' ? 'Jadwal dijeda' : status === 'ACTIVE' ? 'Jadwal diaktifkan' : 'Jadwal diarsipkan');
-      invalidate();
       await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal mengubah status');
@@ -418,8 +424,8 @@ export default function MaintenanceJadwalPage() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
-              <Button onClick={() => void save()} disabled={saving} className="bg-orange-500 hover:bg-orange-600">
-                {saving ? 'Menyimpan…' : 'Simpan'}
+              <Button onClick={() => void save()} disabled={saving || mutating} className="bg-orange-500 hover:bg-orange-600">
+                {saving || mutating ? 'Menyimpan…' : 'Simpan'}
               </Button>
             </DialogFooter>
           </DialogContent>

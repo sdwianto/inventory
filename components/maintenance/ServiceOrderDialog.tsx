@@ -1,7 +1,7 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { num } from '@/types/json';
+import { str, num } from '@/types/json';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { fetchJson } from '@/lib/fetch-json';
+import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
 
 interface ServiceOrderDialogProps {
   open: boolean;
@@ -26,6 +26,7 @@ export default function ServiceOrderDialog({
   wr,
   onSuccess,
 }: ServiceOrderDialogProps) {
+  const { run: mutate, isPending } = useMaintenanceMutations();
   const [vendorName, setVendorName] = useState('');
   const [vendorContact, setVendorContact] = useState('');
   const [scope, setScope] = useState('');
@@ -50,20 +51,21 @@ export default function ServiceOrderDialog({
     if (!scope.trim()) { toast.error('Scope pekerjaan wajib'); return; }
     setSaving(true);
     try {
-      const data = await fetchJson<JsonObject>('/api/maintenance-service-orders', {
+      const data = await mutate({
+        url: '/api/maintenance-service-orders',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           maintenanceRequestId: wr.id,
           vendorName,
           vendorContact,
           scope,
           estimasiBiaya: num(estimasiBiaya),
-        }),
-      });
+        },
+        offlineLabel: 'Buat service order maintenance',
+      }) as JsonObject;
       setCreatedOrder(data);
       setActualBiaya(String(data.estimasiBiaya || estimasiBiaya || ''));
-      toast.success(`Service order ${data.noMSO} dibuat`);
+      toast.success(`Service order ${str(data.noMSO)} dibuat`);
       onSuccess();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
@@ -75,12 +77,13 @@ export default function ServiceOrderDialog({
     if (!createdOrder?.id) return;
     setCompleting(true);
     try {
-      const data = await fetchJson<JsonObject>(`/api/maintenance-service-orders/${createdOrder.id}/complete`, {
+      const data = await mutate({
+        url: `/api/maintenance-service-orders/${str(createdOrder.id)}/complete`,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actualBiaya: num(actualBiaya) }),
-      });
-      toast.success(`Selesai — tagihan ${data.hutangNo || ''} menunggu review admin`);
+        body: { actualBiaya: num(actualBiaya) },
+        offlineLabel: 'Selesaikan service order maintenance',
+      }) as JsonObject;
+      toast.success(`Selesai — tagihan ${str(data.hutangNo) || ''} menunggu review admin`);
       onOpenChange(false);
       reset();
       onSuccess();
@@ -139,12 +142,12 @@ export default function ServiceOrderDialog({
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Tutup</Button>
           {!createdOrder ? (
-            <Button onClick={() => void createOrder()} disabled={saving}>
-              {saving ? 'Menyimpan...' : 'Buat Service Order'}
+            <Button onClick={() => void createOrder()} disabled={saving || isPending}>
+              {saving || isPending ? 'Menyimpan...' : 'Buat Service Order'}
             </Button>
           ) : (
-            <Button onClick={() => void completeOrder()} disabled={completing}>
-              {completing ? 'Memproses...' : 'Selesai & Buat Tagihan'}
+            <Button onClick={() => void completeOrder()} disabled={completing || isPending}>
+              {completing || isPending ? 'Memproses...' : 'Selesai & Buat Tagihan'}
             </Button>
           )}
         </DialogFooter>

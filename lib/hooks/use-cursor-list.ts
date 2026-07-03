@@ -1,6 +1,5 @@
 'use client';
 
-import { useMemo } from 'react';
 import { useCursorQuery, type CursorPage } from '@/lib/hooks/use-cursor-query';
 
 export interface CursorListState<T> {
@@ -17,9 +16,13 @@ export interface CursorListState<T> {
 /** Wrapper kompatibel — di belakang memakai React Query infinite cache. */
 export function useCursorList<T>(
   baseUrl: string,
-  { limit = 100, enabled = true }: { limit?: number; enabled?: boolean } = {},
+  {
+    limit = 100,
+    enabled = true,
+    queryKey,
+  }: { limit?: number; enabled?: boolean; queryKey?: readonly unknown[] } = {},
 ): CursorListState<T> {
-  const queryKey = useMemo(() => ['cursor-list', baseUrl, limit] as const, [baseUrl, limit]);
+  const key = queryKey ?? (['cursor-list', baseUrl, limit] as const);
   const {
     items,
     loading,
@@ -29,7 +32,7 @@ export function useCursorList<T>(
     reload,
     loadMore,
     query,
-  } = useCursorQuery<T>(queryKey, baseUrl, { limit, enabled });
+  } = useCursorQuery<T>(key, baseUrl, { limit, enabled });
 
   const lastPage = query.data?.pages?.[query.data.pages.length - 1] as CursorPage<T> | undefined;
 

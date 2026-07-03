@@ -93,4 +93,28 @@ export const queryKeys = {
     preview: (params: { tenantId?: string; includeSales?: boolean } = {}) =>
       ['sandbox', 'preview', params] as const,
   },
+  maintenance: {
+    assets: {
+      all: ['assets'] as const,
+      list: (params: { q?: string; status?: string } = {}) => ['assets', 'list', params] as const,
+      detail: (id: string) => ['assets', 'detail', id] as const,
+    },
+    requests: {
+      all: ['maintenance-requests'] as const,
+      cursor: (status = '') => ['maintenance-requests', 'cursor', status] as const,
+      detail: (id: string) => ['maintenance-requests', 'detail', id] as const,
+    },
+    schedules: {
+      all: ['maintenance-schedules'] as const,
+      cursor: (status = '') => ['maintenance-schedules', 'cursor', status] as const,
+    },
+    reports: {
+      all: ['maintenance-reports'] as const,
+      report: (params: { from?: string; to?: string; assetId?: string } = {}) =>
+        ['maintenance-reports', 'report', params] as const,
+    },
+    serviceOrders: {
+      all: ['maintenance-service-orders'] as const,
+    },
+  },
 } as const;

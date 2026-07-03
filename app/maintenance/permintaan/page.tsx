@@ -5,6 +5,7 @@ import { str, asObject, asArray, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import type { MaintenancePriority, MaintenanceRequestStatus } from '@/types/maintenance';
 import { useEffect, useMemo, useState, Suspense } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -21,11 +22,12 @@ import {
 import { toast } from 'sonner';
 import { formatDateTime } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
-import { fetchJson } from '@/lib/fetch-json';
 import {
+  fetchMaintenanceRequestDetail,
   useAssets,
-  useInvalidateMaintenance,
 } from '@/lib/hooks/use-maintenance';
+import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
+import { queryKeys } from '@/lib/query-keys';
 import {
   EMPTY_WR,
   WR_APPROVE_ROLES,
@@ -50,7 +52,8 @@ import Link from 'next/link';
 function MaintenancePermintaanPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const invalidate = useInvalidateMaintenance();
+  const queryClient = useQueryClient();
+  const { run: mutate, isPending: mutating } = useMaintenanceMutations();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [showForm, setShowForm] = useState(false);
@@ -74,7 +77,10 @@ function MaintenancePermintaanPageContent() {
     loadingMore,
     error,
     reload,
-  } = useCursorList<JsonObject>(wrUrl, { limit: 100 });
+  } = useCursorList<JsonObject>(wrUrl, {
+    limit: 100,
+    queryKey: queryKeys.maintenance.requests.cursor(statusFilter),
+  });
   const { data: assets = [] } = useAssets({ enabled: showForm || list.length > 0 });
 
   const canCreate = WR_CREATE_ROLES.includes(String(user?.role || '') as typeof WR_CREATE_ROLES[number])
@@ -102,7 +108,7 @@ function MaintenancePermintaanPageContent() {
 
   const openEdit = async (row: JsonObject) => {
     try {
-      const full = await fetchJson<JsonObject>(`/api/maintenance-requests/${str(row.id)}`);
+      const full = await fetchMaintenanceRequestDetail(queryClient, str(row.id));
       setEditing(full);
       setForm({
         assetId: str(full.assetId),
@@ -119,7 +125,7 @@ function MaintenancePermintaanPageContent() {
 
   const loadPhotos = async (id: string) => {
     if (photosCache[id]) return photosCache[id];
-    const full = await fetchJson<JsonObject>(`/api/maintenance-requests/${id}`);
+    const full = await fetchMaintenanceRequestDetail(queryClient, id);
     const photos = asArray(full.photos).map(String);
     setPhotosCache((prev) => ({ ...prev, [id]: photos }));
     return photos;
@@ -134,20 +140,20 @@ function MaintenancePermintaanPageContent() {
     setSaving(true);
     try {
       const url = editing ? `/api/maintenance-requests/${str(editing.id)}` : '/api/maintenance-requests';
-      await fetchJson(url, {
+      await mutate({
+        url,
         method: editing ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           assetId: form.assetId,
           priority: form.priority,
           judul: form.judul,
           deskripsi: form.deskripsi,
           photos: wrPhotos,
-        }),
+        },
+        offlineLabel: editing ? 'Perbarui permintaan maintenance' : 'Buat permintaan maintenance',
       });
       toast.success(editing ? 'Permintaan diperbarui' : 'Permintaan dibuat');
       setShowForm(false);
-      invalidate();
       void reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
@@ -157,10 +163,11 @@ function MaintenancePermintaanPageContent() {
 
   const action = async (id: string, actionType: string, extra: JsonObject = {}) => {
     try {
-      await fetchJson(`/api/maintenance-requests/${id}/${actionType}`, {
+      await mutate({
+        url: `/api/maintenance-requests/${id}/${actionType}`,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(extra),
+        body: extra,
+        offlineLabel: `Aksi maintenance: ${actionType}`,
       });
       const labels: Record<string, string> = {
         'request-approval': 'Diajukan ke admin',
@@ -172,7 +179,6 @@ function MaintenancePermintaanPageContent() {
         cancel: 'Permintaan dibatalkan',
       };
       toast.success(labels[actionType] || 'Berhasil');
-      invalidate();
       void reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
@@ -547,8 +553,8 @@ function MaintenancePermintaanPageContent() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
-              <Button onClick={() => void save()} disabled={saving}>
-                {saving ? 'Menyimpan...' : editing ? 'Simpan' : 'Simpan Draft'}
+              <Button onClick={() => void save()} disabled={saving || mutating}>
+                {saving || mutating ? 'Menyimpan...' : editing ? 'Simpan' : 'Simpan Draft'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -559,7 +565,6 @@ function MaintenancePermintaanPageContent() {
           onOpenChange={(open) => { if (!open) setServiceWr(null); }}
           wr={serviceWr}
           onSuccess={() => {
-            invalidate();
             void reload();
           }}
         />

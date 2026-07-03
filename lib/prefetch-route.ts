@@ -67,16 +67,36 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       );
       break;
     case '/maintenance/permintaan':
-      prefetchCursorPage(queryClient, ['maintenance-requests'], '/api/maintenance-requests', 100);
+      prefetchCursorPage(
+        queryClient,
+        queryKeys.maintenance.requests.cursor(''),
+        '/api/maintenance-requests',
+        100,
+      );
       break;
     case '/maintenance/jadwal':
       prefetchCursorPage(
         queryClient,
-        ['maintenance-schedules', 'ACTIVE'],
+        queryKeys.maintenance.schedules.cursor('ACTIVE'),
         '/api/maintenance-schedules?status=ACTIVE',
         100,
       );
       break;
+    case '/maintenance/aset':
+      prefetch(queryKeys.maintenance.assets.list({ q: '', status: '' }), '/api/assets');
+      break;
+    case '/maintenance/laporan': {
+      const to = new Date().toISOString().slice(0, 10);
+      const fromDate = new Date();
+      fromDate.setMonth(fromDate.getMonth() - 5);
+      fromDate.setDate(1);
+      const from = fromDate.toISOString().slice(0, 10);
+      prefetch(
+        queryKeys.maintenance.reports.report({ from, to, assetId: '' }),
+        `/api/maintenance-reports?from=${from}&to=${to}`,
+      );
+      break;
+    }
     case '/utiliti/user':
       prefetchCursorPage(queryClient, ['users'], '/api/users', 100);
       break;

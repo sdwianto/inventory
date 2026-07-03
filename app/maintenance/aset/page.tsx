@@ -4,6 +4,7 @@ import type { JsonObject } from '@/types/json';
 import { str, num } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -19,9 +20,9 @@ import {
 import { toast } from 'sonner';
 import { formatDate, formatIDR } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
-import { fetchJson } from '@/lib/fetch-json';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { useAssets, useInvalidateMaintenance } from '@/lib/hooks/use-maintenance';
+import { fetchAssetDetail, useAssets } from '@/lib/hooks/use-maintenance';
+import { useMaintenanceMutations } from '@/lib/hooks/use-maintenance-mutations';
 import {
   ASSET_KATEGORI,
   ASSET_MANAGE_ROLES,
@@ -34,7 +35,8 @@ import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 
 export default function MaintenanceAsetPage() {
   const confirm = useConfirm();
-  const invalidate = useInvalidateMaintenance();
+  const queryClient = useQueryClient();
+  const { run: mutate, isPending: mutating } = useMaintenanceMutations();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -59,7 +61,7 @@ export default function MaintenanceAsetPage() {
 
   const openEdit = async (row: JsonObject) => {
     try {
-      const full = await fetchJson<JsonObject>(`/api/assets/${str(row.id)}`);
+      const full = await fetchAssetDetail(queryClient, str(row.id));
       setEditing(full);
       setForm({
         ...full,
@@ -92,14 +94,14 @@ export default function MaintenanceAsetPage() {
         fotoBase64: str(form.fotoBase64) || null,
       };
       const url = editing ? `/api/assets/${str(editing.id)}` : '/api/assets';
-      await fetchJson(url, {
+      await mutate({
+        url,
         method: editing ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: payload,
+        offlineLabel: editing ? 'Perbarui aset' : 'Tambah aset',
       });
       toast.success(editing ? 'Aset diperbarui' : 'Aset ditambahkan');
       setShowForm(false);
-      invalidate();
       void refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
@@ -116,9 +118,12 @@ export default function MaintenanceAsetPage() {
     });
     if (!ok) return;
     try {
-      await fetchJson(`/api/assets/${str(row.id)}`, { method: 'DELETE' });
+      await mutate({
+        url: `/api/assets/${str(row.id)}`,
+        method: 'DELETE',
+        offlineLabel: 'Hapus aset',
+      });
       toast.success('Aset dihapus');
-      invalidate();
       void refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal hapus');
@@ -326,8 +331,8 @@ export default function MaintenanceAsetPage() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
-              <Button onClick={() => void save()} disabled={saving}>
-                {saving ? 'Menyimpan...' : 'Simpan'}
+              <Button onClick={() => void save()} disabled={saving || mutating}>
+                {saving || mutating ? 'Menyimpan...' : 'Simpan'}
               </Button>
             </DialogFooter>
           </DialogContent>

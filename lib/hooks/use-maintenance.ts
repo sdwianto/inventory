@@ -1,14 +1,19 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
+import { queryKeys } from '@/lib/query-keys';
 import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
 
-export const ASSETS_QUERY_KEY = ['assets'];
-export const MAINTENANCE_REQUESTS_QUERY_KEY = ['maintenance-requests'];
-export const MAINTENANCE_SCHEDULES_QUERY_KEY = ['maintenance-schedules'];
-export const MAINTENANCE_REPORTS_QUERY_KEY = ['maintenance-reports'];
+/** @deprecated gunakan queryKeys.maintenance.assets.all */
+export const ASSETS_QUERY_KEY = queryKeys.maintenance.assets.all;
+/** @deprecated */
+export const MAINTENANCE_REQUESTS_QUERY_KEY = queryKeys.maintenance.requests.all;
+/** @deprecated */
+export const MAINTENANCE_SCHEDULES_QUERY_KEY = queryKeys.maintenance.schedules.all;
+/** @deprecated */
+export const MAINTENANCE_REPORTS_QUERY_KEY = queryKeys.maintenance.reports.all;
 
 export function useAssets(params: { q?: string; status?: string; enabled?: boolean } = {}) {
   const { q = '', status = '', enabled = true } = params;
@@ -17,32 +22,11 @@ export function useAssets(params: { q?: string; status?: string; enabled?: boole
   if (status) qs.set('status', status);
   const suffix = qs.toString() ? `?${qs}` : '';
   return useQuery({
-    queryKey: [...ASSETS_QUERY_KEY, { q, status }],
+    queryKey: queryKeys.maintenance.assets.list({ q, status }),
     queryFn: () => fetchJson<JsonObject[]>(`/api/assets${suffix}`),
     select: (data) => (Array.isArray(data) ? data : []),
     enabled,
-  });
-}
-
-export function useMaintenanceRequests(params: { status?: string; enabled?: boolean } = {}) {
-  const { status = '', enabled = true } = params;
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-  return useQuery({
-    queryKey: [...MAINTENANCE_REQUESTS_QUERY_KEY, { status }],
-    queryFn: () => fetchJson<JsonObject[]>(`/api/maintenance-requests${qs}`),
-    select: (data) => (Array.isArray(data) ? data : []),
-    enabled,
-  });
-}
-
-export function useMaintenanceSchedules(params: { status?: string; enabled?: boolean } = {}) {
-  const { status = '', enabled = true } = params;
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-  return useQuery({
-    queryKey: [...MAINTENANCE_SCHEDULES_QUERY_KEY, { status }],
-    queryFn: () => fetchJson<JsonObject[]>(`/api/maintenance-schedules${qs}`),
-    select: (data) => (Array.isArray(data) ? data : []),
-    enabled,
+    staleTime: 60_000,
   });
 }
 
@@ -54,20 +38,41 @@ export function useMaintenanceReport(params: { from?: string; to?: string; asset
   if (assetId) qs.set('assetId', assetId);
   const suffix = qs.toString() ? `?${qs}` : '';
   return useQuery({
-    queryKey: [...MAINTENANCE_REPORTS_QUERY_KEY, { from, to, assetId }],
+    queryKey: queryKeys.maintenance.reports.report({ from, to, assetId }),
     queryFn: () => fetchJson<JsonObject>(`/api/maintenance-reports${suffix}`),
     enabled,
+    staleTime: 60_000,
+  });
+}
+
+export async function fetchAssetDetail(queryClient: QueryClient, id: string): Promise<JsonObject> {
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.maintenance.assets.detail(id),
+    queryFn: () => fetchJson<JsonObject>(`/api/assets/${id}`),
+    staleTime: 60_000,
+  });
+}
+
+export async function fetchMaintenanceRequestDetail(
+  queryClient: QueryClient,
+  id: string,
+): Promise<JsonObject> {
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.maintenance.requests.detail(id),
+    queryFn: () => fetchJson<JsonObject>(`/api/maintenance-requests/${id}`),
+    staleTime: 60_000,
   });
 }
 
 export function useInvalidateMaintenance() {
   const qc = useQueryClient();
   return () => {
-    qc.invalidateQueries({ queryKey: ASSETS_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: MAINTENANCE_REQUESTS_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: MAINTENANCE_SCHEDULES_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: MAINTENANCE_REPORTS_QUERY_KEY });
-    qc.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
+    qc.invalidateQueries({ queryKey: queryKeys.maintenance.assets.all });
+    qc.invalidateQueries({ queryKey: queryKeys.maintenance.requests.all });
+    qc.invalidateQueries({ queryKey: queryKeys.maintenance.schedules.all });
+    qc.invalidateQueries({ queryKey: queryKeys.maintenance.reports.all });
+    qc.invalidateQueries({ queryKey: queryKeys.maintenance.serviceOrders.all });
+    qc.invalidateQueries({ queryKey: NAV_BADGES_QUERY_KEY });
     window.dispatchEvent(new CustomEvent('erp-maintenance-change'));
   };
 }
