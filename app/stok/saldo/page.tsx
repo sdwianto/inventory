@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatIDR, formatNumber } from '@/lib/format';
 import { Boxes, Search, TrendingUp } from 'lucide-react';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 const StockTrendCharts = dynamic(
   () => import('@/components/StockTrendCharts'),
@@ -78,35 +80,33 @@ function SummaryCard({
 }
 
 export default function SaldoGudangPage() {
-  const [rows, setRows] = useState<StockRow[]>([]);
-  const [summary, setSummary] = useState<SaldoSummary | null>(null);
-  const [trend, setTrend] = useState<StockTrend>({ periods: [], totals: {} });
   const [q, setQ] = useState('');
   const [trendMonths, setTrendMonths] = useState('1');
-  const [loading, setLoading] = useState(true);
   const [gudangFilter, setGudangFilter] = useState<GudangFilter>({ GKERING: true, GBASAH: true });
 
-  const load = async (query = q, months = trendMonths) => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (query) params.set('q', query);
-      params.set('trendMonths', months);
-      const res = await fetch(`/api/stok/saldo?${params}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat');
-      setRows(Array.isArray(data.rows) ? data.rows : []);
-      setSummary(data.summary || null);
-      setTrend(data.trend || { periods: [], totals: {} });
-    } catch {
-      setRows([]);
-      setSummary(null);
-      setTrend({ periods: [], totals: {} });
-    }
-    setLoading(false);
-  };
+  const saldoUrl = `/api/stok/saldo?${new URLSearchParams({
+    ...(q ? { q } : {}),
+    trendMonths,
+  })}`;
 
-  useEffect(() => { load('', trendMonths); }, []);
+  const { data, isLoading: loading, refetch } = useApiQuery<{
+    rows?: StockRow[];
+    summary?: SaldoSummary;
+    trend?: StockTrend;
+  }>(
+    queryKeys.stokSaldo.report({ q, trendMonths }),
+    saldoUrl,
+  );
+
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const summary = data?.summary || null;
+  const trend = data?.trend || { periods: [], totals: {} };
+
+  const load = (query = q, months = trendMonths) => {
+    if (query !== q) setQ(query);
+    if (months !== trendMonths) setTrendMonths(months);
+    void refetch();
+  };
 
   const toggleGudang = (kode: keyof GudangFilter, checked: boolean) => {
     setGudangFilter((prev) => {

@@ -14,6 +14,10 @@ import { toast } from 'sonner';
 import { Building2, Plus, Users, ImageIcon, Upload, X, Save, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
 import { invalidateTenantCache } from '@/lib/tenant-client';
+import { fetchJson } from '@/lib/fetch-json';
+import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
 
 const emptyForm = {
   tenantId: '', companyName: '', companyAddress: '', companyPhone: '', companyNPWP: '',
@@ -22,7 +26,7 @@ const emptyForm = {
 };
 
 export default function TenantsListPage() {
-  const [list, setList] = useState<JsonObject[]>([]);
+  const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editTenant, setEditTenant] = useState<JsonObject | null>(null);
   const [deleteTenant, setDeleteTenant] = useState<JsonObject | null>(null);
@@ -45,22 +49,36 @@ export default function TenantsListPage() {
       .slice(0, 40);
 
   const findTenantConflict = (tenantId: string) =>
-    list.find((t) => str(t.tenantId) === tenantId);
+    tenantRows.find((t) => str(t.tenantId) === tenantId);
 
-  useEffect(() => { setUser(getUser()); load(); }, []);
+  const { data: list = [] } = useApiQuery<JsonObject[]>(
+    queryKeys.tenants.list,
+    '/api/tenants',
+    { enabled: user?.role === 'MASTER' },
+  );
+  const tenantRows = Array.isArray(list) ? list : [];
 
-  const load = async () => {
-    const res = await fetch('/api/tenants');
-    const data = await res.json();
-    setList(Array.isArray(data) ? data : []);
+  const createTenantMutation = useApiMutation([queryKeys.tenants.all, queryKeys.tenantSettings.all]);
+  const saveSettingsMutation = useApiMutation([queryKeys.tenants.all, queryKeys.tenantSettings.all]);
+  const deleteTenantMutation = useApiMutation([queryKeys.tenants.all]);
+
+  const refreshTenants = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.tenants.all });
   };
 
-  // Open Edit dialog: fetch full tenant settings
+  useEffect(() => { setUser(getUser()); }, []);
+
   const openEdit = async (t: JsonObject) => {
-    const res = await fetch(`/api/tenant/settings?tenantId=${encodeURIComponent(str(t.tenantId))}`);
-    const settings = await res.json();
-    setForm({ ...emptyForm, ...asObject(settings), tenantId: str(t.tenantId) });
-    setEditTenant(t);
+    try {
+      const settings = await queryClient.fetchQuery({
+        queryKey: queryKeys.tenantSettings.detail(str(t.tenantId)),
+        queryFn: () => fetchJson<JsonObject>(`/api/tenant/settings?tenantId=${encodeURIComponent(str(t.tenantId))}`),
+      });
+      setForm({ ...emptyForm, ...asObject(settings), tenantId: str(t.tenantId) });
+      setEditTenant(t);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   // Open Create dialog
@@ -88,28 +106,25 @@ export default function TenantsListPage() {
     setDeleting(true);
     try {
       const qs = deleteForce ? '?force=true' : '';
-      const res = await fetch(`/api/tenants/${encodeURIComponent(str(deleteTenant.tenantId))}${qs}`, {
+      const data = await deleteTenantMutation.mutateAsync({
+        url: `/api/tenants/${encodeURIComponent(str(deleteTenant.tenantId))}${qs}`,
         method: 'DELETE',
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        // If has users and not forced yet, offer force option
-        if (res.status === 400 && /user/i.test(data.error || '') && !deleteForce) {
-          toast.error(data.error || 'Tenant masih punya user');
-          setDeleteForce(true); // surface checkbox so user can opt-in
-          setDeleting(false);
-          return;
-        }
-        throw new Error(data.error || 'Gagal menghapus tenant');
-      }
+      }) as JsonObject;
       toast.success(`Tenant ${expected} berhasil dihapus${data.usersDeleted ? ` (${data.usersDeleted} user ikut dihapus)` : ''}`);
       setDeleteTenant(null);
       setDeleteConfirmText('');
       setDeleteForce(false);
       invalidateTenantCache();
-      load();
+      refreshTenants();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/user/i.test(msg) && !deleteForce) {
+        toast.error(msg || 'Tenant masih punya user');
+        setDeleteForce(true);
+        setDeleting(false);
+        return;
+      }
+      toast.error(msg);
     }
     setDeleting(false);
   };
@@ -156,27 +171,24 @@ export default function TenantsListPage() {
     }
     setSaving(true);
     try {
-      // First create tenant (basic)
-      const res1 = await fetch('/api/tenants', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await createTenantMutation.mutateAsync({
+        url: '/api/tenants',
+        body: {
           tenantId: form.tenantId, tenantName: form.companyName,
           companyAddress: form.companyAddress, companyPhone: form.companyPhone,
           companyNPWP: form.companyNPWP, logoBase64: form.logoBase64,
           seedDemoProducts,
-        }),
+        },
       });
-      const d1 = await res1.json();
-      if (!res1.ok) throw new Error(d1.error || 'Gagal');
-      // Then update full settings (footer, ppn, toggles)
-      await fetch('/api/tenant/settings', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+      await saveSettingsMutation.mutateAsync({
+        url: '/api/tenant/settings',
+        method: 'PUT',
+        body: form,
       });
       toast.success(`Tenant ${form.companyName} dibuat`);
       setShowCreate(false);
       invalidateTenantCache();
-      load();
+      refreshTenants();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };
@@ -185,16 +197,15 @@ export default function TenantsListPage() {
   const saveEdit = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/tenant/settings', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+      await saveSettingsMutation.mutateAsync({
+        url: '/api/tenant/settings',
+        method: 'PUT',
+        body: form,
       });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || 'Gagal');
       toast.success('Tenant diperbarui');
       setEditTenant(null);
       invalidateTenantCache();
-      load();
+      refreshTenants();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };
@@ -306,8 +317,8 @@ export default function TenantsListPage() {
         </div>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {list.length === 0 && <div className="col-span-3 text-center py-10 text-slate-400">Belum ada tenant</div>}
-          {list.map(t => (
+          {tenantRows.length === 0 && <div className="col-span-3 text-center py-10 text-slate-400">Belum ada tenant</div>}
+          {tenantRows.map(t => (
             <Card key={str(t.tenantId)} onClick={() => openEdit(t)} className="cursor-pointer hover:shadow-md hover:border-orange-300 transition group">
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-3">

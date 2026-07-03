@@ -12,6 +12,12 @@ import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
 import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import {
+  isIdempotentMutation,
+  readIdempotencyKey,
+  replayIdempotentResponse,
+  storeIdempotentResponse,
+} from '@/lib/api/idempotency';
 
 export async function OPTIONS() {
   return cors(new NextResponse(null, { status: 200 }));
@@ -85,12 +91,47 @@ async function handleRoute(request: Request, context: RouteContext) {
     }
 
     const ctx = { request, db, route, method, url, path, body, auth };
-    for (const handler of handlersForRoute(route)) {
-      const res = await handler(ctx);
-      if (res) return res;
+
+    const idemKey = readIdempotencyKey(request);
+    const tenantId = auth?.tenantId || 'default';
+    if (isIdempotentMutation(method, idemKey) && auth && !workerAuthed) {
+      const replay = await replayIdempotentResponse(
+        db,
+        tenantId,
+        route,
+        method,
+        idemKey!,
+        body,
+      );
+      if (replay) return replay;
     }
 
-    return err(`Route ${route} not found`, 404);
+    let handlerResponse: NextResponse | null = null;
+    for (const handler of handlersForRoute(route)) {
+      const res = await handler(ctx);
+      if (res) {
+        handlerResponse = res;
+        break;
+      }
+    }
+
+    if (!handlerResponse) {
+      return err(`Route ${route} not found`, 404);
+    }
+
+    if (isIdempotentMutation(method, idemKey) && auth && !workerAuthed) {
+      return storeIdempotentResponse(
+        db,
+        tenantId,
+        route,
+        method,
+        idemKey!,
+        body,
+        handlerResponse,
+      );
+    }
+
+    return handlerResponse;
   } catch (e) {
     logger.error('api_request_failed', {
       route,

@@ -11,6 +11,11 @@ import { AlertTriangle, Eraser, Eye, Loader2, ShieldAlert } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
 import type { SessionUser } from '@/types/auth';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
+import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
+import { queryKeys } from '@/lib/query-keys';
+import { fetchJson } from '@/lib/fetch-json';
 
 type CountInfo =
   | { skipped: true; before: 0; deleted: 0 }
@@ -99,9 +104,8 @@ function renderCountRows(counts: DbPreview['counts']) {
 }
 
 export default function SandboxResetPage() {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [tenants, setTenants] = useState<{ tenantId: string; companyName?: string }[]>([]);
   const [tenantId, setTenantId] = useState('');
   const [includeSales, setIncludeSales] = useState(true);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -111,40 +115,22 @@ export default function SandboxResetPage() {
   const [resetting, setResetting] = useState(false);
 
   const menuVisible = isSandboxResetMenuVisible();
+  const isMaster = user?.role === 'MASTER';
+
+  const { data: status } = useApiQuery<StatusResponse>(
+    queryKeys.sandbox.status,
+    isMaster ? '/api/sandbox/status' : null,
+    { enabled: isMaster },
+  );
+
+  const { tenants: masterTenants } = useMasterTenants(isMaster);
+  const tenants = masterTenants as { tenantId: string; companyName?: string }[];
+
+  const resetMutation = useApiMutation([queryKeys.sandbox.all]);
 
   useEffect(() => {
     setUser(getUser());
-    void loadStatus();
-    void loadTenants();
   }, []);
-
-  const loadStatus = async () => {
-    try {
-      const res = await fetch('/api/sandbox/status');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat status');
-      setStatus(data);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const loadTenants = async () => {
-    try {
-      const res = await fetch('/api/tenants');
-      const data = await res.json();
-      if (!res.ok) return;
-      const list = Array.isArray(data) ? data : [];
-      setTenants(
-        list.map((t: Record<string, unknown>) => ({
-          tenantId: String(t.tenantId || ''),
-          companyName: t.companyName ? String(t.companyName) : undefined,
-        })),
-      );
-    } catch {
-      /* ignore */
-    }
-  };
 
   const runPreview = async () => {
     setLoadingPreview(true);
@@ -152,9 +138,11 @@ export default function SandboxResetPage() {
       const qs = new URLSearchParams();
       if (tenantId.trim()) qs.set('tenantId', tenantId.trim());
       if (!includeSales) qs.set('includeSales', '0');
-      const res = await fetch(`/api/sandbox/preview?${qs.toString()}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Preview gagal');
+      const previewParams = { tenantId: tenantId.trim() || undefined, includeSales };
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.sandbox.preview(previewParams),
+        queryFn: () => fetchJson<PreviewResponse>(`/api/sandbox/preview?${qs.toString()}`),
+      });
       setPreview(data);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -169,17 +157,14 @@ export default function SandboxResetPage() {
     }
     setResetting(true);
     try {
-      const res = await fetch('/api/sandbox/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await resetMutation.mutateAsync({
+        url: '/api/sandbox/reset',
+        body: {
           confirmPhrase,
           tenantId: tenantId.trim() || undefined,
           includeSales,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Reset gagal');
+        },
+      }) as PreviewResponse;
       setPreview(data);
       setConfirmPhrase('');
       setAcknowledge(false);

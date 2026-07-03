@@ -10,7 +10,9 @@ import { str, num } from '@/types/json';
 import { getUser } from '@/lib/auth-client';
 import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function IntegrasiPage() {
   const [syncing, setSyncing] = useState(false);
@@ -30,6 +32,8 @@ export default function IntegrasiPage() {
   );
 
   const displayStatus = probeStatus || status;
+
+  const syncCatalogMutation = useApiMutation([queryKeys.integrations.all, queryKeys.products.all]);
 
   const loadStatus = useCallback(async (probe = false) => {
     if (probe) {
@@ -60,20 +64,22 @@ export default function IntegrasiPage() {
   const syncCatalog = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/integrations/sync-catalog', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Sync gagal');
-      if (res.status === 202 && data.jobId) {
+      const data = await syncCatalogMutation.mutateAsync({
+        url: '/api/integrations/sync-catalog',
+        offlineLabel: 'Sync katalog dari sales.app',
+      }) as JsonObject;
+      if (data.jobId) {
         toast.info('Sync katalog berjalan di background…');
         setActiveJobId(String(data.jobId));
         return;
       }
-      toast.success(`Sync selesai — ${data.created} baru, ${data.updated} diperbarui dari ${data.vendorTenantCount || '?'} vendor tenant`);
+      toast.success(`Sync selesai — ${num(data.created)} baru, ${num(data.updated)} diperbarui dari ${num(data.vendorTenantCount) || '?'} vendor tenant`);
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
       void loadStatus(true);
       setSyncing(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
       setSyncing(false);
     }
   };

@@ -1,6 +1,6 @@
 'use client';
 
-import { str, asObject, type JsonObject } from '@/types/json';
+import { str, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import { useEffect, useState } from 'react';
 import { useCursorList } from '@/lib/hooks/use-cursor-list';
@@ -21,6 +21,10 @@ import { useListSelection } from '@/hooks/useListSelection';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
 import { postBulkDelete } from '@/lib/bulk-delete-client';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 const empty = { email: '', password: '', name: '', role: 'GUDANG', tenantId: 'default' };
 
@@ -45,7 +49,6 @@ export default function UserManagementPage() {
     loadMore,
     error,
   } = useCursorList<JsonObject>('/api/users', { limit: 100 });
-  const [tenants, setTenants] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
   const [form, setForm] = useState<UserForm>(empty);
@@ -56,25 +59,18 @@ export default function UserManagementPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const selection = useListSelection<{ id: string }>();
 
+  const isMaster = currentUser?.role === 'MASTER';
+  const { tenants: masterTenants } = useMasterTenants(isMaster);
+  const tenants = masterTenants as JsonObject[];
+  const userMutation = useApiMutation([queryKeys.users.all]);
+
   useEffect(() => {
-    const u = getUser();
-    setCurrentUser(u);
-    if (u?.role === 'MASTER') loadTenants();
+    setCurrentUser(getUser());
   }, []);
 
   const refreshList = async () => {
     selection.clear();
     await reload();
-  };
-
-  const loadTenants = async () => {
-    try {
-      const res = await fetch('/api/tenants');
-      const data = await res.json();
-      setTenants(Array.isArray(data) ? data : []);
-    } catch {
-      setTenants([]);
-    }
   };
 
   const openNew = () => {
@@ -97,17 +93,19 @@ export default function UserManagementPage() {
         tenantName: str(selectedTenant?.companyName) || str(selectedTenant?.tenantName) || form.tenantName || form.tenantId,
       };
       const url = editing ? `/api/users/${str(editing.id)}` : '/api/users';
-      const res = await fetch(url, {
+      await userMutation.mutateAsync({
+        url,
         method: editing ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: payload,
+        offlineLabel: editing ? `Ubah user ${str(editing.email)}` : 'Buat user baru',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(editing ? 'User diperbarui' : 'User baru ditambahkan');
       setShowForm(false);
       refreshList();
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
     setSaving(false);
   };
 
@@ -121,14 +119,17 @@ export default function UserManagementPage() {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/users/${str(deleteTarget.id)}`, { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(str(asObject(data).error, 'Gagal menghapus user'));
+      await userMutation.mutateAsync({
+        url: `/api/users/${str(deleteTarget.id)}`,
+        method: 'DELETE',
+        offlineLabel: `Hapus user ${str(deleteTarget.name)}`,
+      });
       toast.success(`User ${str(deleteTarget.name)} dihapus`);
       setDeleteTarget(null);
       refreshList();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setDeleting(false);
   };

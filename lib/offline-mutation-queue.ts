@@ -1,10 +1,16 @@
 /**
  * Antrian mutasi offline — IndexedDB + replay saat kembali online.
+ * P4.3: idempotency key, conflict detection, tenant scope isolation.
  */
 
+import { getUser } from '@/lib/auth-client';
+import { getActingTenantId } from '@/lib/acting-tenant-client';
+
 const DB_NAME = 'dawam-erp-offline';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'mutations';
+
+const CONFLICT_STATUSES = new Set([409, 422]);
 
 export type OfflineMutation = {
   id: string;
@@ -14,6 +20,15 @@ export type OfflineMutation = {
   headers?: Record<string, string>;
   label?: string;
   createdAt: number;
+  tenantScope?: string;
+  idempotencyKey?: string;
+  lastError?: string;
+};
+
+export type ReplayResult = {
+  ok: number;
+  failed: number;
+  conflicts: Array<{ id: string; label?: string; error: string }>;
 };
 
 export class OfflineQueuedError extends Error {
@@ -23,6 +38,16 @@ export class OfflineQueuedError extends Error {
   }
 }
 
+export function getQueueTenantScope(): string {
+  const user = getUser();
+  if (!user) return 'anon';
+  if (user.role === 'MASTER') {
+    const acting = getActingTenantId();
+    return acting ? `t:${acting}` : 'master:unset';
+  }
+  return `t:${user.tenantId || 'default'}`;
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
@@ -30,10 +55,14 @@ function openDb(): Promise<IDBDatabase> {
       return;
     }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: 'id' });
+      }
+      if (event.oldVersion < 2) {
+        const tx = (event.target as IDBOpenDBRequest).transaction;
+        if (tx) tx.objectStore(STORE).clear();
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -56,10 +85,35 @@ function withStore<T>(
   }));
 }
 
+function matchesTenantScope(row: OfflineMutation): boolean {
+  const scope = getQueueTenantScope();
+  if (!row.tenantScope) return scope === 'anon';
+  return row.tenantScope === scope;
+}
+
+function dispatchQueueEvent(name: string, detail?: unknown) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(name, detail ? { detail } : undefined));
+}
+
+async function parseErrorMessage(res: Response): Promise<string> {
+  const data = await res.json().catch(() => ({}));
+  return (data as { error?: string }).error || `HTTP ${res.status}`;
+}
+
+async function persistLastError(id: string, error: string): Promise<void> {
+  const rows = await withStore<OfflineMutation[]>('readonly', (store) => store.getAll());
+  const row = (rows || []).find((r) => r.id === id);
+  if (!row) return;
+  await withStore('readwrite', (store) => store.put({ ...row, lastError: error }));
+}
+
 export async function listPendingMutations(): Promise<OfflineMutation[]> {
   if (typeof indexedDB === 'undefined') return [];
   const rows = await withStore<OfflineMutation[]>('readonly', (store) => store.getAll());
-  return (rows || []).sort((a, b) => a.createdAt - b.createdAt);
+  return (rows || [])
+    .filter(matchesTenantScope)
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export async function countPendingMutations(): Promise<number> {
@@ -68,58 +122,108 @@ export async function countPendingMutations(): Promise<number> {
 }
 
 export async function enqueueOfflineMutation(
-  input: Omit<OfflineMutation, 'id' | 'createdAt'>,
+  input: Omit<OfflineMutation, 'id' | 'createdAt' | 'tenantScope' | 'idempotencyKey'>,
 ): Promise<string> {
+  const id = crypto.randomUUID();
   const row: OfflineMutation = {
     ...input,
-    id: crypto.randomUUID(),
+    id,
+    idempotencyKey: id,
+    tenantScope: getQueueTenantScope(),
     createdAt: Date.now(),
   };
   await withStore('readwrite', (store) => store.put(row));
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('erp-offline-queued'));
-  }
+  dispatchQueueEvent('erp-offline-queued');
   return row.id;
 }
 
 export async function removeOfflineMutation(id: string): Promise<void> {
   await withStore('readwrite', (store) => store.delete(id));
+  dispatchQueueEvent('erp-offline-queued');
 }
 
-export async function replayOfflineMutations(): Promise<{ ok: number; failed: number }> {
+export async function discardOfflineMutation(id: string): Promise<void> {
+  await removeOfflineMutation(id);
+}
+
+type ReplayOutcome =
+  | { result: 'ok' }
+  | { result: 'conflict' | 'failed'; error: string };
+
+async function replayOne(row: OfflineMutation): Promise<ReplayOutcome> {
+  const idempotencyKey = row.idempotencyKey || row.id;
+  try {
+    const res = await fetch(row.url, {
+      method: row.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+        ...(row.headers || {}),
+      },
+      body: row.body,
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const message = await parseErrorMessage(res);
+      if (CONFLICT_STATUSES.has(res.status)) {
+        await persistLastError(row.id, message);
+        dispatchQueueEvent('erp-offline-conflict', {
+          id: row.id,
+          label: row.label,
+          error: message,
+        });
+        return { result: 'conflict', error: message };
+      }
+      await persistLastError(row.id, message);
+      return { result: 'failed', error: message };
+    }
+    await removeOfflineMutation(row.id);
+    return { result: 'ok' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Gagal sinkron';
+    await persistLastError(row.id, message);
+    return { result: 'failed', error: message };
+  }
+}
+
+export async function replayOfflineMutation(
+  id: string,
+): Promise<'ok' | 'conflict' | 'failed' | 'skipped'> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'skipped';
+  const pending = await listPendingMutations();
+  const row = pending.find((r) => r.id === id);
+  if (!row) return 'skipped';
+  const outcome = await replayOne(row);
+  return outcome.result === 'ok' ? 'ok' : outcome.result;
+}
+
+export async function replayOfflineMutations(): Promise<ReplayResult> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return { ok: 0, failed: 0 };
+    return { ok: 0, failed: 0, conflicts: [] };
   }
 
   const pending = await listPendingMutations();
   let ok = 0;
   let failed = 0;
+  const conflicts: ReplayResult['conflicts'] = [];
 
   for (const row of pending) {
-    try {
-      const res = await fetch(row.url, {
-        method: row.method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(row.headers || {}),
-        },
-        body: row.body,
-        credentials: 'include',
+    const outcome = await replayOne(row);
+    if (outcome.result === 'ok') ok += 1;
+    else if (outcome.result === 'conflict') {
+      conflicts.push({
+        id: row.id,
+        label: row.label,
+        error: outcome.error,
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
-      }
-      await removeOfflineMutation(row.id);
-      ok += 1;
-    } catch {
-      failed += 1;
-    }
+    } else failed += 1;
   }
 
-  return { ok, failed };
+  dispatchQueueEvent('erp-offline-replay-done', { ok, failed, conflicts });
+  return { ok, failed, conflicts };
 }
 
+/** Fetch biasa; jika offline dan method mutasi, antre ke IndexedDB. */
 export async function fetchOrQueue(
   url: string,
   init: RequestInit & { offlineLabel?: string } = {},

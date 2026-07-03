@@ -12,6 +12,10 @@ function patchPoList(
   return list.map((row) => (String(row.id) === id ? { ...row, ...patch } : row));
 }
 
+function prependPoToList(list: JsonObject[], row: JsonObject): JsonObject[] {
+  return [row, ...list];
+}
+
 export function usePoMutations(
   setList: Dispatch<SetStateAction<JsonObject[]>>,
   reload: () => Promise<void>,
@@ -97,5 +101,50 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
-  return { requestApproval, approve, reject, submit, syncVendor };
+  const createPO = useCallback(async (
+    payload: Record<string, unknown>,
+    optimisticRow?: JsonObject,
+  ) => {
+    let snapshot: JsonObject[] = [];
+    setList((prev) => {
+      snapshot = prev;
+      return optimisticRow ? prependPoToList(prev, optimisticRow) : prev;
+    });
+
+    try {
+      const res = await fetchOrQueue('/api/customer-purchase-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        offlineLabel: 'Buat PO customer',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal');
+      await reload();
+      return data;
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) throw e;
+      setList(snapshot);
+      throw e;
+    }
+  }, [setList, reload]);
+
+  const updatePO = useCallback(async (
+    id: string,
+    payload: Record<string, unknown>,
+    optimisticPatch?: Record<string, unknown>,
+  ) => {
+    return withOptimistic(
+      id,
+      optimisticPatch || { status: 'DRAFT' },
+      () => fetchOrQueue(`/api/customer-purchase-orders/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        offlineLabel: `Ubah PO ${id}`,
+      }),
+    );
+  }, [withOptimistic]);
+
+  return { requestApproval, approve, reject, submit, syncVendor, createPO, updatePO };
 }

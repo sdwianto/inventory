@@ -2,7 +2,7 @@
 
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { TrendingDown, Download } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 function monthStartISO() {
   const d = new Date();
@@ -23,24 +25,16 @@ function todayISO() {
 export default function PengeluaranPengadaanPage() {
   const [from, setFrom] = useState(monthStartISO);
   const [to, setTo] = useState(todayISO);
-  const [data, setData] = useState<JsonObject | null>(null);
-  const [loading, setLoading] = useState(false);
+
+  const reportUrl = `/api/procurement-expenses?${new URLSearchParams({ from, to })}`;
+  const { data, isLoading: loading, refetch } = useApiQuery<JsonObject>(
+    queryKeys.procurementExpenses.report({ from, to }),
+    reportUrl,
+  );
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const q = new URLSearchParams({ from, to });
-      const res = await fetch(`/api/procurement-expenses?${q}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Gagal memuat');
-      setData(json);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    }
-    setLoading(false);
-  }, [from, to]);
-
-  useEffect(() => { load(); }, [load]);
+    await refetch();
+  }, [refetch]);
 
   const exportCsv = () => {
     const rows = asArray(data?.rows) as JsonObject[];
@@ -112,7 +106,7 @@ export default function PengeluaranPengadaanPage() {
           </Button>
         </div>
 
-        {data?.summary != null && (
+        {data != null && data.summary != null && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-lg p-4">
               <div className="text-2xl font-bold text-orange-600">{formatIDR(num(s.approvedTotal))}</div>

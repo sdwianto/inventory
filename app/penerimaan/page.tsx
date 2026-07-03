@@ -22,6 +22,8 @@ import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-rec
 import { useGrnMutations } from '@/lib/hooks/use-grn-mutations';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { useQueryClient } from '@/lib/hooks/useApiQuery';
+import { fetchJson } from '@/lib/fetch-json';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -66,6 +68,7 @@ const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
 );
 
 export default function PenerimaanPage() {
+  const queryClient = useQueryClient();
   const invalidateGrn = useInvalidateGrn();
   const listKey = queryKeys.pages.penerimaan();
   const {
@@ -187,9 +190,10 @@ export default function PenerimaanPage() {
   const openDoView = async (id: string) => {
     setLoadingDo(id);
     try {
-      const res = await fetch(`/api/goods-receipts/${id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat DO');
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.goodsReceipts.detail(id),
+        queryFn: () => fetchJson<JsonObject>(`/api/goods-receipts/${id}`),
+      });
       setDoView(data);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -203,21 +207,26 @@ export default function PenerimaanPage() {
   );
 
   const openPost = async (id: string) => {
-    const res = await fetch(`/api/goods-receipts/${id}`);
-    const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Gagal'); return; }
-    setDetail(data);
-    const detailItems = asArray(data.items) as JsonObject[];
-    const initQty: JsonObject = {};
-    const initGudang: JsonObject = {};
-    for (const [idx, it] of detailItems.entries()) {
-      const key = itemRowKey(it, idx);
-      initQty[key] = it.qtyOrdered ?? 0;
-      const embedded = it.product as JsonObject | undefined;
-      initGudang[key] = str(it.gudangKode || embedded?.gudangKode, 'GKERING');
+    try {
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.goodsReceipts.detail(id),
+        queryFn: () => fetchJson<JsonObject>(`/api/goods-receipts/${id}`),
+      });
+      setDetail(data);
+      const detailItems = asArray(data.items) as JsonObject[];
+      const initQty: JsonObject = {};
+      const initGudang: JsonObject = {};
+      for (const [idx, it] of detailItems.entries()) {
+        const key = itemRowKey(it, idx);
+        initQty[key] = it.qtyOrdered ?? 0;
+        const embedded = it.product as JsonObject | undefined;
+        initGudang[key] = str(it.gudangKode || embedded?.gudangKode, 'GKERING');
+      }
+      setQtyMap(initQty);
+      setGudangMap(initGudang);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
-    setQtyMap(initQty);
-    setGudangMap(initGudang);
   };
 
   const postGrn = async () => {

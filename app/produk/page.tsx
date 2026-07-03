@@ -30,11 +30,17 @@ import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
+import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
+import { useProdukMeta } from '@/lib/hooks/use-produk-meta';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function ProdukPage() {
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [filterTenantId, setFilterTenantId] = useState('');
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -47,11 +53,11 @@ export default function ProdukPage() {
   const [metaTenantId, setMetaTenantId] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
-  const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
-  const [defaultTier, setDefaultTier] = useState('ECER');
   const selection = useListSelection((item: { id: string }) => item.id);
 
   const isMaster = user?.role === 'MASTER';
+  const { tenants: masterTenants } = useMasterTenants(isMaster);
+  const tenants = masterTenants as TenantOption[];
   const canManageProducts = (PRODUCT_MANAGE_ROLES as readonly string[]).includes(String(user?.role || ''));
   const {
     products,
@@ -61,10 +67,27 @@ export default function ProdukPage() {
     loadingMore,
     error,
     reload,
-    grupList,
-    satuanList,
-    loadMeta,
   } = useProdukCatalog({ filterTenantId, isMaster, q: debouncedQ });
+
+  const metaScopeTenantId = showMeta
+    ? metaTenantId
+    : showForm
+      ? (str(form.tenantId) || filterTenantId || user?.tenantId || '')
+      : '';
+  const metaEnabled = showForm || showMeta;
+  const { grupList, satuanList } = useProdukMeta(metaScopeTenantId, isMaster, metaEnabled);
+
+  const { data: vendorTiersData } = useApiQuery<JsonObject>(
+    queryKeys.integrations.vendorTiers,
+    user ? '/api/integrations/vendor-tiers' : null,
+    { enabled: Boolean(user), staleTime: 120_000 },
+  );
+  const vendorTierMap = asObject(vendorTiersData?.tierMap);
+  const defaultTier = str(vendorTiersData?.tierHargaDefault, 'ECER');
+
+  const metaMutation = useApiMutation([queryKeys.productMeta.all]);
+  const productMutation = useApiMutation([queryKeys.products.all, queryKeys.productMeta.all]);
+  const syncVendorMutation = useApiMutation([queryKeys.products.all, queryKeys.integrations.all]);
 
   const load = async () => {
     await reload();
@@ -76,21 +99,10 @@ export default function ProdukPage() {
     return user?.tenantId || '';
   };
 
-  const loadTenants = async () => {
-    try {
-      const res = await fetch('/api/tenants');
-      const data = await res.json();
-      setTenants(Array.isArray(data) ? data as TenantOption[] : []);
-    } catch {
-      setTenants([]);
-    }
-  };
-
   useEffect(() => {
     const u = getUser();
     setUser(u);
-    if (u?.role === 'MASTER') loadTenants();
-    else setFilterTenantId(String(u?.tenantId || 'default'));
+    if (u?.role !== 'MASTER') setFilterTenantId(String(u?.tenantId || 'default'));
   }, []);
 
   useEffect(() => {
@@ -103,25 +115,15 @@ export default function ProdukPage() {
   }, [debouncedQ, filterTenantId]);
 
   useEffect(() => {
-    const loadTiers = () => {
-      fetch('/api/integrations/vendor-tiers')
-        .then((r) => r.json())
-        .then((data: JsonObject) => {
-          setVendorTierMap(asObject(data.tierMap));
-          setDefaultTier(str(data.tierHargaDefault, 'ECER'));
-        })
-        .catch(() => {});
-    };
     if (!user) return undefined;
-    loadTiers();
     const onCatalogSynced = () => {
-      loadTiers();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.vendorTiers });
       if (isMaster && !filterTenantId) void load();
       else if (!isMaster || filterTenantId) void load();
     };
     window.addEventListener('vendor-catalog-synced', onCatalogSynced);
     return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
-  }, [user, q, filterTenantId, isMaster]);
+  }, [user, filterTenantId, isMaster, queryClient]);
 
   const openNew = () => {
     setEditing(null);
@@ -133,7 +135,6 @@ export default function ProdukPage() {
     };
     setForm(nextForm);
     setShowForm(true);
-    loadMeta(str(defaultTenant));
   };
 
   const openEdit = (p: JsonObject) => {
@@ -141,7 +142,6 @@ export default function ProdukPage() {
     const tid = String(p.tenantId || 'default');
     setForm({ ...p, tenantId: tid });
     setShowForm(true);
-    loadMeta(str(tid));
   };
 
   const openMetaDialog = () => {
@@ -154,7 +154,6 @@ export default function ProdukPage() {
     setNewGrup('');
     setNewSatuan('');
     setShowMeta(true);
-    loadMeta(str(tid));
   };
 
   const addGrup = async () => {
@@ -162,16 +161,14 @@ export default function ProdukPage() {
     if (!nama) return;
     const payload: JsonObject = { nama };
     if (isMaster && metaTenantId) payload.tenantId = metaTenantId;
-    const res = await fetch('/api/produk-grup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'Gagal menambah grup');
-    setNewGrup('');
-    loadMeta(metaTenantId);
-    toast.success('Grup ditambahkan');
+    try {
+      await metaMutation.mutateAsync({ url: '/api/produk-grup', body: payload });
+      setNewGrup('');
+      toast.success('Grup ditambahkan');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const addSatuan = async () => {
@@ -179,34 +176,36 @@ export default function ProdukPage() {
     if (!nama) return;
     const payload: JsonObject = { nama };
     if (isMaster && metaTenantId) payload.tenantId = metaTenantId;
-    const res = await fetch('/api/produk-satuan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'Gagal menambah satuan');
-    setNewSatuan('');
-    loadMeta(metaTenantId);
-    toast.success('Satuan ditambahkan');
+    try {
+      await metaMutation.mutateAsync({ url: '/api/produk-satuan', body: payload });
+      setNewSatuan('');
+      toast.success('Satuan ditambahkan');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const removeGrup = async (id: string) => {
     if (!(await confirm({ title: 'Hapus grup?', description: 'Grup yang masih dipakai produk tidak bisa dihapus.', confirmText: 'Hapus' }))) return;
-    const res = await fetch(`/api/produk-grup/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'Gagal hapus');
-    loadMeta(metaTenantId);
-    toast.success('Grup dihapus');
+    try {
+      await metaMutation.mutateAsync({ url: `/api/produk-grup/${id}`, method: 'DELETE' });
+      toast.success('Grup dihapus');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const removeSatuan = async (id: string) => {
     if (!(await confirm({ title: 'Hapus satuan?', description: 'Satuan yang masih dipakai produk tidak bisa dihapus.', confirmText: 'Hapus' }))) return;
-    const res = await fetch(`/api/produk-satuan/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'Gagal hapus');
-    loadMeta(metaTenantId);
-    toast.success('Satuan dihapus');
+    try {
+      await metaMutation.mutateAsync({ url: `/api/produk-satuan/${id}`, method: 'DELETE' });
+      toast.success('Satuan dihapus');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const save = async () => {
@@ -219,36 +218,36 @@ export default function ProdukPage() {
       return;
     }
     try {
-      const url = editing ? `/api/products/${editing.id}` : '/api/products';
-      const method = editing ? 'PUT' : 'POST';
       const payload = { ...form };
       if (!isMaster) delete payload.tenantId;
       if (editing) delete payload.stok;
       delete payload.hargaSpesial;
       delete payload.hargaGrosir;
       delete payload.hargaEcer;
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      await productMutation.mutateAsync({
+        url: editing ? `/api/products/${editing.id}` : '/api/products',
+        method: editing ? 'PUT' : 'POST',
+        body: payload,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(editing ? 'Produk diperbarui' : 'Produk ditambahkan');
       setShowForm(false);
       void load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
   const remove = async (id: string) => {
     if (!(await confirm({ title: 'Hapus Produk?', description: 'Produk ini akan dihapus dari master data.', confirmText: 'Hapus' }))) return;
-    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) return toast.error(data.error || 'Gagal hapus');
-    toast.success('Produk dihapus');
-    void load();
+    try {
+      await productMutation.mutateAsync({ url: `/api/products/${id}`, method: 'DELETE' });
+      toast.success('Produk dihapus');
+      void load();
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const bulkDelete = async () => {
@@ -345,15 +344,20 @@ export default function ProdukPage() {
   const syncFromVendor = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/sync/vendor-catalog', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal sync');
-      const total = data.total ?? 0;
+      const data = await syncVendorMutation.mutateAsync({
+        url: '/api/sync/vendor-catalog',
+        body: {},
+        offlineLabel: 'Sync katalog dari sales.app',
+      }) as JsonObject;
+      const total = num(data.total);
       if (total === 0) throw new Error('Katalog kosong — cek SALES_VENDOR_TENANT_ID di .env.local (produk sales.app mungkin di tenant lain)');
-      toast.success(`Sync OK: ${data.created || 0} baru, ${data.updated || 0} diperbarui (${total} dari sales.app)`);
+      toast.success(`Sync OK: ${num(data.created)} baru, ${num(data.updated)} diperbarui (${total} dari sales.app)`);
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
       void load();
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
     setSyncing(false);
   };
 
@@ -597,7 +601,6 @@ export default function ProdukPage() {
                   value={str(form.tenantId)}
                   onChange={(tid) => {
                     setForm({ ...form, tenantId: tid });
-                    loadMeta(str(tid));
                   }}
                   required
                   label="Tenant pemilik produk"

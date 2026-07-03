@@ -7,12 +7,16 @@ import {
   readSessionCookieFromRequest,
   verifySessionToken,
 } from '@/lib/api/session';
+import { authFromEdgeHeaders } from '@/lib/api/edge-session';
 import { resolveApiKeyAuth } from '@/lib/api/api-key';
 
 export async function resolveRequestContext(
   request: Request,
   db?: Db,
 ): Promise<AuthContext | null> {
+  const fromEdge = authFromEdgeHeaders(request);
+  if (fromEdge) return fromEdge;
+
   const token = readSessionCookieFromRequest(request);
   if (token) {
     const payload = verifySessionToken(token);

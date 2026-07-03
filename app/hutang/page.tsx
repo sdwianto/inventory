@@ -23,6 +23,9 @@ import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
 import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
 import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { fetchJson } from '@/lib/fetch-json';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -52,6 +55,7 @@ const CAN_MARK_PAID = new Set(['APPROVED', 'OUTSTANDING', 'PARTIAL']);
 
 export default function HutangVendorPage() {
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState('PENDING_REVIEW');
   const hutangUrl = tab
     ? `/api/pages/hutang?approvalStatus=${encodeURIComponent(tab)}`
@@ -82,6 +86,8 @@ export default function HutangVendorPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
+
+  const syncMutation = useApiMutation([queryKeys.hutang.all, queryKeys.pages.hutang()]);
 
   const refreshAfterMutation = useHutangPageRefresh(() => reload({ silent: true }));
 
@@ -134,9 +140,10 @@ export default function HutangVendorPage() {
   const openDetail = async (id: string) => {
     setLoadingDetail(id);
     try {
-      const res = await fetch(`/api/hutang/${id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat');
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.hutang.detail(id),
+        queryFn: () => fetchJson<JsonObject>(`/api/hutang/${id}`),
+      });
       setDetail(data);
       setOverrideMatch(false);
       setRejectReason('');
@@ -207,42 +214,49 @@ export default function HutangVendorPage() {
   const syncNow = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/hutang/sync-pending', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok && !data.skipped) throw new Error(data.error || 'Gagal sync');
-      if (res.status === 202 && data.jobId) {
+      const data = await syncMutation.mutateAsync({
+        url: '/api/hutang/sync-pending',
+        offlineLabel: 'Sync hutang dari sales.app',
+      }) as JsonObject;
+      if (data.skipped) {
+        toast.info(String(data.error || 'Sync dilewati'));
+        setSyncing(false);
+        return;
+      }
+      if (data.jobId) {
         toast.info('Sync hutang berjalan di background…');
         setActiveSyncJobId(String(data.jobId));
         return;
       }
-      if (data.skipped) toast.info(data.error || 'Endpoint sync belum tersedia di sales.app');
-      else if (data.fetchIncomplete || data.warning) {
+      if (data.fetchIncomplete || data.warning) {
         toast.warning(String(data.warning || 'Sync invoice tidak lengkap — coba lagi'));
-      } else if ((data.reconcile?.replayed || 0) > 0 && (data.reconcile?.created || 0) > 0) {
-        toast.success(`${data.reconcile.created} faktur dibuat ulang di sales.app`);
-      } else if ((data.refreshed || 0) > 0 || (data.reconcile?.fixed || 0) > 0) {
-        const n = (data.refreshed || 0) + (data.reconcile?.fixed || 0);
+      } else if (num(asObject(data.reconcile).replayed) > 0 && num(asObject(data.reconcile).created) > 0) {
+        toast.success(`${num(asObject(data.reconcile).created)} faktur dibuat ulang di sales.app`);
+      } else if (num(data.refreshed) > 0 || num(asObject(data.reconcile).fixed) > 0) {
+        const n = num(data.refreshed) + num(asObject(data.reconcile).fixed);
         toast.success(`${n} tagihan dipulihkan — cek tab Menunggu review`);
-      } else if ((data.pendingAfter || 0) > 0) {
-        toast.success(`${data.pendingAfter} tagihan menunggu review admin`);
-      } else if (data.reconcile?.salesErrors?.length) {
-        toast.warning(`Gagal buat faktur di sales: ${data.reconcile.salesErrors[0]?.error || 'cek pelanggan B2B'}`);
-      } else if ((data.created || 0) > 0) {
-        toast.success(`Sync: ${data.created} tagihan baru, ${data.existing || 0} sudah ada`);
-      } else if ((data.reconcile?.localCreated || 0) > 0 || (data.reconcile?.created || 0) > 0) {
-        const n = (data.reconcile?.localCreated || 0) + (data.reconcile?.created || 0);
+      } else if (num(data.pendingAfter) > 0) {
+        toast.success(`${num(data.pendingAfter)} tagihan menunggu review admin`);
+      } else if (asArray(asObject(data.reconcile).salesErrors).length) {
+        const first = asObject(asArray(asObject(data.reconcile).salesErrors)[0]);
+        toast.warning(`Gagal buat faktur di sales: ${str(first.error, 'cek pelanggan B2B')}`);
+      } else if (num(data.created) > 0) {
+        toast.success(`Sync: ${num(data.created)} tagihan baru, ${num(data.existing)} sudah ada`);
+      } else if (num(asObject(data.reconcile).localCreated) > 0 || num(asObject(data.reconcile).created) > 0) {
+        const n = num(asObject(data.reconcile).localCreated) + num(asObject(data.reconcile).created);
         toast.success(`${n} tagihan dibuat dari GRN yang sudah diposting`);
-      } else if (data.errors?.length) {
-        toast.warning(`Sync: ${data.errors.length} gagal — ${data.errors[0]?.error || 'cek GRN/invoice'}`);
-      } else if (data.total === 0) {
-        toast.info(data.hint || 'Tidak ada invoice POSTED di sales.app untuk tenant ini');
+      } else if (asArray(data.errors).length) {
+        toast.warning(`Sync: ${asArray(data.errors).length} gagal — ${str(asObject(asArray(data.errors)[0]).error, 'cek GRN/invoice')}`);
+      } else if (num(data.total) === 0) {
+        toast.info(str(data.hint, 'Tidak ada invoice POSTED di sales.app untuk tenant ini'));
       } else {
-        toast.success(`Sync: ${data.existing || 0} sudah ada, tidak ada yang baru`);
+        toast.success(`Sync: ${num(data.existing)} sudah ada, tidak ada yang baru`);
       }
       await refreshAfterMutation();
       setSyncing(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
       setSyncing(false);
     }
   };

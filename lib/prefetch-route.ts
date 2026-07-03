@@ -87,3 +87,10 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       break;
   }
 }
+
+/** Prefetch semua route dalam satu menu group (saat expand sidebar). */
+export function prefetchNavGroup(queryClient: QueryClient, hrefs: string[]) {
+  for (const href of hrefs) {
+    prefetchRouteData(queryClient, href);
+  }
+}

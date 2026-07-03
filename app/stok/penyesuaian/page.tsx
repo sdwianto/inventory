@@ -16,12 +16,14 @@ import { getUser } from '@/lib/auth-client';
 import ListExportMenu from '@/components/ListExportMenu';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
 
 const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 export default function PenyesuaianPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [list, setList] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [showPicker, setShowPicker] = useState(false);
@@ -29,18 +31,20 @@ export default function PenyesuaianPage() {
   const [items, setItems] = useState<JsonObject[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const load = async () => {
-    const res = await fetch('/api/stok/penyesuaian');
-    const data = await res.json();
-    if (!res.ok) {
-      setList([]);
-      return;
-    }
-    setList(Array.isArray(data) ? data : []);
-  };
+  const { data: listData = [] } = useApiQuery<JsonObject[]>(
+    queryKeys.penyesuaian.list,
+    '/api/stok/penyesuaian',
+  );
+
+  const list = Array.isArray(listData) ? listData : [];
+
+  const saveMutation = useApiMutation<
+    { keterangan: string; userId?: string; userName?: string; items: { stokId: string; kode: string; qtyAktual: number }[] },
+    { noPenyesuaian?: string; error?: string }
+  >([queryKeys.penyesuaian.all, queryKeys.products.all]);
+
   useEffect(() => {
     setUser(getUser());
-    load();
   }, []);
 
   const openNew = () => {
@@ -72,20 +76,17 @@ export default function PenyesuaianPage() {
     const user = getUser();
     setSaving(true);
     try {
-      const res = await fetch('/api/stok/penyesuaian', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await saveMutation.mutateAsync({
+        url: '/api/stok/penyesuaian',
+        body: {
           keterangan,
-          userId: user?.id, userName: user?.name,
-          items: items.map(it => ({ stokId: it.stokId, kode: it.kode, qtyAktual: it.qtyAktual })),
-        }),
+          userId: user?.id,
+          userName: user?.name,
+          items: items.map(it => ({ stokId: str(it.stokId), kode: str(it.kode), qtyAktual: num(it.qtyAktual) })),
+        },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(`Penyesuaian ${str(data.noPenyesuaian)} berhasil`);
       setShowForm(false);
-      load();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };

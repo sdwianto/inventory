@@ -69,7 +69,7 @@ export function cors(res: NextResponse): NextResponse {
   res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.headers.set(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Webhook-Secret, X-Event',
+    'Content-Type, Authorization, X-Webhook-Secret, X-Event, Idempotency-Key',
   );
   return res;
 }

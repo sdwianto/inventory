@@ -1,6 +1,6 @@
 'use client';
 import { str, num, asArray, type JsonObject } from '@/types/json';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,10 +16,11 @@ import ListSummaryCards from '@/components/ListSummaryCards';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
 
 export default function TransferPage() {
-  const [list, setList] = useState<JsonObject[]>([]);
-  const [lokasi, setLokasi] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [form, setForm] = useState<{ lokasiAsal: string; lokasiTujuan: string; keterangan: string; items: JsonObject[] }>({
@@ -27,8 +28,23 @@ export default function TransferPage() {
   });
   const [saving, setSaving] = useState(false);
 
-  const load = async () => { const r = await fetch('/api/stok/transfer'); setList(await r.json()); };
-  useEffect(() => { load(); fetch('/api/lokasi').then(r => r.json()).then(d => setLokasi(Array.isArray(d) ? d : [])); }, []);
+  const { data: listData = [] } = useApiQuery<JsonObject[]>(
+    queryKeys.transfer.list,
+    '/api/stok/transfer',
+  );
+
+  const { data: lokasiData = [] } = useApiQuery<JsonObject[]>(
+    queryKeys.lokasi.list({}),
+    '/api/lokasi',
+  );
+
+  const list = Array.isArray(listData) ? listData : [];
+  const lokasi = Array.isArray(lokasiData) ? lokasiData : [];
+
+  const saveMutation = useApiMutation<
+    typeof form & { lokasiAsalNama?: string; lokasiTujuanNama?: string; userName?: string },
+    { noTransfer?: string; error?: string }
+  >([queryKeys.transfer.all, queryKeys.products.all]);
 
   const addItem = (p: JsonObject) => {
     if (form.items.find(it => it.stokId === p.id)) { toast.error('Sudah ada'); return; }
@@ -46,15 +62,12 @@ export default function TransferPage() {
       const asal = lokasi.find(l => l.id === form.lokasiAsal || l.kode === form.lokasiAsal);
       const tujuan = lokasi.find(l => l.id === form.lokasiTujuan || l.kode === form.lokasiTujuan);
       const user = getUser();
-      const res = await fetch('/api/stok/transfer', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, lokasiAsalNama: asal?.nama, lokasiTujuanNama: tujuan?.nama, userName: user?.name }),
+      const d = await saveMutation.mutateAsync({
+        url: '/api/stok/transfer',
+        body: { ...form, lokasiAsalNama: str(asal?.nama), lokasiTujuanNama: str(tujuan?.nama), userName: user?.name },
       });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || 'Gagal');
       toast.success(`Transfer ${str(d.noTransfer)} berhasil`);
       setShowForm(false); setForm({ lokasiAsal: '', lokasiTujuan: '', keterangan: '', items: [] });
-      load();
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
     setSaving(false);
   };

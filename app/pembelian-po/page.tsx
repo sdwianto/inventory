@@ -37,12 +37,15 @@ import {
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
 import { usePoMutations } from '@/lib/hooks/use-po-mutations';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 function CustomerPoPageContent() {
   const [user, setUser] = useState<JsonObject | null>(null);
   const { list, reload: reloadList, setList } = useCustomerPoList();
   const poMutations = usePoMutations(setList, async () => { await reloadList(); });
+  const syncPendingMutation = useApiMutation([queryKeys.customerPurchaseOrders.all]);
   const { products, reloadProducts } = useCustomerPoProducts();
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -144,23 +147,26 @@ function CustomerPoPageContent() {
     autoSyncBusy.current = true;
     let startedAsyncJob = false;
     try {
-      const res = await fetch('/api/customer-purchase-orders/sync-pending', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) return;
-      if (res.status === 202 && data.jobId) {
+      const data = await syncPendingMutation.mutateAsync({
+        url: '/api/customer-purchase-orders/sync-pending',
+        offlineLabel: 'Sync PO pending ke vendor',
+      }) as JsonObject;
+      if (data.jobId) {
         toast.info('PO antrian dikirim ke background');
         setVendorSyncJobId(String(data.jobId));
         startedAsyncJob = true;
         return;
       }
-      if (data.synced?.length > 0) {
+      const synced = asArray(data.synced) as JsonObject[];
+      if (synced.length > 0) {
         await reloadList();
-        const labels = data.synced.map((s: { noPO?: string }) => s.noPO).join(', ');
-        toast.success(`${data.synced.length} PO terkirim otomatis ke vendor`, {
+        const labels = synced.map((s) => str(s.noPO)).filter(Boolean).join(', ');
+        toast.success(`${synced.length} PO terkirim otomatis ke vendor`, {
           description: labels,
         });
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
       /* sales.app belum online */
     } finally {
       if (!startedAsyncJob) autoSyncBusy.current = false;
@@ -300,28 +306,41 @@ function CustomerPoPageContent() {
     }
     setSaving(true);
     try {
-      const res = await fetch('/api/customer-purchase-orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items,
-          catatan,
-          tanggalKedatangan: toDateInputValue(createDate),
-          maintenanceRequestId: wrMeta?.id || null,
-          assetId: wrMeta?.assetId || null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
+      const payload = {
+        items,
+        catatan,
+        tanggalKedatangan: toDateInputValue(createDate),
+        maintenanceRequestId: wrMeta?.id || null,
+        assetId: wrMeta?.assetId || null,
+      };
+      const optimisticRow: JsonObject = {
+        id: `temp-${Date.now()}`,
+        noPO: '…',
+        status: 'DRAFT',
+        approvalStatus: 'DRAFT',
+        tanggalKedatangan: toDateInputValue(createDate),
+        catatan,
+        totalQty: lineSummary.totalQty,
+        totalEstimasi: lineSummary.totalEstimasi,
+      };
+      const data = await poMutations.createPO(payload, optimisticRow);
       toast.success(`PO ${data.noPO} dibuat untuk ${formatDate(createDate)}`);
       setCreateOpen(false);
       setEditingPo(null);
       setWrMeta(null);
       setSelectedDate(createDate ? toDateInputValue(createDate) : null);
       setShowAll(false);
-      setExpandedId(data.id);
-      reloadList();
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+      setExpandedId(String(data.id));
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) {
+        toast.info('PO disimpan offline — akan disinkron saat online');
+        setCreateOpen(false);
+        setEditingPo(null);
+        setWrMeta(null);
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    }
     setSaving(false);
   };
 
@@ -338,23 +357,31 @@ function CustomerPoPageContent() {
     }
     setSaving(true);
     try {
-      const res = await fetch(`/api/customer-purchase-orders/${str(editingPo.id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items,
-          catatan,
-          tanggalKedatangan: toDateInputValue(createDate),
-        }),
+      const poId = str(editingPo.id);
+      const payload = {
+        items,
+        catatan,
+        tanggalKedatangan: toDateInputValue(createDate),
+      };
+      const data = await poMutations.updatePO(poId, payload, {
+        catatan,
+        tanggalKedatangan: toDateInputValue(createDate),
+        totalQty: lineSummary.totalQty,
+        totalEstimasi: lineSummary.totalEstimasi,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan');
       toast.success(`PO ${data.noPO} diperbarui`);
       setCreateOpen(false);
       setEditingPo(null);
-      setExpandedId(data.id);
-      reloadList();
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+      setExpandedId(poId);
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) {
+        toast.info('Perubahan PO disimpan offline — akan disinkron saat online');
+        setCreateOpen(false);
+        setEditingPo(null);
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    }
     setSaving(false);
   };
 

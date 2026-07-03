@@ -2,7 +2,7 @@
 
 import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
-import { useEffect, useRef, useState, Suspense } from 'react';
+import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
@@ -16,6 +16,10 @@ import { toast } from 'sonner';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
 import { fetchJson } from '@/lib/fetch-json';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { WAREHOUSES } from '@/lib/warehouses-client';
 import { ArrowUpFromLine, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
 
@@ -32,8 +36,6 @@ const CAN_APPROVE = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 function ReleaseInventoryPageContent() {
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [list, setList] = useState<JsonObject[]>([]);
-  const [products, setProducts] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<{
@@ -56,11 +58,34 @@ function ReleaseInventoryPageContent() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
 
-  const load = () => fetch('/api/inventory-releases').then((r) => r.json()).then((d) => setList(Array.isArray(d) ? d : []));
+  const { data: listData = [] } = useApiQuery<JsonObject[]>(
+    queryKeys.inventoryReleases.list,
+    '/api/inventory-releases',
+  );
+
+  const { data: saldoData } = useApiQuery<JsonObject>(
+    queryKeys.stokSaldo.list,
+    '/api/stok/saldo',
+    { enabled: showForm || pickerOpen },
+  );
+
+  const list = Array.isArray(listData) ? listData : [];
+  const products = useMemo(
+    () => asArray(asObject(saldoData).rows) as JsonObject[],
+    [saldoData],
+  );
+
+  const saveMutation = useApiMutation<
+    typeof form & { submit?: boolean },
+    JsonObject
+  >([queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all]);
+
+  const actionMutation = useApiMutation<JsonObject, JsonObject>(
+    [queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all],
+  );
 
   useEffect(() => {
     setUser(getUser());
-    load();
   }, []);
 
   useEffect(() => {
@@ -85,12 +110,6 @@ function ReleaseInventoryPageContent() {
       })
       .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
   }, [searchParams]);
-
-  useEffect(() => {
-    if (showForm || pickerOpen) {
-      fetch('/api/stok/saldo').then((r) => r.json()).then((d) => setProducts(asArray(asObject(d).rows) as JsonObject[]));
-    }
-  }, [showForm, pickerOpen]);
 
   const canCreate = CAN_CREATE.includes(str(user?.role));
   const canApprove = CAN_APPROVE.includes(str(user?.role));
@@ -177,13 +196,10 @@ function ReleaseInventoryPageContent() {
     if (!form.items.length) { toast.error('Tambah minimal 1 item'); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/inventory-releases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, submit }),
+      const data = await saveMutation.mutateAsync({
+        url: '/api/inventory-releases',
+        body: { ...form, submit },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
       toast.success(submit ? 'Pengajuan release dikirim ke supervisor' : 'Draft release disimpan');
       setShowForm(false);
       setForm({
@@ -194,24 +210,27 @@ function ReleaseInventoryPageContent() {
         assetId: '',
         items: [],
       });
-      load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setSaving(false);
   };
 
   const action = async (id: string, type: 'submit' | 'approve' | 'reject', extra: JsonObject = {}) => {
     const paths = { submit: 'submit', approve: 'approve', reject: 'reject' } as const;
-    const res = await fetch(`/api/inventory-releases/${id}/${paths[type]}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(extra),
-    });
-    const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Gagal'); return; }
-    toast.success(type === 'approve' ? 'Release disetujui — stok dikurangi' : type === 'reject' ? 'Ditolak' : 'Diajukan');
-    load();
+    const labels = { submit: 'Ajukan release', approve: 'Setujui release', reject: 'Tolak release' };
+    try {
+      await actionMutation.mutateAsync({
+        url: `/api/inventory-releases/${id}/${paths[type]}`,
+        body: extra,
+        offlineLabel: `${labels[type]} ${id}`,
+      });
+      toast.success(type === 'approve' ? 'Release disetujui — stok dikurangi' : type === 'reject' ? 'Ditolak' : 'Diajukan');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const filteredProducts = products.filter((p) => {

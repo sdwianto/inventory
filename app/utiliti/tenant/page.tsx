@@ -11,9 +11,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Building2, Upload, Save, ImageIcon, X, Eye } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
-import { fetchTenantSettings, invalidateTenantCache } from '@/lib/tenant-client';
+import { invalidateTenantCache } from '@/lib/tenant-client';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function TenantSetupPage() {
+  const [tenantId, setTenantId] = useState('default');
   const [form, setForm] = useState({
     tenantId: 'default', companyName: '', companyAddress: '', companyPhone: '',
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
@@ -26,12 +31,23 @@ export default function TenantSetupPage() {
 
   useEffect(() => {
     const user = getUser();
-    const tenantId = user?.tenantId || 'default';
-    fetch(`/api/tenant/settings?tenantId=${tenantId}`)
-      .then(r => r.json())
-      .then(d => setForm({ ...form, ...d }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const tid = user?.tenantId || 'default';
+    setTenantId(tid);
   }, []);
+
+  const { data: settingsData } = useApiQuery<Record<string, unknown>>(
+    queryKeys.tenantSettings.detail(tenantId),
+    tenantId ? `/api/tenant/settings?tenantId=${tenantId}` : null,
+    { enabled: Boolean(tenantId) },
+  );
+
+  useEffect(() => {
+    if (settingsData) {
+      setForm((f) => ({ ...f, ...settingsData, tenantId }));
+    }
+  }, [settingsData, tenantId]);
+
+  const saveMutation = useApiMutation([queryKeys.tenantSettings.all]);
 
   const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -73,15 +89,17 @@ export default function TenantSetupPage() {
   const save = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/tenant/settings', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+      await saveMutation.mutateAsync({
+        url: '/api/tenant/settings',
+        method: 'PUT',
+        body: form,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
       invalidateTenantCache();
       toast.success('Pengaturan tenant tersimpan. Logo akan muncul di semua dokumen.');
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
     setSaving(false);
   };
 

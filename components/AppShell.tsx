@@ -29,7 +29,7 @@ import {
 } from '@/lib/hooks/use-workspace-bootstrap';
 import { queryKeys } from '@/lib/query-keys';
 import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
-import { prefetchRouteData } from '@/lib/prefetch-route';
+import { prefetchRouteData, prefetchNavGroup } from '@/lib/prefetch-route';
 import { prefetchByRole } from '@/lib/prefetch-by-role';
 import { prefetchRouteFlow } from '@/lib/prefetch-flow';
 import { fetchTenantSettings } from '@/lib/tenant-client';
@@ -335,7 +335,7 @@ export default function AppShell({ children }: AppShellProps) {
       <aside
         className={`${
           open ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden'
-        } md:relative md:flex w-64 h-full min-h-0 bg-bgn-navy text-slate-100 flex-shrink-0 flex flex-col`}
+        } md:relative md:flex w-64 h-full min-h-0 bg-bgn-navy text-slate-100 flex-shrink-0 flex flex-col overflow-hidden`}
       >
         <div className="flex-shrink-0 px-5 py-5 border-b border-bgn-navy-light flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-bgn-gold flex items-center justify-center overflow-hidden shrink-0 ring-1 ring-bgn-gold-light/50">
@@ -353,7 +353,13 @@ export default function AppShell({ children }: AppShellProps) {
             </div>
           </div>
         </div>
-        <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto overscroll-contain">
+        <nav
+          onWheel={(e) => {
+            const nav = e.currentTarget;
+            if (nav.scrollHeight > nav.clientHeight) e.stopPropagation();
+          }}
+          className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto overscroll-y-contain"
+        >
           {user.role === 'MASTER' ? (
             <div className="px-1 pb-3 mb-2 border-b border-bgn-navy-light">
               <TenantScopeSelector />
@@ -395,7 +401,15 @@ export default function AppShell({ children }: AppShellProps) {
               return (
                 <div key={item.key}>
                   <button
-                    onClick={() => setExpanded((s) => ({ ...s, [item.key]: !s[item.key] }))}
+                    onClick={() => {
+                      setExpanded((s) => {
+                        const nextOpen = !s[item.key];
+                        if (nextOpen) {
+                          prefetchNavGroup(queryClient, item.items.map((c) => c.href));
+                        }
+                        return { ...s, [item.key]: nextOpen };
+                      });
+                    }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
                       groupActive ? 'text-bgn-gold font-medium' : 'text-slate-300 hover:bg-bgn-navy-light hover:text-white'
                     }`}

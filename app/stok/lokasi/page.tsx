@@ -1,7 +1,7 @@
 'use client';
-import { str, asObject, type JsonObject } from '@/types/json';
+import { str, type JsonObject } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,77 +15,69 @@ import { withActingTenantQuery } from '@/lib/tenant-api';
 import { invalidateLokasiCache } from '@/lib/lokasi-client';
 import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 const empty = { kode: '', nama: '', keterangan: '', tenantId: '' };
 
 export default function LokasiPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [filterTenantId, setFilterTenantId] = useState('');
-  const [list, setList] = useState<JsonObject[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<JsonObject | null>(null);
   const [form, setForm] = useState(empty);
 
   const isMaster = user?.role === 'MASTER';
+  const { tenants: masterTenants } = useMasterTenants(isMaster);
+  const tenants = masterTenants as TenantOption[];
 
-  const load = async (tenantId = filterTenantId) => {
-    try {
-      let url = '/api/lokasi';
-      url = withActingTenantQuery(url, tenantId, isMaster);
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat');
-      setList(Array.isArray(data) ? data : []);
-      invalidateLokasiCache();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-      setList([]);
-    }
-  };
+  const lokasiUrl = useMemo(() => {
+    if (!user) return null;
+    if (isMaster && !filterTenantId) return null;
+    let url = '/api/lokasi';
+    return withActingTenantQuery(url, filterTenantId, isMaster);
+  }, [user, filterTenantId, isMaster]);
+
+  const { data: listData = [], refetch, isLoading } = useApiQuery<JsonObject[]>(
+    queryKeys.lokasi.list({ tenantId: filterTenantId || undefined }),
+    lokasiUrl,
+    { enabled: Boolean(lokasiUrl) },
+  );
+  const list = Array.isArray(listData) ? listData : [];
+
+  const saveMutation = useApiMutation([queryKeys.lokasi.all]);
 
   useEffect(() => {
     const u = getUser();
     setUser(u);
-    if (u?.role === 'MASTER') {
-      fetch('/api/tenants').then((r) => r.json()).then((d) => {
-        setTenants(Array.isArray(d) ? d.map((t) => {
-          const row = asObject(t);
-          return {
-            tenantId: str(row.tenantId),
-            companyName: str(row.companyName) || undefined,
-            tenantName: str(row.tenantName) || undefined,
-          };
-        }) : []);
-      });
-    } else {
+    if (u?.role !== 'MASTER') {
       setFilterTenantId(u?.tenantId || 'default');
     }
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    if (isMaster && !filterTenantId) {
-      setList([]);
-      return;
-    }
-    if (!isMaster || filterTenantId) load(filterTenantId);
-  }, [user, filterTenantId]);
+    if (list.length >= 0) invalidateLokasiCache();
+  }, [list]);
 
   const save = async () => {
     if (!editing) return;
     try {
-      const res = await fetch(`/api/lokasi/${str(editing.id)}`, {
+      await saveMutation.mutateAsync({
+        url: `/api/lokasi/${str(editing.id)}`,
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keterangan: form.keterangan }),
+        body: { keterangan: form.keterangan },
+        offlineLabel: `Ubah keterangan gudang ${str(editing.kode)}`,
       });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || 'Gagal');
       toast.success('Keterangan gudang diperbarui');
       setShowForm(false);
-      load();
-    } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+      void refetch();
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const getExportColumns = () => [
@@ -151,8 +143,11 @@ export default function LokasiPage() {
               {isMaster && !filterTenantId && (
                 <tr><td colSpan={isMaster ? 5 : 4} className="text-center py-10 text-slate-400">Pilih tenant untuk melihat gudang</td></tr>
               )}
-              {(isMaster ? filterTenantId : true) && list.length === 0 && (
+              {(isMaster ? filterTenantId : true) && isLoading && (
                 <tr><td colSpan={isMaster ? 5 : 4} className="text-center py-10 text-slate-400">Memuat gudang…</td></tr>
+              )}
+              {(isMaster ? filterTenantId : true) && !isLoading && list.length === 0 && (
+                <tr><td colSpan={isMaster ? 5 : 4} className="text-center py-10 text-slate-400">Tidak ada gudang</td></tr>
               )}
               {list.map((l) => (
                 <tr key={str(l.id)} className="border-t hover:bg-slate-50">

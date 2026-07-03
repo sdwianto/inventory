@@ -1,7 +1,7 @@
 'use client';
 
 import { str, num, asObject, asArray, type JsonObject } from '@/types/json';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,38 +14,59 @@ import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 import { toast } from 'sonner';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { queryKeys } from '@/lib/query-keys';
+import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function KartuStokPage() {
   const [selectedProduct, setSelectedProduct] = useState<JsonObject | null>(null);
-  const [data, setData] = useState<{ rows: JsonObject[]; product: JsonObject | null; ledgerSaldo: number | null }>({
-    rows: [], product: null, ledgerSaldo: null,
-  });
-  const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [reconciling, setReconciling] = useState(false);
 
-  const load = async (productId: string) => {
-    if (!productId) return;
-    setLoading(true);
-    const params = new URLSearchParams({ productId });
-    if (from) params.append('from', from);
-    if (to) params.append('to', to);
-    const res = await fetch(`/api/stok/kartu?${params}`);
-    const json = asObject(await res.json());
-    setData({
+  const productId = selectedProduct ? str(selectedProduct.id) : '';
+  const kartuParams = useMemo(
+    () => ({ productId, from: from || undefined, to: to || undefined }),
+    [productId, from, to],
+  );
+  const kartuUrl = productId
+    ? `/api/stok/kartu?${new URLSearchParams({
+      productId,
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    })}`
+    : null;
+
+  const { data: kartuRaw, isLoading: loading, refetch } = useApiQuery<JsonObject>(
+    queryKeys.stokKartu.detail(kartuParams),
+    kartuUrl,
+    { enabled: Boolean(productId) },
+  );
+
+  const data = useMemo(() => {
+    const json = asObject(kartuRaw);
+    return {
       rows: asArray(json.rows) as JsonObject[],
       product: json.product ? asObject(json.product) : null,
       ledgerSaldo: json.ledgerSaldo != null ? num(json.ledgerSaldo) : null,
-    });
-    setLoading(false);
-  };
+    };
+  }, [kartuRaw]);
+
+  const reconcileMutation = useApiMutation([
+    queryKeys.stokKartu.all,
+    queryKeys.products.all,
+    queryKeys.stokSaldo.all,
+  ]);
 
   const pick = (p: JsonObject) => {
     setSelectedProduct(p);
     setShowPicker(false);
-    load(str(p.id));
+  };
+
+  const load = () => {
+    void refetch();
   };
 
   const totalMasuk = data.rows.reduce((s, r) => s + num(r.masuk), 0);
@@ -61,17 +82,16 @@ export default function KartuStokPage() {
     if (!selectedProduct) return;
     setReconciling(true);
     try {
-      const res = await fetch('/api/stok/kartu/reconcile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: str(selectedProduct.id) }),
-      });
-      const json = asObject(await res.json());
-      if (!res.ok) throw new Error(str(json.error, 'Gagal sinkronisasi'));
+      const json = await reconcileMutation.mutateAsync({
+        url: '/api/stok/kartu/reconcile',
+        body: { productId: str(selectedProduct.id) },
+        offlineLabel: `Samakan stok ${str(selectedProduct.kode)}`,
+      }) as JsonObject;
       toast.success(`Stok master disamakan ke ${formatNumber(num(json.ledgerSaldo))} ${str(selectedProduct.satuan)}`);
-      load(str(selectedProduct.id));
+      load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
     }
     setReconciling(false);
   };
@@ -130,7 +150,7 @@ export default function KartuStokPage() {
             <label className="text-xs text-slate-500 block mb-1">Sampai</label>
             <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-44" />
           </div>
-          <Button onClick={() => selectedProduct && load(str(selectedProduct.id))} disabled={!selectedProduct} className="bg-orange-500 hover:bg-orange-600">
+          <Button onClick={load} disabled={!selectedProduct} className="bg-orange-500 hover:bg-orange-600">
             Tampilkan
           </Button>
         </div>
