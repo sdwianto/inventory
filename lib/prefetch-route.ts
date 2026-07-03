@@ -33,13 +33,13 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
 
   switch (href) {
     case '/dashboard':
-      prefetch(['dashboard'], '/api/dashboard');
+      prefetch(queryKeys.dashboard.all, '/api/dashboard');
       break;
     case '/penerimaan':
       prefetchCursorPage(queryClient, queryKeys.pages.penerimaan(), '/api/pages/penerimaan', 100);
       break;
     case '/pembelian-po':
-      prefetch(['customer-purchase-orders'], '/api/customer-purchase-orders');
+      prefetch(queryKeys.customerPurchaseOrders.list, '/api/customer-purchase-orders');
       break;
     case '/hutang':
       prefetchCursorPage(

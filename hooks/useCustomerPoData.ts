@@ -1,42 +1,48 @@
+'use client';
+
+import type { Dispatch, SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
-import { useCallback, useEffect, useState } from 'react';
-import { fetchJson } from '@/lib/fetch-json';
-import { toast } from 'sonner';
+import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 export function useCustomerPoList() {
-  const [list, setList] = useState<JsonObject[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const query = useApiQuery<JsonObject[]>(
+    queryKeys.customerPurchaseOrders.list,
+    '/api/customer-purchase-orders',
+    { staleTime: 60_000 },
+  );
 
-  const reload = useCallback(() => {
-    setLoading(true);
-    return fetchJson<JsonObject[]>('/api/customer-purchase-orders')
-      .then((data) => setList(Array.isArray(data) ? data : []))
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, []);
+  const setList: Dispatch<SetStateAction<JsonObject[]>> = (updater) => {
+    queryClient.setQueryData<JsonObject[]>(queryKeys.customerPurchaseOrders.list, (prev) => {
+      const base = Array.isArray(prev) ? prev : [];
+      return typeof updater === 'function'
+        ? (updater as (p: JsonObject[]) => JsonObject[])(base)
+        : updater;
+    });
+  };
 
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  return { list, loading, reload, setList };
+  return {
+    list: Array.isArray(query.data) ? query.data : [],
+    loading: query.isLoading,
+    reload: () => query.refetch(),
+    setList,
+  };
 }
 
 export function useCustomerPoProducts() {
-  const [products, setProducts] = useState<JsonObject[]>([]);
+  const query = useApiQuery<{ items?: JsonObject[] } | JsonObject[]>(
+    queryKeys.products.list({ limit: 200, withWarehouseStock: true }),
+    '/api/products?limit=200&withWarehouseStock=1',
+    { staleTime: 120_000 },
+  );
 
-  const reload = useCallback(() => {
-    return fetchJson<{ items?: JsonObject[] } | JsonObject[]>('/api/products?limit=200&withWarehouseStock=1')
-      .then((data) => {
-        const items = Array.isArray(data) ? data : (data?.items || []);
-        setProducts(items);
-      })
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)));
-  }, []);
+  const products = Array.isArray(query.data)
+    ? query.data
+    : (query.data?.items || []);
 
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  return { products, reloadProducts: reload };
+  return {
+    products,
+    reloadProducts: () => query.refetch(),
+  };
 }

@@ -29,9 +29,10 @@ import {
 } from '@/lib/hooks/use-workspace-bootstrap';
 import { queryKeys } from '@/lib/query-keys';
 import { NAV_BADGES_QUERY_KEY } from '@/lib/hooks/use-nav-badges';
-import { prefetchRouteData, prefetchNavGroup } from '@/lib/prefetch-route';
-import { prefetchByRole } from '@/lib/prefetch-by-role';
+import { prefetchRouteData } from '@/lib/prefetch-route';
 import { prefetchRouteFlow } from '@/lib/prefetch-flow';
+import { debouncedPrefetch, prefetchNavGroupThrottled } from '@/lib/prefetch-throttle';
+import { prefetchByRole } from '@/lib/prefetch-by-role';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
 
@@ -375,7 +376,7 @@ export default function AppShell({ children }: AppShellProps) {
                   key={item.href}
                   href={item.href}
                   onClick={() => setOpen(false)}
-                  onMouseEnter={() => prefetchRouteData(queryClient, item.href)}
+                  onMouseEnter={() => debouncedPrefetch(item.href, () => prefetchRouteData(queryClient, item.href))}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
                     active ? 'nav-active-bgn' : 'text-slate-300 hover:bg-bgn-navy-light hover:text-white'
                   } ${item.highlight && !active ? 'ring-1 ring-bgn-gold/50' : ''}`}
@@ -405,7 +406,11 @@ export default function AppShell({ children }: AppShellProps) {
                       setExpanded((s) => {
                         const nextOpen = !s[item.key];
                         if (nextOpen) {
-                          prefetchNavGroup(queryClient, item.items.map((c) => c.href));
+                          prefetchNavGroupThrottled(
+                            queryClient,
+                            item.items.map((c) => c.href),
+                            prefetchRouteData,
+                          );
                         }
                         return { ...s, [item.key]: nextOpen };
                       });
@@ -434,7 +439,7 @@ export default function AppShell({ children }: AppShellProps) {
                             key={c.href}
                             href={c.href}
                             onClick={() => setOpen(false)}
-                            onMouseEnter={() => prefetchRouteData(queryClient, c.href)}
+                            onMouseEnter={() => debouncedPrefetch(c.href, () => prefetchRouteData(queryClient, c.href))}
                             className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors ${
                               cActive ? 'nav-active-bgn' : 'text-slate-400 hover:bg-bgn-navy-light hover:text-white'
                             }`}

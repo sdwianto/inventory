@@ -206,17 +206,23 @@ export async function replayOfflineMutations(): Promise<ReplayResult> {
   let ok = 0;
   let failed = 0;
   const conflicts: ReplayResult['conflicts'] = [];
+  const concurrency = 4;
 
-  for (const row of pending) {
-    const outcome = await replayOne(row);
-    if (outcome.result === 'ok') ok += 1;
-    else if (outcome.result === 'conflict') {
-      conflicts.push({
-        id: row.id,
-        label: row.label,
-        error: outcome.error,
-      });
-    } else failed += 1;
+  for (let i = 0; i < pending.length; i += concurrency) {
+    const batch = pending.slice(i, i + concurrency);
+    const outcomes = await Promise.all(batch.map((row) => replayOne(row)));
+    for (let j = 0; j < outcomes.length; j += 1) {
+      const outcome = outcomes[j];
+      const row = batch[j];
+      if (outcome.result === 'ok') ok += 1;
+      else if (outcome.result === 'conflict') {
+        conflicts.push({
+          id: row.id,
+          label: row.label,
+          error: outcome.error,
+        });
+      } else failed += 1;
+    }
   }
 
   dispatchQueueEvent('erp-offline-replay-done', { ok, failed, conflicts });

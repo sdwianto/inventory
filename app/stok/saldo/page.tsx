@@ -84,28 +84,35 @@ export default function SaldoGudangPage() {
   const [trendMonths, setTrendMonths] = useState('1');
   const [gudangFilter, setGudangFilter] = useState<GudangFilter>({ GKERING: true, GBASAH: true });
 
-  const saldoUrl = `/api/stok/saldo?${new URLSearchParams({
-    ...(q ? { q } : {}),
-    trendMonths,
-  })}`;
+  const rowsUrl = `/api/stok/saldo?part=rows${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const trendUrl = `/api/stok/saldo?part=trend&trendMonths=${trendMonths}`;
 
-  const { data, isLoading: loading, refetch } = useApiQuery<{
+  const { data: rowData, isLoading: loadingRows, refetch: refetchRows } = useApiQuery<{
     rows?: StockRow[];
     summary?: SaldoSummary;
-    trend?: StockTrend;
   }>(
-    queryKeys.stokSaldo.report({ q, trendMonths }),
-    saldoUrl,
+    queryKeys.stokSaldo.rows({ q }),
+    rowsUrl,
+    { staleTime: 60_000 },
   );
 
-  const rows = Array.isArray(data?.rows) ? data.rows : [];
-  const summary = data?.summary || null;
-  const trend = data?.trend || { periods: [], totals: {} };
+  const { data: trendData, isLoading: loadingTrend } = useApiQuery<{
+    trend?: StockTrend;
+  }>(
+    queryKeys.stokSaldo.trend(trendMonths),
+    trendUrl,
+    { staleTime: 120_000 },
+  );
+
+  const loading = loadingRows;
+  const rows = Array.isArray(rowData?.rows) ? rowData.rows : [];
+  const summary = rowData?.summary || null;
+  const trend = trendData?.trend || { periods: [], totals: {} };
 
   const load = (query = q, months = trendMonths) => {
     if (query !== q) setQ(query);
     if (months !== trendMonths) setTrendMonths(months);
-    void refetch();
+    void refetchRows();
   };
 
   const toggleGudang = (kode: keyof GudangFilter, checked: boolean) => {

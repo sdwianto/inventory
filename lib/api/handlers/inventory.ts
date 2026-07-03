@@ -336,7 +336,16 @@ export async function handleInventory({
     const { denied, scopeAuth, tenantId: tid } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     if (!tid) return err('Scope tidak valid', 400);
+
+    const part = (url.searchParams.get('part') || 'all').toLowerCase();
     const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+    const trendMonths = Math.min(24, Math.max(1, parseInt(url.searchParams.get('trendMonths') || '3', 10)));
+
+    if (part === 'trend') {
+      const trend = await buildStockTrend(db, tid, { months: trendMonths, granularity: 'day' });
+      return ok({ trend });
+    }
+
     let filter = withTenantFilter(scopeAuth, { aktif: { $ne: false } });
     if (q) {
       filter = {
@@ -357,7 +366,6 @@ export async function handleInventory({
       .sort({ gudangKode: 1, nama: 1 })
       .limit(500)
       .toArray();
-    const trendMonths = Math.min(24, Math.max(1, parseInt(url.searchParams.get('trendMonths') || '6', 10)));
     const stokMap = await getStokByWarehouseBatch(db, tid, products.map((p) => p.id));
     let summaryQtyKering = 0;
     let summaryQtyBasah = 0;
@@ -399,20 +407,30 @@ export async function handleInventory({
       });
     });
 
+    const summary = {
+      qtyKering: summaryQtyKering,
+      qtyBasah: summaryQtyBasah,
+      qtyTotal: summaryQtyKering + summaryQtyBasah,
+      nilaiKering: summaryNilaiKering,
+      nilaiBasah: summaryNilaiBasah,
+      nilaiTotal: summaryNilaiKering + summaryNilaiBasah,
+      skuAktif,
+      skuTotal: rows.length,
+    };
+
+    if (part === 'rows') {
+      return ok({
+        warehouses: WAREHOUSE_CODES.map((k) => ({ kode: k, nama: warehouseLabel(k) })),
+        summary,
+        rows,
+      });
+    }
+
     const trend = await buildStockTrend(db, tid, { months: trendMonths, granularity: 'day' });
 
     return ok({
       warehouses: WAREHOUSE_CODES.map((k) => ({ kode: k, nama: warehouseLabel(k) })),
-      summary: {
-        qtyKering: summaryQtyKering,
-        qtyBasah: summaryQtyBasah,
-        qtyTotal: summaryQtyKering + summaryQtyBasah,
-        nilaiKering: summaryNilaiKering,
-        nilaiBasah: summaryNilaiBasah,
-        nilaiTotal: summaryNilaiKering + summaryNilaiBasah,
-        skuAktif,
-        skuTotal: rows.length,
-      },
+      summary,
       trend,
       rows,
     });

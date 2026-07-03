@@ -1,6 +1,9 @@
 /** Central React Query keys — keep stable for cache invalidation. */
 
 export const queryKeys = {
+  dashboard: {
+    all: ['dashboard'] as const,
+  },
   workspace: {
     all: ['workspace'] as const,
     bootstrap: (scopeKey: string) => ['workspace', 'bootstrap', scopeKey] as const,
@@ -13,6 +16,8 @@ export const queryKeys = {
   },
   products: {
     all: ['products'] as const,
+    list: (params: { limit?: number; withWarehouseStock?: boolean } = {}) =>
+      ['products', 'list', params] as const,
   },
   productMeta: {
     all: ['product-meta'] as const,
@@ -47,6 +52,8 @@ export const queryKeys = {
   stokSaldo: {
     all: ['stok-saldo'] as const,
     list: ['stok-saldo', 'list'] as const,
+    rows: (params: { q?: string } = {}) => ['stok-saldo', 'rows', params] as const,
+    trend: (trendMonths: string) => ['stok-saldo', 'trend', trendMonths] as const,
     report: (params: { q?: string; trendMonths?: string } = {}) =>
       ['stok-saldo', 'report', params] as const,
   },
@@ -66,6 +73,7 @@ export const queryKeys = {
   },
   customerPurchaseOrders: {
     all: ['customer-purchase-orders'] as const,
+    list: ['customer-purchase-orders', 'list'] as const,
   },
   tenants: {
     all: ['tenants'] as const,

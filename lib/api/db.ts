@@ -28,8 +28,8 @@ async function connectMongoClient(): Promise<{ client: MongoClient; db: Db }> {
     const { uri, dbName } = getMongoConfig();
     clientPromise = (async () => {
       const client = new MongoClient(uri, {
-        maxPoolSize: 20,
-        minPoolSize: 2,
+        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 8,
+        minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 0,
         maxIdleTimeMS: 60_000,
         serverSelectionTimeoutMS: 8_000,
         connectTimeoutMS: 10_000,

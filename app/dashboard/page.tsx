@@ -1,15 +1,14 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import AppShell from '@/components/AppShell';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
-import { fetchJson } from '@/lib/fetch-json';
-import { toast } from 'sonner';
-import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
 import { formatIDR } from '@/lib/format';
+import { PackageCheck, Package, Banknote, TrendingDown } from 'lucide-react';
 import Link from 'next/link';
+import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 const DashboardProcurementCharts = dynamic(
   () => import('@/components/DashboardProcurementCharts'),
@@ -47,17 +46,11 @@ const EMPTY_SUMMARY: DashboardSummary = {
 };
 
 export default function DashboardPage() {
-  const [chartData, setChartData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJson<DashboardData>('/api/dashboard')
-      .then((data) => {
-        if (data?.summary) setChartData(data);
-      })
-      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, []);
+  const { data: chartData, isLoading: loading } = useApiQuery<DashboardData>(
+    queryKeys.dashboard.all,
+    '/api/dashboard',
+    { staleTime: 60_000 },
+  );
 
   const stats = chartData?.summary || EMPTY_SUMMARY;
 

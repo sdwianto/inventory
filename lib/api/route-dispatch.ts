@@ -1,100 +1,53 @@
-// Inventory app — handler routing (customer gudang).
+// Lazy route → handler (kurangi cold start Vercel).
 
-import type { ApiHandler } from '@/types/api/handler';
-import { handleAuth } from '@/lib/api/handlers/auth';
-import { handleDashboard } from '@/lib/api/handlers/dashboard';
-import { handleProducts } from '@/lib/api/handlers/products';
-import { handleProductMeta } from '@/lib/api/handlers/product-meta';
-import { handleInventory } from '@/lib/api/handlers/inventory';
-import { handleTenants } from '@/lib/api/handlers/tenants';
-import { handleUsers } from '@/lib/api/handlers/users';
-import { handleWebhooks } from '@/lib/api/handlers/webhooks';
-import { handleGoodsReceipts } from '@/lib/api/handlers/goods-receipts';
-import { handleCatalogSync } from '@/lib/api/handlers/catalog-sync';
-import { handleVendorHutang } from '@/lib/api/handlers/vendor-hutang';
-import { handleProcurementExpenses } from '@/lib/api/handlers/procurement-expenses';
-import { handleCustomerPo } from '@/lib/api/handlers/customer-po';
-import { handleIntegrations } from '@/lib/api/handlers/integrations';
-import { handleInventoryReleases } from '@/lib/api/handlers/inventory-releases';
-import { handleBgJobs } from '@/lib/api/handlers/bg-jobs';
-import { handleLocalPurchaseOrders } from '@/lib/api/handlers/local-purchase-orders';
-import { handleAssets } from '@/lib/api/handlers/assets';
-import { handleMaintenanceRequests } from '@/lib/api/handlers/maintenance-requests';
-import { handleMaintenanceServiceOrders } from '@/lib/api/handlers/maintenance-service-orders';
-import { handleMaintenanceSchedules } from '@/lib/api/handlers/maintenance-schedules';
-import { handleNavBadges } from '@/lib/api/handlers/nav-badges';
-import { handleWorkspace } from '@/lib/api/handlers/workspace';
-import { handlePages } from '@/lib/api/handlers/pages';
-import { handleMedia } from '@/lib/api/handlers/media';
-import { handleMaintenanceReports } from '@/lib/api/handlers/maintenance-reports';
-import { handleSandbox } from '@/lib/api/handlers/sandbox';
+import type { NextResponse } from 'next/server';
+import type { HandlerContext } from '@/types/api/handler';
 
-const SEGMENT_HANDLERS: Record<string, ApiHandler> = {
-  sandbox: handleSandbox,
-  media: handleMedia,
-  'nav-badges': handleNavBadges,
-  assets: handleAssets,
-  'maintenance-requests': handleMaintenanceRequests,
-  'maintenance-service-orders': handleMaintenanceServiceOrders,
-  'maintenance-schedules': handleMaintenanceSchedules,
-  'maintenance-reports': handleMaintenanceReports,
-  'local-purchase-orders': handleLocalPurchaseOrders,
-  integrations: handleIntegrations,
-  auth: handleAuth,
-  dashboard: handleDashboard,
-  products: handleProducts,
-  'produk-grup': handleProductMeta,
-  'produk-satuan': handleProductMeta,
-  stok: handleInventory,
-  lokasi: handleInventory,
-  webhooks: handleWebhooks,
-  'goods-receipts': handleGoodsReceipts,
-  sync: handleCatalogSync,
-  hutang: handleVendorHutang,
-  'procurement-expenses': handleProcurementExpenses,
-  'customer-purchase-orders': handleCustomerPo,
-  'inventory-releases': handleInventoryReleases,
-  tenant: handleTenants,
-  tenants: handleTenants,
-  users: handleUsers,
-  'bg-jobs': handleBgJobs,
-  workspace: handleWorkspace,
-  pages: handlePages,
+type ApiHandler = (ctx: HandlerContext) => Promise<NextResponse | null>;
+
+const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
+  sandbox: async () => (await import('@/lib/api/handlers/sandbox')).handleSandbox,
+  media: async () => (await import('@/lib/api/handlers/media')).handleMedia,
+  'nav-badges': async () => (await import('@/lib/api/handlers/nav-badges')).handleNavBadges,
+  assets: async () => (await import('@/lib/api/handlers/assets')).handleAssets,
+  'maintenance-requests': async () => (await import('@/lib/api/handlers/maintenance-requests')).handleMaintenanceRequests,
+  'maintenance-service-orders': async () => (await import('@/lib/api/handlers/maintenance-service-orders')).handleMaintenanceServiceOrders,
+  'maintenance-schedules': async () => (await import('@/lib/api/handlers/maintenance-schedules')).handleMaintenanceSchedules,
+  'maintenance-reports': async () => (await import('@/lib/api/handlers/maintenance-reports')).handleMaintenanceReports,
+  'local-purchase-orders': async () => (await import('@/lib/api/handlers/local-purchase-orders')).handleLocalPurchaseOrders,
+  integrations: async () => (await import('@/lib/api/handlers/integrations')).handleIntegrations,
+  auth: async () => (await import('@/lib/api/handlers/auth')).handleAuth,
+  dashboard: async () => (await import('@/lib/api/handlers/dashboard')).handleDashboard,
+  products: async () => (await import('@/lib/api/handlers/products')).handleProducts,
+  'produk-grup': async () => (await import('@/lib/api/handlers/product-meta')).handleProductMeta,
+  'produk-satuan': async () => (await import('@/lib/api/handlers/product-meta')).handleProductMeta,
+  stok: async () => (await import('@/lib/api/handlers/inventory')).handleInventory,
+  lokasi: async () => (await import('@/lib/api/handlers/inventory')).handleInventory,
+  webhooks: async () => (await import('@/lib/api/handlers/webhooks')).handleWebhooks,
+  'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
+  sync: async () => (await import('@/lib/api/handlers/catalog-sync')).handleCatalogSync,
+  hutang: async () => (await import('@/lib/api/handlers/vendor-hutang')).handleVendorHutang,
+  'procurement-expenses': async () => (await import('@/lib/api/handlers/procurement-expenses')).handleProcurementExpenses,
+  'customer-purchase-orders': async () => (await import('@/lib/api/handlers/customer-po')).handleCustomerPo,
+  'inventory-releases': async () => (await import('@/lib/api/handlers/inventory-releases')).handleInventoryReleases,
+  tenant: async () => (await import('@/lib/api/handlers/tenants')).handleTenants,
+  tenants: async () => (await import('@/lib/api/handlers/tenants')).handleTenants,
+  users: async () => (await import('@/lib/api/handlers/users')).handleUsers,
+  'bg-jobs': async () => (await import('@/lib/api/handlers/bg-jobs')).handleBgJobs,
+  workspace: async () => (await import('@/lib/api/handlers/workspace')).handleWorkspace,
+  pages: async () => (await import('@/lib/api/handlers/pages')).handlePages,
 };
 
-const FALLBACK: ApiHandler[] = [
-  handleSandbox,
-  handleMaintenanceRequests,
-  handleMaintenanceServiceOrders,
-  handleMaintenanceSchedules,
-  handleMaintenanceReports,
-  handleAssets,
-  handleLocalPurchaseOrders,
-  handleIntegrations,
-  handleWebhooks,
-  handleGoodsReceipts,
-  handleCatalogSync,
-  handleVendorHutang,
-  handleProcurementExpenses,
-  handleCustomerPo,
-  handleInventoryReleases,
-  handleAuth,
-  handleDashboard,
-  handleProducts,
-  handleProductMeta,
-  handleInventory,
-  handleTenants,
-  handleUsers,
-  handleBgJobs,
-  handleNavBadges,
-  handleWorkspace,
-  handlePages,
-  handleMedia,
-];
+export async function dispatchRoute(ctx: HandlerContext): Promise<NextResponse | null> {
+  const seg = ctx.route.split('/').filter(Boolean)[0] || '';
+  const loader = HANDLER_LOADERS[seg];
+  if (!loader) return null;
+  const handler = await loader();
+  return handler(ctx);
+}
 
+/** @deprecated */
 export function handlersForRoute(route: string): ApiHandler[] {
-  const seg = route.split('/').filter(Boolean)[0] || '';
-  const primary = SEGMENT_HANDLERS[seg];
-  if (!primary) return FALLBACK;
-  return [primary, ...FALLBACK.filter((h) => h !== primary)];
+  void route;
+  return [];
 }

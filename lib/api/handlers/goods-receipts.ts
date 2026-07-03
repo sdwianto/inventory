@@ -63,7 +63,11 @@ export async function handleGoodsReceipts({
 
     const refreshProducts = url.searchParams.get('refreshProducts') === '1';
     if (refreshProducts && tenantId) {
-      await refreshUnresolvedGrnsForTenant(db, tenantId);
+      void enqueueJob(db, {
+        type: JOB_TYPES.GRN_RESOLVE_PRODUCTS,
+        tenantId,
+        payload: { dedupeKey: 'grn-resolve-products' },
+      }).then(() => scheduleJobProcessing(db));
     }
 
     const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });

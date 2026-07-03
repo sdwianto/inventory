@@ -7,7 +7,8 @@ import { logger } from '@/lib/api/logger';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
-import { handlersForRoute } from '@/lib/api/route-dispatch';
+import { dispatchRoute } from '@/lib/api/route-dispatch';
+import { ensureOperationalIndexes } from '@/lib/api/operational-indexes';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
@@ -68,14 +69,13 @@ async function handleRoute(request: Request, context: RouteContext) {
     }
 
     const db = await connectToMongo();
+    void ensureOperationalIndexes(db).catch(() => {});
 
     const isWorkerRoute = isWorkerProcessRoute(method, route);
     const workerAuthed = isWorkerRoute && verifyWorkerOrCronSecret(request);
 
     const isPublic = isPublicRoute(method, route);
-    if (!isPublic && !workerAuthed) {
-      await ensureSeeded(db);
-    } else if (route === '/auth/login' && method === 'POST') {
+    if (route === '/auth/login' && method === 'POST') {
       await ensureSeeded(db);
     }
 
@@ -106,14 +106,7 @@ async function handleRoute(request: Request, context: RouteContext) {
       if (replay) return replay;
     }
 
-    let handlerResponse: NextResponse | null = null;
-    for (const handler of handlersForRoute(route)) {
-      const res = await handler(ctx);
-      if (res) {
-        handlerResponse = res;
-        break;
-      }
-    }
+    const handlerResponse = await dispatchRoute(ctx);
 
     if (!handlerResponse) {
       return err(`Route ${route} not found`, 404);
