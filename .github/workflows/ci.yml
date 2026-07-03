@@ -63,3 +63,7 @@ jobs:
           APP_PORT: '3001'
           MONGO_URL: mongodb://127.0.0.1:27017
           SESSION_SECRET: ci-session-secret-min-32-characters-xx
+          MASTER_BOOTSTRAP_EMAIL: master@dawam.com
+          MASTER_BOOTSTRAP_PASSWORD: ci-e2e-bootstrap-password-min-16
+          E2E_MASTER_EMAIL: master@dawam.com
+          E2E_MASTER_PASSWORD: ci-e2e-bootstrap-password-min-16
