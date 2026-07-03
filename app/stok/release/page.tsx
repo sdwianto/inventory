@@ -242,6 +242,7 @@ function ReleaseInventoryPageContent() {
   });
 
   return (
+    <>
     <div className="p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -417,6 +418,7 @@ function ReleaseInventoryPageContent() {
           </div>
         </DialogContent>
       </Dialog>
+    </>
   );
 }
 
