@@ -35,8 +35,12 @@ async function loadLokasi(db: Db, scopeAuth: AuthContext | null, tenantId: strin
 
 async function loadTenants(db: Db) {
   const [allSettings, users] = await Promise.all([
-    db.collection('tenant_settings').find({}).toArray(),
-    db.collection('users').find({}).toArray(),
+    db.collection('tenant_settings').find({}).project({
+      tenantId: 1, companyName: 1, tenantName: 1,
+    }).toArray(),
+    db.collection('users').find({}).project({
+      tenantId: 1, tenantName: 1,
+    }).toArray(),
   ]);
   const tenantMap: Record<string, Record<string, unknown>> = {};
   for (const s of allSettings) {

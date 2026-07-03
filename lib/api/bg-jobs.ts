@@ -158,7 +158,18 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
     invoiceSyncError: null,
   });
 
-  const result = await notifyGrnPostedToSales(db, job.tenantId, grn) as Record<string, unknown>;
+  let result: Record<string, unknown>;
+  try {
+    result = await notifyGrnPostedToSales(db, job.tenantId, grn) as Record<string, unknown>;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await setGrnInvoiceSync(db, grn.id, {
+      invoiceSyncStatus: 'FAILED',
+      invoiceSyncError: msg,
+      invoiceSyncAt: new Date(),
+    });
+    return { error: msg };
+  }
 
   if ('error' in result && result.error) {
     await setGrnInvoiceSync(db, grn.id, {
@@ -185,6 +196,8 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   };
   if (result.noInvoice) patch.noInvoice = result.noInvoice;
   if (result.invoiceId) patch.vendorInvoiceId = result.invoiceId;
+  const hutang = result.hutang as Record<string, unknown> | undefined;
+  if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
   await setGrnInvoiceSync(db, grn.id, patch);
 
   return { ok: true, result };

@@ -6,6 +6,7 @@ import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 
 const GRN_STALE_MS = 60 * 60 * 1000;
+const GRN_SYNCING_STUCK_MS = 5 * 60 * 1000;
 
 export interface IntegrationReconcileDiff {
   cpoStatusMismatch: Array<{ id: string; noPO: string; status: string; lastVendorEvent?: string }>;
@@ -28,12 +29,21 @@ export async function runIntegrationReconcile(
   }).project({ id: 1, noPO: 1, status: 1, lastVendorEvent: 1 }).limit(200).toArray();
 
   const grnCutoff = new Date(Date.now() - GRN_STALE_MS);
+  const grnSyncingCutoff = new Date(Date.now() - GRN_SYNCING_STUCK_MS);
   const grnInvoiceNotDone = await db.collection('goods_receipts').find({
     ...tenantFilter,
     status: 'POSTED',
-    invoiceSyncStatus: { $in: ['PENDING', 'SYNCING', 'FAILED'] },
-    postedAt: { $lt: grnCutoff },
-  }).project({ id: 1, noGRN: 1, noDO: 1, invoiceSyncStatus: 1 }).limit(200).toArray();
+    $or: [
+      {
+        invoiceSyncStatus: 'SYNCING',
+        postedAt: { $lt: grnSyncingCutoff },
+      },
+      {
+        invoiceSyncStatus: { $in: ['PENDING', 'FAILED'] },
+        postedAt: { $lt: grnCutoff },
+      },
+    ],
+  }).project({ id: 1, noGRN: 1, noDO: 1, invoiceSyncStatus: 1, tenantId: 1 }).limit(200).toArray();
 
   const hutangMissingVendorInvoice = await db.collection('hutang').find({
     ...tenantFilter,

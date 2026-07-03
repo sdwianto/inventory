@@ -42,6 +42,8 @@ export async function postGoodsReceipt(
     grn.vendorTenantId ? String(grn.vendorTenantId) : undefined,
   );
   const canSyncInvoice = !!(salesApiKey && (grn.noDO || grn.vendorDeliveryId));
+  // Di Vercel, grn-posted inline sering timeout sebelum hutang terbentuk — pakai bg job.
+  const syncInvoiceInline = asyncInvoice === false && !process.env.VERCEL;
 
   const txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
     const stock = await applyGrnStockPosting(
@@ -120,7 +122,7 @@ export async function postGoodsReceipt(
   let invoiceSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;
 
-  if (canSyncInvoice && asyncInvoice) {
+  if (canSyncInvoice && !syncInvoiceInline) {
     const enq = await enqueueJob(db, {
       type: JOB_TYPES.GRN_INVOICE_SYNC,
       tenantId,
@@ -131,22 +133,44 @@ export async function postGoodsReceipt(
     void processJobById(db, enq.jobId);
     scheduleJobProcessing(db);
     invoiceSync = { async: true, jobId, status: 'PENDING' };
-  } else if (canSyncInvoice && !asyncInvoice) {
+  } else if (canSyncInvoice && syncInvoiceInline) {
     const { notifyGrnPostedToSales } = await import('@/lib/api/grn-notify-sales');
-    invoiceSync = await notifyGrnPostedToSales(db, tenantId, posted) as Record<string, unknown>;
+    try {
+      invoiceSync = await notifyGrnPostedToSales(db, tenantId, posted) as Record<string, unknown>;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error('grn_invoice_sync_inline_exception', { tenantId, grnId: grn.id, error: msg });
+      invoiceSync = { error: msg };
+    }
+
     const patch: Record<string, unknown> = { invoiceSyncAt: new Date() };
     if ('error' in invoiceSync && invoiceSync.error) {
       patch.invoiceSyncStatus = 'FAILED';
       patch.invoiceSyncError = invoiceSync.error;
+      const enq = await enqueueJob(db, {
+        type: JOB_TYPES.GRN_INVOICE_SYNC,
+        tenantId,
+        grnId: grn.id,
+        payload: { noGRN: grn.noGRN, noDO: grn.noDO, retryAfterInline: true },
+      });
+      jobId = enq.jobId;
+      void processJobById(db, enq.jobId);
+      scheduleJobProcessing(db);
+      invoiceSync = { ...invoiceSync, async: true, jobId: enq.jobId, status: 'PENDING' };
     } else if (invoiceSync.skipped) {
       patch.invoiceSyncStatus = 'SKIPPED';
+      patch.invoiceSyncError = invoiceSync.reason || null;
     } else {
       patch.invoiceSyncStatus = 'DONE';
       if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;
+      if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
+      const hutang = invoiceSync.hutang as Record<string, unknown> | undefined;
+      if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
     }
     await db.collection('goods_receipts').updateOne({ id: grn.id }, { $set: patch });
     posted.invoiceSyncStatus = String(patch.invoiceSyncStatus);
     if (patch.noInvoice) posted.noInvoice = String(patch.noInvoice);
+    if (patch.hutangId) posted.hutangId = String(patch.hutangId);
   }
 
   logger.info('grn_posted', { tenantId, grnId: grn.id, noGRN: grn.noGRN, noDO: grn.noDO });
