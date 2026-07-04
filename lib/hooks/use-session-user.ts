@@ -1,19 +1,28 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getUser } from '@/lib/auth-client';
 import type { SessionUser } from '@/types/auth';
 
 export function useSessionUser(): SessionUser | null {
-  const [user] = useState(() => getUser());
+  const [user, setUser] = useState<SessionUser | null>(null);
+
+  useEffect(() => {
+    setUser(getUser());
+  }, []);
+
   return user;
 }
 
 export function useSessionUserWithTenantFilter(defaultTenant = 'default') {
-  const [user] = useState(() => getUser());
-  const [filterTenantId, setFilterTenantId] = useState(() => {
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [filterTenantId, setFilterTenantId] = useState(defaultTenant);
+
+  useEffect(() => {
     const u = getUser();
-    return u?.role !== 'MASTER' ? String(u?.tenantId || defaultTenant) : '';
-  });
+    setUser(u);
+    setFilterTenantId(u?.role !== 'MASTER' ? String(u?.tenantId || defaultTenant) : '');
+  }, [defaultTenant]);
+
   return { user, filterTenantId, setFilterTenantId };
 }

@@ -24,6 +24,7 @@ import {
   mergeFormLinesFromPo,
   emptyPoLine,
   formatPoVendorSoDisplay,
+  isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
@@ -53,6 +54,7 @@ export function useCustomerPoPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const autoSyncBusy = useRef(false);
+  const autoSyncCooldownUntil = useRef(0);
   const [vendorSyncJobId, setVendorSyncJobId] = useState<string | null>(null);
   const { data: vendorSyncJob } = useBgJob(vendorSyncJobId);
   const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
@@ -128,7 +130,11 @@ export function useCustomerPoPage() {
   }, [vendorNameMap, products]);
 
   const pendingVendorSyncCount = useMemo(
-    () => (Array.isArray(list) ? list : []).filter((p) => p.status === 'APPROVED' && p.vendorSyncPending !== false).length,
+    () => (Array.isArray(list) ? list : []).filter(
+      (p) => !isPendingOptimisticPo(p)
+        && p.status === 'APPROVED'
+        && p.vendorSyncPending !== false,
+    ).length,
     [list],
   );
 
@@ -147,6 +153,9 @@ export function useCustomerPoPage() {
           invalidateOperationalCaches(queryClient);
           const labels = syncedRows.map((s) => str(s.noPO)).filter(Boolean).join(', ');
           toast.success(`${syncedRows.length} PO terkirim otomatis ke vendor`, { description: labels });
+        } else {
+          void reloadList();
+          autoSyncCooldownUntil.current = Date.now() + 60_000;
         }
         setVendorSyncJobId(null);
         autoSyncBusy.current = false;
@@ -154,6 +163,7 @@ export function useCustomerPoPage() {
         toast.warning(String(vendorSyncJob.lastError || asObject(vendorSyncJob.result).error || 'Sync PO vendor gagal'));
         setVendorSyncJobId(null);
         autoSyncBusy.current = false;
+        autoSyncCooldownUntil.current = Date.now() + 60_000;
       }
     }, 0);
     return () => clearTimeout(t);
@@ -161,6 +171,7 @@ export function useCustomerPoPage() {
 
   const runAutoVendorSync = useCallback(async () => {
     if (autoSyncBusy.current) return;
+    if (Date.now() < autoSyncCooldownUntil.current) return;
     autoSyncBusy.current = true;
     let startedAsyncJob = false;
     try {
@@ -169,7 +180,9 @@ export function useCustomerPoPage() {
         offlineLabel: 'Sync PO pending ke vendor',
       }) as JsonObject;
       if (data.jobId) {
-        toast.info('PO antrian dikirim ke background');
+        if (!data.reused) {
+          toast.info('PO antrian dikirim ke background');
+        }
         setVendorSyncJobId(String(data.jobId));
         startedAsyncJob = true;
         return;
@@ -192,11 +205,13 @@ export function useCustomerPoPage() {
 
   useEffect(() => {
     if (!user || pendingVendorSyncCount === 0) return undefined;
+    if (vendorSyncJobId) return undefined;
+    if (Date.now() < autoSyncCooldownUntil.current) return undefined;
     const t = setTimeout(() => {
       void runAutoVendorSync();
-    }, 0);
+    }, 800);
     return () => clearTimeout(t);
-  }, [user, pendingVendorSyncCount, runAutoVendorSync]);
+  }, [user, pendingVendorSyncCount, vendorSyncJobId, runAutoVendorSync]);
 
   const filteredList = useMemo(() => {
     const rows = Array.isArray(list) ? list : [];
@@ -223,6 +238,7 @@ export function useCustomerPoPage() {
   };
 
   const canEditPo = (po: JsonObject) => {
+    if (isPendingOptimisticPo(po)) return false;
     const status = str(po.status);
     if (!po || !['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
     if (canApprove) return true;
@@ -334,6 +350,7 @@ export function useCustomerPoPage() {
       };
       const optimisticRow: JsonObject = {
         id: `temp-${Date.now()}`,
+        _optimistic: true,
         noPO: '…',
         status: 'DRAFT',
         approvalStatus: 'DRAFT',
@@ -517,6 +534,8 @@ export function useCustomerPoPage() {
     canDirectSubmit,
     canApprove,
     pendingVendorSyncCount,
+    runAutoVendorSync,
+    vendorSyncJobId,
     month,
     setMonth,
     selectedDate,

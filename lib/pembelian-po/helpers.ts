@@ -49,6 +49,12 @@ export function emptyPoLine(): JsonObject {
   return { localStokId: '', qty: 1, estimasiHarga: '', estimasiManual: false };
 }
 
+/** Baris PO optimistik di UI — belum punya id server. */
+export function isPendingOptimisticPo(po: JsonObject | null | undefined): boolean {
+  const id = str(po?.id);
+  return id.startsWith('temp-') || po?._optimistic === true;
+}
+
 function vendorLabel(vendorTenantId: string, vendorNameById: Record<string, string>): string {
   const vid = vendorTenantId.trim();
   if (!vid) return 'Vendor';

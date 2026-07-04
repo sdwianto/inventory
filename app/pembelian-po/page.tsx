@@ -23,6 +23,8 @@ function CustomerPoPageContent() {
     canDirectSubmit,
     canApprove,
     pendingVendorSyncCount,
+    runAutoVendorSync,
+    vendorSyncJobId,
     month,
     setMonth,
     selectedDate,
@@ -84,13 +86,24 @@ function CustomerPoPageContent() {
             {pendingVendorSyncCount > 0 && (
               <p className="text-xs text-emerald-700 mt-1 flex items-center gap-1">
                 <RefreshCw className="w-3 h-3" />
-                {pendingVendorSyncCount} PO menunggu — gunakan tombol Sync Vendor untuk kirim ke sales.app
+                {pendingVendorSyncCount} PO menunggu kirim ke sales.app
               </p>
             )}
           </div>
           {canCreate && (
             <Button onClick={() => openCreate(selectedDate || new Date())} className="bg-orange-500 hover:bg-orange-600">
               <Plus className="w-4 h-4 mr-1" /> Buat PO
+            </Button>
+          )}
+          {pendingVendorSyncCount > 0 && canApprove && (
+            <Button
+              variant="outline"
+              className="border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+              onClick={() => void runAutoVendorSync()}
+              disabled={!!vendorSyncJobId}
+            >
+              <RefreshCw className={`w-4 h-4 mr-1 ${vendorSyncJobId ? 'animate-spin' : ''}`} />
+              Sync Vendor
             </Button>
           )}
         </div>

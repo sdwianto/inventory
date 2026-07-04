@@ -23,9 +23,8 @@ function formatLabel(row: OfflineMutation) {
 }
 
 export default function OfflineIndicator() {
-  const [online, setOnline] = useState(() => (
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  ));
+  const [mounted, setMounted] = useState(false);
+  const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
   const [items, setItems] = useState<OfflineMutation[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -65,6 +64,8 @@ export default function OfflineIndicator() {
   }, [refreshPending]);
 
   useEffect(() => {
+    setMounted(true);
+    setOnline(navigator.onLine);
     refreshPending();
 
     const handleOnline = () => {
@@ -135,7 +136,7 @@ export default function OfflineIndicator() {
     });
   };
 
-  if (online && pending === 0) return null;
+  if (!mounted || (online && pending === 0)) return null;
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 no-print">

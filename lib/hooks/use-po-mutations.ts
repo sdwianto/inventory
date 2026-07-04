@@ -3,6 +3,13 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
 import { fetchOrQueue, OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
+
+function assertPersistedPoId(id: string) {
+  if (isPendingOptimisticPo({ id })) {
+    throw new Error('PO masih disimpan — tunggu sebentar lalu coba lagi');
+  }
+}
 
 function patchPoList(
   list: JsonObject[],
@@ -25,6 +32,7 @@ export function usePoMutations(
     optimisticPatch: Record<string, unknown>,
     run: () => Promise<Response>,
   ) => {
+    assertPersistedPoId(id);
     let snapshot: JsonObject[] = [];
     setList((prev) => {
       snapshot = prev;
@@ -131,6 +139,12 @@ export function usePoMutations(
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal');
+      if (optimisticRow) {
+        setList((prev) => {
+          const withoutTemp = prev.filter((row) => String(row.id) !== String(optimisticRow.id));
+          return prependPoToList(withoutTemp, data as JsonObject);
+        });
+      }
       await reload();
       return data;
     } catch (e) {

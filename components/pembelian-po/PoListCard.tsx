@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
-import { poCreatorLabel, formatPoVendorSoDisplay } from '@/lib/pembelian-po/helpers';
+import { poCreatorLabel, formatPoVendorSoDisplay, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
 
 export type PoListCardProps = {
   po: JsonObject;
@@ -50,6 +50,7 @@ export default function PoListCard({
   onReject,
 }: PoListCardProps) {
   const poId = str(po.id);
+  const isOptimistic = isPendingOptimisticPo(po);
   const arrival = getPoArrivalDate(po);
   const poStatus = str(po.status);
   const vendorSoLabel = formatPoVendorSoDisplay(po, vendorNameById);
@@ -78,7 +79,7 @@ export default function PoListCard({
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-xs font-semibold">{str(po.noPO)}</span>
               <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${PO_STATUS_STYLE[poStatus as keyof typeof PO_STATUS_STYLE] || PO_STATUS_STYLE.DRAFT}`}>
-                {poStatus}
+                {isOptimistic ? 'MENYIMPAN' : poStatus}
               </span>
             </div>
             <div className="text-xs text-slate-500 mt-0.5">
@@ -92,13 +93,13 @@ export default function PoListCard({
             </div>
           </div>
         </button>
-        {canEdit && (
+        {canEdit && !isOptimistic && (
           <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit}>
             <Pencil className="w-3 h-3 mr-1" />
             Edit
           </Button>
         )}
-        {poStatus === 'DRAFT' && canRequest && (
+        {poStatus === 'DRAFT' && canRequest && !isOptimistic && (
           user?.role !== 'GUDANG' || str(createdBy.userId) === str(user?.id)
         ) && (
           <Button
@@ -112,7 +113,7 @@ export default function PoListCard({
             {isSubmitting ? '...' : 'Ajukan'}
           </Button>
         )}
-        {poStatus === 'DRAFT' && canDirectSubmit && (
+        {poStatus === 'DRAFT' && canDirectSubmit && !isOptimistic && (
           <Button size="sm" className="shrink-0" onClick={onSubmit} disabled={isSubmitting}>
             <Send className="w-3 h-3 mr-1" />
             {isSubmitting ? '...' : 'Kirim'}

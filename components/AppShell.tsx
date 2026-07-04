@@ -153,7 +153,7 @@ function filterByRole(items: NavEntry[], role: string): NavEntry[] {
 export default function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUserState] = useState<SessionUser | null>(() => getUser());
+  const [user, setUserState] = useState<SessionUser | null>(null);
   const [now, setNow] = useState(new Date());
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
@@ -195,6 +195,9 @@ export default function AppShell({ children }: AppShellProps) {
   }, [user, wsTenantLabel, scopeId, lokasiList, branding]);
 
   useEffect(() => {
+    const cached = getUser();
+    if (cached) setUserState(cached);
+
     syncSessionUser().then((synced) => {
       if (!synced) {
         router.replace('/');
@@ -327,7 +330,13 @@ export default function AppShell({ children }: AppShellProps) {
     router.replace('/');
   };
 
-  if (!user) return null;
+  if (!user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+      </div>
+    );
+  }
 
   const visibleNav = filterByRole(NAV, user.role);
 
