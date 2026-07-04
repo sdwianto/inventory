@@ -7,6 +7,7 @@ import {
   getSalesDbName,
   isSandboxResetUiEnabled,
   SANDBOX_CONFIRM_PHRASE,
+  usesDedicatedSalesMongo,
 } from '@/lib/api/sandbox-config';
 import {
   previewSandboxPurge,
@@ -37,6 +38,10 @@ export async function handleSandbox({
       confirmPhrase: SANDBOX_CONFIRM_PHRASE,
       inventoryDbName: db.databaseName,
       salesDbName: getSalesDbName(),
+      salesUsesDedicatedMongo: usesDedicatedSalesMongo(),
+      salesMongoHint: usesDedicatedSalesMongo()
+        ? null
+        : 'Jika reset sales tidak bersih, set SALES_MONGO_URL di Vercel (sama dengan MONGO_URL app Sales) + redeploy.',
       keepHint: SANDBOX_KEEP_HINT,
     });
   }

@@ -29,3 +29,20 @@ export function getSandboxResetBlockReason(): string | null {
 export function getSalesDbName(): string {
   return process.env.SALES_DB_NAME || 'kasir_db';
 }
+
+/** URI MongoDB untuk app Sales — bisa cluster berbeda dari inventory. */
+export function getSalesMongoUri(): string {
+  return (
+    process.env.SALES_MONGO_URL?.trim()
+    || process.env.MONGO_URL?.trim()
+    || process.env.MONGODB_URI?.trim()
+    || ''
+  );
+}
+
+export function usesDedicatedSalesMongo(): boolean {
+  const dedicated = process.env.SALES_MONGO_URL?.trim();
+  if (!dedicated) return false;
+  const shared = process.env.MONGO_URL?.trim() || process.env.MONGODB_URI?.trim() || '';
+  return dedicated !== shared;
+}

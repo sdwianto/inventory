@@ -45,6 +45,8 @@ type StatusResponse = {
   confirmPhrase: string;
   inventoryDbName: string;
   salesDbName: string;
+  salesUsesDedicatedMongo?: boolean;
+  salesMongoHint?: string | null;
   keepHint: string[];
 };
 
@@ -269,6 +271,11 @@ export default function SandboxResetPage() {
                   <> · Sales DB: <b>{status?.salesDbName || '…'}</b></>
                 )}
               </div>
+              {includeSales && status?.salesMongoHint && !status.salesUsesDedicatedMongo && (
+                <div className="text-xs text-amber-800 bg-amber-100/80 rounded px-2 py-1">
+                  {status.salesMongoHint}
+                </div>
+              )}
               <div className="text-xs text-amber-800">
                 Tetap dipertahankan: {status?.keepHint?.slice(0, 8).join(', ')}…
               </div>
