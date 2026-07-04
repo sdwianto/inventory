@@ -2,16 +2,19 @@ import { after } from 'next/server';
 import type { NextResponse } from 'next/server';
 import { ok, err, getMongoClient, connectToMongo } from '@/lib/api/db';
 import { requireMaster } from '@/lib/api/require-auth';
+import { verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 import {
   getSandboxResetBlockReason,
   getSalesDbName,
+  getWorkerSandboxBlockReason,
   isSandboxResetUiEnabled,
   SANDBOX_CONFIRM_PHRASE,
-  usesDedicatedSalesMongo,
 } from '@/lib/api/sandbox-config';
 import {
   previewSandboxPurge,
+  purgeSandboxDatabase,
   SANDBOX_KEEP_HINT,
+  salesRemotePurgeConfigured,
   summarizeSandboxCounts,
 } from '@/lib/api/sandbox-purge';
 import { enqueueJob, processJobById, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
@@ -25,23 +28,63 @@ export async function handleSandbox({
   url,
   body,
   auth,
+  request,
 }: HandlerContext): Promise<NextResponse | null> {
   if (!route.startsWith('/sandbox')) return null;
+
+  // Worker routes — dipanggil inventory → sales.app (SALES_APP_URL + WORKER_SECRET).
+  if (route === '/sandbox/worker-preview' && method === 'GET') {
+    if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    const workerBlock = getWorkerSandboxBlockReason();
+    if (workerBlock) return err(workerBlock, 403);
+    const tenantId = url.searchParams.get('tenantId')?.trim() || undefined;
+    const result = await purgeSandboxDatabase(db, 'sales', db.databaseName, tenantId, false);
+    return ok({
+      ...result,
+      summary: summarizeSandboxCounts(result),
+    });
+  }
+
+  if (route === '/sandbox/worker-purge' && method === 'POST') {
+    if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    const workerBlock = getWorkerSandboxBlockReason();
+    if (workerBlock) return err(workerBlock, 403);
+    const payload = parseHandlerBody(body);
+    const tenantId = String(payload.tenantId || '').trim() || undefined;
+    const result = await purgeSandboxDatabase(db, 'sales', db.databaseName, tenantId, true);
+    return ok({
+      ...result,
+      summary: summarizeSandboxCounts(result),
+    });
+  }
 
   if (route === '/sandbox/status' && method === 'GET') {
     const denied = requireMaster(auth);
     if (denied) return denied;
     const blockReason = getSandboxResetBlockReason();
+    let salesWorkerReady: boolean | null = null;
+    if (salesRemotePurgeConfigured()) {
+      try {
+        const base = String(process.env.SALES_APP_URL || '').replace(/\/$/, '');
+        const secret = (process.env.WORKER_SECRET || '').trim();
+        const res = await fetch(`${base}/api/sandbox/worker-preview`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${secret}` },
+          signal: AbortSignal.timeout(8_000),
+        });
+        salesWorkerReady = res.ok;
+      } catch {
+        salesWorkerReady = false;
+      }
+    }
     return ok({
       enabled: isSandboxResetUiEnabled() && !blockReason,
       blockReason,
       confirmPhrase: SANDBOX_CONFIRM_PHRASE,
       inventoryDbName: db.databaseName,
       salesDbName: getSalesDbName(),
-      salesUsesDedicatedMongo: usesDedicatedSalesMongo(),
-      salesMongoHint: usesDedicatedSalesMongo()
-        ? null
-        : 'Jika reset sales tidak bersih, set SALES_MONGO_URL di Vercel (sama dengan MONGO_URL app Sales) + redeploy.',
+      salesPurgeVia: salesRemotePurgeConfigured() ? 'SALES_APP_URL' : 'MONGO_URL',
+      salesWorkerReady,
       keepHint: SANDBOX_KEEP_HINT,
     });
   }
@@ -61,6 +104,7 @@ export async function handleSandbox({
       tenantId: tenantId || null,
       scope: tenantId ? 'tenant' : 'all',
       includeSales,
+      salesPurgeVia: salesRemotePurgeConfigured() ? 'SALES_APP_URL' : 'MONGO_URL',
       inventory: {
         ...result.inventory,
         summary: summarizeSandboxCounts(result.inventory),
@@ -87,7 +131,6 @@ export async function handleSandbox({
       payload: { tenantId, includeSales },
     });
 
-    // Vercel: purge bisa >60s — jangan blokir response HTTP (hindari 504).
     after(async () => {
       const freshDb = await connectToMongo();
       await processJobById(freshDb, jobId);

@@ -45,8 +45,8 @@ type StatusResponse = {
   confirmPhrase: string;
   inventoryDbName: string;
   salesDbName: string;
-  salesUsesDedicatedMongo?: boolean;
-  salesMongoHint?: string | null;
+  salesPurgeVia?: string;
+  salesWorkerReady?: boolean | null;
   keepHint: string[];
 };
 
@@ -268,12 +268,18 @@ export default function SandboxResetPage() {
               <div>
                 Inventory DB: <b>{status?.inventoryDbName || '…'}</b>
                 {includeSales && (
-                  <> · Sales DB: <b>{status?.salesDbName || '…'}</b></>
+                  <> · Sales DB: <b>{status?.salesDbName || '…'}</b>
+                    {status?.salesPurgeVia === 'SALES_APP_URL' && (
+                      <span className="text-xs text-slate-500"> (via sales.app API)</span>
+                    )}
+                  </>
                 )}
               </div>
-              {includeSales && status?.salesMongoHint && !status.salesUsesDedicatedMongo && (
+              {includeSales && status?.salesWorkerReady === false && (
                 <div className="text-xs text-amber-800 bg-amber-100/80 rounded px-2 py-1">
-                  {status.salesMongoHint}
+                  sales.app belum siap menerima purge worker — deploy route{' '}
+                  <code className="font-mono">/api/sandbox/worker-purge</code> di project Sales
+                  dan set <code className="font-mono">ALLOW_SANDBOX_RESET=1</code> di env Sales.
                 </div>
               )}
               <div className="text-xs text-amber-800">

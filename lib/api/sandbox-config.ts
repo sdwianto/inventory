@@ -30,19 +30,10 @@ export function getSalesDbName(): string {
   return process.env.SALES_DB_NAME || 'kasir_db';
 }
 
-/** URI MongoDB untuk app Sales — bisa cluster berbeda dari inventory. */
-export function getSalesMongoUri(): string {
-  return (
-    process.env.SALES_MONGO_URL?.trim()
-    || process.env.MONGO_URL?.trim()
-    || process.env.MONGODB_URI?.trim()
-    || ''
-  );
-}
-
-export function usesDedicatedSalesMongo(): boolean {
-  const dedicated = process.env.SALES_MONGO_URL?.trim();
-  if (!dedicated) return false;
-  const shared = process.env.MONGO_URL?.trim() || process.env.MONGODB_URI?.trim() || '';
-  return dedicated !== shared;
+/** Worker purge (server-to-server) — tidak perlu ENABLE_SANDBOX_RESET_UI. */
+export function getWorkerSandboxBlockReason(): string | null {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SANDBOX_RESET !== '1') {
+    return 'Production: set ALLOW_SANDBOX_RESET=1 untuk purge sandbox via worker.';
+  }
+  return null;
 }

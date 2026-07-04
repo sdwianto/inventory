@@ -1,5 +1,10 @@
 import type { Db, MongoClient } from 'mongodb';
-import { connectSalesMongo, closeSalesMongo } from '@/lib/api/sandbox-sales-db';
+import { getSalesDbName } from '@/lib/api/sandbox-config';
+import {
+  executeSalesSandboxRemote,
+  previewSalesSandboxRemote,
+  salesRemotePurgeConfigured,
+} from '@/lib/api/sandbox-purge-sales-remote';
 
 /** Koleksi transaksi — urutan: anak dulu, induk belakangan (sama dengan scripts/purge-transactions.mjs). */
 export const SANDBOX_TRANSACTION_COLLECTIONS = [
@@ -88,21 +93,18 @@ function tenantQuery(tenantId?: string): Record<string, string> {
   return { tenantId: tid };
 }
 
-async function collectionExists(db: Db, name: string): Promise<boolean> {
-  const cols = await db.listCollections({ name }).toArray();
-  return cols.length > 0;
-}
-
 async function countCollection(db: Db, name: string, tenantId?: string): Promise<number | null> {
   try {
-    if (!(await collectionExists(db, name))) return null;
+    const cols = await db.listCollections({ name }).toArray();
+    if (!cols.length) return null;
     return db.collection(name).countDocuments(tenantQuery(tenantId));
   } catch {
     return null;
   }
 }
 
-async function purgeDb(
+/** Purge satu database MongoDB (inventory lokal atau fallback sales). */
+export async function purgeSandboxDatabase(
   db: Db,
   label: string,
   dbName: string,
@@ -163,6 +165,49 @@ async function purgeDb(
   return { label, dbName, counts };
 }
 
+async function purgeSalesLocal(
+  client: MongoClient,
+  tenantId: string | undefined,
+  confirm: boolean,
+): Promise<SandboxDbResult> {
+  const salesDb = client.db(getSalesDbName());
+  return purgeSandboxDatabase(
+    salesDb,
+    'sales',
+    salesDb.databaseName,
+    tenantId,
+    confirm,
+  );
+}
+
+async function previewSalesPurge(
+  client: MongoClient,
+  tenantId?: string,
+): Promise<SandboxDbResult> {
+  if (salesRemotePurgeConfigured()) {
+    const remote = await previewSalesSandboxRemote(tenantId);
+    if (remote?.ok) return remote.result;
+    if (remote && !remote.notFound && remote.status !== 0) {
+      throw new Error(remote.error);
+    }
+  }
+  return purgeSalesLocal(client, tenantId, false);
+}
+
+async function executeSalesPurge(
+  client: MongoClient,
+  tenantId?: string,
+): Promise<SandboxDbResult> {
+  if (salesRemotePurgeConfigured()) {
+    const remote = await executeSalesSandboxRemote(tenantId);
+    if (remote?.ok) return remote.result;
+    if (remote && !remote.notFound && remote.status !== 0) {
+      throw new Error(`Purge sales.app gagal: ${remote.error}`);
+    }
+  }
+  return purgeSalesLocal(client, tenantId, true);
+}
+
 export async function previewSandboxPurge(
   inventoryDb: Db,
   client: MongoClient,
@@ -170,27 +215,20 @@ export async function previewSandboxPurge(
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
   const { tenantId, includeSales = true } = options;
 
+  const inventory = await purgeSandboxDatabase(
+    inventoryDb,
+    'inventory',
+    inventoryDb.databaseName,
+    tenantId,
+    false,
+  );
+
   if (!includeSales) {
-    const inventory = await purgeDb(
-      inventoryDb,
-      'inventory',
-      inventoryDb.databaseName,
-      tenantId,
-      false,
-    );
     return { inventory, sales: null };
   }
 
-  const salesHandle = await connectSalesMongo(client);
-  try {
-    const [inventory, sales] = await Promise.all([
-      purgeDb(inventoryDb, 'inventory', inventoryDb.databaseName, tenantId, false),
-      purgeDb(salesHandle.db, 'sales', salesHandle.db.databaseName, tenantId, false),
-    ]);
-    return { inventory, sales };
-  } finally {
-    await closeSalesMongo(salesHandle);
-  }
+  const sales = await previewSalesPurge(client, tenantId);
+  return { inventory, sales };
 }
 
 export async function executeSandboxPurge(
@@ -200,27 +238,20 @@ export async function executeSandboxPurge(
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
   const { tenantId, includeSales = true } = options;
 
+  const inventory = await purgeSandboxDatabase(
+    inventoryDb,
+    'inventory',
+    inventoryDb.databaseName,
+    tenantId,
+    true,
+  );
+
   if (!includeSales) {
-    const inventory = await purgeDb(
-      inventoryDb,
-      'inventory',
-      inventoryDb.databaseName,
-      tenantId,
-      true,
-    );
     return { inventory, sales: null };
   }
 
-  const salesHandle = await connectSalesMongo(client);
-  try {
-    const [inventory, sales] = await Promise.all([
-      purgeDb(inventoryDb, 'inventory', inventoryDb.databaseName, tenantId, true),
-      purgeDb(salesHandle.db, 'sales', salesHandle.db.databaseName, tenantId, true),
-    ]);
-    return { inventory, sales };
-  } finally {
-    await closeSalesMongo(salesHandle);
-  }
+  const sales = await executeSalesPurge(client, tenantId);
+  return { inventory, sales };
 }
 
 export function summarizeSandboxCounts(result: SandboxDbResult): {
@@ -256,6 +287,7 @@ export async function runSandboxResetJob(
     tenantId: options.tenantId || null,
     scope: options.tenantId ? 'tenant' : 'all',
     includeSales: options.includeSales !== false,
+    salesPurgeMode: salesRemotePurgeConfigured() ? 'remote' : 'mongo',
     inventory: {
       ...result.inventory,
       summary: summarizeSandboxCounts(result.inventory),
@@ -265,3 +297,5 @@ export async function runSandboxResetJob(
       : null,
   };
 }
+
+export { salesRemotePurgeConfigured };

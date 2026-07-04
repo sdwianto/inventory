@@ -6,6 +6,18 @@ export function isWorkerProcessRoute(method: string, route: string): boolean {
   return route === '/bg-jobs/process' && (method === 'POST' || method === 'GET');
 }
 
+/** Dipanggil inventory → sales.app (SALES_APP_URL + WORKER_SECRET). */
+export function isWorkerSandboxRoute(method: string, route: string): boolean {
+  return (
+    (route === '/sandbox/worker-preview' && method === 'GET') ||
+    (route === '/sandbox/worker-purge' && method === 'POST')
+  );
+}
+
+export function isWorkerRoute(method: string, route: string): boolean {
+  return isWorkerProcessRoute(method, route) || isWorkerSandboxRoute(method, route);
+}
+
 export function verifyWorkerOrCronSecret(request: Request | undefined): boolean {
   if (!request) return false;
   const workerSecret = (process.env.WORKER_SECRET || '').trim();

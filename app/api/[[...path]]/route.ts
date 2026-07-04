@@ -12,7 +12,7 @@ import { ensureOperationalIndexes } from '@/lib/api/operational-indexes';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
-import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import { isWorkerRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 import {
   isIdempotentMutation,
   readIdempotencyKey,
@@ -77,8 +77,8 @@ async function handleRoute(request: Request, context: RouteContext) {
     const db = await connectToMongo();
     void ensureOperationalIndexes(db).catch(() => {});
 
-    const isWorkerRoute = isWorkerProcessRoute(method, route);
-    const workerAuthed = isWorkerRoute && verifyWorkerOrCronSecret(request);
+    const isWorker = isWorkerRoute(method, route);
+    const workerAuthed = isWorker && verifyWorkerOrCronSecret(request);
 
     const isPublic = isPublicRoute(method, route);
     if (route === '/auth/login' && method === 'POST') {
