@@ -7,6 +7,7 @@ import { ok, err, clean } from '@/lib/api/db';
 import { secureCompare } from '@/lib/api/secure-compare';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { getIntegrationConfig, getSetupToken } from '@/lib/api/integration-config';
+import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
 import {
   listActiveLinksForCustomer,
   upsertIntegrationLink,
@@ -180,7 +181,7 @@ export async function handleIntegrations({
     const { runPlatformPair } = await import('@/lib/api/platform-pair');
     const result = await runPlatformPair(db, {
       customerTenantId: String(intBody.customerTenantId || ''),
-      salesAppUrl: String(intBody.salesAppUrl || 'http://localhost:3000'),
+      salesAppUrl: resolveEffectiveSalesAppUrl(String(intBody.salesAppUrl || '')),
       salesApiKey: String(intBody.salesApiKey || ''),
       webhookSecret: String(intBody.webhookSecret || ''),
       autoSyncCatalog: intBody.autoSyncCatalog !== false,
@@ -236,7 +237,7 @@ export async function handleIntegrations({
     const salesApiKey = String(intBody.salesApiKey || '').trim();
     const webhookSecret = String(intBody.webhookSecret || '').trim();
     const vendorTenantId = String(intBody.vendorTenantId || 'default').trim();
-    const salesAppUrl = String(intBody.salesAppUrl || 'http://localhost:3000').replace(/\/$/, '');
+    const salesAppUrl = resolveEffectiveSalesAppUrl(String(intBody.salesAppUrl || ''));
     if (!salesApiKey || !webhookSecret) return err('salesApiKey dan webhookSecret wajib', 400);
 
     const now = new Date();

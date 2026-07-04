@@ -2,8 +2,10 @@ import type { Db } from 'mongodb';
 import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
-import { processPendingJobs, getJobById, enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { processPendingJobs, getJobById, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
 import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import { requireRole } from '@/lib/api/require-auth';
+import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
 import type { HandlerContext } from '@/types/api/handler';
 
 function isWorkerReconcileRoute(method: string, route: string): boolean {
@@ -43,12 +45,24 @@ export async function handleBgJobs({
   if (isWorkerProcessRoute(method, route)) {
     // Fail closed: hanya worker/cron dengan secret valid — tanpa fallback session.
     if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    const recovered = await recoverStaleRunningJobs(db);
     const results = await processPendingJobs(db, { limit: 15 });
     return ok({
+      recoveredStaleRunning: recovered,
       processed: results.length,
       results,
       at: new Date().toISOString(),
     });
+  }
+
+  if (route === '/bg-jobs/repair-procurement' && method === 'POST') {
+    const deniedRole = requireRole(auth, ['MASTER', 'ADMIN', 'OWNER']);
+    if (deniedRole) return deniedRole;
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Tenant operasional wajib', 400);
+    const result = await runProcurementRepair(db, tenantId);
+    return ok({ message: 'Perbaikan procurement selesai', ...result });
   }
 
   if (path[0] === 'bg-jobs' && path.length === 2 && method === 'GET') {

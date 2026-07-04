@@ -30,6 +30,7 @@ export const JOB_TYPES = {
 
 const MAX_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 30_000;
+export const STALE_RUNNING_MS = 15 * 60 * 1000;
 
 /** Backoff eksponensial: 30s, 60s, 120s. */
 function retryDelayMs(attempts: number): number {
@@ -384,6 +385,66 @@ export async function processJob(db: Db, job: BgJob) {
   return outcome;
 }
 
+/** Reset job RUNNING yang menggantung (worker mati di tengah proses). */
+export async function recoverStaleRunningJobs(
+  db: Db,
+  { maxAgeMs = STALE_RUNNING_MS } = {},
+): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const res = await db.collection('bg_jobs').updateMany(
+    {
+      status: 'RUNNING',
+      $or: [
+        { updatedAt: { $lt: cutoff } },
+        { startedAt: { $lt: cutoff } },
+      ],
+    },
+    {
+      $set: {
+        status: 'PENDING',
+        nextRunAt: new Date(),
+        updatedAt: new Date(),
+        lastError: 'Recovered from stale RUNNING (worker timeout)',
+      },
+    },
+  );
+  return res.modifiedCount;
+}
+
+/** Re-queue dead-letter jobs untuk retry setelah perbaikan integrasi. */
+export async function requeueDeadLetterJobs(
+  db: Db,
+  {
+    types = null,
+    tenantId = null,
+    lastErrorIncludes = null,
+  }: {
+    types?: string[] | null;
+    tenantId?: string | null;
+    lastErrorIncludes?: string | null;
+  } = {},
+): Promise<number> {
+  const filter: Record<string, unknown> = { status: 'FAILED', deadLetter: true };
+  if (types?.length) filter.type = { $in: types };
+  if (tenantId) filter.tenantId = normalizeTenantId(tenantId);
+  if (lastErrorIncludes) {
+    filter.lastError = { $regex: lastErrorIncludes, $options: 'i' };
+  }
+
+  const res = await db.collection('bg_jobs').updateMany(filter, {
+    $set: {
+      status: 'PENDING',
+      deadLetter: false,
+      attempts: 0,
+      nextRunAt: new Date(),
+      updatedAt: new Date(),
+      startedAt: null,
+      finishedAt: null,
+    },
+  });
+  return res.modifiedCount;
+}
+
 /** Jalankan satu job segera — dipakai GRN invoice agar tidak antri di scheduler. */
 export async function processJobById(db: Db, jobId: string) {
   const row = await db.collection('bg_jobs').findOne({ id: jobId });
@@ -398,6 +459,8 @@ export async function processPendingJobs(
   { limit = 5, types = null }: { limit?: number; types?: string[] | null } = {},
 ) {
   await ensureBgJobIndexes(db);
+  const recovered = await recoverStaleRunningJobs(db);
+
   const filter: Record<string, unknown> = {
     status: 'PENDING',
     $or: [
@@ -423,6 +486,9 @@ export async function processPendingJobs(
   });
 
   const results: Record<string, unknown>[] = [];
+  if (recovered > 0) {
+    results.push({ recoveredStaleRunning: recovered });
+  }
   for (const jobRow of jobs) {
     const job = jobRow as unknown as BgJob;
     results.push({ jobId: job.id, ...(await processJob(db, job)) });

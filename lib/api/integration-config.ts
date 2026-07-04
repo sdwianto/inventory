@@ -2,6 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
+import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
 import {
   getSalesApiKeyForVendor,
   listActiveLinksForCustomer,
@@ -68,12 +69,9 @@ export async function getIntegrationConfig(
   const salesApiKey = await getSalesApiKeyForVendor(db, tid, vid || undefined);
 
   return {
-    salesAppUrl: (String(
-      linkForVendor?.salesAppUrl
-      || dbConfig?.salesAppUrl
-      || process.env.SALES_APP_URL
-      || 'http://localhost:3000',
-    )).replace(/\/$/, ''),
+    salesAppUrl: resolveEffectiveSalesAppUrl(
+      linkForVendor?.salesAppUrl || dbConfig?.salesAppUrl || links[0]?.salesAppUrl,
+    ),
     salesApiKey,
     vendorTenantId: vid || String(process.env.SALES_VENDOR_TENANT_ID || 'default'),
     webhookSecret: String(

@@ -3,6 +3,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
+import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
 
 export interface IntegrationLinkDoc {
   id: string;
@@ -230,13 +231,9 @@ export async function resolveSalesApiAccess(
   const links = link ? [link] : await listActiveLinksForCustomer(db, tid);
   const legacy = await db.collection('integration_settings').findOne({ tenantId: tid });
 
-  const salesAppUrl = String(
-    link?.salesAppUrl
-    || links[0]?.salesAppUrl
-    || legacy?.salesAppUrl
-    || process.env.SALES_APP_URL
-    || 'http://localhost:3000',
-  ).replace(/\/$/, '');
+  const salesAppUrl = resolveEffectiveSalesAppUrl(
+    link?.salesAppUrl || links[0]?.salesAppUrl || legacy?.salesAppUrl,
+  );
 
   return { salesAppUrl, salesApiKey };
 }
