@@ -14,7 +14,7 @@ import { buildHutangDetailEnrichment } from '@/lib/api/hutang-detail-enrich';
 import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval';
 import { backfixVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
 import { runHutangSyncPending } from '@/lib/api/hutang-sync-pending-run';
-import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES, processJobById, getJobById } from '@/lib/api/bg-jobs';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 import {
   payableHutangFilter,
@@ -143,7 +143,25 @@ export async function handleVendorHutang({
       tenantId,
       payload: { replaySales },
     });
-    scheduleJobProcessing(db);
+
+    const kickoff = await processJobById(db, jobId);
+    if (!kickoff || (kickoff as { skipped?: boolean }).skipped) {
+      scheduleJobProcessing(db);
+    }
+
+    const job = await getJobById(db, jobId, tenantId);
+    if (job?.status === 'DONE' && job.result) {
+      return ok({ ...(job.result as Record<string, unknown>), jobId, async: false });
+    }
+    if (job?.status === 'FAILED') {
+      return ok({
+        jobId,
+        async: false,
+        error: job.lastError,
+        result: job.result,
+      });
+    }
+
     return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 

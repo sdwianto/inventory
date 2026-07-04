@@ -76,6 +76,17 @@ export async function handleBgJobs({
     return err('Method not allowed', 405);
   }
 
+  if (path[0] === 'bg-jobs' && path.length === 3 && path[2] === 'stream' && method === 'GET') {
+    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const jobId = path[1];
+    const { createBgJobStreamResponse } = await import('@/lib/api/bg-job-stream');
+    return createBgJobStreamResponse(async () => {
+      const job = await getJobById(db, jobId, tenantId);
+      return job as Record<string, unknown> | null;
+    });
+  }
+
   if (path[0] === 'bg-jobs' && path.length === 2 && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;

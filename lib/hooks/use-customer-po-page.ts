@@ -179,6 +179,19 @@ export function useCustomerPoPage() {
         url: '/api/customer-purchase-orders/sync-pending',
         offlineLabel: 'Sync PO pending ke vendor',
       }) as JsonObject;
+      if (data.async === false) {
+        const syncedRows = asArray(data.synced) as JsonObject[];
+        if (syncedRows.length > 0) {
+          await reloadList();
+          invalidateOperationalCaches(queryClient);
+          const labels = syncedRows.map((s) => str(s.noPO)).filter(Boolean).join(', ');
+          toast.success(`${syncedRows.length} PO terkirim ke vendor`, { description: labels });
+        } else if (data.error) {
+          toast.warning(String(data.error));
+          autoSyncCooldownUntil.current = Date.now() + 60_000;
+        }
+        return;
+      }
       if (data.jobId) {
         if (!data.reused) {
           toast.info('PO antrian dikirim ke background');

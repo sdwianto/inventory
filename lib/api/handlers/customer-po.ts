@@ -24,7 +24,7 @@ import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
 import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
-import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES, processJobById, getJobById } from '@/lib/api/bg-jobs';
 import {
   parseCursorPageParams,
   applyDescDateIdCursor,
@@ -312,7 +312,26 @@ export async function handleCustomerPo({
       tenantId,
       payload: {},
     });
-    scheduleJobProcessing(db);
+
+    // Vercel serverless: setImmediate tidak dijamin jalan setelah response — proses job di request ini.
+    const kickoff = await processJobById(db, jobId);
+    if (!kickoff || (kickoff as { skipped?: boolean }).skipped) {
+      scheduleJobProcessing(db);
+    }
+
+    const job = await getJobById(db, jobId, tenantId);
+    if (job?.status === 'DONE' && job.result) {
+      return ok({ ...(job.result as Record<string, unknown>), jobId, async: false });
+    }
+    if (job?.status === 'FAILED') {
+      return ok({
+        jobId,
+        async: false,
+        error: job.lastError,
+        result: job.result,
+      });
+    }
+
     return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
   }
 

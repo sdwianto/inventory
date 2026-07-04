@@ -71,10 +71,11 @@ export function useBgJob(jobId: string | null | undefined) {
   const poll = useQuery({
     queryKey: [...BG_JOB_QUERY_KEY, jobId],
     queryFn: () => fetchJson<JsonObject>(`/api/bg-jobs/${jobId}`),
-    enabled: !!jobId && stream.streamFailed,
+    enabled: !!jobId,
     refetchInterval: (query) => {
-      const status = String(query.state.data?.status || '');
-      if (status === 'PENDING' || status === 'RUNNING') return 2000;
+      const status = String((stream.data ?? query.state.data)?.status || '');
+      if (TERMINAL.has(status)) return false;
+      if (!status || status === 'PENDING' || status === 'RUNNING') return 2000;
       return false;
     },
   });
