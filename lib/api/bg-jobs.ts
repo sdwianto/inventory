@@ -26,6 +26,7 @@ export const JOB_TYPES = {
   HUTANG_REPAIR: 'HUTANG_REPAIR',
   HUTANG_BACKFILL: 'HUTANG_BACKFILL',
   INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE',
+  SANDBOX_RESET: 'SANDBOX_RESET',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -327,6 +328,12 @@ export async function processJob(db: Db, job: BgJob) {
       } else {
         outcome = { ...(await runIntegrationReconcile(db, job.tenantId)) };
       }
+    } else if (job.type === JOB_TYPES.SANDBOX_RESET) {
+      const { runSandboxResetJob } = await import('@/lib/api/sandbox-purge');
+      outcome = await runSandboxResetJob(db, {
+        tenantId: job.payload?.tenantId ? String(job.payload.tenantId) : undefined,
+        includeSales: job.payload?.includeSales !== false,
+      });
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

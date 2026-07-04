@@ -109,19 +109,32 @@ async function purgeDb(
 ): Promise<SandboxDbResult> {
   const counts: SandboxDbResult['counts'] = {};
   const filter = tenantQuery(tenantId);
+  const existingNames = new Set(
+    (await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name),
+  );
 
-  for (const name of SANDBOX_TRANSACTION_COLLECTIONS) {
-    const before = await countCollection(db, name, tenantId);
-    if (before === null) {
-      counts[name] = { skipped: true, before: 0, deleted: 0 };
-      continue;
-    }
-    if (!confirm) {
+  if (!confirm) {
+    for (const name of SANDBOX_TRANSACTION_COLLECTIONS) {
+      if (!existingNames.has(name)) {
+        counts[name] = { skipped: true, before: 0, deleted: 0 };
+        continue;
+      }
+      const before = await db.collection(name).countDocuments(filter);
       counts[name] = { dryRun: true, before };
-      continue;
     }
-    const r = await db.collection(name).deleteMany(filter);
-    counts[name] = { before, deleted: r.deletedCount };
+  } else {
+    const deletions = await Promise.all(
+      SANDBOX_TRANSACTION_COLLECTIONS.map(async (name) => {
+        if (!existingNames.has(name)) {
+          return [name, { skipped: true, before: 0, deleted: 0 } as CollectionCount] as const;
+        }
+        const r = await db.collection(name).deleteMany(filter);
+        return [name, { before: r.deletedCount, deleted: r.deletedCount } as CollectionCount] as const;
+      }),
+    );
+    for (const [name, info] of deletions) {
+      counts[name] = info;
+    }
   }
 
   if (confirm) {
@@ -214,4 +227,25 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
     }
   }
   return { documents, collections };
+}
+
+export async function runSandboxResetJob(
+  inventoryDb: Db,
+  options: { tenantId?: string; includeSales?: boolean } = {},
+) {
+  const { getMongoClient } = await import('@/lib/api/db');
+  const client = await getMongoClient();
+  const result = await executeSandboxPurge(inventoryDb, client, options);
+  return {
+    tenantId: options.tenantId || null,
+    scope: options.tenantId ? 'tenant' : 'all',
+    includeSales: options.includeSales !== false,
+    inventory: {
+      ...result.inventory,
+      summary: summarizeSandboxCounts(result.inventory),
+    },
+    sales: result.sales
+      ? { ...result.sales, summary: summarizeSandboxCounts(result.sales) }
+      : null,
+  };
 }

@@ -8,13 +8,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { AlertTriangle, Eraser, Eye, Loader2, ShieldAlert } from 'lucide-react';
 import { useSessionUser } from '@/lib/hooks/use-session-user';
-import type { SessionUser } from '@/types/auth';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchJson } from '@/lib/fetch-json';
+import { useBgJob } from '@/lib/hooks/use-bg-job';
 
 type CountInfo =
   | { skipped: true; before: 0; deleted: 0 }
@@ -112,6 +112,8 @@ export default function SandboxResetPage() {
   const [acknowledge, setAcknowledge] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [resetJobId, setResetJobId] = useState<string | null>(null);
+  const { data: resetJob, status: resetJobStatus } = useBgJob(resetJobId);
 
   const menuVisible = isSandboxResetMenuVisible();
   const isMaster = user?.role === 'MASTER';
@@ -159,7 +161,14 @@ export default function SandboxResetPage() {
           tenantId: tenantId.trim() || undefined,
           includeSales,
         },
-      }) as PreviewResponse;
+      }) as PreviewResponse & { jobId?: string; async?: boolean; message?: string };
+
+      if (data.async && data.jobId) {
+        setResetJobId(String(data.jobId));
+        toast.info(data.message || 'Reset sandbox berjalan di background…');
+        return;
+      }
+
       setPreview(data);
       setConfirmPhrase('');
       setAcknowledge(false);
@@ -169,6 +178,30 @@ export default function SandboxResetPage() {
     }
     setResetting(false);
   };
+
+  useEffect(() => {
+    if (!resetJob || !resetJobId) return undefined;
+    if (resetJobStatus !== 'DONE' && resetJobStatus !== 'FAILED') return undefined;
+
+    const t = setTimeout(() => {
+      if (resetJobStatus === 'DONE') {
+        const result = resetJob.result as PreviewResponse | undefined;
+        if (result?.inventory) {
+          setPreview(result);
+        }
+        setConfirmPhrase('');
+        setAcknowledge(false);
+        toast.success('Reset sandbox selesai — transaksi dihapus, master data tetap');
+      } else {
+        toast.error(String(resetJob.lastError || 'Reset sandbox gagal'));
+      }
+      setResetJobId(null);
+      setResetting(false);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sandbox.all });
+    }, 0);
+
+    return () => clearTimeout(t);
+  }, [resetJob, resetJobId, resetJobStatus, queryClient]);
 
   const confirmOk = useMemo(
     () => confirmPhrase.trim() === (status?.confirmPhrase || 'RESET SANDBOX'),
@@ -333,8 +366,14 @@ export default function SandboxResetPage() {
                 disabled={resetting || !acknowledge || !confirmOk}
               >
                 {resetting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Eraser className="w-4 h-4 mr-2" />}
-                Reset sandbox sekarang
+                {resetting ? 'Reset berjalan…' : 'Reset sandbox sekarang'}
               </Button>
+              {resetting && resetJobId && (
+                <p className="text-xs text-slate-500">
+                  Menghapus transaksi di background — jangan tutup halaman sampai selesai.
+                  {resetJobStatus && resetJobStatus !== 'PENDING' ? ` Status: ${resetJobStatus}` : ''}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

@@ -1,5 +1,6 @@
+import { after } from 'next/server';
 import type { NextResponse } from 'next/server';
-import { ok, err, getMongoClient } from '@/lib/api/db';
+import { ok, err, getMongoClient, connectToMongo } from '@/lib/api/db';
 import { requireMaster } from '@/lib/api/require-auth';
 import {
   getSandboxResetBlockReason,
@@ -8,11 +9,11 @@ import {
   SANDBOX_CONFIRM_PHRASE,
 } from '@/lib/api/sandbox-config';
 import {
-  executeSandboxPurge,
   previewSandboxPurge,
   SANDBOX_KEEP_HINT,
   summarizeSandboxCounts,
 } from '@/lib/api/sandbox-purge';
+import { enqueueJob, processJobById, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import type { HandlerContext } from '@/types/api/handler';
 import { parseHandlerBody } from '@/types/api/handler';
 
@@ -75,21 +76,26 @@ export async function handleSandbox({
     const tenantId = String(payload.tenantId || '').trim() || undefined;
     const includeSales = payload.includeSales !== false;
 
-    const client = await getMongoClient();
-    const result = await executeSandboxPurge(db, client, { tenantId, includeSales });
-    return ok({
-      ok: true,
-      tenantId: tenantId || null,
-      scope: tenantId ? 'tenant' : 'all',
-      includeSales,
-      inventory: {
-        ...result.inventory,
-        summary: summarizeSandboxCounts(result.inventory),
-      },
-      sales: result.sales
-        ? { ...result.sales, summary: summarizeSandboxCounts(result.sales) }
-        : null,
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.SANDBOX_RESET,
+      tenantId: tenantId || 'system',
+      payload: { tenantId, includeSales },
     });
+
+    // Vercel: purge bisa >60s — jangan blokir response HTTP (hindari 504).
+    after(async () => {
+      const freshDb = await connectToMongo();
+      await processJobById(freshDb, jobId);
+    });
+    scheduleJobProcessing(db, { limit: 1 });
+
+    return ok({
+      jobId,
+      async: true,
+      status: reused ? 'RUNNING' : 'PENDING',
+      reused,
+      message: 'Reset sandbox berjalan di background',
+    }, 202);
   }
 
   return null;
