@@ -55,14 +55,25 @@ export async function handleBgJobs({
     });
   }
 
-  if (route === '/bg-jobs/repair-procurement' && method === 'POST') {
-    const deniedRole = requireRole(auth, ['MASTER', 'ADMIN', 'OWNER']);
-    if (deniedRole) return deniedRole;
-    const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
-    if (denied) return denied;
-    if (!tenantId) return err('Tenant operasional wajib', 400);
-    const result = await runProcurementRepair(db, tenantId);
-    return ok({ message: 'Perbaikan procurement selesai', ...result });
+  if (route === '/bg-jobs/repair-procurement') {
+    if (method === 'GET') {
+      return ok({
+        message: 'Endpoint perbaikan procurement — gunakan POST (bukan buka langsung di browser).',
+        method: 'POST',
+        auth: 'Login MASTER/ADMIN/OWNER + cookie session, atau jalankan: npm run repair:procurement -- --apply',
+        hint: 'Dari browser DevTools: fetch("/api/bg-jobs/repair-procurement", { method: "POST", credentials: "include" })',
+      });
+    }
+    if (method === 'POST') {
+      const deniedRole = requireRole(auth, ['MASTER', 'ADMIN', 'OWNER']);
+      if (deniedRole) return deniedRole;
+      const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+      if (denied) return denied;
+      if (!tenantId) return err('Tenant operasional wajib', 400);
+      const result = await runProcurementRepair(db, tenantId);
+      return ok({ message: 'Perbaikan procurement selesai', ...result });
+    }
+    return err('Method not allowed', 405);
   }
 
   if (path[0] === 'bg-jobs' && path.length === 2 && method === 'GET') {

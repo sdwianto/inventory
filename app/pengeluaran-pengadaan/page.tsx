@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import { TrendingDown, Download, Eye, Loader2 } from 'lucide-react';
+import { TrendingDown, Download, Eye, Loader2, Wrench } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { queryKeys } from '@/lib/query-keys';
@@ -31,6 +31,7 @@ export default function PengeluaranPengadaanPage() {
   const [to, setTo] = useState(todayISO);
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [loadingDetail, setLoadingDetail] = useState('');
+  const [repairing, setRepairing] = useState(false);
   const queryClient = useQueryClient();
 
   const reportUrl = `/api/procurement-expenses?${new URLSearchParams({ from, to })}`;
@@ -42,6 +43,24 @@ export default function PengeluaranPengadaanPage() {
   const load = useCallback(async () => {
     await refetch();
   }, [refetch]);
+
+  const runRepair = async () => {
+    setRepairing(true);
+    try {
+      const result = await fetchJson<JsonObject>('/api/bg-jobs/repair-procurement', {
+        method: 'POST',
+      });
+      const requeued = num(result.deadLetterRequeued);
+      const recovered = num(result.recoveredStaleRunning);
+      toast.success(
+        `Perbaikan selesai${requeued || recovered ? ` — ${requeued} dead-letter, ${recovered} job dipulihkan` : ''}`,
+      );
+      await refetch();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+    setRepairing(false);
+  };
 
   const openDetail = async (id: string) => {
     if (!id) return;
@@ -109,6 +128,10 @@ export default function PengeluaranPengadaanPage() {
           </div>
           <Button variant="outline" size="sm" onClick={exportCsv} disabled={!tableRows.length}>
             <Download className="w-4 h-4 mr-1" /> Export CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={runRepair} disabled={repairing} title="Perbaiki URL integrasi, dead-letter job, dan variance hutang">
+            {repairing ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Wrench className="w-4 h-4 mr-1" />}
+            Perbaiki data
           </Button>
         </div>
         <OperationalScopeBar />

@@ -25,7 +25,11 @@ function loadEnv() {
 loadEnv();
 
 const APP_URL = (process.env.APP_URL || process.env.INVENTORY_APP_URL || 'https://penarukan2.vercel.app').replace(/\/$/, '');
-const SALES_URL = (process.env.SALES_APP_URL || 'https://sales-dawam.vercel.app').replace(/\/$/, '');
+const SALES_URL = (() => {
+  const env = (process.env.SALES_APP_URL || '').replace(/\/$/, '');
+  if (!env || /localhost|127\.0\.0\.1/i.test(env)) return 'https://sales-dawam.vercel.app';
+  return env;
+})();
 const TENANT = process.env.E2E_TENANT || 'sppg';
 const EMAIL = process.env.MASTER_EMAIL || process.env.ADMIN_EMAIL || 'master@sppg.com';
 const PASSWORD = process.env.MASTER_PASSWORD || process.env.ADMIN_PASSWORD || 'master123';

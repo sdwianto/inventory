@@ -13,6 +13,9 @@ import { resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { MongoClient } from 'mongodb';
 
+const PROD_SALES_DEFAULT = 'https://sales-dawam.vercel.app';
+const PROD_INVENTORY_DEFAULT = 'https://penarukan2.vercel.app';
+
 function loadEnv() {
   try {
     const p = resolve(process.cwd(), '.env.local');
@@ -31,8 +34,10 @@ const APPLY = args.includes('--apply');
 const PROCESS_JOBS = args.includes('--process-jobs');
 const tenantArg = args.find((a) => a.startsWith('--tenant='));
 const TENANT = tenantArg ? tenantArg.split('=')[1] : 'sppg';
-const SALES_URL = (process.env.SALES_APP_URL || 'https://sales-dawam.vercel.app').replace(/\/$/, '');
-const INVENTORY_URL = (process.env.INVENTORY_APP_URL || 'https://penarukan2.vercel.app').replace(/\/$/, '');
+const envSales = (process.env.SALES_APP_URL || '').replace(/\/$/, '');
+const SALES_URL = isLoopback(envSales) ? PROD_SALES_DEFAULT : (envSales || PROD_SALES_DEFAULT);
+const envInv = (process.env.INVENTORY_APP_URL || '').replace(/\/$/, '');
+const INVENTORY_URL = envInv || PROD_INVENTORY_DEFAULT;
 const STALE_MS = 15 * 60 * 1000;
 
 const uri = process.env.MONGO_URL || process.env.MONGODB_URI;
@@ -207,7 +212,13 @@ async function triggerWorker() {
 
 async function main() {
   console.log(`\n=== repair-procurement ${APPLY ? 'APPLY' : 'DRY-RUN'} ===`);
-  console.log({ tenant: TENANT, salesUrl: SALES_URL, inventoryUrl: INVENTORY_URL, dbName });
+  console.log({
+    tenant: TENANT,
+    salesUrl: SALES_URL,
+    inventoryUrl: INVENTORY_URL,
+    dbName,
+    envSalesWasLoopback: isLoopback(envSales),
+  });
 
   const client = new MongoClient(uri);
   await client.connect();
