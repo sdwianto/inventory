@@ -72,7 +72,9 @@ export function useBgJob(jobId: string | null | undefined) {
     queryKey: [...BG_JOB_QUERY_KEY, jobId],
     queryFn: () => fetchJson<JsonObject>(`/api/bg-jobs/${jobId}`, { credentials: 'include' }),
     enabled: !!jobId,
+    retry: false,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const status = String((stream.data ?? query.state.data)?.status || '');
       if (TERMINAL.has(status)) return false;
       if (!status || status === 'PENDING' || status === 'RUNNING') return 2000;

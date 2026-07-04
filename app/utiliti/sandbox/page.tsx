@@ -182,27 +182,27 @@ export default function SandboxResetPage() {
   };
 
   useEffect(() => {
-    if (!resetJob || !resetJobId) return undefined;
-    if (resetJobStatus !== 'DONE' && resetJobStatus !== 'FAILED') return undefined;
-
-    const t = setTimeout(() => {
-      if (resetJobStatus === 'DONE') {
-        const result = resetJob.result as PreviewResponse | undefined;
-        if (result?.inventory) {
-          setPreview(result);
+    if (!resetJobId) return undefined;
+    if (resetJobStatus === 'DONE' || resetJobStatus === 'FAILED') {
+      const t = setTimeout(() => {
+        if (resetJobStatus === 'DONE' && resetJob) {
+          const result = resetJob.result as PreviewResponse | undefined;
+          if (result?.inventory) {
+            setPreview(result);
+          }
+          setConfirmPhrase('');
+          setAcknowledge(false);
+          toast.success('Reset sandbox selesai — transaksi dihapus, master data tetap');
+        } else if (resetJobStatus === 'FAILED') {
+          toast.error(String(resetJob?.lastError || 'Reset sandbox gagal'));
         }
-        setConfirmPhrase('');
-        setAcknowledge(false);
-        toast.success('Reset sandbox selesai — transaksi dihapus, master data tetap');
-      } else {
-        toast.error(String(resetJob.lastError || 'Reset sandbox gagal'));
-      }
-      setResetJobId(null);
-      setResetting(false);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sandbox.all });
-    }, 0);
-
-    return () => clearTimeout(t);
+        setResetJobId(null);
+        setResetting(false);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sandbox.all });
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    return undefined;
   }, [resetJob, resetJobId, resetJobStatus, queryClient]);
 
   const confirmOk = useMemo(

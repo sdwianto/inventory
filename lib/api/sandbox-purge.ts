@@ -110,12 +110,21 @@ export async function purgeSandboxDatabase(
   dbName: string,
   tenantId: string | undefined,
   confirm: boolean,
+  options?: { preserveBgJobIds?: string[] },
 ): Promise<SandboxDbResult> {
   const counts: SandboxDbResult['counts'] = {};
   const filter = tenantQuery(tenantId);
+  const preserveBgJobIds = (options?.preserveBgJobIds || []).map((id) => String(id).trim()).filter(Boolean);
   const existingNames = new Set(
     (await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name),
   );
+
+  const collectionFilter = (name: string): Record<string, unknown> => {
+    if (name === 'bg_jobs' && preserveBgJobIds.length) {
+      return { ...filter, id: { $nin: preserveBgJobIds } };
+    }
+    return filter;
+  };
 
   if (!confirm) {
     for (const name of SANDBOX_TRANSACTION_COLLECTIONS) {
@@ -123,7 +132,7 @@ export async function purgeSandboxDatabase(
         counts[name] = { skipped: true, before: 0, deleted: 0 };
         continue;
       }
-      const before = await db.collection(name).countDocuments(filter);
+      const before = await db.collection(name).countDocuments(collectionFilter(name));
       counts[name] = { dryRun: true, before };
     }
   } else {
@@ -132,7 +141,7 @@ export async function purgeSandboxDatabase(
         if (!existingNames.has(name)) {
           return [name, { skipped: true, before: 0, deleted: 0 } as CollectionCount] as const;
         }
-        const r = await db.collection(name).deleteMany(filter);
+        const r = await db.collection(name).deleteMany(collectionFilter(name));
         return [name, { before: r.deletedCount, deleted: r.deletedCount } as CollectionCount] as const;
       }),
     );
@@ -234,9 +243,10 @@ export async function previewSandboxPurge(
 export async function executeSandboxPurge(
   inventoryDb: Db,
   client: MongoClient,
-  options: { tenantId?: string; includeSales?: boolean } = {},
+  options: { tenantId?: string; includeSales?: boolean; preserveBgJobIds?: string[] } = {},
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
-  const { tenantId, includeSales = true } = options;
+  const { tenantId, includeSales = true, preserveBgJobIds } = options;
+  const purgeOpts = preserveBgJobIds?.length ? { preserveBgJobIds } : undefined;
 
   const inventory = await purgeSandboxDatabase(
     inventoryDb,
@@ -244,6 +254,7 @@ export async function executeSandboxPurge(
     inventoryDb.databaseName,
     tenantId,
     true,
+    purgeOpts,
   );
 
   if (!includeSales) {
@@ -278,11 +289,16 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
 
 export async function runSandboxResetJob(
   inventoryDb: Db,
-  options: { tenantId?: string; includeSales?: boolean } = {},
+  options: { tenantId?: string; includeSales?: boolean; preserveJobId?: string } = {},
 ) {
   const { getMongoClient } = await import('@/lib/api/db');
   const client = await getMongoClient();
-  const result = await executeSandboxPurge(inventoryDb, client, options);
+  const preserveBgJobIds = options.preserveJobId ? [options.preserveJobId] : undefined;
+  const result = await executeSandboxPurge(inventoryDb, client, {
+    tenantId: options.tenantId,
+    includeSales: options.includeSales,
+    preserveBgJobIds,
+  });
   return {
     tenantId: options.tenantId || null,
     scope: options.tenantId ? 'tenant' : 'all',

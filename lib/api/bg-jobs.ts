@@ -347,6 +347,7 @@ export async function processJob(db: Db, job: BgJob) {
       outcome = await runSandboxResetJob(db, {
         tenantId: job.payload?.tenantId ? String(job.payload.tenantId) : undefined,
         includeSales: job.payload?.includeSales !== false,
+        preserveJobId: job.id,
       });
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
