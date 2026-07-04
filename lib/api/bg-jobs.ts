@@ -273,6 +273,20 @@ export async function getJobById(db: Db, jobId: string, tenantId?: string | null
   return db.collection('bg_jobs').findOne(filter);
 }
 
+/** Baca job untuk UI — MASTER boleh lihat job `system` / lintas tenant. */
+export async function getJobByIdAccessible(
+  db: Db,
+  jobId: string,
+  auth: { isMaster?: boolean; role?: string; tenantId?: string | null } | null | undefined,
+  scopeTenantId?: string | null,
+) {
+  const job = await db.collection('bg_jobs').findOne({ id: jobId });
+  if (!job) return null;
+  if (auth?.isMaster || auth?.role === 'MASTER') return job;
+  const tid = normalizeTenantId(scopeTenantId || auth?.tenantId || 'default');
+  return normalizeTenantId(String(job.tenantId)) === tid ? job : null;
+}
+
 export async function processJob(db: Db, job: BgJob) {
   const now = new Date();
   // Klaim atomik — dua worker paralel tidak memproses job yang sama.

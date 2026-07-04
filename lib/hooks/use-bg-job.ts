@@ -70,7 +70,7 @@ export function useBgJob(jobId: string | null | undefined) {
   const stream = useBgJobStream(jobId);
   const poll = useQuery({
     queryKey: [...BG_JOB_QUERY_KEY, jobId],
-    queryFn: () => fetchJson<JsonObject>(`/api/bg-jobs/${jobId}`),
+    queryFn: () => fetchJson<JsonObject>(`/api/bg-jobs/${jobId}`, { credentials: 'include' }),
     enabled: !!jobId,
     refetchInterval: (query) => {
       const status = String((stream.data ?? query.state.data)?.status || '');

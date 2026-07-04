@@ -2,7 +2,7 @@ import type { Db } from 'mongodb';
 import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
-import { processPendingJobs, getJobById, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
+import { processPendingJobs, getJobByIdAccessible, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
 import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 import { requireRole } from '@/lib/api/require-auth';
 import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
@@ -82,7 +82,7 @@ export async function handleBgJobs({
     const jobId = path[1];
     const { createBgJobStreamResponse } = await import('@/lib/api/bg-job-stream');
     return createBgJobStreamResponse(async () => {
-      const job = await getJobById(db, jobId, tenantId);
+      const job = await getJobByIdAccessible(db, jobId, auth, tenantId);
       return job as Record<string, unknown> | null;
     });
   }
@@ -90,7 +90,7 @@ export async function handleBgJobs({
   if (path[0] === 'bg-jobs' && path.length === 2 && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
-    const job = await getJobById(db, path[1], tenantId);
+    const job = await getJobByIdAccessible(db, path[1], auth, tenantId);
     if (!job) return err('Job tidak ditemukan', 404);
     return ok(clean(job));
   }

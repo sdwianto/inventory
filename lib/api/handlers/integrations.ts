@@ -19,7 +19,7 @@ import {
   enqueueJob,
   JOB_TYPES,
   scheduleJobProcessing,
-  getJobById,
+  getJobByIdAccessible,
 } from '@/lib/api/bg-jobs';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
@@ -315,7 +315,7 @@ export async function handleIntegrations({
     const jobId = path[2];
     const { createBgJobStreamResponse } = await import('@/lib/api/bg-job-stream');
     return createBgJobStreamResponse(async () => {
-      const job = await getJobById(db, jobId, tenantId);
+      const job = await getJobByIdAccessible(db, jobId, auth, tenantId);
       return job as Record<string, unknown> | null;
     });
   }
@@ -323,7 +323,7 @@ export async function handleIntegrations({
   if (path[0] === 'integrations' && path[1] === 'jobs' && path[2] && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
-    const job = await getJobById(db, path[2], tenantId);
+    const job = await getJobByIdAccessible(db, path[2], auth, tenantId);
     if (!job) return err('Job tidak ditemukan', 404);
     return ok(clean(job));
   }
