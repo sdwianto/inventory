@@ -5,20 +5,17 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { fetchJson } from '@/lib/fetch-json';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { getUser } from '@/lib/auth-client';
-import { BADGE_POLL_MS } from '@/lib/constants/badge-poll';
-import { queryKeys } from '@/lib/query-keys';
 
 export const NAV_BADGES_QUERY_KEY = ['nav-badges'] as const;
 
 export type NavBadgeBroadcast = 'grn' | 'hutang' | 'maintenance';
 
-/** Invalidate badge sidebar + workspace bootstrap; opsional broadcast untuk refresh halaman terkait. */
+/** Invalidate badge sidebar; opsional broadcast untuk refresh halaman terkait. */
 export function invalidateNavBadges(
   qc: QueryClient,
   opts?: { broadcast?: NavBadgeBroadcast },
 ) {
   void qc.invalidateQueries({ queryKey: [...NAV_BADGES_QUERY_KEY] });
-  void qc.invalidateQueries({ queryKey: queryKeys.workspace.all });
   if (opts?.broadcast && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(`erp-${opts.broadcast}-change`));
   }
@@ -65,9 +62,8 @@ export function useNavBadges(enabled = true) {
     queryKey: [...NAV_BADGES_QUERY_KEY, scopeKey],
     queryFn: () => fetchJson<NavBadgesData>(url!),
     enabled: enabled && Boolean(url),
-    staleTime: 15_000,
-    refetchInterval: enabled ? BADGE_POLL_MS : false,
-    refetchIntervalInBackground: false,
+    staleTime: 60_000,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: false,
   });
 }

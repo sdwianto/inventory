@@ -33,7 +33,7 @@ import {
 } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
-import { findProductUomById } from '@/lib/api/product-uom';
+import { findProductUomsByIds } from '@/lib/api/product-uom';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
@@ -160,15 +160,31 @@ async function enrichOnePo(db: Db, po) {
   return enriched;
 }
 
-async function mapPoItems(db: Db, tenantId, items) {
-  const mapped = await Promise.all((items || []).map(async (it) => {
+async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
+  const rawItems = items || [];
+  const localIds = [...new Set(
+    rawItems.map((it) => it.localStokId).filter(Boolean).map((id) => String(id)),
+  )];
+  const uomIds = [...new Set(
+    rawItems.map((it) => it.uomId).filter(Boolean).map((id) => String(id)),
+  )];
+
+  const [productRows, uomById] = await Promise.all([
+    localIds.length
+      ? db.collection('products').find({ tenantId, id: { $in: localIds } }).toArray()
+      : Promise.resolve([]),
+    findProductUomsByIds(db, tenantId, uomIds),
+  ]);
+  const prodById = new Map(productRows.map((p) => [String(p.id), p]));
+
+  const mapped = rawItems.map((it) => {
     let vendorStokId = it.vendorStokId;
     let vendorKode = it.vendorKode || it.kode;
     let vendorTenantId = it.vendorTenantId;
     let vendorUomId = it.vendorUomId || '';
     let satuan = it.satuan;
     if (it.localStokId) {
-      const prod = await db.collection('products').findOne({ tenantId, id: it.localStokId });
+      const prod = prodById.get(String(it.localStokId));
       if (prod) {
         vendorStokId = prod.vendorStokId || vendorStokId;
         vendorKode = prod.kode || vendorKode;
@@ -176,14 +192,14 @@ async function mapPoItems(db: Db, tenantId, items) {
       }
     }
     if (it.uomId) {
-      const localUom = await findProductUomById(db, tenantId, String(it.uomId));
+      const localUom = uomById.get(String(it.uomId));
       if (localUom) {
         satuan = localUom.satuan;
         vendorUomId = localUom.vendorUomId || vendorUomId;
       }
     }
     return computeLineEstimasi({
-      lineId: it.lineId || uuidv4(),
+      lineId: String(it.lineId || uuidv4()),
       localStokId: it.localStokId,
       vendorStokId,
       vendorTenantId,
@@ -191,13 +207,13 @@ async function mapPoItems(db: Db, tenantId, items) {
       kode: it.kode || vendorKode,
       nama: it.nama,
       satuan,
-      uomId: it.uomId || '',
-      vendorUomId,
-      qty: parseFloat(it.qty) || 0,
-      estimasiHarga: parseInt(it.estimasiHarga || 0, 10),
-      hargaBeliReferensi: parseInt(it.hargaBeliReferensi || 0, 10),
+      uomId: String(it.uomId || ''),
+      vendorUomId: String(vendorUomId || ''),
+      qty: parseFloat(String(it.qty)) || 0,
+      estimasiHarga: parseInt(String(it.estimasiHarga || 0), 10),
+      hargaBeliReferensi: parseInt(String(it.hargaBeliReferensi || 0), 10),
     });
-  }));
+  });
   return mergePoItemsByStokId(mapped);
 }
 

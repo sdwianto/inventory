@@ -16,6 +16,7 @@ import ListExportMenu from '@/components/ListExportMenu';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { lineUomKey, qtyInUom } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
@@ -34,6 +35,8 @@ export default function PenyesuaianPage() {
   const [keterangan, setKeterangan] = useState('');
   const [items, setItems] = useState<JsonObject[]>([]);
   const [saving, setSaving] = useState(false);
+
+  usePrimeLineItemUoms(showForm, items.map((it) => str(it.stokId)));
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.penyesuaian.list,

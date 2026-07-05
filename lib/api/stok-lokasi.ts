@@ -4,6 +4,7 @@
 
 import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import { persistStokDisplay } from '@/lib/api/product-uom';
 import { productFilterById, updateProductStockScoped } from '@/lib/api/tenant-operational';
 import { normalizeWarehouseKode, WAREHOUSE_CODES, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/product-warehouse';
@@ -249,6 +250,7 @@ export async function syncProductStokFromLokasi(
     .toArray();
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
   await updateProductStockScoped(db, tid, stokId, { $set: { stok: total, updatedAt: new Date() } }, session);
+  await persistStokDisplay(db, tid, stokId, total, session).catch(() => {});
   return total;
 }
 

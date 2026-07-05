@@ -40,6 +40,7 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
       break;
     case '/pembelian-po':
       prefetchCursorPage(queryClient, queryKeys.customerPurchaseOrders.list, '/api/customer-purchase-orders', 100);
+      prefetch(['products', { limit: 100, enrichUom: 0 }], '/api/products?limit=100&enrichUom=0');
       break;
     case '/hutang':
       prefetchCursorPage(
@@ -63,7 +64,7 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/stok/kartu':
       prefetch(
         ['products', { limit: 100 }],
-        `/api/products?limit=100`,
+        `/api/products?limit=100&enrichUom=0`,
       );
       break;
     case '/maintenance/permintaan':

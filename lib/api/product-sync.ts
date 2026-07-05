@@ -4,10 +4,12 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
 import { pickBaseUom, uomInputsFromLegacyProductBody, validateAndNormalizeUomInputs } from '@/lib/uom/conversion';
+import type { NormalizedUomInput } from '@/lib/uom/types';
 import {
   replaceProductUoms,
   replaceProductUomsFromVendor,
   productDenormFromBaseUom,
+  bulkReplaceProductUoms,
 } from '@/lib/api/product-uom';
 
 function parseVendorPrices(product) {
@@ -108,6 +110,72 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
   await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
   await syncVendorProductUoms(db, tid, doc.id, product, snap);
   return { action: 'created', id: doc.id, kode: snap.kode, vendorTenantId: vTenant };
+}
+
+function vendorUomsToInputs(
+  vendorProduct: Record<string, unknown>,
+  snap: ReturnType<typeof vendorProductSnapshot>,
+): NormalizedUomInput[] | null {
+  const vendorUoms = Array.isArray(vendorProduct.uoms) ? vendorProduct.uoms : null;
+  if (vendorUoms?.length) {
+    return (vendorUoms as Array<Record<string, unknown>>).map((u, i) => ({
+      satuan: String(u.satuan || 'PCS').trim().toUpperCase(),
+      isBase: u.isBase === true,
+      factorToBase: parseInt(String(u.factorToBase ?? (u.isBase ? 1 : 1)), 10) || 1,
+      barcode: String(u.barcode || ''),
+      sortOrder: parseInt(String(u.sortOrder ?? i), 10) || i,
+      hargaEcer: parseInt(String(u.hargaEcer || 0), 10),
+      hargaGrosir: parseInt(String(u.hargaGrosir || 0), 10),
+      hargaSpesial: parseInt(String(u.hargaSpesial || 0), 10),
+      aktif: u.aktif !== false,
+      vendorUomId: u.id ? String(u.id) : undefined,
+    }));
+  }
+  const legacyParsed = validateAndNormalizeUomInputs(uomInputsFromLegacyProductBody({
+    satuan: snap.satuan,
+    barcode: snap.barcode,
+    hargaEcer: snap.hargaEcer,
+    hargaGrosir: snap.hargaGrosir,
+    hargaSpesial: snap.hargaSpesial,
+  }));
+  if ('error' in legacyParsed) return null;
+  return legacyParsed.uoms;
+}
+
+export async function bulkSyncVendorProductUoms(
+  db: Db,
+  tenantId: string,
+  items: Array<{
+    productId: string;
+    raw: Record<string, unknown>;
+    snap: ReturnType<typeof vendorProductSnapshot>;
+  }>,
+) {
+  if (!items.length) return;
+
+  const entries: Array<{ productId: string; uoms: NormalizedUomInput[] }> = [];
+  for (const item of items) {
+    const uoms = vendorUomsToInputs(item.raw, item.snap);
+    if (uoms?.length) entries.push({ productId: item.productId, uoms });
+  }
+  if (!entries.length) return;
+
+  const uomDocsByProduct = await bulkReplaceProductUoms(db, tenantId, entries);
+  const bulkOps: { updateOne: { filter: { id: string }; update: { $set: ReturnType<typeof productDenormFromBaseUom> } } }[] = [];
+  for (const [productId, docs] of uomDocsByProduct) {
+    const base = pickBaseUom(docs);
+    if (base) {
+      bulkOps.push({
+        updateOne: {
+          filter: { id: productId },
+          update: { $set: productDenormFromBaseUom(base) },
+        },
+      });
+    }
+  }
+  if (bulkOps.length) {
+    await db.collection('products').bulkWrite(bulkOps, { ordered: false });
+  }
 }
 
 export async function syncVendorProductUoms(

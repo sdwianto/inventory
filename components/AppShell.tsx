@@ -27,7 +27,6 @@ import {
   applyWorkspaceLokasi,
   useWorkspaceBootstrap,
 } from '@/lib/hooks/use-workspace-bootstrap';
-import { queryKeys } from '@/lib/query-keys';
 import { invalidateNavBadges, useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { invalidateOperationalCaches } from '@/lib/hooks/invalidate-operational';
 import { prefetchRouteData } from '@/lib/prefetch-route';
@@ -168,18 +167,17 @@ export default function AppShell({ children }: AppShellProps) {
     tenantLabel: wsTenantLabel,
     lokasiList,
     branding,
-    badges: wsBadges,
     invalidate: invalidateWorkspace,
   } = useWorkspaceBootstrap(Boolean(user));
 
   const { data: liveBadges } = useNavBadges(Boolean(user));
-  const badgeSource = liveBadges ?? wsBadges;
+  const badgeSource = liveBadges;
 
   useVendorCatalogAutoSync(user);
 
   const GRN_BADGE_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER']);
 
-  const refreshOperationalScope = async (synced: SessionUser) => {
+  const refreshOperationalScope = () => {
     invalidateWorkspace();
   };
 
@@ -206,7 +204,7 @@ export default function AppShell({ children }: AppShellProps) {
         return;
       }
       setUserState(synced);
-      refreshOperationalScope(synced);
+      refreshOperationalScope();
       const logoTenant = synced.role === 'MASTER' ? getActingTenantId() : (synced.tenantId || 'default');
       if (synced.role !== 'MASTER' || logoTenant) {
         fetchTenantSettings(logoTenant || synced.tenantId, { bustCache: false }).then((s) => {
@@ -222,7 +220,21 @@ export default function AppShell({ children }: AppShellProps) {
 
   useEffect(() => {
     if (!user) return;
-    prefetchByRole(queryClient, user.role);
+    const scopeKey = getActingTenantId() || user.tenantId || '';
+    const runIdle = (fn: () => void) => {
+      let idleId: number | undefined;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(fn, { timeout: 3000 });
+      } else {
+        timeoutId = setTimeout(fn, 150);
+      }
+      return () => {
+        if (idleId != null && typeof window !== 'undefined') window.cancelIdleCallback(idleId);
+        if (timeoutId != null) clearTimeout(timeoutId);
+      };
+    };
+    return runIdle(() => prefetchByRole(queryClient, user.role));
   }, [user, queryClient]);
 
   useKeepWarm(Boolean(user));
@@ -230,28 +242,11 @@ export default function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     if (!user) return undefined;
     const onScopeChange = () => {
-      refreshOperationalScope(user);
-      const scopeKeys = [
-        queryKeys.workspace.all,
-        ['goods-receipts'],
-        ['hutang'],
-        ['maintenance-requests'],
-        ['maintenance-schedules'],
-        ['customer-purchase-orders'],
-        ['products'],
-        ['dashboard'],
-        ['integrations'],
-      ] as const;
-      for (const queryKey of scopeKeys) {
-        queryClient.invalidateQueries({ queryKey: [...queryKey] });
-      }
-      invalidateNavBadges(queryClient);
+      invalidateWorkspace();
     };
     window.addEventListener('erp-scope-change', onScopeChange);
-    window.addEventListener('storage', onScopeChange);
     return () => {
       window.removeEventListener('erp-scope-change', onScopeChange);
-      window.removeEventListener('storage', onScopeChange);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- scope listener uses stable invalidate helpers
   }, [user, queryClient]);
@@ -293,13 +288,19 @@ export default function AppShell({ children }: AppShellProps) {
   }, [debouncedOperationalRefresh]);
 
   useEffect(() => {
-    if (!user) return;
-    invalidateNavBadges(queryClient);
-  }, [pathname, user, queryClient]);
-
-  useEffect(() => {
-    if (!user || !pathname) return;
-    prefetchRouteFlow(queryClient, pathname);
+    if (!user || !pathname) return undefined;
+    const run = () => prefetchRouteFlow(queryClient, pathname);
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      idleId = window.requestIdleCallback(run, { timeout: 2000 });
+    } else {
+      timeoutId = setTimeout(run, 100);
+    }
+    return () => {
+      if (idleId != null && typeof window !== 'undefined') window.cancelIdleCallback(idleId);
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
   }, [user, pathname, queryClient]);
 
   useEffect(() => {

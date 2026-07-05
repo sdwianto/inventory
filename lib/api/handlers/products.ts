@@ -93,16 +93,22 @@ async function enrichProductList(
   tenantId: string,
   rows: ProductDoc[],
   includeUomDetail: boolean,
+  enrichUom = false,
 ) {
   if (!rows.length) return rows;
-  const uomMap = await listProductUomsByProductIds(db, tenantId, rows.map((r) => r.id));
+  const uomMap = enrichUom || includeUomDetail
+    ? await listProductUomsByProductIds(db, tenantId, rows.map((r) => r.id))
+    : new Map<string, import('@/lib/uom/types').ProductUom[]>();
   return rows.map((row) => {
     const uoms = uomMap.get(row.id) || [];
+    const stokNum = parseFloat(String(row.stok)) || 0;
     const summary = {
       ...row,
-      uomCount: uoms.length || 1,
-      baseUomId: row.baseUomId || pickBaseUom(uoms)?.id,
-      stokDisplay: formatStockDualLabel(parseFloat(String(row.stok)) || 0, uoms),
+      uomCount: enrichUom || includeUomDetail ? (uoms.length || 1) : (Number(row.uomCount) || 1),
+      baseUomId: row.baseUomId || (enrichUom || includeUomDetail ? pickBaseUom(uoms)?.id : undefined),
+      stokDisplay: enrichUom || includeUomDetail
+        ? formatStockDualLabel(stokNum, uoms)
+        : (String(row.stokDisplay || '') || `${stokNum} ${row.satuan || 'PCS'}`),
     };
     if (includeUomDetail && uoms.length) {
       return { ...summary, uoms: uomSummaryForList(uoms) };
@@ -160,7 +166,8 @@ export async function handleProducts({
     const tid = tenantId;
     const enriched = await enrichProductsVendorNames(db, tid, list) as ProductDoc[];
     const includeUom = url.searchParams.get('includeUom') === '1';
-    const withUom = await enrichProductList(db, tid, enriched, includeUom);
+    const enrichUom = url.searchParams.get('enrichUom') === '1';
+    const withUom = await enrichProductList(db, tid, enriched, includeUom, enrichUom);
     const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1';
     if (withWarehouseStock && enriched.length > 0) {
       const stokMap = await getStokByWarehouseBatch(db, tid, withUom.map((p) => p.id));
@@ -230,6 +237,8 @@ export async function handleProducts({
       grup,
       gudangKode,
       ...denorm,
+      uomCount: uomDocs.length,
+      stokDisplay: formatStockDualLabel(parseFloat(String(productBody.stok || 0)), uomDocs),
       hargaBeli: parseInt(String(productBody.hargaBeli || 0), 10),
       stok: parseFloat(String(productBody.stok || 0)),
       minStok: parseFloat(String(productBody.minStok || 0)),
@@ -293,9 +302,12 @@ export async function handleProducts({
     if (uomHit) {
       const product = await findMasterDoc(db, 'products', scopeAuth, { id: uomHit.productId });
       if (!product) return err('Produk tidak ditemukan', 404);
+      const uoms = (await listProductUomsByProductIds(db, tenantId, [uomHit.productId])).get(uomHit.productId) || [];
+      const enriched = attachUomSummary(product as Record<string, unknown>, uoms);
+      const matchedUom = uoms.find((u) => u.barcode === code) || uomHit;
       return ok(clean({
-        product: await loadProductWithUoms(db, tenantId, product as Record<string, unknown>),
-        uom: uomHit,
+        product: enriched,
+        uom: matchedUom,
         resolvedBy: 'barcode',
       }));
     }
@@ -303,9 +315,9 @@ export async function handleProducts({
     let doc = await findMasterDoc(db, 'products', scopeAuth, { barcode: code });
     if (!doc) doc = await findMasterDoc(db, 'products', scopeAuth, { kode: code });
     if (!doc) return err('Produk tidak ditemukan', 404);
-    const uoms = await listProductUoms(db, tenantId, String(doc.id));
+    const uoms = (await listProductUomsByProductIds(db, tenantId, [String(doc.id)])).get(String(doc.id)) || [];
+    const enriched = attachUomSummary(doc as Record<string, unknown>, uoms);
     const baseUom = pickBaseUom(uoms);
-    const enriched = await loadProductWithUoms(db, tenantId, doc as Record<string, unknown>);
     if (baseUom) {
       return ok(clean({
         product: enriched,
@@ -314,6 +326,23 @@ export async function handleProducts({
       }));
     }
     return ok(clean(enriched));
+  }
+
+  if (route === '/products/uom' && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const tenantId = String(scopeAuth.tenantId || 'default');
+    const ids = (url.searchParams.get('ids') || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    if (!ids.length) return err('ids wajib');
+    const map = await listProductUomsByProductIds(db, tenantId, ids);
+    const out: Record<string, unknown[]> = {};
+    for (const id of ids) out[id] = (map.get(id) || []).map((u) => clean(u as unknown as Record<string, unknown>));
+    return ok(out);
   }
 
   if (path[0] === 'products' && path.length === 3 && path[2] === 'uom' && method === 'GET') {
@@ -407,6 +436,11 @@ export async function handleProducts({
           const baseUom = pickBaseUom(uomDocs);
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
+          update.uomCount = uomDocs.length;
+          update.stokDisplay = formatStockDualLabel(
+            parseFloat(String(update.stok ?? existing.stok ?? 0)),
+            uomDocs,
+          );
           update.grup = grup;
         } else if (update.grup !== undefined || update.satuan !== undefined) {
           const uomParsed = validateAndNormalizeUomInputs(resolveUomInputsFromProductBody({
@@ -422,6 +456,11 @@ export async function handleProducts({
           const baseUom = pickBaseUom(uomDocs);
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
+          update.uomCount = uomDocs.length;
+          update.stokDisplay = formatStockDualLabel(
+            parseFloat(String(update.stok ?? existing.stok ?? 0)),
+            uomDocs,
+          );
           update.grup = grup;
         }
       }

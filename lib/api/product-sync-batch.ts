@@ -3,7 +3,7 @@
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
-import { vendorProductSnapshot, syncVendorProductUoms } from '@/lib/api/product-sync';
+import { vendorProductSnapshot, bulkSyncVendorProductUoms } from '@/lib/api/product-sync';
 import type { JsonObject } from '@/types/json';
 
 const BATCH_SIZE = 250;
@@ -163,8 +163,8 @@ export async function bulkUpsertProductsFromVendor(
         ),
       );
     }
-    for (const item of uomSyncQueue) {
-      await syncVendorProductUoms(db, tid, item.productId, item.raw, item.snap);
+    if (uomSyncQueue.length) {
+      await bulkSyncVendorProductUoms(db, tid, uomSyncQueue);
     }
   }
 

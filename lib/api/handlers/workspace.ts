@@ -4,9 +4,6 @@ import { ok, clean, okCached } from '@/lib/api/db';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { requireMaster } from '@/lib/api/require-auth';
-import { countScheduleDueStats, startOfDay } from '@/lib/api/maintenance-schedule-engine';
-import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
-import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
 import { mergeFeatureFlags } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
@@ -83,10 +80,8 @@ export async function handleWorkspace({
   if (denied) return denied;
 
   const brandTenantId = auth?.tenantId || 'default';
-  const today = startOfDay(new Date());
-  const tenantFilter = tenantId ? withTenantFilter(scopeAuth, {}) : {};
 
-  const [brandSettings, scopeSettings, lokasi, tenants, grnPending, hutangReview, wrPending, pmStats] =
+  const [brandSettings, scopeSettings, lokasi, tenants] =
     await Promise.all([
       loadTenantSettings(db, brandTenantId),
       tenantId ? loadTenantSettings(db, tenantId) : Promise.resolve(null),
@@ -98,26 +93,6 @@ export async function handleWorkspace({
             return loadTenants(db);
           })()
         : Promise.resolve([]),
-      tenantId
-        ? db.collection('goods_receipts').countDocuments(
-            withTenantFilter(scopeAuth, {
-              status: { $in: ['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING'] },
-            }),
-          )
-        : Promise.resolve(0),
-      tenantId
-        ? db.collection('hutang').countDocuments(
-            withTenantFilter(scopeAuth, hutangPendingReviewFilter()),
-          )
-        : Promise.resolve(0),
-      tenantId
-        ? db.collection(MAINTENANCE_REQUESTS_COLLECTION).countDocuments(
-            withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' }),
-          )
-        : Promise.resolve(0),
-      tenantId
-        ? countScheduleDueStats(db, tenantFilter, today)
-        : Promise.resolve({ overdue: 0, dueSoon: 0 }),
     ]);
 
   return okPrivate({
@@ -139,13 +114,6 @@ export async function handleWorkspace({
         || 'Inventory App',
       logoUrl: (brandSettings?.logoUrl as string) || '',
       logoBase64: (brandSettings?.logoBase64 as string) || '',
-    },
-    badges: {
-      grnPending: Number(grnPending) || 0,
-      hutangReview: Number(hutangReview) || 0,
-      wrPending: Number(wrPending) || 0,
-      pmOverdue: Number(pmStats?.overdue || 0),
-      pmDueSoon: Number(pmStats?.dueSoon || 0),
     },
     tenants,
     user: auth

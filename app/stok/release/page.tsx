@@ -24,6 +24,7 @@ import { WAREHOUSES } from '@/lib/warehouses-client';
 import { ArrowUpFromLine, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { lineUomKey } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 
@@ -61,6 +62,8 @@ function ReleaseInventoryPageContent() {
   const wrPrefillDone = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
+
+  usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.inventoryReleases.list,

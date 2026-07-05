@@ -27,7 +27,8 @@ import {
   isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
-import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { fetchDefaultProductUom, primeUomsForStokIds } from '@/lib/hooks/use-product-uoms';
+import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { patchPoEstimasiLineOnUomChange } from '@/lib/uom/line-patch';
 import type { ProductUom } from '@/lib/uom/types';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
@@ -66,6 +67,8 @@ export function useCustomerPoPage() {
   const searchParams = useSearchParams();
   const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
   const wrPrefillDone = useRef(false);
+
+  usePrimeLineItemUoms(createOpen, lines.map((l) => str(l.localStokId)));
 
   const loadVendorTiers = useCallback(() => {
     fetchJson('/api/integrations/vendor-tiers')
@@ -251,6 +254,10 @@ export function useCustomerPoPage() {
     setLines(mergeFormLinesFromPo(asArray(po.items) as JsonObject[], emptyPoLine));
     setCatatan(str(po.catatan));
     setCreateOpen(true);
+    const itemIds = asArray(po.items)
+      .map((it) => str(asObject(it).localStokId || asObject(it).stokId))
+      .filter(Boolean);
+    void primeUomsForStokIds(itemIds);
   };
 
   const canEditPo = (po: JsonObject) => {

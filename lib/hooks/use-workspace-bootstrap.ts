@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
@@ -23,13 +23,6 @@ export interface WorkspaceBootstrap {
     logoUrl?: string;
     logoBase64?: string;
   };
-  badges: {
-    grnPending?: number;
-    hutangReview?: number;
-    wrPending?: number;
-    pmOverdue?: number;
-    pmDueSoon?: number;
-  };
   tenants: Array<Record<string, unknown>>;
   user: Record<string, unknown> | null;
 }
@@ -49,15 +42,21 @@ function workspaceUrl(): string | null {
 export function useWorkspaceBootstrap(enabled = true) {
   const queryClient = useQueryClient();
   const url = workspaceUrl();
+  const key = getActingTenantId() || getUser()?.tenantId || '';
 
   const query = useQuery({
-    queryKey: [...queryKeys.workspace.bootstrap(getActingTenantId() || getUser()?.tenantId || '')],
+    queryKey: [...queryKeys.workspace.bootstrap(key)],
     queryFn: () => fetchJson<WorkspaceBootstrap>(url!),
     enabled: enabled && Boolean(url),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
+
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workspace.bootstrap(key) });
+  }, [queryClient, key]);
 
   useEffect(() => {
     setClientFeatureFlags(query.data?.scope?.featureFlags);
@@ -69,11 +68,8 @@ export function useWorkspaceBootstrap(enabled = true) {
     tenantLabel: query.data?.scope?.tenantLabel || '',
     lokasiList: query.data?.scope?.lokasiList || [],
     branding: query.data?.branding,
-    badges: query.data?.badges,
     tenants: query.data?.tenants || [],
-    invalidate: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.workspace.all });
-    },
+    invalidate,
   };
 }
 

@@ -241,6 +241,59 @@ export async function findProductUomById(
   return row as ProductUom | null;
 }
 
+export async function findProductUomsByIds(
+  db: Db,
+  tenantId: string,
+  uomIds: string[],
+): Promise<Map<string, ProductUom>> {
+  const map = new Map<string, ProductUom>();
+  const ids = [...new Set(uomIds.filter(Boolean))];
+  if (!ids.length) return map;
+  const rows = await db.collection(PRODUCT_UOM_COLLECTION)
+    .find({ tenantId, id: { $in: ids }, aktif: { $ne: false } })
+    .toArray() as unknown as ProductUom[];
+  for (const row of rows) map.set(row.id, row);
+  return map;
+}
+
+const BULK_UOM_INSERT_CHUNK = 500;
+
+/** Ganti UOM banyak produk sekaligus — satu deleteMany + insertMany chunked. */
+export async function bulkReplaceProductUoms(
+  db: Db,
+  tenantId: string,
+  entries: Array<{ productId: string; uoms: NormalizedUomInput[] }>,
+): Promise<Map<string, ProductUom[]>> {
+  const byProduct = new Map<string, ProductUom[]>();
+  if (!entries.length) return byProduct;
+
+  await ensureProductUomIndexes(db);
+  const productIds = entries.map((e) => e.productId);
+  await db.collection(PRODUCT_UOM_COLLECTION).deleteMany({
+    tenantId,
+    productId: { $in: productIds },
+  });
+
+  const now = new Date();
+  const allDocs: ProductUom[] = [];
+  for (const { productId, uoms } of entries) {
+    const docs = uoms.map((u) => buildUomDoc(tenantId, productId, u, now));
+    byProduct.set(productId, docs);
+    allDocs.push(...docs);
+  }
+
+  if (allDocs.length) {
+    for (let i = 0; i < allDocs.length; i += BULK_UOM_INSERT_CHUNK) {
+      await db.collection(PRODUCT_UOM_COLLECTION).insertMany(
+        allDocs.slice(i, i + BULK_UOM_INSERT_CHUNK),
+        { ordered: false },
+      );
+    }
+  }
+
+  return byProduct;
+}
+
 export function attachUomSummary<T extends Record<string, unknown>>(
   product: T,
   uoms: ProductUom[],
@@ -254,6 +307,39 @@ export function attachUomSummary<T extends Record<string, unknown>>(
     uoms,
     stokDisplay: formatStockDualLabel(stok, uoms),
   };
+}
+
+/** Persist denormalized stokDisplay on product doc after stock/UOM changes. */
+export async function persistStokDisplay(
+  db: Db,
+  tenantId: string,
+  productId: string,
+  qtyBase?: number,
+  session?: import('mongodb').ClientSession,
+): Promise<void> {
+  const opts = session ? { session } : undefined;
+  const prod = await db.collection('products').findOne(
+    { tenantId, id: productId },
+    opts,
+  ) as Record<string, unknown> | null;
+  if (!prod) return;
+  const stok = qtyBase ?? (parseFloat(String(prod.stok)) || 0);
+  const uomCount = Number(prod.uomCount) || 0;
+  let stokDisplay: string;
+  if (uomCount <= 1) {
+    const rounded = Math.round(stok * 1000) / 1000;
+    const qtyStr = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+    stokDisplay = `${qtyStr} ${String(prod.satuan || 'PCS')}`;
+  } else {
+    const uoms = await listProductUoms(db, tenantId, productId);
+    stokDisplay = formatStockDualLabel(stok, uoms);
+  }
+  if (String(prod.stokDisplay || '') === stokDisplay) return;
+  await db.collection('products').updateOne(
+    { tenantId, id: productId },
+    { $set: { stokDisplay, updatedAt: new Date() } },
+    opts,
+  );
 }
 
 export async function prepareProductUomsForWrite(

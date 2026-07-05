@@ -76,7 +76,6 @@ export function useVendorCatalogAutoSync(user: SessionUser | null) {
 
       if (status === 'DONE') {
         void queryClient.invalidateQueries({ queryKey: ['pages'] });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.workspace.all });
         void queryClient.invalidateQueries({ queryKey: ['products'] });
         void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all });
         window.dispatchEvent(

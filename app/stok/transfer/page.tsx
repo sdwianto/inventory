@@ -16,6 +16,7 @@ import OperationalScopeBar from '@/components/OperationalScopeBar';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { lineUomKey, qtyInUom } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
@@ -31,6 +32,8 @@ export default function TransferPage() {
     lokasiAsal: '', lokasiTujuan: '', keterangan: '', items: [],
   });
   const [saving, setSaving] = useState(false);
+
+  usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.transfer.list,

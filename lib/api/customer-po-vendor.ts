@@ -2,7 +2,7 @@ import type { Db } from 'mongodb';
 // Siapkan baris PO untuk dikirim ke sales.app — kode produk = single source of truth di master.
 
 import type { JsonObject } from '@/types/json';
-import { findProductUomById } from '@/lib/api/product-uom';
+import { findProductUomsByIds } from '@/lib/api/product-uom';
 
 type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string };
 
@@ -98,6 +98,10 @@ function resolveProduct(
 export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: JsonObject[]) {
   const tid = tenantId || 'default';
   const maps = await loadProductsBatch(db, tid, items);
+  const uomIds = [...new Set(
+    (items || []).map((it) => it.uomId).filter(Boolean).map(String),
+  )];
+  const uomById = await findProductUomsByIds(db, tid, uomIds);
   const enriched: JsonObject[] = [];
 
   for (const it of items || []) {
@@ -117,8 +121,8 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     let satuan = it.satuan ? String(it.satuan) : undefined;
     let vendorUomId: string | undefined;
 
-    if (it.uomId && prod?.id) {
-      const localUom = await findProductUomById(db, tid, String(it.uomId));
+    if (it.uomId) {
+      const localUom = uomById.get(String(it.uomId));
       if (localUom) {
         satuan = localUom.satuan;
         vendorUomId = localUom.vendorUomId || undefined;
