@@ -165,6 +165,9 @@ function buildFallbackDeliverySnapshot(grn: Record<string, unknown>) {
       qty: it.qtyOrdered ?? it.qtyReceived ?? 0,
       harga: it.harga || it.hargaSatuan || 0,
       satuan: it.satuan,
+      uomId: it.uomId,
+      qtyBase: it.qtyBase,
+      factorToBase: it.factorToBase,
     })),
   };
 }
@@ -226,6 +229,9 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
       kode: it.vendorKode || it.localKode,
       qty: it.qtyReceived ?? it.qtyOrdered ?? 0,
       harga: it.harga || it.hargaSatuan || 0,
+      uomId: it.uomId,
+      qtyBase: it.qtyBase,
+      satuan: it.satuan,
     })),
   };
 

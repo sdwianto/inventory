@@ -2,6 +2,7 @@
 
 import type { JsonObject } from '@/types/json';
 import { str } from '@/types/json';
+import LineUomSelect from '@/components/uom/LineUomSelect';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
 import ProductStockReminder from '@/components/ProductStockReminder';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import { toDateInputValue } from '@/lib/pembelian-po/helpers';
 import { formatIDR, formatNumber } from '@/lib/format';
 import { getEstimasiHargaHint, formatBeliDeltaSign } from '@/lib/po-estimasi-harga';
 import { vendorDisplayName } from '@/lib/vendor-display';
+import type { ProductUom } from '@/lib/uom/types';
 import { cn } from '@/lib/utils';
 
 type PoLineDetail = JsonObject & { product: JsonObject | null };
@@ -39,6 +41,7 @@ export type PoFormDialogProps = {
   onRemoveLine: (index: number) => void;
   onSelectProduct: (index: number, id: string) => void;
   onUpdateLine: (index: number, patch: JsonObject) => void;
+  onUpdateFormItemUom?: (index: number, uom: ProductUom) => void;
   onSave: () => void;
   onCancel: () => void;
 };
@@ -62,6 +65,7 @@ export default function PoFormDialog({
   onRemoveLine,
   onSelectProduct,
   onUpdateLine,
+  onUpdateFormItemUom,
   onSave,
   onCancel,
 }: PoFormDialogProps) {
@@ -205,15 +209,23 @@ export default function PoFormDialog({
                       </div>
                       <div className="w-full sm:w-auto shrink-0 flex flex-col">
                         <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Satuan</Label>
-                        <span className={cn(
-                          'inline-flex h-9 w-full items-center justify-center rounded-md border px-2 text-xs font-semibold',
-                          l.product?.satuan
-                            ? 'bg-white text-slate-700 border-slate-200'
-                            : 'bg-slate-50 text-slate-400 border-dashed',
+                        {l.product && str(l.localStokId) ? (
+                          <LineUomSelect
+                            stokId={str(l.localStokId)}
+                            uomId={str(l.uomId)}
+                            disabled={!onUpdateFormItemUom}
+                            className="h-9 w-full"
+                            onChange={(uom) => onUpdateFormItemUom?.(i, uom)}
+                          />
+                        ) : (
+                          <span className={cn(
+                            'inline-flex h-9 w-full items-center justify-center rounded-md border px-2 text-xs font-semibold',
+                            'bg-slate-50 text-slate-400 border-dashed',
+                          )}
+                          >
+                            —
+                          </span>
                         )}
-                        >
-                          {str(l.product?.satuan) || '—'}
-                        </span>
                       </div>
                       <div className="flex justify-end sm:justify-center sm:pt-0.5">
                         <Button

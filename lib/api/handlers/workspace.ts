@@ -8,6 +8,7 @@ import { countScheduleDueStats, startOfDay } from '@/lib/api/maintenance-schedul
 import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
 import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
+import { mergeFeatureFlags } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
@@ -128,6 +129,7 @@ export async function handleWorkspace({
         || tenantId
         || '',
       lokasiList: lokasi,
+      featureFlags: mergeFeatureFlags(scopeSettings),
     },
     branding: {
       tenantId: brandTenantId,

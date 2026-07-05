@@ -12,7 +12,6 @@ import {
 } from '@/lib/api/tenant-master';
 import { assertMasterAccess } from '@/lib/api/tenant-validate';
 import { buildProductSearchFilter, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
-import { validateProdukGrupSatuan } from '@/lib/api/product-meta';
 import { bulkDeleteMaster } from '@/lib/api/bulk-delete-master';
 import { getStokByWarehouseBatch, syncProductStokFromLokasi, getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -29,10 +28,34 @@ import { recordMasterProductStockChange } from '@/lib/api/stock-ledger';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
 import { parseCursorPageParams, applyAscStringIdCursor, encodeStringCursor, sliceCursorPage } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import {
+  validateAndNormalizeUomInputs,
+  resolveUomInputsFromProductBody,
+  pickBaseUom,
+} from '@/lib/uom/conversion';
+import {
+  insertProductUoms,
+  replaceProductUoms,
+  deleteProductUoms,
+  listProductUoms,
+  listProductUomsByProductIds,
+  findProductUomByBarcode,
+  prepareProductUomsForWrite,
+  productDenormFromBaseUom,
+  attachUomSummary,
+  uomSummaryForList,
+  mergeProductSearchWithUomBarcode,
+} from '@/lib/api/product-uom';
+import { formatStockDualLabel } from '@/lib/uom/display';
+import { assertMultiUomAllowed } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
-const VENDOR_LOCKED_FIELDS = ['kode', 'nama', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId'];
+const VENDOR_LOCKED_FIELDS = [
+  'kode', 'nama', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId', 'baseUomId',
+];
+
+const VENDOR_PRICE_FIELDS = ['hargaEcer', 'hargaGrosir', 'hargaSpesial'];
 
 interface ProductBody extends Record<string, unknown> {
   kode?: string;
@@ -40,6 +63,8 @@ interface ProductBody extends Record<string, unknown> {
   barcode?: string;
   grup?: string;
   satuan?: string;
+  baseUomId?: string;
+  uoms?: unknown[];
   gudangKode?: string;
   hargaBeli?: number | string;
   hargaSpesial?: number | string;
@@ -61,6 +86,34 @@ interface ProductDoc extends Record<string, unknown> {
   satuan?: string;
   gudangKode?: string;
   stok?: number;
+}
+
+async function enrichProductList(
+  db: Db,
+  tenantId: string,
+  rows: ProductDoc[],
+  includeUomDetail: boolean,
+) {
+  if (!rows.length) return rows;
+  const uomMap = await listProductUomsByProductIds(db, tenantId, rows.map((r) => r.id));
+  return rows.map((row) => {
+    const uoms = uomMap.get(row.id) || [];
+    const summary = {
+      ...row,
+      uomCount: uoms.length || 1,
+      baseUomId: row.baseUomId || pickBaseUom(uoms)?.id,
+      stokDisplay: formatStockDualLabel(parseFloat(String(row.stok)) || 0, uoms),
+    };
+    if (includeUomDetail && uoms.length) {
+      return { ...summary, uoms: uomSummaryForList(uoms) };
+    }
+    return summary;
+  });
+}
+
+async function loadProductWithUoms(db: Db, tenantId: string, product: Record<string, unknown>) {
+  const uoms = await listProductUoms(db, tenantId, String(product.id));
+  return attachUomSummary(product, uoms);
 }
 
 export async function handleProducts({
@@ -91,6 +144,7 @@ export async function handleProducts({
       if (ids.length) filter.id = { $in: ids };
     }
     filter = withTenantFilter(scopeAuth, filter);
+    filter = await mergeProductSearchWithUomBarcode(db, tenantId, q, filter);
 
     const { pageMode, limit: pageLimit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
     const fetchLimit = pageMode ? pageLimit + 1 : pageLimit;
@@ -105,15 +159,17 @@ export async function handleProducts({
       .toArray();
     const tid = tenantId;
     const enriched = await enrichProductsVendorNames(db, tid, list) as ProductDoc[];
+    const includeUom = url.searchParams.get('includeUom') === '1';
+    const withUom = await enrichProductList(db, tid, enriched, includeUom);
     const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1';
     if (withWarehouseStock && enriched.length > 0) {
-      const stokMap = await getStokByWarehouseBatch(db, tid, enriched.map((p) => p.id));
-      for (const p of enriched) {
+      const stokMap = await getStokByWarehouseBatch(db, tid, withUom.map((p) => p.id));
+      for (const p of withUom) {
         const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
         (p as ProductDoc & { stokByWarehouse?: Record<string, number> }).stokByWarehouse = byWh;
       }
     }
-    const cleaned = enriched.map(clean);
+    const cleaned = withUom.map(clean);
 
     if (pageMode) {
       const { items, hasMore } = sliceCursorPage(cleaned, pageLimit);
@@ -137,9 +193,13 @@ export async function handleProducts({
 
     const tenantId = tenantIdForWrite(scopeAuth, productBody);
     const grup = String(productBody.grup || 'Umum').trim();
-    const satuan = String(productBody.satuan || 'PCS').trim().toUpperCase();
-    const metaCheck = await validateProdukGrupSatuan(db, tenantId, grup, satuan);
-    if ('error' in metaCheck) return err(metaCheck.error, 400);
+
+    const uomParsed = validateAndNormalizeUomInputs(resolveUomInputsFromProductBody(productBody));
+    if ('error' in uomParsed) return err(uomParsed.error, 400);
+    const multiUomDenied = await assertMultiUomAllowed(db, tenantId, uomParsed.uoms.length);
+    if (multiUomDenied) return err(multiUomDenied, 403);
+    const uomPrep = await prepareProductUomsForWrite(db, tenantId, grup, uomParsed.uoms);
+    if ('error' in uomPrep) return err(uomPrep.error, 400);
 
     const existing = await db.collection('products').findOne({
       tenantId,
@@ -156,19 +216,21 @@ export async function handleProducts({
       return err('Pilih gudang produk: GKERING (Kering) atau GBASAH (Basah)', 400);
     }
 
+    const productId = uuidv4();
+    const uomDocs = await insertProductUoms(db, tenantId, productId, uomParsed.uoms);
+    const baseUom = pickBaseUom(uomDocs);
+    if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
+    const denorm = productDenormFromBaseUom(baseUom);
+
     const doc: ProductDoc = {
-      id: uuidv4(),
+      id: productId,
       tenantId,
       kode: productBody.kode,
-      barcode: productBody.barcode || '',
       nama: productBody.nama,
       grup,
-      satuan,
       gudangKode,
+      ...denorm,
       hargaBeli: parseInt(String(productBody.hargaBeli || 0), 10),
-      hargaSpesial: parseInt(String(productBody.hargaSpesial || 0), 10),
-      hargaGrosir: parseInt(String(productBody.hargaGrosir || 0), 10),
-      hargaEcer: parseInt(String(productBody.hargaEcer || 0), 10),
       stok: parseFloat(String(productBody.stok || 0)),
       minStok: parseFloat(String(productBody.minStok || 0)),
       aktif: productBody.aktif !== false,
@@ -191,8 +253,12 @@ export async function handleProducts({
     }
     await refreshGrnsForProductKode(db, tenantId, doc.kode);
     await invalidateDashboardSnapshot(db, tenantId);
-    const saved = await db.collection('products').findOne({ id: doc.id, tenantId });
-    return ok(clean(saved || doc));
+    const saved = await loadProductWithUoms(
+      db,
+      tenantId,
+      ((await db.collection('products').findOne({ id: doc.id, tenantId })) || doc) as unknown as Record<string, unknown>,
+    );
+    return ok(clean(saved));
   }
 
   if (route === '/products/bulk-delete' && method === 'POST') {
@@ -201,6 +267,16 @@ export async function handleProducts({
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: productBody, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
+    const unique = [...new Set((productBody.ids || []).map(String).filter(Boolean))];
+    const tenantId = scopeAuth.tenantId || 'default';
+    if (unique.length) {
+      const rows = await db.collection('products').find({ tenantId, id: { $in: unique } }).toArray();
+      const vendorLocked = rows.filter((r) => isVendorSyncedProduct(r));
+      if (vendorLocked.length) {
+        return err(`${vendorLocked.length} produk dari sales.app tidak bisa dihapus di inventory`, 400);
+      }
+      await deleteProductUoms(db, tenantId, unique);
+    }
     return bulkDeleteMaster(db, scopeAuth, 'products', productBody.ids);
   }
 
@@ -211,10 +287,45 @@ export async function handleProducts({
 
     const code = (url.searchParams.get('code') || '').trim();
     if (!code) return err('code required');
+    const tenantId = scopeAuth.tenantId || 'default';
+
+    const uomHit = await findProductUomByBarcode(db, tenantId, code);
+    if (uomHit) {
+      const product = await findMasterDoc(db, 'products', scopeAuth, { id: uomHit.productId });
+      if (!product) return err('Produk tidak ditemukan', 404);
+      return ok(clean({
+        product: await loadProductWithUoms(db, tenantId, product as Record<string, unknown>),
+        uom: uomHit,
+        resolvedBy: 'barcode',
+      }));
+    }
+
     let doc = await findMasterDoc(db, 'products', scopeAuth, { barcode: code });
     if (!doc) doc = await findMasterDoc(db, 'products', scopeAuth, { kode: code });
     if (!doc) return err('Produk tidak ditemukan', 404);
-    return ok(clean(doc));
+    const uoms = await listProductUoms(db, tenantId, String(doc.id));
+    const baseUom = pickBaseUom(uoms);
+    const enriched = await loadProductWithUoms(db, tenantId, doc as Record<string, unknown>);
+    if (baseUom) {
+      return ok(clean({
+        product: enriched,
+        uom: baseUom,
+        resolvedBy: doc.kode === code ? 'kode' : 'base',
+      }));
+    }
+    return ok(clean(enriched));
+  }
+
+  if (path[0] === 'products' && path.length === 3 && path[2] === 'uom' && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const id = path[1];
+    const access = await assertMasterAccess(db, scopeAuth, 'products', { id });
+    if ('error' in access) return access.error;
+    const tenantId = String(access.doc?.tenantId || scopeAuth.tenantId || 'default');
+    const uoms = await listProductUoms(db, tenantId, id);
+    return ok(uoms.map((u) => clean(u as unknown as Record<string, unknown>)));
   }
 
   if (path[0] === 'products' && path.length === 2) {
@@ -224,6 +335,12 @@ export async function handleProducts({
 
     const id = path[1];
     const access = await assertMasterAccess(db, scopeAuth, 'products', { id });
+    if (method === 'GET') {
+      if ('error' in access) return access.error;
+      const tenantId = String(access.doc?.tenantId || scopeAuth.tenantId || 'default');
+      const enriched = await loadProductWithUoms(db, tenantId, access.doc as Record<string, unknown>);
+      return ok(clean(enriched));
+    }
     if (method === 'PUT') {
       if ('error' in access) return access.error;
       const existing = access.doc as ProductDoc;
@@ -242,12 +359,24 @@ export async function handleProducts({
             return err(`Field ${k} dikelola sales.app — edit di vendor`, 400);
           }
         }
+        if (Array.isArray(productBody.uoms) && productBody.uoms.length > 0) {
+          return err('Satuan dikelola sales.app — edit di vendor', 400);
+        }
+        for (const k of VENDOR_PRICE_FIELDS) {
+          if (productBody[k] !== undefined && productBody[k] !== existing[k]) {
+            return err(`Field ${k} dikelola sales.app — edit di vendor`, 400);
+          }
+        }
       }
       const update: Record<string, unknown> = { ...productBody, updatedAt: new Date() };
       delete update.id;
       delete update._id;
       delete update.tenantId;
+      delete update.uoms;
       VENDOR_LOCKED_FIELDS.forEach((k) => delete update[k]);
+      if (isVendorSyncedProduct(existing)) {
+        VENDOR_PRICE_FIELDS.forEach((k) => delete update[k]);
+      }
       if (update.kode && update.kode !== existing.kode) {
         const dup = await db.collection('products').findOne({
           tenantId: existing.tenantId || 'default',
@@ -262,15 +391,41 @@ export async function handleProducts({
       ['stok', 'minStok'].forEach((k) => {
         if (update[k] !== undefined) update[k] = parseFloat(String(update[k] || 0));
       });
-      if (update.grup !== undefined || update.satuan !== undefined) {
-        const nextGrup = String(update.grup ?? existing.grup ?? 'Umum').trim();
-        const nextSatuan = String(update.satuan ?? existing.satuan ?? 'PCS').trim().toUpperCase();
-        const metaCheck = await validateProdukGrupSatuan(db, existing.tenantId, nextGrup, nextSatuan);
-        if ('error' in metaCheck) return err(metaCheck.error, 400);
-        update.grup = nextGrup;
-        update.satuan = nextSatuan;
-      }
+
       const tid = existing.tenantId || 'default';
+      const grup = String(update.grup ?? existing.grup ?? 'Umum').trim();
+
+      if (!isVendorSyncedProduct(existing)) {
+        if (Array.isArray(productBody.uoms) && productBody.uoms.length > 0) {
+          const uomParsed = validateAndNormalizeUomInputs(productBody.uoms as import('@/lib/uom/types').UomInput[]);
+          if ('error' in uomParsed) return err(uomParsed.error, 400);
+          const multiUomDenied = await assertMultiUomAllowed(db, tid, uomParsed.uoms.length);
+          if (multiUomDenied) return err(multiUomDenied, 403);
+          const uomPrep = await prepareProductUomsForWrite(db, tid, grup, uomParsed.uoms, id);
+          if ('error' in uomPrep) return err(uomPrep.error, 400);
+          const uomDocs = await replaceProductUoms(db, tid, id, uomParsed.uoms);
+          const baseUom = pickBaseUom(uomDocs);
+          if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
+          Object.assign(update, productDenormFromBaseUom(baseUom));
+          update.grup = grup;
+        } else if (update.grup !== undefined || update.satuan !== undefined) {
+          const uomParsed = validateAndNormalizeUomInputs(resolveUomInputsFromProductBody({
+            ...existing,
+            ...update,
+          }));
+          if ('error' in uomParsed) return err(uomParsed.error, 400);
+          const multiUomDeniedLegacy = await assertMultiUomAllowed(db, tid, uomParsed.uoms.length);
+          if (multiUomDeniedLegacy) return err(multiUomDeniedLegacy, 403);
+          const uomPrep = await prepareProductUomsForWrite(db, tid, grup, uomParsed.uoms, id);
+          if ('error' in uomPrep) return err(uomPrep.error, 400);
+          const uomDocs = await replaceProductUoms(db, tid, id, uomParsed.uoms);
+          const baseUom = pickBaseUom(uomDocs);
+          if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
+          Object.assign(update, productDenormFromBaseUom(baseUom));
+          update.grup = grup;
+        }
+      }
+
       if (update.gudangKode !== undefined) {
         const nextGudang = String(update.gudangKode || '').trim().toUpperCase();
         if (!isValidProductGudang(nextGudang)) {
@@ -310,7 +465,9 @@ export async function handleProducts({
       );
       await invalidateDashboardSnapshot(db, tid);
       const doc = await findMasterDoc(db, 'products', auth, { id });
-      return ok(clean(doc));
+      if (!doc) return ok(clean(doc));
+      const enriched = await loadProductWithUoms(db, tid, doc as Record<string, unknown>);
+      return ok(clean(enriched));
     }
     if (method === 'DELETE') {
       const denied = requireRole(auth, PRODUCT_MANAGE_ROLES);
@@ -319,6 +476,8 @@ export async function handleProducts({
       if (isVendorSyncedProduct(access.doc)) {
         return err('Produk dari sales.app tidak bisa dihapus di inventory — nonaktifkan di vendor', 400);
       }
+      const tid = String(access.doc.tenantId || auth?.tenantId || 'default');
+      await deleteProductUoms(db, tid, id);
       await db.collection('products').deleteOne(withTenantFilter(scopeAuth, { id }));
       await invalidateDashboardSnapshot(db, String(access.doc.tenantId || auth?.tenantId || 'default'));
       return ok({ message: 'deleted' });

@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
 import { buildVendorSoSnapshot } from '@/lib/api/vendor-so-snapshot';
+import { findMatchingGrnLine, findMatchingVendorWebhookLine } from '@/lib/uom/match-vendor-line';
 
 function findCpoFilter(tenantId, payload) {
   const base = { tenantId };
@@ -52,11 +53,11 @@ export async function syncCpoFromVendorEvent(db: Db, tenantId, event, payload) {
     patch.cancelledAt = payload.cancelledAt ? new Date(payload.cancelledAt) : now;
     patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
   } else if (event === 'delivery.shipped') {
+    const usedShip = new Set<number>();
+    const webhookItems = Array.isArray(payload.items) ? payload.items : [];
     const items = (po.items || []).map((line) => {
-      const shipped = (payload.items || []).find(
-        (s) => s.kode === line.vendorKode || s.kode === line.kode || s.stokId === line.vendorStokId,
-      );
-      const add = parseFloat(shipped?.qty) || 0;
+      const shipped = findMatchingVendorWebhookLine(line, webhookItems, usedShip);
+      const add = parseFloat(String(shipped?.qty)) || 0;
       return { ...line, qtyShipped: (line.qtyShipped || 0) + add };
     });
     patch.items = items;
@@ -89,11 +90,11 @@ export async function syncCpoOnGrnPosted(db: Db, grn) {
   });
   if (!po) return { action: 'not_found' };
 
+  const usedGrn = new Set<number>();
+  const grnItems = Array.isArray(grn.items) ? grn.items : [];
   const items = (po.items || []).map((line) => {
-    const recv = (grn.items || []).find(
-      (g) => g.vendorKode === line.vendorKode || g.localKode === line.kode,
-    );
-    const add = parseFloat(recv?.qtyReceived) || 0;
+    const recv = findMatchingGrnLine(line, grnItems, usedGrn);
+    const add = parseFloat(String(recv?.qtyReceived)) || 0;
     return { ...line, qtyReceived: (line.qtyReceived || 0) + add };
   });
 

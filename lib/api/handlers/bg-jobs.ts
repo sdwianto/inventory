@@ -3,7 +3,7 @@ import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { processPendingJobs, getJobByIdAccessible, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
-import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import { isWorkerProcessRoute, isWorkerAuditPurgeRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 import { requireRole } from '@/lib/api/require-auth';
 import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
 import type { HandlerContext } from '@/types/api/handler';
@@ -38,6 +38,23 @@ export async function handleBgJobs({
       jobId,
       reused,
       type: JOB_TYPES.INTEGRATION_RECONCILE,
+      at: new Date().toISOString(),
+    });
+  }
+
+  if (isWorkerAuditPurgeRoute(method, route)) {
+    if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.AUDIT_LOG_PURGE,
+      tenantId: 'system',
+      payload: { dedupeKey: 'audit-purge:weekly' },
+    });
+    scheduleJobProcessing(db, { limit: 2 });
+    return ok({
+      enqueued: true,
+      jobId,
+      reused,
+      type: JOB_TYPES.AUDIT_LOG_PURGE,
       at: new Date().toISOString(),
     });
   }

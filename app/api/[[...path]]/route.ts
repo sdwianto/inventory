@@ -4,12 +4,14 @@ import { NextResponse } from 'next/server';
 import type { Db } from 'mongodb';
 import { connectToMongo, cors, ok, err } from '@/lib/api/db';
 import { logger } from '@/lib/api/logger';
+import { captureException } from '@/lib/api/sentry';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
 import { dispatchRoute } from '@/lib/api/route-dispatch';
 import { ensureOperationalIndexes } from '@/lib/api/operational-indexes';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
+import { enforceDangerousRouteGuard } from '@/lib/api/production-guard';
 import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
 import { isWorkerRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
@@ -52,25 +54,25 @@ async function handleRoute(request: Request, context: RouteContext) {
     }
 
     if (route === '/auth/login' && method === 'POST') {
-      const rl = checkRateLimit(`login:${clientIp(request)}`);
+      const rl = await checkRateLimit(`login:${clientIp(request)}`);
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
     const webhookMax = parseInt(process.env.RATE_LIMIT_WEBHOOK_MAX || '120', 10);
     if (route === '/webhooks/sales' && method === 'POST') {
-      const rl = checkRateLimit(`webhook:${clientIp(request)}`, webhookMax);
+      const rl = await checkRateLimit(`webhook:${clientIp(request)}`, webhookMax);
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
     if (route === '/integrations/pair' && method === 'POST') {
       const pairMax = parseInt(process.env.RATE_LIMIT_PAIR_MAX || '10', 10);
-      const rl = checkRateLimit(`pair:${clientIp(request)}`, pairMax);
+      const rl = await checkRateLimit(`pair:${clientIp(request)}`, pairMax);
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
     if (route === '/integrations/platform-pair' && method === 'POST') {
       const pairMax = parseInt(process.env.RATE_LIMIT_PAIR_MAX || '10', 10);
-      const rl = checkRateLimit(`platform-pair:${clientIp(request)}`, pairMax);
+      const rl = await checkRateLimit(`platform-pair:${clientIp(request)}`, pairMax);
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
@@ -94,6 +96,8 @@ async function handleRoute(request: Request, context: RouteContext) {
     if (!isPublic && !workerAuthed) {
       const denied = requireAuth(auth);
       if (denied) return denied;
+      const dangerousDenied = enforceDangerousRouteGuard(method, route, auth);
+      if (dangerousDenied) return dangerousDenied;
     }
 
     const ctx = { request, db, route, method, url, path, body, auth };
@@ -137,6 +141,7 @@ async function handleRoute(request: Request, context: RouteContext) {
       method,
       error: e instanceof Error ? e.message : String(e),
     });
+    void captureException(e, { route, method });
     const msg = publicApiErrorMessage(e, 'Terjadi kesalahan server');
     if (msg.includes('MONGO_URL') || msg.includes('Database tidak terjangkau')) {
       return err(

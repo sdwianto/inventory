@@ -33,6 +33,7 @@ import {
 } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
+import { findProductUomById } from '@/lib/api/product-uom';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
@@ -164,12 +165,21 @@ async function mapPoItems(db: Db, tenantId, items) {
     let vendorStokId = it.vendorStokId;
     let vendorKode = it.vendorKode || it.kode;
     let vendorTenantId = it.vendorTenantId;
+    let vendorUomId = it.vendorUomId || '';
+    let satuan = it.satuan;
     if (it.localStokId) {
       const prod = await db.collection('products').findOne({ tenantId, id: it.localStokId });
       if (prod) {
         vendorStokId = prod.vendorStokId || vendorStokId;
         vendorKode = prod.kode || vendorKode;
         vendorTenantId = prod.vendorTenantId || vendorTenantId;
+      }
+    }
+    if (it.uomId) {
+      const localUom = await findProductUomById(db, tenantId, String(it.uomId));
+      if (localUom) {
+        satuan = localUom.satuan;
+        vendorUomId = localUom.vendorUomId || vendorUomId;
       }
     }
     return computeLineEstimasi({
@@ -180,7 +190,9 @@ async function mapPoItems(db: Db, tenantId, items) {
       vendorKode,
       kode: it.kode || vendorKode,
       nama: it.nama,
-      satuan: it.satuan,
+      satuan,
+      uomId: it.uomId || '',
+      vendorUomId,
       qty: parseFloat(it.qty) || 0,
       estimasiHarga: parseInt(it.estimasiHarga || 0, 10),
       hargaBeliReferensi: parseInt(it.hargaBeliReferensi || 0, 10),

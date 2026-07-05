@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatIDR, formatNumber } from '@/lib/format';
+import { productStockTitle } from '@/lib/uom/display';
 import { Boxes, Search, TrendingUp } from 'lucide-react';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
@@ -40,6 +41,7 @@ interface StockRow {
   hargaBeli?: number;
   stokQty?: number;
   stokTotal?: number;
+  stokDisplay?: string;
   nilaiStok?: number;
   nilaiTotal?: number;
 }
@@ -301,7 +303,9 @@ export default function SaldoGudangPage() {
                     </td>
                     <td className="px-3 py-2 text-center text-xs">{r.satuan}</td>
                     <td className="px-3 py-2 text-right text-xs">{formatIDR(r.hargaBeli || 0)}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{formatNumber(r.stokQty ?? r.stokTotal ?? 0)}</td>
+                    <td className="px-3 py-2 text-right font-semibold" title={productStockTitle({ stok: r.stokQty ?? r.stokTotal, stokDisplay: r.stokDisplay })}>
+                      {r.stokDisplay || formatNumber(r.stokQty ?? r.stokTotal ?? 0)}
+                    </td>
                     <td className="px-3 py-2 text-right font-semibold">{formatIDR(r.nilaiStok ?? r.nilaiTotal ?? 0)}</td>
                   </tr>
                 ))}

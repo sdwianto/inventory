@@ -9,6 +9,7 @@ import { isValidWarehouseKode, warehouseLabel } from '@/lib/api/warehouses';
 import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { calcWeightedAvgHargaBeli, buildJualPricesAfterBeliChange } from '@/lib/api/inventory-cost';
 import { productFilterById } from '@/lib/api/tenant-operational';
+import { resolveLineQtyBase, unitCostPerBaseFromLine } from '@/lib/uom/resolve-line-qty';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
@@ -30,7 +31,8 @@ export async function applyGrnStockPosting(
   const now = new Date();
   await ensureStokLokasiIndexes(db);
 
-  const lineInputs: { it: JsonObject; qty: number; lineIndex: number }[] = [];
+  const lineInputs: { it: JsonObject; qty: number; qtyBase: number; resolved: import('@/lib/uom/resolve-line-qty').ResolvedLineQty; lineIndex: number }[] = [];
+  const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
   for (const [lineIndex, it] of ((grn.items || []) as JsonObject[]).entries()) {
     if (!it.localStokId) {
       return { error: `Kode ${it.vendorKode} belum terdaftar di Master Produk` };
@@ -41,7 +43,13 @@ export async function applyGrnStockPosting(
     ));
     const qty = parseFloat(String(bodyLine?.qty ?? it.qtyOrdered ?? it.qtyReceived ?? 0)) || 0;
     if (qty <= 0) continue;
-    lineInputs.push({ it, qty, lineIndex });
+    const resolved = await resolveLineQtyBase(db, tid, String(it.localStokId), {
+      qty,
+      uomId: String(bodyLine?.uomId || it.uomId || ''),
+      satuan: String(bodyLine?.satuan || it.satuan || ''),
+    }, uomsCache);
+    if ('error' in resolved) return { error: resolved.error };
+    lineInputs.push({ it, qty: resolved.qty, qtyBase: resolved.qtyBase, resolved, lineIndex });
   }
 
   if (!lineInputs.length) return { error: 'Tidak ada qty diterima' };
@@ -63,7 +71,7 @@ export async function applyGrnStockPosting(
   const lokasiSet = new Set<string>();
   const kartuDocs: JsonObject[] = [];
 
-  for (const { it, qty } of lineInputs) {
+  for (const { it, qty, qtyBase, resolved } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
     if (!prod) return { error: `Produk lokal tidak ditemukan: ${it.vendorKode}` };
 
@@ -76,8 +84,9 @@ export async function applyGrnStockPosting(
 
     lokasiSet.add(lokasiKode);
     const unitCost = parseInt(String(it.harga || it.hargaSatuan || 0), 10);
+    const unitCostBase = unitCostPerBaseFromLine(resolved, unitCost * qty);
     const lk = lokasiKey(String(it.localStokId), lokasiKode);
-    lokasiDeltas.set(lk, (lokasiDeltas.get(lk) || 0) + qty);
+    lokasiDeltas.set(lk, (lokasiDeltas.get(lk) || 0) + qtyBase);
 
     let state = productState.get(String(it.localStokId));
     if (!state) {
@@ -89,8 +98,8 @@ export async function applyGrnStockPosting(
       };
       productState.set(String(it.localStokId), state);
     }
-    state.newBeli = calcWeightedAvgHargaBeli(state.oldQty, state.newBeli, qty, unitCost);
-    state.oldQty += qty;
+    state.newBeli = calcWeightedAvgHargaBeli(state.oldQty, state.newBeli, qtyBase, unitCostBase);
+    state.oldQty += qtyBase;
 
     const lokasiLabel = `${lokasiKode} - ${warehouseLabel(lokasiKode)}`;
     kartuDocs.push(stampTenantId(tid, {
@@ -102,14 +111,20 @@ export async function applyGrnStockPosting(
       noTransaksi: grn.noGRN,
       keterangan: `GRN dari ${grn.noDO} (sales.app)`,
       sourceType: 'GRN',
-      masuk: qty,
+      masuk: qtyBase,
       keluar: 0,
-      hargaSatuan: unitCost,
+      qtyEntered: qty,
+      uomId: resolved.uomId,
+      satuan: resolved.satuan,
+      hargaSatuan: unitCostBase,
     }));
 
     itemsFull.push({
       ...it,
       qtyReceived: qty,
+      qtyReceivedBase: qtyBase,
+      uomId: resolved.uomId,
+      satuan: resolved.satuan,
       lokasiKode,
       lokasiNama: warehouseLabel(lokasiKode),
       hargaBeliBaru: state.newBeli,

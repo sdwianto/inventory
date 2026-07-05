@@ -2,6 +2,11 @@
 
 import type { ClientSession, Db } from 'mongodb';
 import { getMongoClient, connectToMongo } from '@/lib/api/db';
+import {
+  isNoTransactionSupportError,
+  MongoTransactionsRequiredError,
+  requiresMongoTransactions,
+} from '@/lib/api/mongo-replica';
 
 export interface TxContext {
   db: Db;
@@ -32,9 +37,11 @@ export async function runInTransaction<T>(fn: (ctx: TxContext) => Promise<T>): P
   }
 }
 
+let warnedNoTx = false;
+
 /**
- * Run in transaction when supported; otherwise run `fn` without session.
- * Standalone MongoDB (no replica set) falls back gracefully for local dev.
+ * Run in transaction when supported.
+ * Production / REQUIRE_MONGO_TRANSACTIONS=1: fail hard if not replica set (no fallback).
  */
 export async function runInTransactionOrFallback<T>(
   fn: (ctx: { db: Db; session?: ClientSession }) => Promise<T>,
@@ -42,12 +49,17 @@ export async function runInTransactionOrFallback<T>(
   try {
     return await runInTransaction(({ db, session }) => fn({ db, session }));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (
-      msg.includes('Transaction numbers are only allowed on a replica set')
-      || msg.includes('replica set')
-      || msg.includes('not support transactions')
-    ) {
+    if (isNoTransactionSupportError(e)) {
+      if (requiresMongoTransactions()) {
+        throw new MongoTransactionsRequiredError();
+      }
+      if (!warnedNoTx) {
+        warnedNoTx = true;
+        console.warn(
+          '[transaction] MongoDB does not support transactions (standalone?). '
+          + 'Non-atomic fallback — local dev only. Use: mongod --replSet rs0',
+        );
+      }
       const db = await connectToMongo();
       return fn({ db });
     }

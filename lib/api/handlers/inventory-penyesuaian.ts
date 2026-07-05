@@ -21,6 +21,7 @@ import {
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { resolveProductGudangKode, purgeOtherWarehouseRows } from '@/lib/api/product-warehouse';
+import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import type { HandlerContext } from '@/types/api/handler';
@@ -74,17 +75,30 @@ export async function handlePenyesuaian({
       items: [],
       createdAt: now,
     });
-    const adjustPlan: Array<{ prod: ReturnType<typeof asProductRow>; lokasiKode: string; lokasiLabel: string; qtyAktual: number }> = [];
+    const adjustPlan: Array<{ prod: ReturnType<typeof asProductRow>; lokasiKode: string; lokasiLabel: string; qtyAktual: number; qtyEntered?: number; uomId?: string; satuan?: string }> = [];
+    const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
     for (const it of items) {
       const stokId = itemStokId(it);
       const prodRaw = await findMasterDoc(db, 'products', scopeAuth, { id: stokId });
       if (!prodRaw) return err(`Produk ${it.kode || stokId} tidak ditemukan`, 404);
       const prod = asProductRow(prodRaw);
+      const resolved = await resolveLineQtyBase(db, tenantId, prod.id, {
+        qty: String(it.qtyAktual ?? 0),
+        uomId: (it as { uomId?: string }).uomId,
+        satuan: (it as { satuan?: string }).satuan,
+      }, uomsCache);
+      if ('error' in resolved) return err(resolved.error, 400);
       const lokasiKode = resolveProductGudangKode(prod);
       const lokasiLabel = `${lokasiKode} - ${warehouseLabel(lokasiKode)}`;
       if (!doc.lokasi) doc.lokasi = lokasiLabel;
       else if (doc.lokasi !== lokasiLabel && doc.lokasi !== 'Multi gudang') doc.lokasi = 'Multi gudang';
-      adjustPlan.push({ prod, lokasiKode, lokasiLabel, qtyAktual: parseFloat(String(it.qtyAktual || 0)) });
+      adjustPlan.push({
+        prod, lokasiKode, lokasiLabel,
+        qtyAktual: resolved.qtyBase,
+        qtyEntered: resolved.qty,
+        uomId: resolved.uomId,
+        satuan: resolved.satuan,
+      });
     }
 
     try {
@@ -99,7 +113,10 @@ export async function handlePenyesuaian({
           const qtySistem = row ? (parseFloat(String(row.qty)) || 0) : 0;
           const selisih = qtyAktual - qtySistem;
           doc.items.push({
-            stokId: prod.id, kode: prod.kode, nama: prod.nama, satuan: prod.satuan,
+            stokId: prod.id, kode: prod.kode, nama: prod.nama,
+            satuan: plan.satuan || prod.satuan,
+            uomId: plan.uomId,
+            qtyEntered: plan.qtyEntered,
             gudangKode: lokasiKode, qtySistem, qtyAktual, selisih,
           });
           await setQtyStokLokasi(txDb, tenantId, prod.id, lokasiKode, qtyAktual, session);
@@ -112,6 +129,9 @@ export async function handlePenyesuaian({
             sourceType: 'PENYESUAIAN',
             masuk: selisih > 0 ? selisih : 0,
             keluar: selisih < 0 ? Math.abs(selisih) : 0,
+            qtyEntered: plan.qtyEntered,
+            uomId: plan.uomId,
+            satuan: plan.satuan || prod.satuan,
             hargaSatuan: prod.hargaBeli || 0,
           }), session ? { session } : {});
         }

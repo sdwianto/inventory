@@ -8,7 +8,8 @@ import path from 'path';
 import crypto from 'crypto';
 
 const NEXT_DIR = '.next';
-const STAMP_FILE = path.join(NEXT_DIR, '.dev-route-stamp');
+const CACHE_DIR = '.cache';
+const STAMP_FILE = path.join(CACHE_DIR, 'dev-route-stamp');
 const ROUTE_TS = 'app/api/[[...path]]/route.ts';
 
 if (!fs.existsSync(ROUTE_TS)) {
@@ -22,16 +23,14 @@ function clearNext(reason) {
   fs.rmSync(NEXT_DIR, { recursive: true, force: true });
 }
 
-if (fs.existsSync(NEXT_DIR)) {
-  const stampMissing = !fs.existsSync(STAMP_FILE);
-  const stampStale = !stampMissing && fs.readFileSync(STAMP_FILE, 'utf8').trim() !== hash;
-
-  if (stampMissing) {
-    clearNext('Menghapus cache .next usang (API route sudah TypeScript)');
-  } else if (stampStale) {
+if (fs.existsSync(STAMP_FILE)) {
+  const stampStale = fs.readFileSync(STAMP_FILE, 'utf8').trim() !== hash;
+  if (stampStale) {
     clearNext('Menghapus cache .next (API route berubah)');
   }
+} else if (fs.existsSync(NEXT_DIR)) {
+  clearNext('Menghapus cache .next usang (belum ada stamp dev)');
 }
 
-fs.mkdirSync(NEXT_DIR, { recursive: true });
+fs.mkdirSync(CACHE_DIR, { recursive: true });
 fs.writeFileSync(STAMP_FILE, hash);

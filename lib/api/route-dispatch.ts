@@ -33,7 +33,9 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   tenants: async () => (await import('@/lib/api/handlers/tenants')).handleTenants,
   users: async () => (await import('@/lib/api/handlers/users')).handleUsers,
   'bg-jobs': async () => (await import('@/lib/api/handlers/bg-jobs')).handleBgJobs,
+  ops: async () => (await import('@/lib/api/handlers/ops-dashboard')).handleOpsDashboard,
   workspace: async () => (await import('@/lib/api/handlers/workspace')).handleWorkspace,
+  'audit-log': async () => (await import('@/lib/api/handlers/audit')).handleAudit,
   pages: async () => (await import('@/lib/api/handlers/pages')).handlePages,
 };
 

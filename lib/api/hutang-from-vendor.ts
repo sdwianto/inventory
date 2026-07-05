@@ -578,6 +578,16 @@ export async function applyCreditNoteFromVendor(
           noCN: payload.noCN,
           amount: reduce,
           postedAt: payload.postedAt || now,
+          items: Array.isArray(payload.items)
+            ? payload.items.map((it) => ({
+              lineId: it.lineId,
+              stokId: it.stokId,
+              uomId: it.uomId,
+              satuan: it.satuan,
+              qty: it.qty,
+              qtyBase: it.qtyBase,
+            }))
+            : undefined,
         },
       } as never,
     },

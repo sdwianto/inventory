@@ -229,6 +229,77 @@ export async function resolveHutangVariance(
   };
 }
 
+type LineQtyRow = { kode: string; uomId?: string; satuan?: string; qty: number };
+
+function lineBucketKey(kode: string, uomId?: string, satuan?: string): string {
+  const uom = String(uomId || satuan || '').trim() || '_default';
+  return `${String(kode || '').trim()}::${uom}`;
+}
+
+function collectLineQty(items: JsonObject[], qtyField: string): Map<string, LineQtyRow> {
+  const map = new Map<string, LineQtyRow>();
+  for (const it of items) {
+    const kode = String(it.kode || it.vendorKode || it.localKode || '').trim();
+    if (!kode) continue;
+    const key = lineBucketKey(kode, String(it.uomId || ''), String(it.satuan || ''));
+    const qty = parseFloat(String(it[qtyField] ?? it.qty ?? 0)) || 0;
+    const prev = map.get(key);
+    if (prev) prev.qty += qty;
+    else {
+      map.set(key, {
+        kode,
+        uomId: it.uomId ? String(it.uomId) : undefined,
+        satuan: it.satuan ? String(it.satuan) : undefined,
+        qty,
+      });
+    }
+  }
+  return map;
+}
+
+/** Variance per baris kode+UOM — PO vs SO snapshot vs invoice (P1.3b). */
+export function buildLineVarianceByUom(params: {
+  poItems?: JsonObject[];
+  soItems?: JsonObject[];
+  invoiceItems?: JsonObject[];
+}) {
+  const poMap = collectLineQty(params.poItems || [], 'qty');
+  const soMap = collectLineQty(params.soItems || [], 'qty');
+  const invMap = collectLineQty(params.invoiceItems || [], 'qty');
+  const keys = new Set([...poMap.keys(), ...soMap.keys(), ...invMap.keys()]);
+  const rows: Array<{
+    kode: string;
+    uomId?: string;
+    satuan: string;
+    poQty: number;
+    soQty: number;
+    invoiceQty: number;
+    variancePoToSo: number;
+    varianceSoToInvoice: number;
+  }> = [];
+
+  for (const key of keys) {
+    const po = poMap.get(key);
+    const so = soMap.get(key);
+    const inv = invMap.get(key);
+    const poQty = po?.qty || 0;
+    const soQty = so?.qty || 0;
+    const invoiceQty = inv?.qty || 0;
+    rows.push({
+      kode: po?.kode || so?.kode || inv?.kode || key.split('::')[0],
+      uomId: po?.uomId || so?.uomId || inv?.uomId,
+      satuan: po?.satuan || so?.satuan || inv?.satuan || key.split('::')[1] || '—',
+      poQty,
+      soQty,
+      invoiceQty,
+      variancePoToSo: soQty - poQty,
+      varianceSoToInvoice: invoiceQty - soQty,
+    });
+  }
+
+  return rows.sort((a, b) => a.kode.localeCompare(b.kode) || a.satuan.localeCompare(b.satuan));
+}
+
 export async function backfillHutangVarianceFields(db: Db, tenantId: string | null | undefined) {
   const filter: Record<string, unknown> = { referenceType: 'VENDOR_INVOICE' };
   if (tenantId) filter.tenantId = tenantId;

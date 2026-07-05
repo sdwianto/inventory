@@ -14,6 +14,7 @@ import {
   getQtyStokLokasi,
   syncProductStokFromLokasi,
 } from '@/lib/api/stok-lokasi';
+import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode, warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
@@ -48,6 +49,9 @@ interface ReleaseLineItem {
   nama?: string;
   satuan?: string;
   qty: number;
+  qtyBase?: number;
+  qtyEntered?: number;
+  uomId?: string;
   hargaBeli: number;
 }
 
@@ -129,6 +133,7 @@ export async function handleInventoryReleases({
     if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING atau GBASAH', 400);
 
     const lineItems: ReleaseLineItem[] = [];
+    const uomsCacheCreate = new Map<string, import('@/lib/uom/types').ProductUom[]>();
     for (const it of items) {
       const prod = await findMasterDoc(db, 'products', scopeAuth, { id: it.stokId });
       if (!prod) return err(`Produk tidak ditemukan: ${it.kode || it.stokId}`, 404);
@@ -143,18 +148,27 @@ export async function handleInventoryReleases({
       if (!prodRow.id) return err(`Produk tidak ditemukan: ${it.kode || it.stokId}`, 404);
       const whErr = assertProductWarehouse(prodRow, lokasiKode);
       if (whErr) return err(whErr.error, 400);
-      const qty = parseFloat(String(it.qty)) || 0;
-      if (qty <= 0) return err(`Qty tidak valid: ${prodRow.nama}`, 400);
+      const resolved = await resolveLineQtyBase(db, tenantId, prodRow.id, {
+        qty: it.qty,
+        uomId: (it as { uomId?: string }).uomId,
+        satuan: (it as { satuan?: string }).satuan,
+      }, uomsCacheCreate);
+      if ('error' in resolved) return err(resolved.error, 400);
+      const qtyBase = resolved.qtyBase;
+      if (qtyBase <= 0) return err(`Qty tidak valid: ${prodRow.nama}`, 400);
       const avail = parseFloat(String(await getQtyStokLokasi(db, tenantId, prodRow.id, lokasiKode))) || 0;
-      if (avail < qty) {
-        return err(`Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail})`, 400);
+      if (avail < qtyBase) {
+        return err(`Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`, 400);
       }
       lineItems.push({
         stokId: prodRow.id,
         kode: String(prodRow.kode || ''),
         nama: String(prodRow.nama || ''),
-        satuan: String(prodRow.satuan || ''),
-        qty,
+        satuan: resolved.satuan || String(prodRow.satuan || ''),
+        qty: resolved.qty,
+        qtyBase,
+        qtyEntered: resolved.qty,
+        uomId: resolved.uomId,
         hargaBeli: parseInt(String(prodRow.hargaBeli || 0), 10),
       });
     }
@@ -235,7 +249,21 @@ export async function handleInventoryReleases({
     if (!lokasiKode) return err('Gudang tidak valid', 400);
     const now = new Date();
 
-    // Klaim status + stok + kartu satu unit atomik — approve ganda / partial failure aman.
+    const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
+    const releaseLines: Array<ReleaseLineItem & { qtyBase: number }> = [];
+    for (const it of doc.items || []) {
+      if (it.qtyBase != null && it.qtyBase > 0) {
+        releaseLines.push({ ...it, qtyBase: it.qtyBase });
+        continue;
+      }
+      const resolved = await resolveLineQtyBase(db, tenantId, String(it.stokId), {
+        qty: it.qty,
+        uomId: (it as { uomId?: string }).uomId,
+        satuan: (it as { satuan?: string }).satuan,
+      }, uomsCache);
+      if ('error' in resolved) return err(resolved.error, 400);
+      releaseLines.push({ ...it, qtyBase: resolved.qtyBase, qty: resolved.qty, uomId: resolved.uomId, satuan: resolved.satuan });
+    }
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const claim = await txDb.collection('inventory_releases').updateOne(
@@ -253,9 +281,9 @@ export async function handleInventoryReleases({
         );
         if (claim.modifiedCount === 0) throw new Error('Release sudah diproses oleh approver lain');
 
-        for (const it of doc.items || []) {
+        for (const it of releaseLines) {
           await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
-          const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qty, session);
+          const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qtyBase, session);
           if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
           await syncProductStokFromLokasi(txDb, tenantId, it.stokId, session);
           await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
@@ -267,7 +295,10 @@ export async function handleInventoryReleases({
             keterangan: `Release operasional: ${doc.keperluan}`,
             sourceType: 'RELEASE',
             masuk: 0,
-            keluar: it.qty,
+            keluar: it.qtyBase,
+            qtyEntered: it.qty,
+            uomId: it.uomId,
+            satuan: it.satuan,
             hargaSatuan: it.hargaBeli || 0,
           }), session ? { session } : {});
         }

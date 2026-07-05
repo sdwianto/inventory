@@ -9,6 +9,7 @@ import { Receipt, Search, ArrowDown, ArrowUp, Package } from 'lucide-react';
 import ListSummaryCards from '@/components/ListSummaryCards';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { formatIDR, formatDate, formatDateTime, formatNumber } from '@/lib/format';
+import { formatKartuMutasiLabel } from '@/lib/uom/display';
 import ListExportMenu from '@/components/ListExportMenu';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
 import { toast } from 'sonner';
@@ -17,6 +18,8 @@ import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+
+const KARTU_COL_SPAN = 9;
 
 export default function KartuStokPage() {
   const [selectedProduct, setSelectedProduct] = useState<JsonObject | null>(null);
@@ -114,9 +117,19 @@ export default function KartuStokPage() {
           { key: 'noTransaksi', label: 'No. Transaksi' },
           { key: 'keterangan', label: 'Keterangan' },
           { key: 'sourceType', label: 'Sumber' },
-          { key: 'masuk', label: 'Masuk', value: (r) => (num(r.masuk) > 0 ? formatNumber(num(r.masuk)) : '-') },
-          { key: 'keluar', label: 'Keluar', value: (r) => (num(r.keluar) > 0 ? formatNumber(num(r.keluar)) : '-') },
-          { key: 'saldo', label: 'Saldo', value: (r) => formatNumber(num(r.saldo)) },
+          {
+            key: 'qtyTransaksi',
+            label: 'Qty Transaksi',
+            value: (r) => formatKartuMutasiLabel({
+              masuk: num(r.masuk),
+              keluar: num(r.keluar),
+              qtyEntered: r.qtyEntered != null ? num(r.qtyEntered) : undefined,
+              satuan: str(r.satuan),
+            }) || '—',
+          },
+          { key: 'masuk', label: 'Masuk (base)', value: (r) => (num(r.masuk) > 0 ? formatNumber(num(r.masuk)) : '-') },
+          { key: 'keluar', label: 'Keluar (base)', value: (r) => (num(r.keluar) > 0 ? formatNumber(num(r.keluar)) : '-') },
+          { key: 'saldo', label: 'Saldo', value: (r) => str(r.saldoDisplay) || formatNumber(num(r.saldo)) },
           { key: 'hargaSatuan', label: 'Harga', value: (r) => formatIDR(num(r.hargaSatuan)) },
         ],
         rows,
@@ -182,7 +195,7 @@ export default function KartuStokPage() {
               items={[
                 {
                   label: 'Saldo Kartu Stok',
-                  value: `${formatNumber(saldoKartu)} ${str(data.product.satuan)}`,
+                  value: str(data.product.stokDisplay) || `${formatNumber(saldoKartu)} ${str(data.product.satuan)}`,
                 },
                 { label: 'Harga Beli', value: formatIDR(num(data.product.hargaBeli)) },
                 { label: 'Total Masuk', value: formatNumber(totalMasuk), valueClassName: 'text-green-600', icon: ArrowDown },
@@ -201,28 +214,36 @@ export default function KartuStokPage() {
                   <th className="px-3 py-2 text-left">No. Transaksi</th>
                   <th className="px-3 py-2 text-left">Keterangan</th>
                   <th className="px-3 py-2 text-center">Sumber</th>
-                  <th className="px-3 py-2 text-right">Masuk</th>
-                  <th className="px-3 py-2 text-right">Keluar</th>
+                  <th className="px-3 py-2 text-left">Qty Transaksi</th>
+                  <th className="px-3 py-2 text-right">Masuk (base)</th>
+                  <th className="px-3 py-2 text-right">Keluar (base)</th>
                   <th className="px-3 py-2 text-right">Saldo</th>
                   <th className="px-3 py-2 text-right">Harga</th>
                 </tr>
               </thead>
               <tbody>
                 {!selectedProduct && (
-                  <tr><td colSpan={8} className="text-center py-12 text-slate-400"><Package className="w-10 h-10 mx-auto mb-2 opacity-40" />Pilih produk untuk melihat kartu stok</td></tr>
+                  <tr><td colSpan={KARTU_COL_SPAN} className="text-center py-12 text-slate-400"><Package className="w-10 h-10 mx-auto mb-2 opacity-40" />Pilih produk untuk melihat kartu stok</td></tr>
                 )}
-                {selectedProduct && loading && <tr><td colSpan={8} className="text-center py-10 text-slate-400">Memuat...</td></tr>}
+                {selectedProduct && loading && <tr><td colSpan={KARTU_COL_SPAN} className="text-center py-10 text-slate-400">Memuat...</td></tr>}
                 {selectedProduct && !loading && data.rows.length === 0 && (
-                  <tr><td colSpan={8} className="text-center py-10 text-slate-400">Tidak ada mutasi pada periode ini</td></tr>
+                  <tr><td colSpan={KARTU_COL_SPAN} className="text-center py-10 text-slate-400">Tidak ada mutasi pada periode ini</td></tr>
                 )}
                 {selectedProduct && !loading && data.truncated && (
                   <tr className="bg-amber-50 border-t">
-                    <td colSpan={8} className="px-3 py-2 text-xs text-amber-800 text-center">
+                    <td colSpan={KARTU_COL_SPAN} className="px-3 py-2 text-xs text-amber-800 text-center">
                       Menampilkan {data.rows.length} mutasi terakhir dari {formatNumber(data.totalRows)} — saldo awal baris pertama {formatNumber(data.saldoAwal)}. Gunakan filter tanggal untuk periode lebih spesifik.
                     </td>
                   </tr>
                 )}
-                {data.rows.map((r, i) => (
+                {data.rows.map((r, i) => {
+                  const mutasiLabel = formatKartuMutasiLabel({
+                    masuk: num(r.masuk),
+                    keluar: num(r.keluar),
+                    qtyEntered: r.qtyEntered != null ? num(r.qtyEntered) : undefined,
+                    satuan: str(r.satuan),
+                  });
+                  return (
                   <tr key={i} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs">{formatDateTime(str(r.tanggal))}</td>
                     <td className="px-3 py-2 font-mono text-xs">{str(r.noTransaksi)}</td>
@@ -235,12 +256,16 @@ export default function KartuStokPage() {
                         'bg-slate-100 text-slate-700'
                       }`}>{str(r.sourceType)}</span>
                     </td>
+                    <td className="px-3 py-2 text-xs text-slate-600">{mutasiLabel || '—'}</td>
                     <td className="px-3 py-2 text-right text-green-600 font-mono">{num(r.masuk) > 0 ? formatNumber(num(r.masuk)) : '-'}</td>
                     <td className="px-3 py-2 text-right text-red-600 font-mono">{num(r.keluar) > 0 ? formatNumber(num(r.keluar)) : '-'}</td>
-                    <td className="px-3 py-2 text-right font-semibold font-mono">{formatNumber(num(r.saldo))}</td>
+                    <td className="px-3 py-2 text-right font-semibold font-mono" title={str(r.saldoDisplay) && str(r.saldoDisplay) !== String(r.saldo) ? `Base: ${formatNumber(num(r.saldo))}` : undefined}>
+                      {str(r.saldoDisplay) || formatNumber(num(r.saldo))}
+                    </td>
                     <td className="px-3 py-2 text-right text-slate-500">{formatIDR(num(r.hargaSatuan))}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -76,6 +76,7 @@ export default function VendorInvoiceDocument({
   const rowsTyped = rows as JsonObject[];
   const totals = asObject(detail.totals);
   const cmp = asObject(detail.priceComparison);
+  const lineVariance = asArray(cmp.lineVarianceByUom) as JsonObject[];
   const poEst = num(cmp.poEstimasiTotal ?? detail.poEstimasiTotal ?? po.estimasiTotal);
   const soT = num(cmp.soTotal ?? detail.soTotal ?? asObject(po.vendorSoSnapshot).total);
   const invT = num(cmp.invoiceTotal ?? detail.total);
@@ -207,6 +208,42 @@ export default function VendorInvoiceDocument({
           <VarianceRow label="Estimasi PO" value={poEst} showDelta={false} />
           <VarianceRow label="Nilai SO (sales.app)" value={soT} delta={soT && poEst ? soT - poEst : null} showDelta={!!soT} />
           <VarianceRow label="Invoice (aktual)" value={invT} delta={soT ? invT - soT : null} showDelta={!!soT} />
+          {lineVariance.length > 0 && (
+            <div className="mt-3 pt-2 border-t border-slate-200">
+              <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Selisih qty per satuan</p>
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-slate-500">
+                    <th className="text-left py-0.5">Kode</th>
+                    <th className="text-center py-0.5">Sat</th>
+                    <th className="text-right py-0.5">PO</th>
+                    <th className="text-right py-0.5">SO</th>
+                    <th className="text-right py-0.5">Inv</th>
+                    <th className="text-right py-0.5">Δ SO</th>
+                    <th className="text-right py-0.5">Δ Inv</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lineVariance.map((row, i) => {
+                    const dSo = num(row.variancePoToSo);
+                    const dInv = num(row.varianceSoToInvoice);
+                    const warn = dSo !== 0 || dInv !== 0;
+                    return (
+                      <tr key={`${str(row.kode)}-${str(row.satuan)}-${i}`} className={warn ? 'text-amber-800' : ''}>
+                        <td className="font-mono py-0.5">{str(row.kode)}</td>
+                        <td className="text-center py-0.5">{str(row.satuan)}</td>
+                        <td className="text-right tabular-nums py-0.5">{num(row.poQty)}</td>
+                        <td className="text-right tabular-nums py-0.5">{num(row.soQty)}</td>
+                        <td className="text-right tabular-nums py-0.5">{num(row.invoiceQty)}</td>
+                        <td className="text-right tabular-nums py-0.5">{dSo > 0 ? `+${dSo}` : dSo}</td>
+                        <td className="text-right tabular-nums py-0.5">{dInv > 0 ? `+${dInv}` : dInv}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
         <div className="border rounded-lg p-3 space-y-1 min-w-0 vendor-invoice-totals">
           <div className="flex justify-between text-xs">

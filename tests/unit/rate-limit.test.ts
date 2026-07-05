@@ -6,17 +6,20 @@ describe('checkRateLimit', () => {
     _resetRateLimitStoreForTests();
   });
 
-  it('allows requests under the limit', () => {
+  it('allows requests under the limit', async () => {
     for (let i = 0; i < 5; i += 1) {
-      expect(checkRateLimit('test-key', 5, 60_000).allowed).toBe(true);
+      expect((await checkRateLimit('test-key', 5, 60_000)).allowed).toBe(true);
     }
   });
 
-  it('blocks when limit exceeded', () => {
+  it('blocks when limit exceeded', async () => {
     for (let i = 0; i < 3; i += 1) {
-      checkRateLimit('block-key', 3, 60_000);
+      await checkRateLimit('block-key', 3, 60_000);
     }
-    const blocked = checkRateLimit('block-key', 3, 60_000);
+    const blocked = await checkRateLimit('block-key', 3, 60_000);
     expect(blocked.allowed).toBe(false);
+    if (!blocked.allowed) {
+      expect(blocked.retryAfterSec).toBeGreaterThan(0);
+    }
   });
 });

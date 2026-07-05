@@ -12,6 +12,7 @@ const MASTER_COLLECTIONS = [
   'lokasi',
   'produk_grup',
   'produk_satuan',
+  'product_uom',
 ];
 
 const EXTRA_COLLECTIONS = [

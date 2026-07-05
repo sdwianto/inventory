@@ -8,6 +8,11 @@ import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { requireAuth, requireMaster, requireRole, requireTenantAccess } from '@/lib/api/require-auth';
 import { bootstrapTenantMasterData } from '@/lib/api/tenant-master';
 import { purgeTenantData } from '@/lib/api/purge-tenant';
+import {
+  auditDangerousRouteAccess,
+  requireProductionConfirmPhrase,
+  TENANT_PURGE_CONFIRM_PHRASE,
+} from '@/lib/api/production-guard';
 import { ACTING_TENANT_COOKIE, sessionCookieOptions } from '@/lib/api/session';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { storeBase64Image } from '@/lib/api/media-storage';
@@ -257,6 +262,9 @@ export async function handleTenants({
     const denied = requireMaster(auth);
     if (denied) return denied;
 
+    const confirmErr = requireProductionConfirmPhrase(body, TENANT_PURGE_CONFIRM_PHRASE, url);
+    if (confirmErr) return err(confirmErr, 400);
+
     const tenantId = path[1];
     if (tenantId === 'master') {
       return err('Tenant master tidak bisa dihapus', 400);
@@ -267,6 +275,13 @@ export async function handleTenants({
       return err(`Tenant masih punya ${userCount} user. Tambahkan ?force=true untuk hapus paksa (users juga akan dihapus).`, 400);
     }
     const purge = await purgeTenantData(db, tenantId, { deleteUsers: force || userCount === 0 });
+    auditDangerousRouteAccess({
+      route,
+      method,
+      kind: 'tenant_purge',
+      allowed: true,
+      auth,
+    });
     return ok({
       message: 'deleted',
       tenantId,

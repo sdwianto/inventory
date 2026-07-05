@@ -14,7 +14,12 @@ import { formatNumber, formatDateTime } from '@/lib/format';
 import { useSessionUser } from '@/lib/hooks/use-session-user';
 import ListExportMenu from '@/components/ListExportMenu';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
+import LineUomSelect from '@/components/uom/LineUomSelect';
+import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { lineUomKey, qtyInUom } from '@/lib/uom/line-ui';
+import type { ProductUom } from '@/lib/uom/types';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { flattenPenyesuaianDocLines } from '@/lib/export/flatten-doc-lines';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
@@ -46,19 +51,33 @@ export default function PenyesuaianPage() {
     setItems([]); setKeterangan(''); setShowForm(true);
   };
 
-  const addProduct = (p: JsonObject) => {
-    if (items.find(it => it.stokId === p.id)) {
+  const addProduct = async (p: JsonObject) => {
+    const id = str(p.id);
+    const defaultUom = await fetchDefaultProductUom(id);
+    const uomId = defaultUom?.id || '';
+    if (items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
       toast.error('Produk sudah ada di daftar');
       return;
     }
     const gudangKode = str(p.gudangKode, 'GKERING').toUpperCase();
     const stokByWarehouse = asObject(p.stokByWarehouse);
-    const qtySistem = num(stokByWarehouse[gudangKode] ?? p.stok);
+    const qtySistemBase = num(stokByWarehouse[gudangKode] ?? p.stok);
+    const qtyDisplay = qtyInUom(qtySistemBase, defaultUom);
     setItems([...items, {
-      stokId: p.id, kode: p.kode, nama: p.nama, satuan: p.satuan,
-      gudangKode, qtySistem, qtyAktual: qtySistem,
+      stokId: p.id, kode: p.kode, nama: p.nama,
+      uomId, satuan: defaultUom?.satuan || p.satuan,
+      gudangKode, qtySistemBase, qtySistem: qtyDisplay, qtyAktual: qtyDisplay,
     }]);
     setShowPicker(false);
+  };
+
+  const updateItemUom = (idx: number, uom: ProductUom) => {
+    setItems(items.map((it, i) => {
+      if (i !== idx) return it;
+      const base = num(it.qtySistemBase ?? it.qtySistem);
+      const display = qtyInUom(base, uom);
+      return { ...it, uomId: uom.id, satuan: uom.satuan, qtySistem: display, qtyAktual: display };
+    }));
   };
 
   const updateAktual = (idx: number, val: string) => {
@@ -76,7 +95,13 @@ export default function PenyesuaianPage() {
           keterangan,
           userId: user?.id,
           userName: user?.name,
-          items: items.map(it => ({ stokId: str(it.stokId), kode: str(it.kode), qtyAktual: num(it.qtyAktual) })),
+          items: items.map(it => ({
+            stokId: str(it.stokId),
+            kode: str(it.kode),
+            qtyAktual: num(it.qtyAktual),
+            uomId: str(it.uomId),
+            satuan: str(it.satuan),
+          })),
         },
       });
       toast.success(`Penyesuaian ${str(data.noPenyesuaian)} berhasil`);
@@ -89,6 +114,7 @@ export default function PenyesuaianPage() {
     try {
       const rows = list;
       if (!rows.length) { toast.error('Tidak ada data'); return; }
+      const flat = flattenPenyesuaianDocLines(rows);
       const stamp = new Date().toISOString().slice(0, 10);
       await runListExport(format, {
         baseName: `penyesuaian-stok-${stamp}`,
@@ -98,11 +124,16 @@ export default function PenyesuaianPage() {
           { key: 'noPenyesuaian', label: 'No.' },
           { key: 'keterangan', label: 'Keterangan', value: (r) => str(r.keterangan) || '-' },
           { key: 'userName', label: 'User', value: (r) => str(r.userName) || '-' },
-          { key: 'jumlahItem', label: 'Jml Item', value: (r) => asArray(r.items).length },
+          { key: 'itemKode', label: 'Kode' },
+          { key: 'itemNama', label: 'Nama' },
+          { key: 'itemSatuan', label: 'Satuan' },
+          { key: 'itemQtySistem', label: 'Qty Sistem' },
+          { key: 'itemQtyAktual', label: 'Qty Aktual' },
+          { key: 'itemSelisih', label: 'Selisih (base)' },
         ],
-        rows,
+        rows: flat,
       });
-      toast.success(`${rows.length} baris diekspor`);
+      toast.success(`${flat.length} baris diekspor`);
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -187,12 +218,13 @@ export default function PenyesuaianPage() {
                     <th className="px-2 py-2 text-left">Gudang</th>
                     <th className="px-2 py-2 text-right">Qty Sistem</th>
                     <th className="px-2 py-2 text-right">Qty Aktual</th>
+                    <th className="px-2 py-2 text-center">Satuan</th>
                     <th className="px-2 py-2 text-right">Selisih</th>
                     <th className="px-2 py-2 w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.length === 0 && <tr><td colSpan={7} className="text-center py-6 text-slate-400 text-xs">Belum ada item</td></tr>}
+                  {items.length === 0 && <tr><td colSpan={8} className="text-center py-6 text-slate-400 text-xs">Belum ada item</td></tr>}
                   {items.map((it, i) => {
                     const selisih = num(it.qtyAktual) - num(it.qtySistem);
                     return (
@@ -203,6 +235,9 @@ export default function PenyesuaianPage() {
                         <td className="px-2 py-2 text-right font-mono">{formatNumber(num(it.qtySistem))} {str(it.satuan)}</td>
                         <td className="px-2 py-2 text-right">
                           <input type="number" value={num(it.qtyAktual)} onChange={e => updateAktual(i, e.target.value)} className="w-24 border rounded px-2 py-1 text-right" step="0.01" />
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <LineUomSelect stokId={str(it.stokId)} uomId={str(it.uomId)} onChange={(uom) => updateItemUom(i, uom)} />
                         </td>
                         <td className={`px-2 py-2 text-right font-semibold ${selisih > 0 ? 'text-green-600' : selisih < 0 ? 'text-red-600' : 'text-slate-500'}`}>
                           {selisih > 0 ? '+' : ''}{formatNumber(selisih)}
@@ -248,9 +283,10 @@ export default function PenyesuaianPage() {
                   <tr>
                     <th className="px-2 py-2 text-left">Kode</th>
                     <th className="px-2 py-2 text-left">Nama</th>
+                    <th className="px-2 py-2 text-center">Sat</th>
                     <th className="px-2 py-2 text-right">Sistem</th>
                     <th className="px-2 py-2 text-right">Aktual</th>
-                    <th className="px-2 py-2 text-right">Selisih</th>
+                    <th className="px-2 py-2 text-right">Selisih (base)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -261,8 +297,9 @@ export default function PenyesuaianPage() {
                     <tr key={i} className="border-t">
                       <td className="px-2 py-2 font-mono text-xs">{str(it.kode)}</td>
                       <td className="px-2 py-2">{str(it.nama)}</td>
+                      <td className="px-2 py-2 text-center text-xs uppercase">{str(it.satuan) || '—'}</td>
                       <td className="px-2 py-2 text-right">{formatNumber(num(it.qtySistem))}</td>
-                      <td className="px-2 py-2 text-right">{formatNumber(num(it.qtyAktual))}</td>
+                      <td className="px-2 py-2 text-right">{formatNumber(num(it.qtyEntered ?? it.qtyAktual))}</td>
                       <td className={`px-2 py-2 text-right font-semibold ${itemSelisih > 0 ? 'text-green-600' : itemSelisih < 0 ? 'text-red-600' : ''}`}>
                         {itemSelisih > 0 ? '+' : ''}{formatNumber(itemSelisih)}
                       </td>

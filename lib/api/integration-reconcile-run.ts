@@ -10,7 +10,9 @@ const GRN_SYNCING_STUCK_MS = 5 * 60 * 1000;
 
 export interface IntegrationReconcileDiff {
   cpoStatusMismatch: Array<{ id: string; noPO: string; status: string; lastVendorEvent?: string }>;
+  cpoWithoutVendorSo: Array<{ id: string; noPO: string; status: string }>;
   grnInvoiceNotDone: Array<{ id: string; noGRN?: string; noDO?: string; invoiceSyncStatus?: string }>;
+  grnPostedWithoutDo: Array<{ id: string; noGRN?: string }>;
   hutangMissingVendorInvoice: Array<{ id: string; noHutang?: string; noPO?: string }>;
   autoFixEnqueued: number;
 }
@@ -27,6 +29,26 @@ export async function runIntegrationReconcile(
     lastVendorEvent: 'invoice.posted',
     status: { $nin: ['INVOICED', 'CANCELLED', 'REJECTED', 'RECEIVED'] },
   }).project({ id: 1, noPO: 1, status: 1, lastVendorEvent: 1 }).limit(200).toArray();
+
+  const cpoWithoutVendorSo = await db.collection('customer_purchase_orders').find({
+    ...tenantFilter,
+    status: { $in: ['CONFIRMED', 'SHIPPED', 'RECEIVED', 'INVOICED'] },
+    $or: [
+      { salesOrderId: { $exists: false } },
+      { salesOrderId: null },
+      { salesOrderId: '' },
+    ],
+  }).project({ id: 1, noPO: 1, status: 1 }).limit(100).toArray();
+
+  const grnPostedWithoutDo = await db.collection('goods_receipts').find({
+    ...tenantFilter,
+    status: 'POSTED',
+    $or: [
+      { noDO: { $exists: false } },
+      { noDO: null },
+      { noDO: '' },
+    ],
+  }).project({ id: 1, noGRN: 1 }).limit(100).toArray();
 
   const grnCutoff = new Date(Date.now() - GRN_STALE_MS);
   const grnSyncingCutoff = new Date(Date.now() - GRN_SYNCING_STUCK_MS);
@@ -75,6 +97,15 @@ export async function runIntegrationReconcile(
       status: String(r.status || ''),
       lastVendorEvent: r.lastVendorEvent ? String(r.lastVendorEvent) : undefined,
     })),
+    cpoWithoutVendorSo: cpoWithoutVendorSo.map((r) => ({
+      id: String(r.id),
+      noPO: String(r.noPO || ''),
+      status: String(r.status || ''),
+    })),
+    grnPostedWithoutDo: grnPostedWithoutDo.map((r) => ({
+      id: String(r.id),
+      noGRN: r.noGRN ? String(r.noGRN) : undefined,
+    })),
     grnInvoiceNotDone: grnInvoiceNotDone.map((r) => ({
       id: String(r.id),
       noGRN: r.noGRN ? String(r.noGRN) : undefined,
@@ -96,9 +127,17 @@ export async function runIntegrationReconcile(
     diff,
     summary: {
       cpoMismatch: diff.cpoStatusMismatch.length,
+      cpoWithoutSo: diff.cpoWithoutVendorSo.length,
       grnStale: diff.grnInvoiceNotDone.length,
+      grnWithoutDo: diff.grnPostedWithoutDo.length,
       hutangOrphan: diff.hutangMissingVendorInvoice.length,
       autoFixEnqueued,
+      totalMismatch:
+        diff.cpoStatusMismatch.length
+        + diff.cpoWithoutVendorSo.length
+        + diff.grnInvoiceNotDone.length
+        + diff.grnPostedWithoutDo.length
+        + diff.hutangMissingVendorInvoice.length,
     },
     createdAt: new Date(),
   });

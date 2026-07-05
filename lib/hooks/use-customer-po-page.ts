@@ -27,6 +27,9 @@ import {
   isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
+import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { patchPoEstimasiLineOnUomChange } from '@/lib/uom/line-patch';
+import type { ProductUom } from '@/lib/uom/types';
 import { useBgJob } from '@/lib/hooks/use-bg-job';
 import { usePoMutations } from '@/lib/hooks/use-po-mutations';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
@@ -264,26 +267,30 @@ export function useCustomerPoPage() {
   };
 
   const buildItemsPayload = () => {
-    const map = new Map();
+    const map = new Map<string, JsonObject>();
     for (const l of lines) {
       const p = products.find((x) => x.id === l.localStokId);
       if (!p || !l.qty) continue;
       if (!p.vendorStokId && p.syncSource !== 'sales.app') continue;
       const qty = num(l.qty);
+      const uomId = str(l.uomId);
+      const productId = str(p.id);
+      const key = uomId ? `${productId}::${uomId}` : productId;
       const estimasiHarga = parseEstimasiHargaInput(l.estimasiHarga as string | number | null | undefined);
-      const prev = map.get(p.id);
+      const prev = map.get(key);
       if (prev) {
-        prev.qty += qty;
+        prev.qty = num(prev.qty) + qty;
         if (l.estimasiManual && estimasiHarga) prev.estimasiHarga = estimasiHarga;
       } else {
-        map.set(p.id, {
-          localStokId: p.id,
+        map.set(key, {
+          localStokId: productId,
           vendorStokId: p.vendorStokId,
           vendorTenantId: p.vendorTenantId,
           vendorKode: p.kode,
           kode: p.kode,
           nama: p.nama,
-          satuan: p.satuan,
+          satuan: str(l.satuan) || p.satuan,
+          uomId: uomId || undefined,
           qty,
           estimasiHarga,
           hargaBeliReferensi: parseInt(str(p.hargaBeli), 10),
@@ -301,12 +308,17 @@ export function useCustomerPoPage() {
 
   const addLine = () => setLines([...lines, emptyPoLine()]);
 
-  const selectProduct = (i: number, id: string) => {
+  const selectProduct = async (i: number, id: string) => {
     if (!id) {
-      updateLine(i, { localStokId: '', estimasiHarga: '', estimasiManual: false });
+      updateLine(i, { localStokId: '', uomId: '', satuan: '', factorToBase: undefined, estimasiHarga: '', estimasiManual: false });
       return;
     }
-    const existingIdx = lines.findIndex((l, idx) => idx !== i && l.localStokId === id);
+    const defaultUom = await fetchDefaultProductUom(id);
+    const uomId = defaultUom?.id || '';
+    const satuan = defaultUom?.satuan || '';
+    const existingIdx = lines.findIndex(
+      (l, idx) => idx !== i && l.localStokId === id && str(l.uomId) === uomId,
+    );
     const p = synced.find((x) => x.id === id);
     if (existingIdx >= 0) {
       const addQty = num(lines[i].qty, 1);
@@ -320,9 +332,30 @@ export function useCustomerPoPage() {
     }
     updateLine(i, {
       localStokId: id,
+      uomId,
+      satuan,
+      factorToBase: defaultUom?.factorToBase,
       estimasiHarga: poEstimasiFromProduct(p, vendorTierMap as Record<string, string>, defaultTier) || '',
       estimasiManual: false,
     });
+  };
+
+  const updateFormItemUom = (i: number, uom: ProductUom) => {
+    const line = lines[i];
+    if (!line?.localStokId) return;
+    const dupIdx = lines.findIndex(
+      (l, idx) => idx !== i && l.localStokId === line.localStokId && str(l.uomId) === uom.id,
+    );
+    if (dupIdx >= 0) {
+      const mergedQty = num(lines[dupIdx].qty) + num(line.qty, 1);
+      const next = lines
+        .map((l, idx) => (idx === dupIdx ? { ...l, qty: mergedQty } : l))
+        .filter((_, idx) => idx !== i);
+      setLines(next.length ? next : [emptyPoLine()]);
+      toast.info('Baris digabung — satuan sama');
+      return;
+    }
+    updateLine(i, patchPoEstimasiLineOnUomChange(line, uom));
   };
   const removeLine = (i: number) => setLines(lines.length > 1 ? lines.filter((_, idx) => idx !== i) : lines);
   const updateLine = (i: number, patch: JsonObject) => setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -583,6 +616,7 @@ export function useCustomerPoPage() {
     removeLine,
     selectProduct,
     updateLine,
+    updateFormItemUom,
     createPo,
     saveEditPo,
     submitting,

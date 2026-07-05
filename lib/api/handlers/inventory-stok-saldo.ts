@@ -4,6 +4,8 @@ import { withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-mast
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { warehouseLabel, WAREHOUSE_CODES, normalizeWarehouseKode, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { formatStockDualLabel } from '@/lib/uom/display';
 import type { HandlerContext } from '@/types/api/handler';
 
 interface TrendBucket {
@@ -288,6 +290,7 @@ export async function handleStokSaldo({
     .sort({ gudangKode: 1, nama: 1 })
     .limit(500)
     .toArray();
+  const uomMap = await listProductUomsByProductIds(db, tid, products.map((p) => String(p.id)));
   const stokMap = await getStokByWarehouseBatch(db, tid, products.map((p) => p.id));
   let summaryQtyKering = 0;
   let summaryQtyBasah = 0;
@@ -299,6 +302,7 @@ export async function handleStokSaldo({
     const gudangKode = resolveProductGudangKode(p);
     const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
     const stokQty = byWh[gudangKode] || parseFloat(p.stok) || 0;
+    const uoms = uomMap.get(String(p.id)) || [];
     const hargaBeli = parseInt(p.hargaBeli || 0, 10);
     const nilaiStok = Math.round(stokQty * hargaBeli);
     const qtyKering = gudangKode === 'GKERING' ? stokQty : 0;
@@ -318,6 +322,7 @@ export async function handleStokSaldo({
       gudangNama: warehouseLabel(gudangKode),
       hargaBeli,
       stokQty,
+      stokDisplay: formatStockDualLabel(stokQty, uoms),
       nilaiStok,
       stokGudangKering: qtyKering,
       stokGudangBasah: qtyBasah,

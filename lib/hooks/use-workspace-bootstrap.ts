@@ -1,17 +1,21 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { getUser } from '@/lib/auth-client';
 import { setLokasiAktif } from '@/lib/lokasi-client';
 import { queryKeys } from '@/lib/query-keys';
+import { setClientFeatureFlags } from '@/lib/feature-flags-client';
+import type { TenantFeatureFlags } from '@/lib/api/feature-flags';
 
 export interface WorkspaceBootstrap {
   scope: {
     tenantId: string;
     tenantLabel: string;
     lokasiList: Array<Record<string, unknown>>;
+    featureFlags?: TenantFeatureFlags;
   };
   branding: {
     tenantId: string;
@@ -54,6 +58,10 @@ export function useWorkspaceBootstrap(enabled = true) {
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
+
+  useEffect(() => {
+    setClientFeatureFlags(query.data?.scope?.featureFlags);
+  }, [query.data?.scope?.featureFlags]);
 
   return {
     ...query,

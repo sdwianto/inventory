@@ -1,4 +1,5 @@
 // Stok per lokasi (gudang) — qty per tenant + produk + kode lokasi.
+// qty selalu dalam satuan dasar produk (qtyBase); konversi UOM di boundary mutasi.
 // Semua mutasi qty atomik ($inc dengan guard di query) — aman dari race condition.
 
 import type { ClientSession, Db } from 'mongodb';

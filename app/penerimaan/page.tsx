@@ -417,7 +417,7 @@ export default function PenerimaanPage() {
               <div key={rowKey} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
                 <div className="flex-1 min-w-[140px]">
                   <div className="font-medium truncate">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</div>
-                  <div className="text-xs text-slate-500">{str(it.vendorKode)} · kirim: {str(it.qtyOrdered)} {str(it.satuan)}</div>
+                  <div className="text-xs text-slate-500">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}{it.uomId ? ` · UOM ${str(it.uomId).slice(0, 8)}…` : ''}</div>
                 </div>
                 <div className="w-36">
                   <Label className="text-xs">Gudang</Label>

@@ -39,7 +39,7 @@ export function buildVendorSoSnapshot(payload) {
     const qty = parseFloat(it.qty) || 0;
     const harga = parseInt(it.harga || 0, 10);
     const jumlah = lineJumlah(it);
-    return { kode: it.kode, qty, harga, jumlah };
+    return { kode: it.kode, qty, harga, jumlah, uomId: it.uomId, qtyBase: it.qtyBase, satuan: it.satuan };
   });
 
   const totals = resolveSoTotals({

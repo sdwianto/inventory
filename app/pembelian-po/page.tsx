@@ -59,6 +59,7 @@ function CustomerPoPageContent() {
     removeLine,
     selectProduct,
     updateLine,
+    updateFormItemUom,
     createPo,
     saveEditPo,
     submitting,
@@ -109,11 +110,11 @@ function CustomerPoPageContent() {
         </div>
         <OperationalScopeBar />
 
-        <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
-          <div className="bg-white border rounded-xl p-4 shadow-sm">
-            <div className="flex items-center gap-2 mb-3">
-              <CalendarDays className="w-5 h-5 text-orange-500" />
-              <h2 className="font-semibold">Kalender Kedatangan</h2>
+        <div className="grid gap-4 lg:grid-cols-[minmax(220px,280px)_1fr]">
+          <div className="bg-white border rounded-xl p-3 shadow-sm lg:max-w-[280px]">
+            <div className="flex items-center gap-2 mb-2">
+              <CalendarDays className="w-4 h-4 text-orange-500" />
+              <h2 className="font-semibold text-sm">Kalender Kedatangan</h2>
             </div>
             <PoCalendar
               pos={list as unknown as never[]}
@@ -216,6 +217,7 @@ function CustomerPoPageContent() {
         onRemoveLine={removeLine}
         onSelectProduct={selectProduct}
         onUpdateLine={updateLine}
+        onUpdateFormItemUom={updateFormItemUom}
         onSave={editingPo ? saveEditPo : createPo}
         onCancel={closeFormDialog}
       />

@@ -11,6 +11,7 @@ import {
   replayOfflineMutations,
   type OfflineMutation,
 } from '@/lib/offline-mutation-queue';
+import { isOfflineQueueEnabled } from '@/lib/feature-flags-client';
 
 function formatLabel(row: OfflineMutation) {
   if (row.label) return row.label;
@@ -136,7 +137,7 @@ export default function OfflineIndicator() {
     });
   };
 
-  if (!mounted || (online && pending === 0)) return null;
+  if (!mounted || !isOfflineQueueEnabled() || (online && pending === 0)) return null;
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 no-print">

@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 // Siapkan baris PO untuk dikirim ke sales.app — kode produk = single source of truth di master.
 
 import type { JsonObject } from '@/types/json';
+import { findProductUomById } from '@/lib/api/product-uom';
 
 type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string };
 
@@ -112,12 +113,26 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       };
     }
 
+    const qty = parseFloat(String(it.qty)) || 0;
+    let satuan = it.satuan ? String(it.satuan) : undefined;
+    let vendorUomId: string | undefined;
+
+    if (it.uomId && prod?.id) {
+      const localUom = await findProductUomById(db, tid, String(it.uomId));
+      if (localUom) {
+        satuan = localUom.satuan;
+        vendorUomId = localUom.vendorUomId || undefined;
+      }
+    }
+
     enriched.push({
       kode: vendorKode,
       vendorStokId,
       vendorTenantId: itemVendorTenantId,
-      qty: parseFloat(String(it.qty)) || 0,
+      qty,
       nama: it.nama || prod?.nama,
+      satuan,
+      uomId: vendorUomId,
       estimasiHarga: parseInt(String(it.estimasiHarga || 0), 10),
       harga: parseInt(String(it.estimasiHarga || 0), 10),
     });

@@ -4,6 +4,8 @@ import { findMasterDoc, resolveOperationalScope } from '@/lib/api/tenant-master'
 import { withOperationalFilter } from '@/lib/api/tenant-operational';
 import { requireRole, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { ledgerSaldoForProduct, reconcileProductStockFromLedger } from '@/lib/api/stock-ledger';
+import { listProductUoms } from '@/lib/api/product-uom';
+import { formatStockDualLabel } from '@/lib/uom/display';
 import type { HandlerContext } from '@/types/api/handler';
 import type { InventoryBody } from './inventory-shared';
 
@@ -81,23 +83,42 @@ export async function handleStokKartu({
       .project({
         id: 1, stokId: 1, lokasi: 1, tanggal: 1, noTransaksi: 1, keterangan: 1,
         sourceType: 1, masuk: 1, keluar: 1, hargaSatuan: 1, tenantId: 1,
+        qtyEntered: 1, satuan: 1, uomId: 1,
       })
       .sort({ tanggal: 1, _id: 1 })
       .skip(skip)
       .limit(limit)
       .toArray();
     let saldo = saldoAwalHalaman;
+    let productUoms: import('@/lib/uom/types').ProductUom[] = [];
+    if (productId) {
+      const p = await findMasterDoc(db, 'products', scopeAuth, { id: productId });
+      if (p) {
+        const tid = String(p.tenantId || scopeAuth?.tenantId || 'default');
+        productUoms = await listProductUoms(db, tid, productId);
+      }
+    }
     const enriched = list.map((r) => {
       saldo += (r.masuk || 0) - (r.keluar || 0);
-      return { ...clean(r), saldo };
+      return {
+        ...clean(r),
+        saldo,
+        saldoDisplay: productUoms.length
+          ? formatStockDualLabel(saldo, productUoms)
+          : String(saldo),
+      };
     });
     let product: Record<string, unknown> | null = null;
     let ledgerSaldo: number | null = null;
     if (productId) {
       const p = await findMasterDoc(db, 'products', scopeAuth, { id: productId });
       if (p) {
-        product = clean(p) as Record<string, unknown>;
-        const tid = p.tenantId || scopeAuth?.tenantId || 'default';
+        const tid = String(p.tenantId || scopeAuth?.tenantId || 'default');
+        const uoms = productUoms.length ? productUoms : await listProductUoms(db, tid, productId);
+        product = {
+          ...clean(p) as Record<string, unknown>,
+          stokDisplay: formatStockDualLabel(parseFloat(String(p.stok)) || 0, uoms),
+        };
         ledgerSaldo = await ledgerSaldoForProduct(db, tid, productId);
       }
     }

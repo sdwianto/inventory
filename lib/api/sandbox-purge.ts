@@ -56,6 +56,7 @@ export const SANDBOX_KEEP_HINT = [
   'lokasi',
   'produk_grup',
   'produk_satuan',
+  'product_uom',
   'stok_lokasi',
   'assets',
   'maintenance_schedules',

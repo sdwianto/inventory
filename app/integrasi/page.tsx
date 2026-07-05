@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Settings, CheckCircle2, AlertCircle, RefreshCw, Link2 } from 'lucide-react';
 import { str, num } from '@/types/json';
-import { getUser } from '@/lib/auth-client';
+import { getUser, syncSessionUser } from '@/lib/auth-client';
+import type { SessionUser } from '@/types/auth';
 import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
@@ -15,6 +16,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function IntegrasiPage() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -31,6 +33,21 @@ export default function IntegrasiPage() {
     '/api/integrations/status?probe=1',
     { enabled: false },
   );
+
+  const isMaster = user?.role === 'MASTER';
+
+  const { data: reconcileLatest } = useApiQuery<JsonObject>(
+    ['integrations', 'reconcile-latest'],
+    isMaster ? '/api/integrations/reconcile/latest' : null,
+    { enabled: Boolean(isMaster), staleTime: 60_000 },
+  );
+
+  const reconcileSummary = reconcileLatest?.summary as JsonObject | undefined;
+  const reconcileMismatch = num(reconcileSummary?.totalMismatch);
+
+  useEffect(() => {
+    void syncSessionUser().then(setUser);
+  }, []);
 
   const displayStatus = probeStatus || status;
 
@@ -159,6 +176,29 @@ export default function IntegrasiPage() {
           Customer tenant ini menerima katalog & transaksi dari semua vendor di sales.app.
         </p>
       </div>
+
+      {isMaster && reconcileMismatch > 0 && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">
+              {reconcileMismatch} ketidaksesuaian integrasi terdeteksi
+            </p>
+            <p className="text-xs mt-1 opacity-80">
+              CPO tanpa SO: {num(reconcileSummary?.cpoWithoutSo)}
+              {' · '}
+              GRN stale: {num(reconcileSummary?.grnStale)}
+              {' · '}
+              GRN tanpa DO: {num(reconcileSummary?.grnWithoutDo)}
+              {' · '}
+              Hutang orphan: {num(reconcileSummary?.hutangOrphan)}
+            </p>
+          </div>
+        </div>
+      )}
 
       <section className="bg-gradient-to-br from-blue-50 to-white border border-blue-200 rounded-lg p-5 space-y-4">
         <div className="flex items-center gap-2">

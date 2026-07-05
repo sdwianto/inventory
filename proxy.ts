@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { SESSION_COOKIE, verifySessionToken } from '@/lib/api/session';
+import { SESSION_COOKIE, verifySessionToken } from '@/lib/api/session-token';
 import { buildEdgeSessionHeaders } from '@/lib/api/edge-session';
-import { isPublicRoute } from '@/lib/api/require-auth';
+import { isPublicRoute } from '@/lib/api/public-routes';
 
 function injectEdgeSession(request: NextRequest, payload: ReturnType<typeof verifySessionToken>) {
   if (!payload?.sub) return NextResponse.next();

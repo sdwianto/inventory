@@ -3,6 +3,12 @@ import type { Db } from 'mongodb';
 
 import { v4 as uuidv4 } from 'uuid';
 import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { pickBaseUom, uomInputsFromLegacyProductBody, validateAndNormalizeUomInputs } from '@/lib/uom/conversion';
+import {
+  replaceProductUoms,
+  replaceProductUomsFromVendor,
+  productDenormFromBaseUom,
+} from '@/lib/api/product-uom';
 
 function parseVendorPrices(product) {
   return {
@@ -76,6 +82,7 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
 
   if (existing) {
     await db.collection('products').updateOne({ id: existing.id }, { $set: syncSet });
+    await syncVendorProductUoms(db, tid, existing.id, product, snap);
     return { action: 'updated', id: existing.id, kode: snap.kode, vendorTenantId: vTenant };
   }
 
@@ -99,7 +106,39 @@ export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTe
   };
   await db.collection('products').insertOne(doc);
   await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
+  await syncVendorProductUoms(db, tid, doc.id, product, snap);
   return { action: 'created', id: doc.id, kode: snap.kode, vendorTenantId: vTenant };
+}
+
+export async function syncVendorProductUoms(
+  db: Db,
+  tenantId: string,
+  localProductId: string,
+  vendorProduct: Record<string, unknown>,
+  snap: ReturnType<typeof vendorProductSnapshot>,
+) {
+  const vendorUoms = Array.isArray(vendorProduct.uoms) ? vendorProduct.uoms : null;
+  let uomDocs;
+  if (vendorUoms?.length) {
+    uomDocs = await replaceProductUomsFromVendor(db, tenantId, localProductId, vendorUoms as Array<Record<string, unknown>>);
+  } else {
+    const legacyParsed = validateAndNormalizeUomInputs(uomInputsFromLegacyProductBody({
+      satuan: snap.satuan,
+      barcode: snap.barcode,
+      hargaEcer: snap.hargaEcer,
+      hargaGrosir: snap.hargaGrosir,
+      hargaSpesial: snap.hargaSpesial,
+    }));
+    if ('error' in legacyParsed) return;
+    uomDocs = await replaceProductUoms(db, tenantId, localProductId, legacyParsed.uoms);
+  }
+  const base = pickBaseUom(uomDocs);
+  if (base) {
+    await db.collection('products').updateOne(
+      { id: localProductId },
+      { $set: productDenormFromBaseUom(base) },
+    );
+  }
 }
 
 export async function deactivateProductFromVendor(db: Db, customerTenantId, product) {

@@ -9,7 +9,7 @@ import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-mast
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot } from '@/lib/api/hutang-approval';
-import { resolveHutangVariance } from '@/lib/api/hutang-variance-enrich';
+import { resolveHutangVariance, buildLineVarianceByUom, resolveSoSnapshotForPo, findPoForHutang } from '@/lib/api/hutang-variance-enrich';
 import { buildHutangDetailEnrichment } from '@/lib/api/hutang-detail-enrich';
 import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval';
 import { backfixVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
@@ -219,6 +219,13 @@ export async function handleVendorHutang({
       buildHutangDetailEnrichment(db, doc, { forceRefresh }),
       resolveHutangVariance(db, doc),
     ]);
+    const linkedPo = await findPoForHutang(db, doc);
+    const soSnap = resolveSoSnapshotForPo(linkedPo as import('@/types/json').JsonObject | null, doc);
+    const lineVarianceByUom = buildLineVarianceByUom({
+      poItems: (linkedPo?.items || []) as import('@/types/json').JsonObject[],
+      soItems: (soSnap?.items || []) as import('@/types/json').JsonObject[],
+      invoiceItems: (doc.items || []) as import('@/types/json').JsonObject[],
+    });
     if (
       (doc.poEstimasiTotal || 0) !== variance.poEstimasiTotal
       || (doc.soTotal || 0) !== variance.soTotal
@@ -259,6 +266,7 @@ export async function handleVendorHutang({
         variancePoToSo: variance.variancePoToSo,
         varianceSoToInvoice: variance.varianceSoToInvoice,
         varianceGrnToInvoice: variance.varianceGrnToInvoice,
+        lineVarianceByUom,
       },
     });
   }

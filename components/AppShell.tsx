@@ -14,7 +14,7 @@ import {
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
-  Eraser,
+  Eraser, Activity, Shield,
 } from 'lucide-react';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
@@ -106,6 +106,8 @@ const NAV: NavEntry[] = [
       { href: '/integrasi', label: 'Integrasi Sales.app', icon: Settings },
       { href: '/utiliti/user', label: 'User Management', icon: UserCog },
       { href: '/utiliti/tenants', label: 'Daftar Tenant (MASTER)', icon: Building2 },
+      { href: '/utiliti/audit', label: 'Audit Log (MASTER)', icon: Shield },
+      { href: '/utiliti/ops', label: 'Ops Dashboard (MASTER)', icon: Activity },
       ...(isSandboxResetMenuVisible()
         ? [{ href: '/utiliti/sandbox', label: 'Reset Sandbox (MASTER)', icon: Eraser }]
         : []),

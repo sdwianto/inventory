@@ -5,6 +5,7 @@
 
 import { getUser } from '@/lib/auth-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
+import { isOfflineQueueEnabled } from '@/lib/feature-flags-client';
 
 const DB_NAME = 'dawam-erp-offline';
 const DB_VERSION = 2;
@@ -238,6 +239,9 @@ export async function fetchOrQueue(
   const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
   if (typeof navigator !== 'undefined' && !navigator.onLine && isMutation) {
+    if (!isOfflineQueueEnabled()) {
+      throw new Error('Antrian offline dinonaktifkan untuk tenant ini');
+    }
     await enqueueOfflineMutation({
       url,
       method,

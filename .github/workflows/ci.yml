@@ -32,6 +32,15 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Multi-UOM regression suite
+        run: npm run test:multi-uom
+
+      - name: P1 regression suite
+        run: npm run test:p1
+
+      - name: P3 regression suite
+        run: npm run test:p3
+
       - name: Build
         run: npm run build
         env:

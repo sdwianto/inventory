@@ -27,6 +27,7 @@ export const JOB_TYPES = {
   HUTANG_BACKFILL: 'HUTANG_BACKFILL',
   INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE',
   SANDBOX_RESET: 'SANDBOX_RESET',
+  AUDIT_LOG_PURGE: 'AUDIT_LOG_PURGE',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -349,6 +350,9 @@ export async function processJob(db: Db, job: BgJob) {
         includeSales: job.payload?.includeSales !== false,
         preserveJobId: job.id,
       });
+    } else if (job.type === JOB_TYPES.AUDIT_LOG_PURGE) {
+      const { runAuditLogPurgeJob } = await import('@/lib/api/audit-purge-run');
+      outcome = await runAuditLogPurgeJob(db);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

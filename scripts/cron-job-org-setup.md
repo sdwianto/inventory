@@ -82,6 +82,30 @@ Header sama seperti Sales.
 
 Tanpa keep-warm, request pertama setelah idle bisa lambat 3–8 detik.
 
+### E. Sales — validasi stok drift (harian)
+
+| Field | Nilai |
+|-------|--------|
+| Title | `DAWAM Sales — validate stok` |
+| URL | `https://sales-dawam.vercel.app/api/bg-jobs/enqueue-stok-validate` |
+| Schedule | Once daily (mis. 03:00 WIB) |
+| Request method | `GET` |
+| Headers | `Authorization: Bearer <CRON_SECRET>` |
+
+Set `OPS_ALERT_WEBHOOK_URL` di Vercel Sales untuk alert Slack/Discord bila drift terdeteksi.
+
+### F. Inventory — integration reconcile (harian)
+
+| Field | Nilai |
+|-------|--------|
+| Title | `DAWAM Inventory — integration reconcile` |
+| URL | `https://penarukan2.vercel.app/api/bg-jobs/enqueue-integration-reconcile` |
+| Schedule | Once daily (mis. 02:00 WIB) |
+| Request method | `GET` |
+| Headers | `Authorization: Bearer <CRON_SECRET>` |
+
+MASTER bisa cek laporan: `GET /api/integrations/reconcile/latest`. Health: `checks.integrationReconcile.totalMismatch`.
+
 ## 4. Verifikasi
 
 Dari mesin lokal (setelah deploy + env):

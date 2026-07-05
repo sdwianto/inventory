@@ -117,4 +117,10 @@ export const queryKeys = {
       all: ['maintenance-service-orders'] as const,
     },
   },
+  ops: {
+    dashboard: ['ops', 'dashboard'] as const,
+  },
+  audit: {
+    list: (params: Record<string, unknown>) => ['audit', 'list', params] as const,
+  },
 } as const;

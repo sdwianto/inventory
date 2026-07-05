@@ -1,47 +1,27 @@
 /**
  * Cache aplikasi — Redis (Upstash REST) opsional, fallback in-memory per instance.
- * Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN di Vercel untuk cache shared antar lambda.
  */
+
+import {
+  buildRedisKey,
+  isRedisConfigured,
+  redisCommand,
+} from '@/lib/api/redis-rest';
 
 type MemoryEntry = { value: string; expiresAt: number };
 
 const memory = new Map<string, MemoryEntry>();
 
-function redisConfigured(): boolean {
-  return !!(
-    process.env.UPSTASH_REDIS_REST_URL?.trim()
-    && process.env.UPSTASH_REDIS_REST_TOKEN?.trim()
-  );
-}
-
-async function redisCommand(command: (string | number)[]): Promise<unknown> {
-  const url = process.env.UPSTASH_REDIS_REST_URL!.trim();
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN!.trim();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify(command),
-    signal: AbortSignal.timeout(4000),
-  });
-  if (!res.ok) return null;
-  const data = await res.json() as { result?: unknown };
-  return data.result ?? null;
-}
-
-function prefix(): string {
-  return (process.env.APP_CACHE_PREFIX || 'inventory').trim();
-}
-
 export function isDistributedCacheEnabled(): boolean {
-  return redisConfigured();
+  return isRedisConfigured();
 }
 
 export function buildCacheKey(...parts: string[]): string {
-  return `${prefix()}:${parts.join(':')}`;
+  return buildRedisKey(...parts);
 }
 
 export async function cacheGetJson<T>(key: string): Promise<T | null> {
-  if (redisConfigured()) {
+  if (isRedisConfigured()) {
     try {
       const raw = await redisCommand(['GET', key]);
       if (raw == null) return null;
@@ -68,7 +48,7 @@ export async function cacheSetJson(key: string, value: unknown, ttlSec: number):
   const serialized = JSON.stringify(value);
   const ttl = Math.max(1, Math.floor(ttlSec));
 
-  if (redisConfigured()) {
+  if (isRedisConfigured()) {
     try {
       await redisCommand(['SET', key, serialized, 'EX', ttl]);
       return;
@@ -81,7 +61,7 @@ export async function cacheSetJson(key: string, value: unknown, ttlSec: number):
 }
 
 export async function cacheDel(key: string): Promise<void> {
-  if (redisConfigured()) {
+  if (isRedisConfigured()) {
     try {
       await redisCommand(['DEL', key]);
     } catch {
@@ -95,7 +75,7 @@ export async function cacheDelMany(keys: string[]): Promise<void> {
   const unique = [...new Set(keys.filter(Boolean))];
   if (!unique.length) return;
 
-  if (redisConfigured()) {
+  if (isRedisConfigured()) {
     try {
       await redisCommand(['DEL', ...unique]);
     } catch {
@@ -105,15 +85,13 @@ export async function cacheDelMany(keys: string[]): Promise<void> {
   for (const key of unique) memory.delete(key);
 }
 
-/** Hapus entri in-memory lokal (Redis mengandalkan TTL). */
 export function clearLocalMemoryCache(): void {
   memory.clear();
 }
 
-/** Hapus semua key Redis yang cocok pola (mis. `inventory:lokasi:*`). */
 export async function cacheDelByPattern(pattern: string): Promise<void> {
   const match = pattern.includes(':') ? pattern : buildCacheKey(pattern);
-  if (redisConfigured()) {
+  if (isRedisConfigured()) {
     try {
       let cursor = '0';
       do {

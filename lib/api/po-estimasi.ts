@@ -11,12 +11,15 @@ export function sumPoEstimasi(items) {
   return (items || []).reduce((s, it) => s + (it.estimasiJumlah || 0), 0);
 }
 
-/** Gabung baris PO dengan produk yang sama (localStokId / vendorKode). */
+/** Gabung baris PO dengan produk + satuan yang sama. */
 export function mergePoItemsByStokId(items) {
   const map = new Map();
   for (const raw of items || []) {
     const it = computeLineEstimasi(raw);
-    const key = it.localStokId || `${it.vendorTenantId || ''}:${it.vendorKode || it.kode || ''}`;
+    const baseKey = it.localStokId || `${it.vendorTenantId || ''}:${it.vendorKode || it.kode || ''}`;
+    const key = it.localStokId
+      ? `${baseKey}::${it.uomId || ''}`
+      : baseKey;
     if (!key || key === ':') continue;
     const prev = map.get(key);
     if (prev) {

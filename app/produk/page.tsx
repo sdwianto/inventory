@@ -1,7 +1,7 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str, num, asObject } from '@/types/json';
+import { str, num, asObject, asArray } from '@/types/json';
 import type { SessionUser } from '@/types/auth';
 import type { ListExportFormat } from '@/lib/run-list-export';
 import { useEffect, useMemo, useState } from 'react';
@@ -35,6 +35,17 @@ import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
 import { useProdukMeta } from '@/lib/hooks/use-produk-meta';
 import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { fetchJson } from '@/lib/fetch-json';
+import { ProductUomTable } from '@/components/produk/ProductUomTable';
+import {
+  defaultUomRows,
+  formFieldsToProductPayload,
+  productToFormFields,
+  uomRowsFromProduct,
+  validateFormUomRows,
+  type ProductLike,
+  type ProductUomFormRow,
+} from '@/lib/uom/form';
 
 export default function ProdukPage() {
   const confirm = useConfirm();
@@ -126,16 +137,38 @@ export default function ProdukPage() {
       ...EMPTY_PRODUCT,
       kode: `B${String(Date.now()).slice(-6)}`,
       tenantId: defaultTenant,
+      uoms: defaultUomRows(),
     };
     setForm(nextForm);
     setShowForm(true);
   };
 
+  const formUoms = (f: JsonObject): ProductUomFormRow[] => {
+    if (Array.isArray(f.uoms)) return f.uoms as ProductUomFormRow[];
+    return uomRowsFromProduct(f as ProductLike);
+  };
+
   const openEdit = (p: JsonObject) => {
     setEditing(p);
     const tid = String(p.tenantId || 'default');
-    setForm({ ...p, tenantId: tid });
+    setForm({ ...p, tenantId: tid, uoms: uomRowsFromProduct(p as ProductLike) });
     setShowForm(true);
+    void (async () => {
+      try {
+        let url = `/api/products/${str(p.id)}`;
+        url = withActingTenantQuery(url, filterTenantId, isMaster);
+        const detail = await fetchJson<JsonObject>(url);
+        setForm({
+          ...p,
+          ...detail,
+          tenantId: tid,
+          uoms: uomRowsFromProduct({ ...p, ...detail } as ProductLike),
+        });
+      } catch (e) {
+        if (e instanceof OfflineQueuedError) toast.message(e.message);
+        else toast.error(e instanceof Error ? e.message : String(e));
+      }
+    })();
   };
 
   const openMetaDialog = () => {
@@ -207,17 +240,40 @@ export default function ProdukPage() {
       toast.error('Pilih tenant untuk produk baru');
       return;
     }
-    if (!form.grup || !form.satuan) {
-      toast.error('Pilih grup dan satuan dari daftar master');
+    const vendorLocked = Boolean(editing && isVendorSynced(editing));
+    if (!form.grup) {
+      toast.error('Pilih grup dari daftar master');
       return;
     }
+    const uoms = formUoms(form);
+    if (!vendorLocked) {
+      const uomErr = validateFormUomRows(uoms);
+      if (uomErr) {
+        toast.error(uomErr);
+        return;
+      }
+    }
     try {
-      const payload = { ...form };
+      let payload: JsonObject;
+      if (vendorLocked) {
+        payload = {
+          hargaBeli: num(form.hargaBeli),
+          minStok: num(form.minStok),
+          gudangKode: str(form.gudangKode, 'GKERING'),
+        };
+      } else {
+        const fields = productToFormFields({ ...form, uoms } as ProductLike, str(form.tenantId));
+        payload = {
+          ...formFieldsToProductPayload(fields, {
+            includeTenantId: isMaster && !editing,
+            isEdit: Boolean(editing),
+          }),
+          gudangKode: str(form.gudangKode, 'GKERING'),
+        };
+        if (!editing) payload.stok = num(form.stok);
+      }
       if (!isMaster) delete payload.tenantId;
       if (editing) delete payload.stok;
-      delete payload.hargaSpesial;
-      delete payload.hargaGrosir;
-      delete payload.hargaEcer;
       await productMutation.mutateAsync({
         url: editing ? `/api/products/${editing.id}` : '/api/products',
         method: editing ? 'PUT' : 'POST',
@@ -267,25 +323,80 @@ export default function ProdukPage() {
   const getExportColumns = () => [
     ...(isMaster ? [{ key: 'tenantId', label: 'Tenant', value: (r: JsonObject) => tenantLabel(tenants, str(r.tenantId)) }] : []),
     { key: 'kode', label: 'Kode' },
-    { key: 'barcode', label: 'Barcode' },
     { key: 'nama', label: 'Nama' },
     { key: 'grup', label: 'Grup' },
     { key: 'gudangKode', label: 'Gudang', value: (r: JsonObject) => warehouseName(str(r.gudangKode, 'GKERING')) },
     { key: 'satuan', label: 'Satuan' },
-    { key: 'hargaBeli', label: 'Harga Beli' },
-    { key: 'stok', label: 'Stok' },
-    { key: 'minStok', label: 'Stok Minimum' },
+    { key: 'isBase', label: 'Satuan Dasar', value: (r: JsonObject) => (r.isBase ? 'Ya' : 'Tidak') },
+    { key: 'factorToBase', label: 'Faktor ke Base' },
+    { key: 'barcode', label: 'Barcode' },
+    { key: 'hargaBeli', label: 'Harga Beli (per base)' },
+    { key: 'hargaSpesial', label: 'Harga Spesial' },
+    { key: 'hargaGrosir', label: 'Harga Grosir' },
+    { key: 'hargaEcer', label: 'Harga Ecer' },
+    { key: 'stokBase', label: 'Stok (base)' },
+    { key: 'minStok', label: 'Stok Minimum (base)' },
     { key: 'aktif', label: 'Aktif', value: (r) => (r.aktif !== false ? 'Ya' : 'Tidak') },
   ];
 
+  const flattenProductsForExport = (products: JsonObject[]) => {
+    const rows: JsonObject[] = [];
+    for (const p of products) {
+      const uoms = asArray(p.uoms);
+      const gudang = warehouseName(str(p.gudangKode, 'GKERING'));
+      if (!uoms.length) {
+        rows.push({
+          tenantId: p.tenantId,
+          kode: p.kode,
+          nama: p.nama,
+          grup: p.grup,
+          gudangKode: gudang,
+          satuan: p.satuan,
+          isBase: true,
+          factorToBase: 1,
+          barcode: p.barcode,
+          hargaBeli: p.hargaBeli,
+          hargaSpesial: p.hargaSpesial,
+          hargaGrosir: p.hargaGrosir,
+          hargaEcer: p.hargaEcer,
+          stokBase: p.stok,
+          minStok: p.minStok,
+          aktif: p.aktif,
+        });
+        continue;
+      }
+      for (const raw of uoms) {
+        const u = asObject(raw);
+        rows.push({
+          tenantId: p.tenantId,
+          kode: p.kode,
+          nama: p.nama,
+          grup: p.grup,
+          gudangKode: gudang,
+          satuan: u.satuan,
+          isBase: u.isBase === true,
+          factorToBase: u.factorToBase ?? 1,
+          barcode: u.barcode || '',
+          hargaBeli: p.hargaBeli,
+          hargaSpesial: u.hargaSpesial ?? p.hargaSpesial,
+          hargaGrosir: u.hargaGrosir ?? p.hargaGrosir,
+          hargaEcer: u.hargaEcer ?? p.hargaEcer,
+          stokBase: u.isBase === true ? p.stok : '',
+          minStok: u.isBase === true ? p.minStok : '',
+          aktif: p.aktif,
+        });
+      }
+    }
+    return rows;
+  };
+
   const fetchExportRows = async () => {
-    let base = `/api/products?q=${encodeURIComponent(debouncedQ)}`;
+    let base = `/api/products?q=${encodeURIComponent(debouncedQ)}&includeUom=1`;
     base = withActingTenantQuery(base, filterTenantId, isMaster);
     const all = await fetchAllCursorPages<JsonObject>(base, { limit: 500 });
-    let rows = all;
-    rows = rows.filter((p) => gudangFilter[str(p.gudangKode, 'GKERING') as keyof typeof gudangFilter]);
-    if (rows.length === 0) throw new Error('Tidak ada data untuk diekspor');
-    return rows;
+    const filtered = all.filter((p) => gudangFilter[str(p.gudangKode, 'GKERING') as keyof typeof gudangFilter]);
+    if (filtered.length === 0) throw new Error('Tidak ada data untuk diekspor');
+    return flattenProductsForExport(filtered);
   };
 
   const exportData = async (format: ListExportFormat) => {
@@ -530,7 +641,17 @@ export default function ProdukPage() {
                         {warehouseName(str(p.gudangKode, 'GKERING'))}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-center text-xs uppercase">{str(p.satuan)}</td>
+                    <td className="px-3 py-2 text-center text-xs">
+                      <span className="uppercase">{str(p.satuan)}</span>
+                      {num(p.uomCount, 1) > 1 && (
+                        <span
+                          className="ml-1 inline-block text-[10px] px-1 py-0.5 bg-orange-100 text-orange-800 rounded font-medium"
+                          title={`${num(p.uomCount)} satuan`}
+                        >
+                          +{num(p.uomCount, 1) - 1}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right font-medium">
                       {(() => {
                         const { amount, vendorRef, tier } = displayHargaBeli(p);
@@ -543,7 +664,12 @@ export default function ProdukPage() {
                       })()}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className={`font-semibold ${num(p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}>{str(p.stok)}</span>
+                      <span
+                        className={`font-semibold ${num(p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}
+                        title={str(p.stokDisplay) && str(p.stokDisplay) !== str(p.stok) ? `Base: ${str(p.stok)}` : undefined}
+                      >
+                        {str(p.stokDisplay) || str(p.stok)}
+                      </span>
                     </td>
                     {canManageProducts && (
                       <td className="px-3 py-2">
@@ -577,10 +703,10 @@ export default function ProdukPage() {
       </div>
 
       <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           {editing && isVendorSynced(editing) && (
             <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-              Kode, nama, dan satuan dikelola di sales.app. Di inventory hanya stok &amp; harga beli yang bisa diubah.
+              Kode, nama, grup, dan satuan dikelola di sales.app. Di inventory hanya gudang, stok minimum, dan harga beli yang bisa diubah.
             </p>
           )}
           <DialogHeader>
@@ -624,23 +750,6 @@ export default function ProdukPage() {
               />
             </div>
             <div>
-              <Label>Barcode</Label>
-              <Input
-                value={str(form.barcode)}
-                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-                disabled={Boolean(editing && isVendorSynced(editing))}
-                className="font-mono"
-              />
-            </div>
-            <div className="col-span-2">
-              <Label>Nama Produk *</Label>
-              <Input
-                value={str(form.nama)}
-                onChange={(e) => setForm({ ...form, nama: e.target.value })}
-                disabled={Boolean(editing && isVendorSynced(editing))}
-              />
-            </div>
-            <div>
               <Label>Grup *</Label>
               <select
                 className={PRODUCT_SELECT_CLASS}
@@ -657,23 +766,43 @@ export default function ProdukPage() {
                 )}
               </select>
             </div>
-            <div>
-              <Label>Satuan *</Label>
-              <select
-                className={PRODUCT_SELECT_CLASS}
-                value={str(form.satuan)}
-                onChange={(e) => setForm({ ...form, satuan: e.target.value })}
-                disabled={satuanList.length === 0 || Boolean(editing && isVendorSynced(editing))}
-              >
-                <option value="">{satuanList.length ? '— Pilih satuan —' : '— Belum ada satuan —'}</option>
-                {satuanList.map((s) => (
-                  <option key={str(s.id)} value={str(s.nama)}>{str(s.nama)}</option>
-                ))}
-                {!!form.satuan && !satuanList.some((s) => s.nama === form.satuan) && (
-                  <option value={str(form.satuan)}>{str(form.satuan)} (legacy)</option>
-                )}
-              </select>
+            <div className="col-span-2">
+              <Label>Nama Produk *</Label>
+              <Input
+                value={str(form.nama)}
+                onChange={(e) => setForm({ ...form, nama: e.target.value })}
+                disabled={Boolean(editing && isVendorSynced(editing))}
+              />
             </div>
+
+            <FormSectionTitle>Harga Beli &amp; Stok</FormSectionTitle>
+            <div>
+              <Label>Harga Beli (per satuan dasar)</Label>
+              <Input
+                type="number"
+                min={0}
+                value={num(form.hargaBeli)}
+                onChange={(e) => setForm({ ...form, hargaBeli: parseInt(e.target.value || '0', 10) })}
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Isi dulu sebelum atur margin % harga jual per satuan.</p>
+            </div>
+            <div>
+              <Label>Stok Minimum</Label>
+              <Input
+                type="number"
+                min={0}
+                value={num(form.minStok)}
+                onChange={(e) => setForm({ ...form, minStok: parseFloat(e.target.value || '0') })}
+              />
+            </div>
+
+            <ProductUomTable
+              rows={formUoms(form)}
+              onChange={(uoms) => setForm({ ...form, uoms })}
+              satuanList={satuanList.map((s) => ({ id: str(s.id), nama: str(s.nama) }))}
+              hargaBeli={num(form.hargaBeli)}
+              readOnly={Boolean(editing && isVendorSynced(editing))}
+            />
 
             <FormSectionTitle>Gudang Penyimpanan</FormSectionTitle>
             <div className="col-span-2">
@@ -684,17 +813,6 @@ export default function ProdukPage() {
               <p className="text-[11px] text-slate-400 mt-2">Satu produk hanya disimpan di satu gudang.</p>
             </div>
 
-            <FormSectionTitle>Harga Beli &amp; Stok</FormSectionTitle>
-            <div>
-              <Label>Harga Beli</Label>
-              <Input
-                type="number"
-                min={0}
-                value={num(form.hargaBeli)}
-                onChange={(e) => setForm({ ...form, hargaBeli: parseInt(e.target.value || '0', 10) })}
-              />
-              <p className="text-[11px] text-slate-400 mt-1">Harga pembelian dari vendor (sales.app).</p>
-            </div>
             <div>
               <Label>Stok</Label>
               {editing ? (
@@ -712,15 +830,6 @@ export default function ProdukPage() {
                   onChange={(e) => setForm({ ...form, stok: parseFloat(e.target.value || '0') })}
                 />
               )}
-            </div>
-            <div>
-              <Label>Stok Minimum</Label>
-              <Input
-                type="number"
-                min={0}
-                value={num(form.minStok)}
-                onChange={(e) => setForm({ ...form, minStok: parseFloat(e.target.value || '0') })}
-              />
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">

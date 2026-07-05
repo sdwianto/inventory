@@ -32,6 +32,32 @@ export interface AuditLogEntry {
   userName?: string;
 }
 
+const AUDIT_UI_RETENTION_DAYS = 90;
+/** Retensi compliance — ~7 tahun (P3). */
+export const AUDIT_COMPLIANCE_RETENTION_DAYS = 2555;
+export { AUDIT_UI_RETENTION_DAYS };
+
+export function auditUiRetentionCutoff(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - AUDIT_UI_RETENTION_DAYS);
+  return d;
+}
+
+export function auditCompliancePurgeCutoff(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - AUDIT_COMPLIANCE_RETENTION_DAYS);
+  return d;
+}
+
+/** Default baca UI — 90 hari. Gunakan `scope=compliance` untuk jendela 7 tahun. */
+export function auditRetentionCutoff(): Date {
+  return auditUiRetentionCutoff();
+}
+
+export function auditReadCutoff(scope: 'ui' | 'compliance'): Date {
+  return scope === 'compliance' ? auditCompliancePurgeCutoff() : auditUiRetentionCutoff();
+}
+
 export async function writeAuditLog(
   db: Db,
   entry: AuditLogEntry,

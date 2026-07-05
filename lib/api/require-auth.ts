@@ -3,21 +3,9 @@
 import type { NextResponse } from 'next/server';
 import type { AuthContext } from '@/types/auth';
 import { err } from '@/lib/api/db';
+import { isPublicRoute } from '@/lib/api/public-routes';
 
-const PUBLIC = [
-  { method: 'GET', route: '/' },
-  { method: 'GET', route: '/root' },
-  { method: 'GET', route: '/health' },
-  { method: 'POST', route: '/auth/login' },
-  { method: 'POST', route: '/auth/logout' },
-  { method: 'POST', route: '/webhooks/sales' },
-  { method: 'POST', route: '/integrations/pair' },
-  { method: 'POST', route: '/integrations/platform-pair' },
-];
-
-export function isPublicRoute(method: string, route: string): boolean {
-  return PUBLIC.some((p) => p.method === method && p.route === route);
-}
+export { isPublicRoute };
 
 export function requireAuth(auth: AuthContext | null | undefined): NextResponse | null {
   if (!auth?.userId) return err('Unauthorized', 401);

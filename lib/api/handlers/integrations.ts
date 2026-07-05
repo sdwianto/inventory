@@ -21,6 +21,7 @@ import {
   scheduleJobProcessing,
   getJobByIdAccessible,
 } from '@/lib/api/bg-jobs';
+import { requireMaster } from '@/lib/api/require-auth';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
 const PROBE_REFRESH_MS = 60 * 1000;
@@ -365,6 +366,19 @@ export async function handleIntegrations({
         tierHargaDefault: r.tierHargaDefault || 'ECER',
       })),
     });
+  }
+
+  if (route === '/integrations/reconcile/latest' && method === 'GET') {
+    const denied = requireMaster(auth);
+    if (denied) return denied;
+    const report = await db.collection('integration_reconcile_reports')
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+    const latest = report[0];
+    if (!latest) return ok({ report: null, message: 'Belum ada laporan reconcile' });
+    return ok(clean(latest));
   }
 
   return null;

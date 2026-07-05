@@ -14,7 +14,12 @@ import ListExportMenu from '@/components/ListExportMenu';
 import ListSummaryCards from '@/components/ListSummaryCards';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import ProductPickerSearch from '@/components/ProductPickerSearch';
+import LineUomSelect from '@/components/uom/LineUomSelect';
+import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { lineUomKey, qtyInUom } from '@/lib/uom/line-ui';
+import type { ProductUom } from '@/lib/uom/types';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { flattenTransferDocLines } from '@/lib/export/flatten-doc-lines';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
@@ -45,10 +50,36 @@ export default function TransferPage() {
     { noTransfer?: string; error?: string }
   >([queryKeys.transfer.all, queryKeys.products.all]);
 
-  const addItem = (p: JsonObject) => {
-    if (form.items.find(it => it.stokId === p.id)) { toast.error('Sudah ada'); return; }
-    setForm({...form, items: [...form.items, { stokId: p.id, kode: p.kode, nama: p.nama, satuan: p.satuan, qty: 1, hargaBeli: p.hargaBeli, stokSistem: p.stok }]});
+  const addItem = async (p: JsonObject) => {
+    const id = str(p.id);
+    const defaultUom = await fetchDefaultProductUom(id);
+    const uomId = defaultUom?.id || '';
+    if (form.items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
+      toast.error('Sudah ada');
+      return;
+    }
+    const stokBase = num(p.stok);
+    setForm({
+      ...form,
+      items: [...form.items, {
+        stokId: p.id, kode: p.kode, nama: p.nama,
+        uomId, satuan: defaultUom?.satuan || p.satuan,
+        qty: 1, hargaBeli: p.hargaBeli,
+        stokSistemBase: stokBase,
+        stokSistem: qtyInUom(stokBase, defaultUom),
+      }],
+    });
     setShowPicker(false);
+  };
+  const updateItemUom = (i: number, uom: ProductUom) => {
+    setForm({
+      ...form,
+      items: form.items.map((it, idx) => {
+        if (idx !== i) return it;
+        const stokBase = num(it.stokSistemBase ?? it.stokSistem);
+        return { ...it, uomId: uom.id, satuan: uom.satuan, stokSistem: qtyInUom(stokBase, uom) };
+      }),
+    });
   };
   const updateQty = (i: number, v: string) => setForm({...form, items: form.items.map((it, idx) => idx === i ? { ...it, qty: parseFloat(v || '0') } : it)});
   const removeItem = (i: number) => setForm({...form, items: form.items.filter((_, idx) => idx !== i)});
@@ -75,6 +106,7 @@ export default function TransferPage() {
     try {
       const rows = list;
       if (!rows.length) { toast.error('Tidak ada data'); return; }
+      const flat = flattenTransferDocLines(rows);
       const stamp = new Date().toISOString().slice(0, 10);
       await runListExport(format, {
         baseName: `transfer-stok-${stamp}`,
@@ -84,12 +116,16 @@ export default function TransferPage() {
           { key: 'noTransfer', label: 'No.' },
           { key: 'lokasiAsalNama', label: 'Dari' },
           { key: 'lokasiTujuanNama', label: 'Ke' },
-          { key: 'jumlahItem', label: 'Item', value: (r) => asArray(r.items).length },
+          { key: 'itemKode', label: 'Kode' },
+          { key: 'itemNama', label: 'Nama' },
+          { key: 'itemSatuan', label: 'Satuan' },
+          { key: 'itemQty', label: 'Qty' },
+          { key: 'itemQtyBase', label: 'Qty Base' },
           { key: 'keterangan', label: 'Catatan', value: (r) => str(r.keterangan) || '-' },
         ],
-        rows,
+        rows: flat,
       });
-      toast.success(`${rows.length} baris diekspor`);
+      toast.success(`${flat.length} baris diekspor`);
     } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -147,15 +183,18 @@ export default function TransferPage() {
               <Button size="sm" variant="outline" onClick={() => setShowPicker(true)}><Plus className="w-3 h-3 mr-1" /> Tambah</Button>
             </div>
             <table className="w-full text-sm border">
-              <thead className="bg-slate-100 text-xs"><tr><th className="px-2 py-2 text-left">Kode</th><th className="px-2 py-2 text-left">Nama</th><th className="px-2 py-2 text-right">Stok Tersedia</th><th className="px-2 py-2 text-right">Qty Transfer</th><th></th></tr></thead>
+              <thead className="bg-slate-100 text-xs"><tr><th className="px-2 py-2 text-left">Kode</th><th className="px-2 py-2 text-left">Nama</th><th className="px-2 py-2 text-right">Stok Tersedia</th><th className="px-2 py-2 text-right">Qty</th><th className="px-2 py-2 text-center">Satuan</th><th></th></tr></thead>
               <tbody>
-                {form.items.length === 0 && <tr><td colSpan={5} className="text-center py-4 text-slate-400 text-xs">Belum ada</td></tr>}
+                {form.items.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 text-xs">Belum ada</td></tr>}
                 {form.items.map((it, i) => (
                   <tr key={i} className="border-t">
                     <td className="px-2 py-1 font-mono text-xs">{str(it.kode)}</td>
                     <td className="px-2 py-1">{str(it.nama)}</td>
                     <td className="px-2 py-1 text-right">{formatNumber(num(it.stokSistem))} {str(it.satuan)}</td>
                     <td className="px-2 py-1 text-right"><input type="number" value={num(it.qty)} onChange={e => updateQty(i, e.target.value)} className="w-20 border rounded px-1 py-0.5 text-right" step="0.01" /></td>
+                    <td className="px-2 py-1 text-center">
+                      <LineUomSelect stokId={str(it.stokId)} uomId={str(it.uomId)} onChange={(uom) => updateItemUom(i, uom)} />
+                    </td>
                     <td className="px-2 py-1"><button onClick={() => removeItem(i)} className="text-red-500"><Trash2 className="w-3 h-3" /></button></td>
                   </tr>
                 ))}

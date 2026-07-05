@@ -2,6 +2,10 @@
 
 import type { Db } from 'mongodb';
 import { ensureBgJobIndexes } from '@/lib/api/bg-jobs';
+import { checkMongoReplicaSet } from '@/lib/api/mongo-replica';
+import { isDistributedRateLimitEnabled } from '@/lib/api/rate-limit';
+import { distributedCacheHealthStatus, isRedisConfigured } from '@/lib/api/redis-rest';
+import { buildSloChecks, sloOverallOk } from '@/lib/api/slo-check';
 
 const startedAt = Date.now();
 export const WORKER_STALE_THRESHOLD_SEC = 300;
@@ -20,7 +24,20 @@ export interface HealthPayload {
   checks: {
     database: 'ok' | 'fail' | 'skipped';
     databaseError?: string;
+    transactions?: 'ok' | 'fail' | 'skipped';
+    transactionsError?: string;
+    replicaSet?: string;
+    rateLimit?: 'redis' | 'memory';
+    cache?: 'redis' | 'memory';
+    cacheStatus?: 'ok' | 'fail' | 'skipped';
+    integrationReconcile?: {
+      totalMismatch: number;
+      checkedAt?: string;
+      neverRun?: boolean;
+      message?: string;
+    };
     worker?: BgJobsHealth;
+    slo?: import('@/lib/api/slo-check').SloChecks;
   };
   timestamp: string;
 }
@@ -48,6 +65,9 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
   let database: HealthPayload['checks']['database'] = 'skipped';
   let databaseError: string | undefined;
   let worker: BgJobsHealth | undefined;
+  let transactions: HealthPayload['checks']['transactions'] = 'skipped';
+  let transactionsError: string | undefined;
+  let replicaSet: string | undefined;
 
   if (db) {
     try {
@@ -58,6 +78,10 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
       } catch {
         worker = undefined;
       }
+      const replica = await checkMongoReplicaSet(db);
+      transactions = replica.status;
+      if (replica.setName) replicaSet = replica.setName;
+      if (replica.error) transactionsError = replica.error;
     } catch (e) {
       database = 'fail';
       databaseError = e instanceof Error ? e.message : 'ping failed';
@@ -67,15 +91,59 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
     databaseError = 'database connection unavailable';
   }
 
+  const cacheStatus = distributedCacheHealthStatus();
+  let integrationReconcile: HealthPayload['checks']['integrationReconcile'];
+  if (db && database === 'ok') {
+    try {
+      const latest = await db.collection('integration_reconcile_reports')
+        .find({})
+        .sort({ createdAt: -1 })
+        .limit(1)
+        .project({ summary: 1, createdAt: 1 })
+        .toArray();
+      const row = latest[0];
+      if (row?.summary) {
+        const summary = row.summary as { totalMismatch?: number };
+        integrationReconcile = {
+          totalMismatch: Number(summary.totalMismatch) || 0,
+          checkedAt: row.createdAt ? new Date(row.createdAt).toISOString() : undefined,
+        };
+      } else {
+        integrationReconcile = {
+          totalMismatch: 0,
+          neverRun: true,
+          message: 'Cron integration reconcile belum pernah dijalankan',
+        };
+      }
+    } catch {
+      integrationReconcile = undefined;
+    }
+  }
+
   const dbReady = database === 'ok';
+  const txReady = transactions !== 'fail';
+  const cacheReady = cacheStatus !== 'fail';
+  const reconcileReady = !integrationReconcile
+    || (integrationReconcile.totalMismatch === 0
+      && !(integrationReconcile.neverRun && process.env.NODE_ENV === 'production'));
+  const slo = await buildSloChecks(db);
+  const sloReady = sloOverallOk(slo);
   return {
-    status: dbReady ? 'ok' : 'degraded',
+    status: dbReady && txReady && cacheReady && reconcileReady && sloReady ? 'ok' : 'degraded',
     app: appName,
     uptimeSec,
     checks: {
       database,
       ...(databaseError ? { databaseError } : {}),
+      transactions,
+      ...(transactionsError ? { transactionsError } : {}),
+      ...(replicaSet ? { replicaSet } : {}),
+      rateLimit: isDistributedRateLimitEnabled() ? 'redis' : 'memory',
+      cache: isRedisConfigured() ? 'redis' : 'memory',
+      cacheStatus,
+      ...(integrationReconcile ? { integrationReconcile } : {}),
       ...(worker ? { worker } : {}),
+      slo,
     },
     timestamp: new Date().toISOString(),
   };

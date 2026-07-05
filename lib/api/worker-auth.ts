@@ -6,6 +6,15 @@ export function isWorkerProcessRoute(method: string, route: string): boolean {
   return route === '/bg-jobs/process' && (method === 'POST' || method === 'GET');
 }
 
+const AUDIT_PURGE_ENQUEUE_ROUTES = new Set([
+  '/bg-jobs/enqueue-audit-purge',
+  '/bg-jobs/enqueue-purge-audit',
+]);
+
+export function isWorkerAuditPurgeRoute(method: string, route: string): boolean {
+  return AUDIT_PURGE_ENQUEUE_ROUTES.has(route) && (method === 'POST' || method === 'GET');
+}
+
 /** Dipanggil inventory → sales.app (SALES_APP_URL + WORKER_SECRET). */
 export function isWorkerSandboxRoute(method: string, route: string): boolean {
   return (
@@ -15,7 +24,11 @@ export function isWorkerSandboxRoute(method: string, route: string): boolean {
 }
 
 export function isWorkerRoute(method: string, route: string): boolean {
-  return isWorkerProcessRoute(method, route) || isWorkerSandboxRoute(method, route);
+  return (
+    isWorkerProcessRoute(method, route) ||
+    isWorkerAuditPurgeRoute(method, route) ||
+    isWorkerSandboxRoute(method, route)
+  );
 }
 
 export function verifyWorkerOrCronSecret(request: Request | undefined): boolean {

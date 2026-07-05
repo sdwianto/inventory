@@ -4,7 +4,56 @@ import { nextDocNumber } from '@/lib/api/document-sequence';
 import { resolveVendorTenantName } from '@/lib/api/grn-enrich';
 import { ensureUniqueLineIds } from '@/lib/api/grn-line-ids';
 import { loadProductMaps, resolveFromMaps } from '@/lib/api/grn-resolve-products';
+import { listProductUoms } from '@/lib/api/product-uom';
+import type { ProductUom } from '@/lib/uom/types';
 import type { JsonObject } from '@/types/json';
+
+export async function resolveLocalUomForGrnLine(
+  db: Db,
+  tenantId: string,
+  localStokId: string | null | undefined,
+  vendorItem: JsonObject,
+  uomsCache: Map<string, ProductUom[]>,
+): Promise<{ uomId?: string; satuan?: string; qtyBase?: number; factorToBase?: number }> {
+  if (!localStokId) {
+    return { satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined };
+  }
+  if (!uomsCache.has(localStokId)) {
+    uomsCache.set(localStokId, await listProductUoms(db, tenantId, localStokId));
+  }
+  const uoms = uomsCache.get(localStokId) || [];
+  const vendorUomId = vendorItem.uomId ? String(vendorItem.uomId) : '';
+  const qty = parseFloat(String(vendorItem.qty)) || 0;
+
+  if (vendorUomId) {
+    const local = uoms.find((u) => u.vendorUomId === vendorUomId || u.id === vendorUomId);
+    if (local) {
+      return {
+        uomId: local.id,
+        satuan: local.satuan,
+        factorToBase: local.factorToBase,
+        qtyBase: vendorItem.qtyBase != null
+          ? parseFloat(String(vendorItem.qtyBase))
+          : qty * local.factorToBase,
+      };
+    }
+  }
+
+  const sat = vendorItem.satuan ? String(vendorItem.satuan).trim().toUpperCase() : '';
+  if (sat) {
+    const bySat = uoms.find((u) => u.satuan === sat);
+    if (bySat) {
+      return {
+        uomId: bySat.id,
+        satuan: bySat.satuan,
+        factorToBase: bySat.factorToBase,
+        qtyBase: qty * bySat.factorToBase,
+      };
+    }
+  }
+
+  return { satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined };
+}
 
 type GrnLineDraft = JsonObject & {
   lineId: string;
@@ -15,6 +64,9 @@ type GrnLineDraft = JsonObject & {
   localKode?: string | null;
   localNama?: string | null;
   satuan?: unknown;
+  uomId?: string;
+  qtyBase?: number;
+  factorToBase?: number;
   qtyOrdered: number;
   qtyReceived: number;
   harga: number;
@@ -48,6 +100,7 @@ export async function buildGrnInsertDoc(
   const rawItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
   const maps = await loadProductMaps(db, tid, vendorTenantId ?? null, rawItems);
   const items: GrnLineDraft[] = [];
+  const uomsCache = new Map<string, ProductUom[]>();
   let hasUnknown = false;
 
   for (const it of rawItems) {
@@ -58,6 +111,13 @@ export async function buildGrnInsertDoc(
       stokId: it.stokId,
     });
     if (!resolved.localStokId) hasUnknown = true;
+    const localUom = await resolveLocalUomForGrnLine(
+      db,
+      tid,
+      resolved.localStokId,
+      it,
+      uomsCache,
+    );
     items.push({
       lineId: String(it.lineId || uuidv4()),
       vendorStokId: it.stokId,
@@ -66,7 +126,10 @@ export async function buildGrnInsertDoc(
       localStokId: resolved.localStokId,
       localKode: resolved.localKode,
       localNama: resolved.localNama,
-      satuan: it.satuan,
+      satuan: localUom.satuan || it.satuan,
+      uomId: localUom.uomId,
+      qtyBase: localUom.qtyBase,
+      factorToBase: localUom.factorToBase,
       qtyOrdered: parseFloat(String(it.qty)) || 0,
       qtyReceived: 0,
       harga: parseInt(String(it.harga || 0), 10),

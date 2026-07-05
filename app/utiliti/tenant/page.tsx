@@ -17,12 +17,18 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 export default function TenantSetupPage() {
+  const isMaster = getUser()?.role === 'MASTER';
   const [tenantId, setTenantId] = useState(() => getUser()?.tenantId || 'default');
   const [form, setForm] = useState({
     tenantId: 'default', companyName: '', companyAddress: '', companyPhone: '',
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
     showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '', logoUrl: '',
     ppnPercent: 11,
+    features: {
+      multiUomEnabled: true,
+      offlineQueueEnabled: true,
+      reportSnapshotsEnabled: true,
+    },
   });
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -37,7 +43,17 @@ export default function TenantSetupPage() {
   useEffect(() => {
     if (!settingsData) return;
     queueMicrotask(() => {
-      setForm((f) => ({ ...f, ...settingsData, tenantId }));
+      setForm((f) => ({
+        ...f,
+        ...settingsData,
+        tenantId,
+        features: {
+          multiUomEnabled: true,
+          offlineQueueEnabled: true,
+          reportSnapshotsEnabled: true,
+          ...(settingsData.features as Record<string, boolean> | undefined),
+        },
+      }));
     });
   }, [settingsData, tenantId]);
 
@@ -204,6 +220,47 @@ export default function TenantSetupPage() {
             </CardContent>
           </Card>
         )}
-      </div>
+
+      {isMaster && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Feature Flags (MASTER — P3)</CardTitle></CardHeader>
+          <CardContent className="grid sm:grid-cols-3 gap-3 text-sm">
+            <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.features?.multiUomEnabled !== false}
+                onChange={(e) => setForm({
+                  ...form,
+                  features: { ...form.features, multiUomEnabled: e.target.checked },
+                })}
+              />
+              Multi-satuan (UOM)
+            </label>
+            <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.features?.offlineQueueEnabled !== false}
+                onChange={(e) => setForm({
+                  ...form,
+                  features: { ...form.features, offlineQueueEnabled: e.target.checked },
+                })}
+              />
+              Antrian offline
+            </label>
+            <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.features?.reportSnapshotsEnabled !== false}
+                onChange={(e) => setForm({
+                  ...form,
+                  features: { ...form.features, reportSnapshotsEnabled: e.target.checked },
+                })}
+              />
+              Report snapshots (CQRS)
+            </label>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }

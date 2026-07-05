@@ -17,6 +17,7 @@ import { fetchJson } from '@/lib/fetch-json';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
+import { TENANT_PURGE_CONFIRM_PHRASE } from '@/lib/dangerous-confirm';
 
 const emptyForm = {
   tenantId: '', companyName: '', companyAddress: '', companyPhone: '', companyNPWP: '',
@@ -102,7 +103,10 @@ export default function TenantsListPage() {
     }
     setDeleting(true);
     try {
-      const qs = deleteForce ? '?force=true' : '';
+      const params = new URLSearchParams();
+      if (deleteForce) params.set('force', 'true');
+      params.set('confirmPhrase', TENANT_PURGE_CONFIRM_PHRASE);
+      const qs = `?${params.toString()}`;
       const data = await deleteTenantMutation.mutateAsync({
         url: `/api/tenants/${encodeURIComponent(str(deleteTenant.tenantId))}${qs}`,
         method: 'DELETE',

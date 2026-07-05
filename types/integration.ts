@@ -2,8 +2,13 @@ import type { JsonObject } from '@/types/json';
 
 /** Invoice line from sales.app webhook payload. */
 export interface VendorInvoiceLine {
+  lineId?: string;
+  stokId?: string;
+  uomId?: string;
+  satuan?: string;
   kode?: string;
   qty?: number | string;
+  qtyBase?: number | string;
   harga?: number | string;
   nama?: string;
 }

@@ -27,7 +27,7 @@ function PoDayButton({ day, poByDate, selectedDate, onSelectDate, onCreateForDat
       onClick={() => onSelectDate(day.date)}
       onDoubleClick={(e) => { e.preventDefault(); onCreateForDate(day.date); }}
       className={cn(
-        'group relative flex min-h-[4.5rem] w-full flex-col items-center justify-start rounded-lg border p-1 pt-1.5 text-sm transition-colors hover:bg-orange-50 hover:border-orange-200',
+        'group relative flex min-h-[3rem] w-full flex-col items-center justify-start rounded-md border p-0.5 pt-1 text-xs transition-colors hover:bg-orange-50 hover:border-orange-200',
         selected && 'border-orange-400 bg-orange-50 ring-2 ring-orange-200',
         !selected && isToday && 'border-blue-300 bg-blue-50/50',
         !selected && !isToday && 'border-transparent',
@@ -35,7 +35,7 @@ function PoDayButton({ day, poByDate, selectedDate, onSelectDate, onCreateForDat
         modifiers.outside && 'opacity-40',
       )}
     >
-      <span className={cn('text-sm font-medium leading-none', selected && 'text-orange-700')}>
+      <span className={cn('text-xs font-medium leading-none', selected && 'text-orange-700')}>
         {day.date.getDate()}
       </span>
       {count > 0 && (
@@ -74,7 +74,7 @@ export default function PoCalendar({
   const poByDate = useMemo(() => groupPosByArrivalDate(pos), [pos]);
 
   return (
-    <div className="space-y-3 overflow-hidden">
+    <div className="space-y-2 overflow-hidden">
       <DayPicker
         mode="single"
         locale={localeId}
@@ -87,16 +87,16 @@ export default function PoCalendar({
         classNames={{
           root: 'w-full',
           months: 'relative w-full',
-          month: 'relative w-full space-y-2',
-          month_caption: 'flex h-9 w-full items-center justify-center px-10',
-          caption_label: 'text-base font-semibold capitalize',
-          nav: 'absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-between',
-          button_previous: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 shrink-0'),
-          button_next: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-8 w-8 shrink-0'),
+          month: 'relative w-full space-y-1',
+          month_caption: 'flex h-7 w-full items-center justify-center px-8',
+          caption_label: 'text-sm font-semibold capitalize',
+          nav: 'absolute inset-x-0 top-0 z-10 flex h-7 items-center justify-between',
+          button_previous: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-6 w-6 shrink-0'),
+          button_next: cn(buttonVariants({ variant: 'outline', size: 'icon' }), 'h-6 w-6 shrink-0'),
           month_grid: 'w-full',
-          weekdays: 'flex mb-1',
-          weekday: 'flex-1 text-center text-[11px] font-medium text-slate-500 uppercase',
-          week: 'flex w-full mt-1 gap-1',
+          weekdays: 'flex mb-0.5',
+          weekday: 'flex-1 text-center text-[10px] font-medium text-slate-500 uppercase',
+          week: 'flex w-full mt-0.5 gap-0.5',
           day: 'flex-1 min-w-0 p-0',
           day_button: 'h-auto w-full p-0 font-normal',
         }}
@@ -121,7 +121,7 @@ export default function PoCalendar({
         }}
       />
 
-      <div className="flex flex-wrap gap-x-4 gap-y-2 border-t pt-3 text-xs text-slate-700">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 border-t pt-2 text-[10px] text-slate-700">
         {PO_STATUS_ORDER.map((st) => (
           <PoStatusLegendItem key={st} status={st} />
         ))}

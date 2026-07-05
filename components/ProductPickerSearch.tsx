@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
-import { str } from '@/types/json';
+import { str, num } from '@/types/json';
+import { productStockLabel, productStockTitle } from '@/lib/uom/display';
 
 interface ProductPickerSearchProps {
   open: boolean;
@@ -56,11 +57,26 @@ export default function ProductPickerSearch({
           <button
             key={str(p.id)}
             type="button"
-            className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm"
+            className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm flex items-center justify-between gap-2"
             onClick={() => onSelect(p)}
           >
-            <span className="font-mono text-xs text-slate-500 mr-2">{str(p.kode)}</span>
-            {str(p.nama)}
+            <span className="min-w-0 truncate">
+              <span className="font-mono text-xs text-slate-500 mr-2">{str(p.kode)}</span>
+              {str(p.nama)}
+            </span>
+            <span
+              className="text-xs text-slate-500 shrink-0 font-medium"
+              title={productStockTitle({
+                stok: num(p.stok),
+                stokDisplay: str(p.stokDisplay) || undefined,
+              })}
+            >
+              {productStockLabel({
+                stok: num(p.stok),
+                stokDisplay: str(p.stokDisplay) || undefined,
+                satuan: str(p.satuan),
+              })}
+            </span>
           </button>
         ))}
       </div>

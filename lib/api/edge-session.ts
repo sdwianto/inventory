@@ -2,7 +2,7 @@
  * Edge-injected session headers (ditandatangani proxy) — hindari re-parse JWT di API handler.
  */
 import { createHmac, timingSafeEqual } from 'crypto';
-import { authFromPayload } from '@/lib/api/session';
+import { authFromPayload } from '@/lib/api/session-token';
 import type { AuthContext, SessionPayload } from '@/types/auth';
 
 function getSecret(): string {

@@ -1,3 +1,4 @@
+import { lineUomKey } from '@/lib/uom/line-ui';
 import type { JsonObject } from '@/types/json';
 import { str, asObject, asArray } from '@/types/json';
 
@@ -29,13 +30,17 @@ export function mergeFormLinesFromPo(
   for (const it of items) {
     const id = String(it.localStokId || '');
     if (!id) continue;
-    const prev = map.get(id);
+    const mergeKey = lineUomKey(id, str(it.uomId) || undefined);
+    const prev = map.get(mergeKey);
     if (prev) {
       prev.qty = (parseFloat(String(prev.qty)) || 0) + (parseFloat(String(it.qty)) || 0);
     } else {
-      map.set(id, {
+      map.set(mergeKey, {
         localStokId: id,
         qty: it.qty,
+        uomId: it.uomId,
+        satuan: it.satuan,
+        factorToBase: it.factorToBase,
         estimasiHarga: it.estimasiHarga || '',
         estimasiManual: true,
       });
@@ -46,7 +51,7 @@ export function mergeFormLinesFromPo(
 }
 
 export function emptyPoLine(): JsonObject {
-  return { localStokId: '', qty: 1, estimasiHarga: '', estimasiManual: false };
+  return { localStokId: '', qty: 1, uomId: '', satuan: '', factorToBase: undefined, estimasiHarga: '', estimasiManual: false };
 }
 
 /** Baris PO optimistik di UI — belum punya id server. */

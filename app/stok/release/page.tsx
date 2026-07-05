@@ -22,6 +22,10 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { WAREHOUSES } from '@/lib/warehouses-client';
 import { ArrowUpFromLine, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
+import LineUomSelect from '@/components/uom/LineUomSelect';
+import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
+import { lineUomKey } from '@/lib/uom/line-ui';
+import type { ProductUom } from '@/lib/uom/types';
 
 const STATUS_STYLE: Record<string, string> = {
   DRAFT: 'bg-slate-100 text-slate-700',
@@ -168,8 +172,11 @@ function ReleaseInventoryPageContent() {
     );
   };
 
-  const addItem = (p: JsonObject) => {
-    if (form.items.find((it) => it.stokId === p.id)) {
+  const addItem = async (p: JsonObject) => {
+    const id = str(p.id);
+    const defaultUom = await fetchDefaultProductUom(id);
+    const uomId = defaultUom?.id || '';
+    if (form.items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
       toast.error('Produk sudah ada');
       return;
     }
@@ -179,12 +186,20 @@ function ReleaseInventoryPageContent() {
         stokId: p.id,
         kode: p.kode,
         nama: p.nama,
-        satuan: p.satuan,
+        uomId,
+        satuan: defaultUom?.satuan || p.satuan,
         qty: 1,
         stokAvail: p.stokQty ?? p.stokTotal ?? 0,
       }],
     });
     setPickerOpen(false);
+  };
+
+  const updateItemUom = (i: number, uom: ProductUom) => {
+    setForm({
+      ...form,
+      items: form.items.map((it, idx) => idx === i ? { ...it, uomId: uom.id, satuan: uom.satuan } : it),
+    });
   };
 
   const save = async (submit = false) => {
@@ -352,11 +367,11 @@ function ReleaseInventoryPageContent() {
             </div>
             <div className="space-y-2">
               {form.items.map((it, i) => (
-                <div key={str(it.stokId)} className="flex items-center gap-2 border rounded p-2 text-sm">
+                <div key={`${str(it.stokId)}-${str(it.uomId)}`} className="flex items-center gap-2 border rounded p-2 text-sm">
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{str(it.nama)}</div>
                     <div className="text-xs text-slate-500">
-                      {str(it.kode)} · tersedia: {formatNumber(num(it.stokAvail))} {str(it.satuan)}
+                      {str(it.kode)} · tersedia: {formatNumber(num(it.stokAvail))} base
                     </div>
                   </div>
                   <Input
@@ -370,6 +385,11 @@ function ReleaseInventoryPageContent() {
                       items[i] = { ...it, qty: parseFloat(e.target.value) || 0 };
                       setForm({ ...form, items });
                     }}
+                  />
+                  <LineUomSelect
+                    stokId={str(it.stokId)}
+                    uomId={str(it.uomId)}
+                    onChange={(uom) => updateItemUom(i, uom)}
                   />
                   <Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}>
                     Hapus
