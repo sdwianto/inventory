@@ -3,18 +3,15 @@ import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { processPendingJobs, getJobByIdAccessible, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
-import { isWorkerProcessRoute, isWorkerAuditPurgeRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import {
+  isWorkerProcessRoute,
+  isWorkerAuditPurgeRoute,
+  isWorkerReconcileRoute,
+  verifyWorkerOrCronSecret,
+} from '@/lib/api/worker-auth';
 import { requireRole } from '@/lib/api/require-auth';
 import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
 import type { HandlerContext } from '@/types/api/handler';
-
-function isWorkerReconcileRoute(method: string, route: string): boolean {
-  const RECONCILE_ROUTES = new Set([
-    '/bg-jobs/enqueue-integration-reconcile',
-    '/bg-jobs/enqueue-reconcile', // alias — label pendek di cron-job.org
-  ]);
-  return RECONCILE_ROUTES.has(route) && (method === 'POST' || method === 'GET');
-}
 
 export async function handleBgJobs({
   db,

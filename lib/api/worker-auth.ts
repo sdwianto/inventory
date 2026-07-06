@@ -11,8 +11,17 @@ const AUDIT_PURGE_ENQUEUE_ROUTES = new Set([
   '/bg-jobs/enqueue-purge-audit',
 ]);
 
+const RECONCILE_ENQUEUE_ROUTES = new Set([
+  '/bg-jobs/enqueue-integration-reconcile',
+  '/bg-jobs/enqueue-reconcile', // alias — label pendek di cron-job.org
+]);
+
 export function isWorkerAuditPurgeRoute(method: string, route: string): boolean {
   return AUDIT_PURGE_ENQUEUE_ROUTES.has(route) && (method === 'POST' || method === 'GET');
+}
+
+export function isWorkerReconcileRoute(method: string, route: string): boolean {
+  return RECONCILE_ENQUEUE_ROUTES.has(route) && (method === 'POST' || method === 'GET');
 }
 
 /** Dipanggil inventory → sales.app (SALES_APP_URL + WORKER_SECRET). */
@@ -27,6 +36,7 @@ export function isWorkerRoute(method: string, route: string): boolean {
   return (
     isWorkerProcessRoute(method, route) ||
     isWorkerAuditPurgeRoute(method, route) ||
+    isWorkerReconcileRoute(method, route) ||
     isWorkerSandboxRoute(method, route)
   );
 }

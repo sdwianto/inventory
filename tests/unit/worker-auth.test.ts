@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isWorkerProcessRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
+import { isWorkerProcessRoute, isWorkerReconcileRoute, isWorkerRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 
 function req(headers: Record<string, string> = {}): Request {
   const map = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
@@ -11,6 +11,21 @@ describe('isWorkerProcessRoute', () => {
     expect(isWorkerProcessRoute('GET', '/bg-jobs/process')).toBe(true);
     expect(isWorkerProcessRoute('POST', '/bg-jobs/process')).toBe(true);
     expect(isWorkerProcessRoute('GET', '/bg-jobs/enqueue-integration-reconcile')).toBe(false);
+  });
+});
+
+describe('isWorkerReconcileRoute', () => {
+  it('matches reconcile enqueue GET/POST', () => {
+    expect(isWorkerReconcileRoute('GET', '/bg-jobs/enqueue-integration-reconcile')).toBe(true);
+    expect(isWorkerReconcileRoute('GET', '/bg-jobs/enqueue-reconcile')).toBe(true);
+    expect(isWorkerReconcileRoute('GET', '/bg-jobs/process')).toBe(false);
+  });
+});
+
+describe('isWorkerRoute', () => {
+  it('includes reconcile enqueue for router auth bypass', () => {
+    expect(isWorkerRoute('GET', '/bg-jobs/enqueue-integration-reconcile')).toBe(true);
+    expect(isWorkerRoute('GET', '/bg-jobs/enqueue-reconcile')).toBe(true);
   });
 });
 
