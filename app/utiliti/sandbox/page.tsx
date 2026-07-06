@@ -23,12 +23,14 @@ type CountInfo =
 
 type StockResetPreview = { dryRun: true; stok_lokasi_rows: number | null; note: string };
 type StockResetDone = { stok_lokasi: number; products: number };
+type AssetResetPreview = { dryRun: true; in_repair: number | null; note: string };
+type AssetResetDone = { in_repair: number };
 
 type DbPreview = {
   label: string;
   dbName: string;
   summary: { documents: number; collections: number };
-  counts: Record<string, CountInfo | StockResetPreview | StockResetDone>;
+  counts: Record<string, CountInfo | StockResetPreview | StockResetDone | AssetResetPreview | AssetResetDone>;
 };
 
 type PreviewResponse = {
@@ -58,10 +60,18 @@ function isStockResetDone(info: unknown): info is StockResetDone {
   return !!info && typeof info === 'object' && 'stok_lokasi' in info && 'products' in info;
 }
 
+function isAssetResetPreview(info: unknown): info is AssetResetPreview {
+  return !!info && typeof info === 'object' && 'dryRun' in info && 'in_repair' in info;
+}
+
+function isAssetResetDone(info: unknown): info is AssetResetDone {
+  return !!info && typeof info === 'object' && 'in_repair' in info && !('dryRun' in info);
+}
+
 function renderCountRows(counts: DbPreview['counts']) {
   return Object.entries(counts)
     .filter(([name, info]) => {
-      if (name === '_stock_reset') return true;
+      if (name === '_stock_reset' || name === '_asset_reset') return true;
       if ('skipped' in info && info.skipped) return false;
       if ('dryRun' in info && 'before' in info) return info.before > 0;
       if ('before' in info) return info.before > 0;
@@ -85,6 +95,29 @@ function renderCountRows(counts: DbPreview['counts']) {
               <td className="px-3 py-1.5 font-mono text-xs text-amber-700">[stok reset]</td>
               <td className="px-3 py-1.5 text-right text-xs text-slate-600">
                 stok_lokasi={info.stok_lokasi}, products={info.products}
+              </td>
+            </tr>
+          );
+        }
+        return null;
+      }
+      if (name === '_asset_reset') {
+        if (isAssetResetPreview(info)) {
+          return (
+            <tr key={name} className="border-t">
+              <td className="px-3 py-1.5 font-mono text-xs text-amber-700">[aset reset]</td>
+              <td className="px-3 py-1.5 text-right text-xs text-slate-600">
+                {info.in_repair ?? 0} aset IN_REPAIR → ACTIVE
+              </td>
+            </tr>
+          );
+        }
+        if (isAssetResetDone(info)) {
+          return (
+            <tr key={name} className="border-t">
+              <td className="px-3 py-1.5 font-mono text-xs text-amber-700">[aset reset]</td>
+              <td className="px-3 py-1.5 text-right text-xs text-slate-600">
+                {info.in_repair} aset IN_REPAIR → ACTIVE
               </td>
             </tr>
           );

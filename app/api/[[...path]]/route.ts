@@ -50,7 +50,9 @@ async function handleRoute(request: Request, context: RouteContext) {
         db = null;
       }
       const health = await buildHealthResponse(db, 'inventory');
-      return ok(health, health.status === 'ok' ? 200 : 503);
+      // HTTP 503 hanya saat DB tidak terjangkau; SLO degraded tetap 200 + body.status.
+      const httpStatus = health.checks.database === 'fail' ? 503 : 200;
+      return ok(health, httpStatus);
     }
 
     if (route === '/auth/login' && method === 'POST') {

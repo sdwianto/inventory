@@ -48,6 +48,14 @@ function printDbResult(label, db) {
       }
       continue;
     }
+    if (name === '_asset_reset') {
+      if (info.dryRun) {
+        console.log(`  [aset reset] dry-run: ${info.in_repair ?? 0} aset IN_REPAIR → ACTIVE`);
+      } else {
+        console.log(`  [aset reset] in_repair=${info.in_repair}`);
+      }
+      continue;
+    }
     if (info.skipped) continue;
     if (info.dryRun && info.before > 0) console.log(`  ${name}: ${info.before}`);
     if (info.deleted !== undefined) console.log(`  ${name}: hapus ${info.deleted}/${info.before}`);

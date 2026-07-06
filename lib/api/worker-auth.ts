@@ -53,6 +53,8 @@ export function verifyWorkerOrCronSecret(request: Request | undefined): boolean 
   let bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   // cron-job.org kadang mengisi token mentah tanpa prefix "Bearer "
   if (!bearer && auth && !auth.includes(' ')) bearer = auth;
+  // Salin-tempel dari cron-job.org kadang menambah ':' atau spasi di akhir
+  bearer = bearer.replace(/[;:,\s]+$/g, '');
   if (!bearer) return false;
 
   if (cronSecret && secureCompare(bearer, cronSecret)) return true;

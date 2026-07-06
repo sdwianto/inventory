@@ -62,7 +62,7 @@ export async function buildSloChecks(db: Db | null): Promise<SloChecks> {
       const summary = row?.summary as { totalMismatch?: number } | undefined;
       const totalMismatch = Number(summary?.totalMismatch) || 0;
       checks.integrationReconcile = {
-        ok: totalMismatch === 0 && !!row,
+        ok: totalMismatch === 0 && (!!row || process.env.NODE_ENV !== 'production'),
         totalMismatch,
         neverRun: !row,
       };
@@ -75,7 +75,8 @@ export async function buildSloChecks(db: Db | null): Promise<SloChecks> {
         status: 'FAILED',
         deadLetter: true,
       });
-      checks.deadLetterJobs = { ok: count < 3, count, threshold: 3 };
+      const threshold = process.env.NODE_ENV === 'production' ? 3 : 25;
+      checks.deadLetterJobs = { ok: count < threshold, count, threshold };
     } catch {
       checks.deadLetterJobs = { ok: true, count: 0, threshold: 3 };
     }

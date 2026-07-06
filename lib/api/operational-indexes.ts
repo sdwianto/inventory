@@ -3,6 +3,7 @@
 import type { Db, IndexSpecification } from 'mongodb';
 
 let operationalIndexesEnsured = false;
+let operationalIndexesInFlight: Promise<void> | null = null;
 
 interface IndexSpec {
   collection: string;
@@ -133,8 +134,23 @@ async function prepareIndexData(db: Db): Promise<void> {
   await backfillEmailNormalized(db);
 }
 
-export async function ensureOperationalIndexes(db: Db): Promise<void> {
-  if (operationalIndexesEnsured) return;
+async function operationalIndexesPresent(db: Db): Promise<boolean> {
+  try {
+    const cols = await db.listCollections({ name: 'hutang' }, { nameOnly: true }).toArray();
+    if (!cols.length) return false;
+    const indexes = await db.collection('hutang').listIndexes().toArray();
+    return indexes.some((idx) => idx.name === 'idx_hutang_tenant_supplier');
+  } catch {
+    return false;
+  }
+}
+
+async function runEnsureOperationalIndexes(db: Db): Promise<void> {
+  if (await operationalIndexesPresent(db)) {
+    operationalIndexesEnsured = true;
+    return;
+  }
+
   await prepareIndexData(db);
   try {
     await db.collection('users').dropIndex('uniq_users_email');
@@ -156,4 +172,15 @@ export async function ensureOperationalIndexes(db: Db): Promise<void> {
     await safeCreateIndex(db, spec.collection, spec.index, opts);
   }
   operationalIndexesEnsured = true;
+}
+
+/** Satu kali per proses — request paralel menunggu promise yang sama (hindari herd index ke Atlas). */
+export async function ensureOperationalIndexes(db: Db): Promise<void> {
+  if (operationalIndexesEnsured) return;
+  if (!operationalIndexesInFlight) {
+    operationalIndexesInFlight = runEnsureOperationalIndexes(db).finally(() => {
+      operationalIndexesInFlight = null;
+    });
+  }
+  await operationalIndexesInFlight;
 }

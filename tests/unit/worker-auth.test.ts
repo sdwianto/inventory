@@ -47,5 +47,7 @@ describe('verifyWorkerOrCronSecret', () => {
     vi.stubEnv('CRON_SECRET', '');
     expect(verifyWorkerOrCronSecret(req({ 'X-Worker-Secret': secret }))).toBe(true);
     expect(verifyWorkerOrCronSecret(req({ Authorization: `Bearer ${secret}` }))).toBe(true);
+    // cron-job.org kadang menambah ':' di akhir saat copy-paste
+    expect(verifyWorkerOrCronSecret(req({ Authorization: `Bearer ${secret}:` }))).toBe(true);
   });
 });

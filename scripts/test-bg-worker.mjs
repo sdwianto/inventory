@@ -61,9 +61,10 @@ if (secret.length !== 64) {
 }
 
 const url = `${base}/api/bg-jobs/process`;
+const reconcileUrl = `${base}/api/bg-jobs/enqueue-integration-reconcile`;
 
-async function main() {
-  const res = await fetch(url, {
+async function probeEndpoint(label, endpointUrl) {
+  const res = await fetch(endpointUrl, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${secret}`,
@@ -77,15 +78,24 @@ async function main() {
   } catch {
     data = text;
   }
-  console.log(`HTTP ${res.status} ${url}`);
+  console.log(`HTTP ${res.status} ${label}`);
   console.log(JSON.stringify(data, null, 2));
-  if (res.status === 401) {
+  return res.status;
+}
+
+async function main() {
+  const processStatus = await probeEndpoint(url, url);
+  const reconcileStatus = await probeEndpoint(reconcileUrl, reconcileUrl);
+  const failed = [processStatus, reconcileStatus].some((s) => s === 401);
+  if (failed) {
     console.error('\n401 Unauthorized — cek:');
-    console.error('  1. WORKER_SECRET di Vercel = secret yang dipakai tes (64 hex char, tanpa spasi)');
+    console.error('  1. WORKER_SECRET di Vercel = secret yang dipakai tes (64 hex char, tanpa spasi/karakter tambahan)');
     console.error('  2. Redeploy setelah ubah env di Vercel');
-    console.error('  3. cron-job.org: Authorization = "Bearer <secret>" atau header X-Worker-Secret');
+    console.error('  3. cron-job.org: Authorization = "Bearer <secret>" TANPA ":" di akhir');
+    console.error('     atau pakai header X-Worker-Secret = <secret> saja (tanpa Bearer)');
+    process.exit(1);
   }
-  if (!res.ok) process.exit(1);
+  if (![processStatus, reconcileStatus].every((s) => s >= 200 && s < 300)) process.exit(1);
 }
 
 main().catch((e) => {

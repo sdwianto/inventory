@@ -137,6 +137,8 @@ Respon sukses contoh:
 | Gejala | Penyebab | Solusi |
 |--------|----------|--------|
 | HTTP 401 | Secret salah / belum di-set | Cek `WORKER_SECRET` di Vercel + header cron-job.org |
+| HTTP 401 reconcile saja | Token punya `:` di akhir / routing belum deploy | Hapus `:` di akhir header; redeploy Inventory; tes `npm run test:worker` |
+| HTTP 401 | Token terpotong (bukan 64 hex char) | Copy ulang full `WORKER_SECRET` dari Vercel → paste ke cron-job.org |
 | Job tetap `PENDING` | Cron belum jalan / URL salah | Cek **Execution history** di cron-job.org |
 | Deploy Vercel gagal (cron) | Masih ada `* * * * *` di vercel.json | Pastikan crons Vercel sudah dihapus (pakai cron-job.org) |
 | Sync lama | Interval cron 5+ menit | Turunkan ke 2 menit |

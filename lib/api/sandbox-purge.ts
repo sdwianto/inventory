@@ -31,6 +31,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'inventory_releases',
   'maintenance_requests',
   'maintenance_service_orders',
+  'maintenance_schedules',
   'jurnal',
   'kas_masuk',
   'kas_keluar',
@@ -59,7 +60,6 @@ export const SANDBOX_KEEP_HINT = [
   'product_uom',
   'stok_lokasi',
   'assets',
-  'maintenance_schedules',
   'users',
   'tenants',
   'tenant_settings',
@@ -81,12 +81,16 @@ type CollectionCount =
 export type SandboxDbResult = {
   label: string;
   dbName: string;
-  counts: Record<string, CollectionCount | StockResetInfo>;
+  counts: Record<string, CollectionCount | StockResetInfo | AssetResetInfo>;
 };
 
 type StockResetInfo =
   | { dryRun: true; stok_lokasi_rows: number | null; note: string }
   | { stok_lokasi: number; products: number };
+
+type AssetResetInfo =
+  | { dryRun: true; in_repair: number | null; note: string }
+  | { in_repair: number };
 
 function tenantQuery(tenantId?: string): Record<string, string> {
   const tid = String(tenantId || '').trim();
@@ -159,9 +163,16 @@ export async function purgeSandboxDatabase(
     const products = await db.collection('products').updateMany(filter, {
       $set: { stok: 0, updatedAt: now },
     });
+    const assetsRepair = await db.collection('assets').updateMany(
+      { ...filter, status: 'IN_REPAIR' },
+      { $set: { status: 'ACTIVE', updatedAt: now } },
+    );
     counts._stock_reset = {
       stok_lokasi: stokLok.modifiedCount,
       products: products.modifiedCount,
+    };
+    counts._asset_reset = {
+      in_repair: assetsRepair.modifiedCount,
     };
   } else {
     const stokBefore = await countCollection(db, 'stok_lokasi', tenantId);
@@ -169,6 +180,23 @@ export async function purgeSandboxDatabase(
       dryRun: true,
       stok_lokasi_rows: stokBefore,
       note: 'qty/qtyReserved/stok → 0',
+    };
+    let inRepairBefore: number | null = null;
+    try {
+      const cols = await db.listCollections({ name: 'assets' }).toArray();
+      if (cols.length) {
+        inRepairBefore = await db.collection('assets').countDocuments({
+          ...filter,
+          status: 'IN_REPAIR',
+        });
+      }
+    } catch {
+      inRepairBefore = null;
+    }
+    counts._asset_reset = {
+      dryRun: true,
+      in_repair: inRepairBefore,
+      note: 'status IN_REPAIR → ACTIVE',
     };
   }
 
@@ -273,7 +301,7 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
   let documents = 0;
   let collections = 0;
   for (const [name, info] of Object.entries(result.counts)) {
-    if (name === '_stock_reset') continue;
+    if (name === '_stock_reset' || name === '_asset_reset') continue;
     if ('skipped' in info && info.skipped) continue;
     if ('dryRun' in info && 'before' in info) {
       documents += info.before;
