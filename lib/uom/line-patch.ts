@@ -26,6 +26,19 @@ export function convertQtyBetweenUoms(
   return Math.round((qtyBase / newFactor) * 1000) / 1000;
 }
 
+/** Ganti satuan — hanya qty (GRN, penyesuaian, transfer, dll.). */
+export function patchQtyLineOnUomChange(
+  line: { qty?: unknown; factorToBase?: number },
+  nextUom: ProductUom,
+) {
+  return {
+    uomId: nextUom.id,
+    satuan: nextUom.satuan,
+    factorToBase: nextUom.factorToBase,
+    qty: convertQtyBetweenUoms(line.qty, line.factorToBase, nextUom),
+  };
+}
+
 /** Ganti satuan — qty + harga beli per kemasan; total baris tetap. */
 export function patchPurchaseLineOnUomChange(
   line: { qty?: unknown; harga?: unknown; factorToBase?: number },

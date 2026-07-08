@@ -126,7 +126,13 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       if (localUom) {
         satuan = localUom.satuan;
         vendorUomId = localUom.vendorUomId || undefined;
+        if (!vendorUomId) {
+          return {
+            error: `Satuan "${localUom.satuan}" untuk "${it.nama || vendorKode}" belum terhubung ke sales.app — jalankan Sync Katalog.`,
+          };
+        }
       }
+      // If uomId not found, fall through to satuan resolution
     }
 
     enriched.push({

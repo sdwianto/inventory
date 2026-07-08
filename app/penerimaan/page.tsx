@@ -3,7 +3,7 @@
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VirtualTableBody from '@/components/VirtualTableBody';
 import { TableSkeleton } from '@/components/TableSkeleton';
@@ -25,6 +25,10 @@ import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { fetchJson } from '@/lib/fetch-json';
+import LineUomSelect from '@/components/uom/LineUomSelect';
+import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
+import { patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
+import type { ProductUom } from '@/lib/uom/types';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -96,11 +100,21 @@ export default function PenerimaanPage() {
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [qtyMap, setQtyMap] = useState<JsonObject>({});
   const [gudangMap, setGudangMap] = useState<JsonObject>({});
+  const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
   const [doView, setDoView] = useState<JsonObject | null>(null);
   const [loadingDo, setLoadingDo] = useState('');
   const [replayingInvoice, setReplayingInvoice] = useState('');
   const [pollInvoiceGrnId, setPollInvoiceGrnId] = useState<string | null>(null);
   const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
+
+  const detailItems = useMemo(
+    () => (detail ? asArray(detail.items) as JsonObject[] : []),
+    [detail],
+  );
+  usePrimeLineItemUoms(
+    Boolean(detail),
+    detailItems.map((it) => str(it.localStokId)),
+  );
 
   const { data: invoicePoll } = useGrnInvoiceStatus(pollInvoiceGrnId, !!pollInvoiceGrnId);
   const { data: syncJob } = useBgJob(activeSyncJobId);
@@ -214,14 +228,20 @@ export default function PenerimaanPage() {
       const detailItems = asArray(data.items) as JsonObject[];
       const initQty: JsonObject = {};
       const initGudang: JsonObject = {};
+      const initUom: Record<string, { uomId?: string; satuan?: string; factorToBase?: number }> = {};
       for (const [idx, it] of detailItems.entries()) {
         const key = itemRowKey(it, idx);
         initQty[key] = it.qtyOrdered ?? 0;
         const embedded = it.product as JsonObject | undefined;
         initGudang[key] = str(it.gudangKode || embedded?.gudangKode, 'GKERING');
+        initUom[key] = {
+          uomId: str(it.uomId) || undefined,
+          satuan: str(it.satuan) || undefined,
+        };
       }
       setQtyMap(initQty);
       setGudangMap(initGudang);
+      setUomMap(initUom);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -231,13 +251,18 @@ export default function PenerimaanPage() {
     if (!detail) return;
     const grnId = str(detail.id);
     setPosting(grnId);
-    const detailItems = asArray(detail.items) as JsonObject[];
-    const items = detailItems.map((it, idx) => ({
-      lineId: it.lineId,
-      lineIndex: idx,
-      qty: num(qtyMap[itemRowKey(it, idx)]),
-      lokasiKode: str(gudangMap[itemRowKey(it, idx)], 'GKERING'),
-    })).filter((it) => it.qty > 0);
+    const items = detailItems.map((it, idx) => {
+      const key = itemRowKey(it, idx);
+      const uom = uomMap[key];
+      return {
+        lineId: it.lineId,
+        lineIndex: idx,
+        qty: num(qtyMap[key]),
+        lokasiKode: str(gudangMap[key], 'GKERING'),
+        uomId: uom?.uomId || str(it.uomId) || undefined,
+        satuan: uom?.satuan || str(it.satuan) || undefined,
+      };
+    }).filter((it) => it.qty > 0);
 
     try {
       const data = await postGrnMutation(grnId, items);
@@ -411,13 +436,15 @@ export default function PenerimaanPage() {
             {' · '}Gudang mengikuti master produk (Kering/Basah tidak bisa dicampur)
           </p>
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {(asArray(detail?.items) as JsonObject[]).map((it, idx) => {
+            {detailItems.map((it, idx) => {
               const rowKey = itemRowKey(it, idx);
+              const localStokId = str(it.localStokId);
+              const uomRow = uomMap[rowKey];
               return (
               <div key={rowKey} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
                 <div className="flex-1 min-w-[140px]">
                   <div className="font-medium truncate">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</div>
-                  <div className="text-xs text-slate-500">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}{it.uomId ? ` · UOM ${str(it.uomId).slice(0, 8)}…` : ''}</div>
+                  <div className="text-xs text-slate-500">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}</div>
                 </div>
                 <div className="w-36">
                   <Label className="text-xs">Gudang</Label>
@@ -429,6 +456,31 @@ export default function PenerimaanPage() {
                     {warehouseName(str(gudangMap[rowKey], 'GKERING'))}
                   </div>
                 </div>
+                {localStokId ? (
+                  <div className="w-28">
+                    <Label className="text-xs">Satuan</Label>
+                    <LineUomSelect
+                      stokId={localStokId}
+                      uomId={uomRow?.uomId || str(it.uomId)}
+                      onChange={(uom: ProductUom) => {
+                        const prev = uomMap[rowKey];
+                        const patched = patchQtyLineOnUomChange(
+                          { qty: qtyMap[rowKey], factorToBase: prev?.factorToBase },
+                          uom,
+                        );
+                        setUomMap({
+                          ...uomMap,
+                          [rowKey]: {
+                            uomId: patched.uomId,
+                            satuan: patched.satuan,
+                            factorToBase: patched.factorToBase,
+                          },
+                        });
+                        setQtyMap({ ...qtyMap, [rowKey]: patched.qty });
+                      }}
+                    />
+                  </div>
+                ) : null}
                 <div className="w-24">
                   <Label className="text-xs">Qty terima</Label>
                   <Input

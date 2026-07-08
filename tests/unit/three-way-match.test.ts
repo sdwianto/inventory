@@ -91,4 +91,74 @@ describe('three-way-match', () => {
     };
     expect(matchInvoiceLinesAgainstGrn(grns, payload).ok).toBe(true);
   });
+
+  it('matches B2B vendor uomId vs GRN local uomId via kode+satuan', () => {
+    const grns = [{
+      items: [{
+        localStokId: 'local-p1',
+        vendorKode: 'B135590',
+        localKode: 'B135590',
+        uomId: 'local-box-uom',
+        satuan: 'BOX',
+        qtyReceived: 2,
+        harga: 50000,
+      }],
+    }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-B2B',
+      subTotal: 100000,
+      ppn: 11000,
+      total: 111000,
+      items: [{
+        stokId: 'vendor-p1',
+        kode: 'B135590',
+        uomId: 'vendor-box-uom',
+        satuan: 'BOX',
+        qty: 2,
+      }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload);
+    expect(result.ok).toBe(true);
+    expect(result.grnValue).toBe(100000);
+  });
+
+  it('uses subTotal for price comparison when PPN present', () => {
+    const grns = [{
+      items: [{ vendorKode: 'SKU1', qtyReceived: 2, harga: 50000 }],
+    }];
+    const payload = {
+      noDO: 'DO-1',
+      subTotal: 100000,
+      ppn: 11000,
+      total: 111000,
+      items: [{ kode: 'SKU1', satuan: 'BOX', qty: 2 }],
+    };
+    expect(matchInvoiceLinesAgainstGrn(grns, payload).ok).toBe(true);
+  });
+
+  it('matches by shared lineId across tenant boundaries', () => {
+    const grns = [{
+      items: [{
+        lineId: 'line-1',
+        vendorKode: 'SKU1',
+        uomId: 'local-uom',
+        satuan: 'BOX',
+        qtyReceived: 2,
+        harga: 10000,
+      }],
+    }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-LID',
+      subTotal: 20000,
+      total: 20000,
+      items: [{
+        lineId: 'line-1',
+        kode: 'SKU1',
+        uomId: 'vendor-uom',
+        satuan: 'BOX',
+        qty: 2,
+      }],
+    };
+    expect(matchInvoiceLinesAgainstGrn(grns, payload).ok).toBe(true);
+  });
 });

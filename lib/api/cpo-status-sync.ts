@@ -98,7 +98,9 @@ export async function syncCpoOnGrnPosted(db: Db, grn) {
     return { ...line, qtyReceived: (line.qtyReceived || 0) + add };
   });
 
-  const status = rollupReceiveStatus(items);
+  const receiveStatus = rollupReceiveStatus(items);
+  const keepInvoiced = String(po.status || '') === 'INVOICED';
+  const status = keepInvoiced ? po.status : receiveStatus;
   await db.collection('customer_purchase_orders').updateOne(
     { id: po.id },
     {

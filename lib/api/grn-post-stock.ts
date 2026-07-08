@@ -10,6 +10,8 @@ import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/prod
 import { calcWeightedAvgHargaBeli, buildJualPricesAfterBeliChange } from '@/lib/api/inventory-cost';
 import { productFilterById } from '@/lib/api/tenant-operational';
 import { resolveLineQtyBase, unitCostPerBaseFromLine } from '@/lib/uom/resolve-line-qty';
+import { formatStockDualLabel } from '@/lib/uom/display';
+import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
@@ -191,6 +193,8 @@ export async function applyGrnStockPosting(
     stokTotalById.set(sid, (stokTotalById.get(sid) || 0) + (parseFloat(String(r.qty)) || 0));
   }
 
+  const uomsByProduct = await listProductUomsByProductIds(db, tid, [...productState.keys()]);
+
   const productBulk: Record<string, unknown>[] = [];
   for (const [stokId, state] of productState) {
     const newStok = stokTotalById.get(stokId) ?? state.oldQty;
@@ -199,6 +203,11 @@ export async function applyGrnStockPosting(
       state.newBeli,
       state.prod,
     );
+    const uoms = uomsByProduct.get(stokId) || [];
+    const uomCount = uoms.length || Number(state.prod.uomCount) || 1;
+    const stokDisplay = uomCount <= 1
+      ? `${Number.isInteger(newStok) ? newStok : Math.round(newStok * 1000) / 1000} ${String(state.prod.satuan || 'PCS')}`
+      : formatStockDualLabel(newStok, uoms);
     productBulk.push({
       updateOne: {
         filter: productFilterById(tid, stokId),
@@ -206,6 +215,8 @@ export async function applyGrnStockPosting(
           $set: {
             hargaBeli: state.newBeli,
             stok: newStok,
+            stokDisplay,
+            uomCount: uoms.length || uomCount,
             ...pricePatch,
             updatedAt: now,
           },

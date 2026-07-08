@@ -178,7 +178,7 @@ function CustomerPoPageContent() {
                       onSyncVendor={() => syncVendorPo(poId)}
                       onSyncVendorForVendor={(vendorTenantId) => syncVendorForVendorPo(poId, vendorTenantId)}
                       onApprove={() => approvePo(poId)}
-                      onReject={() => rejectPo(poId)}
+                      onReject={(reason) => rejectPo(poId, reason)}
                     />
                   );
                 })}

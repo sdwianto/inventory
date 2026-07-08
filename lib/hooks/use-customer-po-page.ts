@@ -26,6 +26,7 @@ import {
   formatPoVendorSoDisplay,
   isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
+import { canEditCustomerPo } from '@/lib/pembelian-po/permissions';
 import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
 import { fetchDefaultProductUom, primeUomsForStokIds } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
@@ -68,7 +69,7 @@ export function useCustomerPoPage() {
   const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
   const wrPrefillDone = useRef(false);
 
-  usePrimeLineItemUoms(createOpen, lines.map((l) => str(l.localStokId)));
+  usePrimeLineItemUoms(createOpen || Boolean(editingPo), lines.map((l) => str(l.localStokId)));
 
   const loadVendorTiers = useCallback(() => {
     fetchJson('/api/integrations/vendor-tiers')
@@ -262,15 +263,10 @@ export function useCustomerPoPage() {
 
   const canEditPo = (po: JsonObject) => {
     if (isPendingOptimisticPo(po)) return false;
-    const status = str(po.status);
-    if (!po || !['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
-    if (canApprove) return true;
-    if (status === 'DRAFT' && user?.role === 'SUPERVISOR') return true;
-    const createdBy = asObject(po.createdBy);
-    if (status === 'DRAFT' && user?.role === 'GUDANG') {
-      return str(createdBy.userId) === str(user?.id);
-    }
-    return false;
+    return canEditCustomerPo(String(user?.role || ''), po, {
+      isMaster: user?.role === 'MASTER',
+      userId: str(user?.id),
+    });
   };
 
   const buildItemsPayload = () => {
@@ -536,10 +532,10 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
-  const rejectPo = async (id: string) => {
+  const rejectPo = async (id: string, reason = 'Ditolak admin') => {
     setSubmitting(id);
     try {
-      await poMutations.reject(id);
+      await poMutations.reject(id, reason);
       toast.success('PO ditolak');
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);

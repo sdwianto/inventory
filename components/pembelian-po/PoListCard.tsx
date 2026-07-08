@@ -1,14 +1,21 @@
 'use client';
 
+import { useState } from 'react';
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   CheckCircle2, ChevronDown, ChevronRight, Pencil, RefreshCw, Send, XCircle,
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
 import { poCreatorLabel, formatPoVendorSoDisplay, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
+import { canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 
 export type PoListCardProps = {
   po: JsonObject;
@@ -27,7 +34,7 @@ export type PoListCardProps = {
   onSyncVendor: () => void;
   onSyncVendorForVendor?: (vendorTenantId: string) => void;
   onApprove: () => void;
-  onReject: () => void;
+  onReject: (reason: string) => void;
 };
 
 export default function PoListCard({
@@ -49,6 +56,9 @@ export default function PoListCard({
   onApprove,
   onReject,
 }: PoListCardProps) {
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+
   const poId = str(po.id);
   const isOptimistic = isPendingOptimisticPo(po);
   const arrival = getPoArrivalDate(po);
@@ -61,6 +71,12 @@ export default function PoListCard({
   const vendorSubs = asArray(po.vendorSubmissions) as JsonObject[];
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
+
+  const handleReject = () => {
+    onReject(rejectReason || 'Ditolak admin');
+    setRejectDialogOpen(false);
+    setRejectReason('');
+  };
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -99,7 +115,7 @@ export default function PoListCard({
             Edit
           </Button>
         )}
-        {poStatus === 'DRAFT' && canRequest && !isOptimistic && (
+        {(canRequestApprovalPoStatus(poStatus)) && canRequest && !isOptimistic && (
           user?.role !== 'GUDANG' || str(createdBy.userId) === str(user?.id)
         ) && (
           <Button
@@ -110,7 +126,7 @@ export default function PoListCard({
             disabled={isSubmitting}
           >
             <Send className="w-3 h-3 mr-1" />
-            {isSubmitting ? '...' : 'Ajukan'}
+            {isSubmitting ? '...' : poStatus === 'REJECTED' ? 'Ajukan ulang' : 'Ajukan'}
           </Button>
         )}
         {poStatus === 'DRAFT' && canDirectSubmit && !isOptimistic && (
@@ -146,7 +162,7 @@ export default function PoListCard({
               size="sm"
               variant="destructive"
               className="shrink-0"
-              onClick={onReject}
+              onClick={() => setRejectDialogOpen(true)}
               disabled={isSubmitting}
             >
               <XCircle className="w-3 h-3" />
@@ -266,6 +282,36 @@ export default function PoListCard({
           )}
         </div>
       )}
+      <AlertDialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tolak PO</AlertDialogTitle>
+            <AlertDialogDescription>
+              Masukkan alasan penolakan untuk PO {str(po.noPO)}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <Label htmlFor="reject-reason">Alasan penolakan</Label>
+            <Input
+              id="reject-reason"
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Contoh: Stok sudah mencukupi, harga terlalu tinggi, dll."
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => {
+              setRejectDialogOpen(false);
+              setRejectReason('');
+            }}>
+              Batal
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleReject}>
+              Tolak
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

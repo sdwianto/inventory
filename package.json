@@ -17,6 +17,7 @@
         "test:unit": "vitest run",
         "test:multi-uom": "vitest run tests/unit/uom-conversion.test.ts tests/unit/uom-display.test.ts tests/unit/resolve-line-qty.test.ts tests/unit/grn-from-webhook.test.ts tests/unit/match-vendor-line.test.ts tests/unit/hutang-variance-uom.test.ts",
         "test:3way-match": "vitest run tests/unit/three-way-match.test.ts",
+        "test:s3": "vitest run tests/unit/grn-from-webhook.test.ts tests/unit/grn-from-webhook-delivery.test.ts tests/unit/three-way-match.test.ts tests/unit/cpo-status-sync.test.ts tests/unit/customer-po-vendor.test.ts tests/unit/po-estimasi.test.ts tests/unit/line-patch.test.ts tests/unit/match-vendor-line.test.ts",
         "test:p1": "vitest run tests/unit/three-way-match.test.ts tests/unit/hutang-variance-uom.test.ts tests/unit/health.test.ts tests/unit/resolve-line-qty.test.ts",
         "test:p3": "vitest run tests/unit/feature-flags.test.ts tests/unit/audit-compliance.test.ts tests/unit/sentry.test.ts",
         "test:unit:watch": "vitest",

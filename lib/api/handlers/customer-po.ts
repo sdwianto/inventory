@@ -24,6 +24,7 @@ import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
 import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
+import { canEditCustomerPo, canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES, processJobById, getJobById } from '@/lib/api/bg-jobs';
 import {
   parseCursorPageParams,
@@ -218,14 +219,10 @@ async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
 }
 
 function canEditPo(auth: AuthContext, po: JsonObject) {
-  const status = String(po.status || '');
-  if (!['DRAFT', 'PENDING_APPROVAL'].includes(status)) return false;
-  if (auth.isMaster || auth.role === 'ADMIN') return true;
-  if (status === 'DRAFT' && auth.role === 'SUPERVISOR') return true;
-  if (status === 'DRAFT' && auth.role === 'GUDANG') {
-    return String(asObject(po.createdBy).userId || '') === auth.userId;
-  }
-  return false;
+  return canEditCustomerPo(auth.role, po, {
+    isMaster: auth.isMaster,
+    userId: auth.userId,
+  });
 }
 
 async function validatePoForApproval(db: Db, tenantId, items) {
@@ -460,7 +457,9 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (po.status !== 'DRAFT') return err('Hanya PO DRAFT yang bisa diajukan', 400);
+    if (!canRequestApprovalPoStatus(String(po.status || ''))) {
+      return err('Hanya PO DRAFT atau REJECTED yang bisa diajukan', 400);
+    }
     if (!po.items?.length) return err('PO kosong', 400);
     if (
       scopeAuth!.role === 'GUDANG'
@@ -477,6 +476,9 @@ export async function handleCustomerPo({
       requestedAt: now,
       updatedAt: now,
       requestedBy: submitter,
+      rejectReason: null,
+      rejectedBy: null,
+      rejectedAt: null,
     };
     if (!po.createdBy?.userId) {
       approvalPatch.createdBy = submitter;

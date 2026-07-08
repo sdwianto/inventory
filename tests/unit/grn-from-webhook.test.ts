@@ -89,4 +89,18 @@ describe('resolveLocalUomForGrnLine', () => {
     );
     expect(res.qtyBase).toBe(24);
   });
+
+  it('preserves qtyBase from webhook when UOM mapping fails', async () => {
+    const cache = new Map<string, ProductUom[]>();
+    cache.set('p1', uoms);
+    const res = await resolveLocalUomForGrnLine(
+      mockDb(new Map()),
+      'sppg',
+      'p1',
+      { uomId: 'unknown-uom', qty: 2, qtyBase: 20, satuan: 'BOX' },
+      cache,
+    );
+    expect(res.qtyBase).toBe(20);
+    expect(res.uomId).toBeUndefined();
+  });
 });

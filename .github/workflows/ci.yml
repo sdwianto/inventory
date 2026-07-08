@@ -41,6 +41,9 @@ jobs:
       - name: P3 regression suite
         run: npm run test:p3
 
+      - name: S3 stabilization suite
+        run: npm run test:s3
+
       - name: Build
         run: npm run build
         env:

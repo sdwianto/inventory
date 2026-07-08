@@ -4,6 +4,7 @@ import type { Db } from 'mongodb';
 import { applyGrnStockPosting } from '@/lib/api/grn-post-stock';
 import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
+import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/lib/api/bg-jobs';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
@@ -118,6 +119,15 @@ export async function postGoodsReceipt(
     payload: { grnId: grn.id },
   });
   scheduleJobProcessing(db);
+
+  if (syncInvoiceInline) {
+    try {
+      await runGrnPostSideEffects(db, tenantId, grn.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error('grn_post_side_effects_inline_exception', { tenantId, grnId: grn.id, error: msg });
+    }
+  }
 
   let invoiceSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;

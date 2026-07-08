@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { patchPoEstimasiLineOnUomChange } from '@/lib/uom/line-patch';
+import { patchPoEstimasiLineOnUomChange, patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
 import type { ProductUom } from '@/lib/uom/types';
 
 const pcs: ProductUom = {
@@ -13,6 +13,14 @@ const dus: ProductUom = {
   factorToBase: 20, barcode: '', hargaEcer: 42800, hargaGrosir: 40000, hargaSpesial: 38000,
   sortOrder: 1, aktif: true,
 };
+
+describe('patchQtyLineOnUomChange', () => {
+  it('converts qty when switching PCS → DUS keeping base qty', () => {
+    const patched = patchQtyLineOnUomChange({ qty: 20, factorToBase: 1 }, dus);
+    expect(patched.qty).toBe(1);
+    expect(patched.satuan).toBe('DUS');
+  });
+});
 
 describe('patchPoEstimasiLineOnUomChange', () => {
   it('scales estimasi harga and qty when switching PCS → DUS', () => {

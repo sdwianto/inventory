@@ -16,7 +16,13 @@ export async function resolveLocalUomForGrnLine(
   uomsCache: Map<string, ProductUom[]>,
 ): Promise<{ uomId?: string; satuan?: string; qtyBase?: number; factorToBase?: number }> {
   if (!localStokId) {
-    return { satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined };
+    const qtyBaseFromWebhook = vendorItem.qtyBase != null
+      ? parseFloat(String(vendorItem.qtyBase))
+      : undefined;
+    return {
+      satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined,
+      qtyBase: qtyBaseFromWebhook,
+    };
   }
   if (!uomsCache.has(localStokId)) {
     uomsCache.set(localStokId, await listProductUoms(db, tenantId, localStokId));
@@ -52,7 +58,13 @@ export async function resolveLocalUomForGrnLine(
     }
   }
 
-  return { satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined };
+  const qtyBaseFromWebhook = vendorItem.qtyBase != null
+    ? parseFloat(String(vendorItem.qtyBase))
+    : undefined;
+  return {
+    satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined,
+    qtyBase: qtyBaseFromWebhook,
+  };
 }
 
 type GrnLineDraft = JsonObject & {
@@ -88,15 +100,13 @@ export function grnUpdateFieldsFromPayload(
   };
 }
 
-export async function buildGrnInsertDoc(
+export async function buildGrnLinesFromWebhookPayload(
   db: Db,
   tenantId: string | null | undefined,
   payload: JsonObject,
   vendorTenantId: string | null | undefined,
-  noGRN: string,
-): Promise<JsonObject> {
+): Promise<{ items: GrnLineDraft[]; hasUnknown: boolean }> {
   const tid = tenantId || 'default';
-  const now = new Date();
   const rawItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
   const maps = await loadProductMaps(db, tid, vendorTenantId ?? null, rawItems);
   const items: GrnLineDraft[] = [];
@@ -118,6 +128,9 @@ export async function buildGrnInsertDoc(
       it,
       uomsCache,
     );
+    const qtyBaseFromWebhook = it.qtyBase != null
+      ? parseFloat(String(it.qtyBase))
+      : undefined;
     items.push({
       lineId: String(it.lineId || uuidv4()),
       vendorStokId: it.stokId,
@@ -128,7 +141,7 @@ export async function buildGrnInsertDoc(
       localNama: resolved.localNama,
       satuan: localUom.satuan || it.satuan,
       uomId: localUom.uomId,
-      qtyBase: localUom.qtyBase,
+      qtyBase: localUom.qtyBase ?? qtyBaseFromWebhook,
       factorToBase: localUom.factorToBase,
       qtyOrdered: parseFloat(String(it.qty)) || 0,
       qtyReceived: 0,
@@ -137,8 +150,27 @@ export async function buildGrnInsertDoc(
     });
   }
 
-  const vendorTenantName = await resolveVendorTenantName(db, tid, vendorTenantId ?? null);
   const { items: uniqueItems } = ensureUniqueLineIds(items);
+  return { items: uniqueItems as GrnLineDraft[], hasUnknown };
+}
+
+export async function buildGrnInsertDoc(
+  db: Db,
+  tenantId: string | null | undefined,
+  payload: JsonObject,
+  vendorTenantId: string | null | undefined,
+  noGRN: string,
+): Promise<JsonObject> {
+  const tid = tenantId || 'default';
+  const now = new Date();
+  const { items: uniqueItems, hasUnknown } = await buildGrnLinesFromWebhookPayload(
+    db,
+    tid,
+    payload,
+    vendorTenantId,
+  );
+
+  const vendorTenantName = await resolveVendorTenantName(db, tid, vendorTenantId ?? null);
 
   return {
     id: uuidv4(),
@@ -176,11 +208,26 @@ export async function createGrnFromDelivery(
       vendorDeliveryId: payload.deliveryId,
     });
     if (existing) {
+      const patch = grnUpdateFieldsFromPayload(
+        payload,
+        vendorTenantId ?? null,
+        existing as JsonObject,
+      ) as Record<string, unknown>;
+      if (existing.status !== 'POSTED') {
+        const { items, hasUnknown } = await buildGrnLinesFromWebhookPayload(
+          db,
+          tid,
+          payload,
+          vendorTenantId,
+        );
+        patch.items = items;
+        patch.status = hasUnknown ? 'UNKNOWN_PRODUCT' : 'DRAFT';
+      }
       await db.collection('goods_receipts').updateOne(
         { id: existing.id },
-        { $set: grnUpdateFieldsFromPayload(payload, vendorTenantId ?? null, existing as JsonObject) },
+        { $set: patch },
       );
-      return { ...existing, vendorDeliverySnapshot: payload } as JsonObject;
+      return { ...existing, ...patch } as JsonObject;
     }
   }
 
