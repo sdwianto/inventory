@@ -108,6 +108,11 @@ export default function PoListCard({
                   SO vendor: {vendorSoLabel}
                 </span>
               )}
+              {!vendorSoLabel && poStatus === 'APPROVED' && !!po.vendorSyncPending && !isOptimistic && (
+                <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0 text-blue-700">
+                  Mengirim ke vendor…
+                </span>
+              )}
               {!vendorSoLabel && ['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED'].includes(poStatus) && !isOptimistic && (
                 <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0 text-amber-700">
                   Nomor SO belum tersinkron — refresh halaman atau klik Sync SO

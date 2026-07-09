@@ -11,16 +11,24 @@ import {
 import type { JsonObject } from '@/types/json';
 import type { AuthContext } from '@/types/auth';
 
-export async function runPoVendorSyncPending(db: Db, scopeAuth: AuthContext | null | undefined) {
+export async function runPoVendorSyncPending(
+  db: Db,
+  scopeAuth: AuthContext | null | undefined,
+  { poId }: { poId?: string } = {},
+) {
   const cutoff = new Date(Date.now() - VENDOR_SYNC_RETRY_COOLDOWN_MS);
   let filter: Record<string, unknown> = {
     status: 'APPROVED',
     vendorSyncPending: { $ne: false },
-    $or: [
+  };
+  if (poId) {
+    filter.id = String(poId);
+  } else {
+    filter.$or = [
       { vendorSyncAt: { $exists: false } },
       { vendorSyncAt: { $lt: cutoff } },
-    ],
-  };
+    ];
+  }
   filter = withTenantFilter(scopeAuth, filter);
 
   const pending = await db.collection('customer_purchase_orders')

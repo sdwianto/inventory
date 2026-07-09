@@ -158,8 +158,12 @@ export function useCustomerPoPage() {
         if (syncedRows.length > 0) {
           void reloadList();
           invalidateOperationalCaches(queryClient);
-          const labels = syncedRows.map((s) => str(s.noPO)).filter(Boolean).join(', ');
-          toast.success(`${syncedRows.length} PO terkirim otomatis ke vendor`, { description: labels });
+          const labels = syncedRows.map((s) => {
+            const noPo = str(s.noPO);
+            const noSo = str(s.vendorNoSO);
+            return noSo ? `${noPo} → ${noSo}` : noPo;
+          }).filter(Boolean).join(', ');
+          toast.success(`${syncedRows.length} PO terkirim ke vendor`, { description: labels });
         } else {
           void reloadList();
           autoSyncCooldownUntil.current = Date.now() + 60_000;
@@ -201,7 +205,7 @@ export function useCustomerPoPage() {
       }
       if (data.jobId) {
         if (!data.reused) {
-          toast.info('PO antrian dikirim ke background');
+          toast.info('Mengirim PO ke vendor di background…');
         }
         setVendorSyncJobId(String(data.jobId));
         startedAsyncJob = true;
@@ -484,15 +488,19 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
+  const trackVendorSyncJob = useCallback((jobId: string | null | undefined) => {
+    if (!jobId) return;
+    setVendorSyncJobId(String(jobId));
+  }, []);
+
   const approvePo = async (id: string) => {
     setSubmitting(id);
     try {
       const data = await poMutations.approve(id);
-      if (data.vendorSynced === false || data.status === 'APPROVED') {
+      trackVendorSyncJob(data.vendorSyncJobId);
+      if (data.vendorSyncPending || data.async) {
         toast.success('PO disetujui', {
-          description: data.vendorSyncError
-            ? `Kirim ke vendor ditunda: ${data.vendorSyncError}`
-            : 'Menunggu pengiriman ke sales.app',
+          description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
         });
       } else if (data.vendorSubmissions?.length > 1) {
         toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
@@ -566,11 +574,10 @@ export function useCustomerPoPage() {
     setSubmitting(id);
     try {
       const data = await poMutations.submit(id);
-      if (data.vendorSynced === false || data.status === 'APPROVED') {
+      trackVendorSyncJob(data.vendorSyncJobId);
+      if (data.vendorSyncPending || data.async) {
         toast.success('PO dikirim (disetujui)', {
-          description: data.vendorSyncError
-            ? `Sinkron vendor ditunda: ${data.vendorSyncError}`
-            : 'Menunggu sales.app',
+          description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
         });
       } else if (data.vendorSubmissions?.length > 1) {
         toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);

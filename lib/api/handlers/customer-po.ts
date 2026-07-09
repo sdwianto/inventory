@@ -19,13 +19,12 @@ import {
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
-import { pushPoToVendor, finalizePoSubmission } from '@/lib/api/customer-po-push';
 import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
 import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
+import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
 import { canEditCustomerPo, canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
-import { enqueueJob, scheduleJobProcessing, JOB_TYPES, processJobById, getJobById } from '@/lib/api/bg-jobs';
 import {
   parseCursorPageParams,
   applyDescDateIdCursor,
@@ -263,32 +262,23 @@ async function markPoApproved(db: Db, po, approverSnap, syncError) {
   return db.collection('customer_purchase_orders').findOne({ id: po.id });
 }
 
-/** Validasi lokal → coba kirim vendor; jika sales.app offline tetap APPROVED (sync ditunda). */
-async function completePoWithVendorSync(db: Db, po, approverSnap) {
+/** Validasi lokal → setujui cepat → kirim vendor di background (tidak blok HTTP). */
+async function approvePoAndQueueVendorSync(db: Db, po, approverSnap) {
   const validation = await validatePoForApproval(db, po.tenantId || 'default', po.items);
   if (validation.error) return { error: validation.error, status: 400 };
 
-  const pushed = await pushPoToVendor(db, po, po.tenantId || 'default');
-  if ('submissions' in pushed && pushed.submissions?.length) {
-    const updated = await finalizePoSubmission(
-      db,
-      po,
-      pushed.submissions,
-      approverSnap,
-      { partialFailures: pushed.partialFailures || [] },
-    );
-    return {
-      po: updated,
-      vendorSynced: !(pushed.partialFailures?.length),
-      vendorSyncError: pushed.partialFailures?.length
-        ? pushed.partialFailures.map((f: { vendorTenantId?: string; error?: string }) => `${f.vendorTenantId}: ${f.error}`).join('; ')
-        : null,
-    };
-  }
+  const updated = await markPoApproved(db, po, approverSnap, null);
+  const tenantId = String(po.tenantId || 'default');
+  const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
 
-  const syncError = 'error' in pushed ? pushed.error : 'Gagal kirim ke vendor';
-  const updated = await markPoApproved(db, po, approverSnap, syncError);
-  return { po: updated, vendorSynced: false, vendorSyncError: syncError };
+  return {
+    po: updated,
+    vendorSynced: false,
+    vendorSyncPending: true,
+    vendorSyncJobId: jobId,
+    async: true,
+    reused,
+  };
 }
 
 async function retryVendorSync(db: Db, po, approverSnap) {
@@ -343,32 +333,14 @@ export async function handleCustomerPo({
       return ok(result);
     }
 
-    const { jobId, reused } = await enqueueJob(db, {
-      type: JOB_TYPES.PO_VENDOR_SYNC,
-      tenantId,
-      payload: {},
-    });
-
-    // Vercel serverless: setImmediate tidak dijamin jalan setelah response — proses job di request ini.
-    const kickoff = await processJobById(db, jobId);
-    if (!kickoff || (kickoff as { skipped?: boolean }).skipped) {
-      scheduleJobProcessing(db);
-    }
-
-    const job = await getJobById(db, jobId, tenantId);
-    if (job?.status === 'DONE' && job.result) {
-      return ok({ ...(job.result as Record<string, unknown>), jobId, async: false });
-    }
-    if (job?.status === 'FAILED') {
-      return ok({
-        jobId,
-        async: false,
-        error: job.lastError,
-        result: job.result,
-      });
-    }
-
-    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
+    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId);
+    return ok({
+      jobId,
+      async: true,
+      status: reused ? 'RUNNING' : 'PENDING',
+      reused,
+      message: 'Kirim PO ke vendor berjalan di background',
+    }, 202);
   }
 
   if (route === '/customer-purchase-orders' && method === 'POST') {
@@ -533,12 +505,18 @@ export async function handleCustomerPo({
     if (po.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
 
     const approverSnap = await actorSnapshot(db, auth);
-    const result = await completePoWithVendorSync(db, po, approverSnap);
+    const result = await approvePoAndQueueVendorSync(db, po, approverSnap);
     if ('error' in result && result.error) return err(result.error, result.status || 400);
 
     const enriched = await enrichOnePo(db, result.po);
     await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
-    return ok({ ...enriched, vendorSynced: result.vendorSynced, vendorSyncError: result.vendorSyncError });
+    return ok({
+      ...enriched,
+      vendorSynced: result.vendorSynced,
+      vendorSyncPending: result.vendorSyncPending,
+      vendorSyncJobId: result.vendorSyncJobId,
+      async: result.async,
+    });
   }
 
   // POST /customer-purchase-orders/:id/sync-so-lines — tarik cancel baris SO dari sales.app
@@ -695,11 +673,17 @@ export async function handleCustomerPo({
     const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
     if (locked) return locked;
 
-    const result = await completePoWithVendorSync(db, po, await actorSnapshot(db, auth));
+    const result = await approvePoAndQueueVendorSync(db, po, await actorSnapshot(db, auth));
     if ('error' in result && result.error) return err(result.error, result.status || 400);
 
     const enriched = await enrichOnePo(db, result.po);
-    return ok({ ...enriched, vendorSynced: result.vendorSynced, vendorSyncError: result.vendorSyncError });
+    return ok({
+      ...enriched,
+      vendorSynced: result.vendorSynced,
+      vendorSyncPending: result.vendorSyncPending,
+      vendorSyncJobId: result.vendorSyncJobId,
+      async: result.async,
+    });
   }
 
   return null;

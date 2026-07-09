@@ -66,7 +66,7 @@ export function usePoMutations(
   const approve = useCallback(async (id: string) => {
     return withOptimistic(
       id,
-      { status: 'APPROVED', approvalStatus: 'APPROVED' },
+      { status: 'APPROVED', approvalStatus: 'APPROVED', vendorSyncPending: true },
       () => fetchOrQueue(`/api/customer-purchase-orders/${id}/approve`, {
         method: 'POST',
         offlineLabel: `Setujui PO ${id}`,
@@ -90,7 +90,7 @@ export function usePoMutations(
   const submit = useCallback(async (id: string) => {
     return withOptimistic(
       id,
-      { status: 'SUBMITTED' },
+      { status: 'APPROVED', vendorSyncPending: true },
       () => fetchOrQueue(`/api/customer-purchase-orders/${id}/submit`, {
         method: 'POST',
         offlineLabel: `Kirim PO ${id}`,

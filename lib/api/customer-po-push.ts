@@ -8,6 +8,7 @@ import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-
 import {
   enrichSubmissionsWithSoFromSales,
   extractPushedVendorSo,
+  submissionHasVendorSo,
   summarizeVendorNoSo,
 } from '@/lib/api/customer-po-so-extract';
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
@@ -17,14 +18,20 @@ export type PushPoToVendorResult =
   | { error: string; partialFailures?: JsonObject[] }
   | { submissions: JsonObject[]; partialFailures?: JsonObject[] };
 
+export type PushPoToVendorOptions = {
+  /** Timeout per vendor (ms). Default 15s — bg job memakai lebih panjang. */
+  timeoutMs?: number;
+};
+
 export async function pushPoGroupToVendor(
   db: Db,
-  { tenantId, config, po, vendorTenantId, items }: {
+  { tenantId, config, po, vendorTenantId, items, timeoutMs = 15_000 }: {
     tenantId: string;
     config: { salesAppUrl: string };
     po: Record<string, unknown>;
     vendorTenantId: string;
     items: JsonObject[];
+    timeoutMs?: number;
   },
 ) {
   const salesUrl = config.salesAppUrl;
@@ -48,7 +55,7 @@ export async function pushPoGroupToVendor(
         catatan: po.catatan || '',
         paymentTerms: po.paymentTerms || 'KREDIT',
       }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     return { error: salesFetchErrorMessage(e, salesUrl), vendorTenantId };
@@ -67,7 +74,13 @@ export async function pushPoGroupToVendor(
   return { vendorSo: data, vendorTenantId };
 }
 
-export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenantId: string): Promise<PushPoToVendorResult> {
+export async function pushPoToVendor(
+  db: Db,
+  po: Record<string, unknown>,
+  tenantId: string,
+  opts: PushPoToVendorOptions = {},
+): Promise<PushPoToVendorResult> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
   const config = await getIntegrationConfig(db, tenantId);
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) {
@@ -84,14 +97,19 @@ export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenant
   const partialFailures: JsonObject[] = [];
   try {
     const groups = grouped.groups || [];
-    for (const { vendorTenantId, items } of groups) {
-      const pushed = await pushPoGroupToVendor(db, {
+    const pushedRows = await Promise.all(
+      groups.map(({ vendorTenantId, items }) => pushPoGroupToVendor(db, {
         tenantId,
         config,
         po,
         vendorTenantId,
         items,
-      });
+        timeoutMs,
+      })),
+    );
+    for (let i = 0; i < groups.length; i += 1) {
+      const { vendorTenantId, items } = groups[i];
+      const pushed = pushedRows[i];
       if (pushed.error) {
         partialFailures.push({
           vendorTenantId,
@@ -135,7 +153,8 @@ export async function finalizePoSubmission(
   approver: Record<string, unknown> | null | undefined,
   { partialFailures = [] }: { partialFailures?: JsonObject[] } = {},
 ) {
-  const syncedSubs = submissions.length
+  const needsSoLookup = submissions.some((sub) => !submissionHasVendorSo(sub));
+  const syncedSubs = needsSoLookup && submissions.length
     ? await enrichSubmissionsWithSoFromSales(db, po as JsonObject, submissions)
     : submissions;
   const primary = syncedSubs[0] || {};

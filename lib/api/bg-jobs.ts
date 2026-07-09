@@ -224,7 +224,8 @@ async function runHutangSyncJob(db: Db, job: BgJob) {
 
 async function runPoVendorSyncJob(db: Db, job: BgJob) {
   const scopeAuth = { tenantId: job.tenantId } as import('@/types/auth').AuthContext;
-  return runPoVendorSyncPending(db, scopeAuth);
+  const poId = job.payload?.poId ? String(job.payload.poId) : undefined;
+  return runPoVendorSyncPending(db, scopeAuth, { poId });
 }
 
 async function runWebhookInboxJob(db: Db, job: BgJob) {

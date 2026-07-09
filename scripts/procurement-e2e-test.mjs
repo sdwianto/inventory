@@ -42,7 +42,8 @@ function record(name, ok, detail = '') {
 }
 
 async function fetchJson(url, opts = {}) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(30_000), ...opts });
+  const timeout = opts.timeout ?? 45_000;
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeout), ...opts });
   let body = null;
   try { body = await res.json(); } catch { body = null; }
   return { res, body };
@@ -50,12 +51,16 @@ async function fetchJson(url, opts = {}) {
 
 async function testHealth() {
   for (const [label, base] of [['inventory', APP_URL], ['sales', SALES_URL]]) {
-    const { res, body } = await fetchJson(`${base}/api/health`);
-    record(
-      `health:${label}`,
-      res.ok && body?.status === 'ok' && body?.checks?.database === 'ok',
-      `HTTP ${res.status} db=${body?.checks?.database} deadLetter=${body?.checks?.worker?.deadLetterCount ?? 0}`,
-    );
+    try {
+      const { res, body } = await fetchJson(`${base}/api/health`, { timeout: label === 'sales' ? 60_000 : 30_000 });
+      record(
+        `health:${label}`,
+        res.ok && body?.status === 'ok' && body?.checks?.database === 'ok',
+        `HTTP ${res.status} db=${body?.checks?.database} deadLetter=${body?.checks?.worker?.deadLetterCount ?? 0}`,
+      );
+    } catch (e) {
+      record(`health:${label}`, false, e.message);
+    }
   }
 }
 
