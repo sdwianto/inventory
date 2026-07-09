@@ -4,6 +4,7 @@ import { withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-mast
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { warehouseLabel, WAREHOUSE_CODES, normalizeWarehouseKode, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { qtyAtWarehouse } from '@/lib/api/warehouse-qty';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { formatStockDualLabel } from '@/lib/uom/display';
 import type { HandlerContext } from '@/types/api/handler';
@@ -301,14 +302,14 @@ export async function handleStokSaldo({
   const rows = products.map((p) => {
     const gudangKode = resolveProductGudangKode(p);
     const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
-    const stokQty = byWh[gudangKode] || parseFloat(p.stok) || 0;
+    const qtyKering = qtyAtWarehouse(byWh, 'GKERING');
+    const qtyBasah = qtyAtWarehouse(byWh, 'GBASAH');
+    const stokQty = qtyAtWarehouse(byWh, gudangKode);
     const uoms = uomMap.get(String(p.id)) || [];
     const hargaBeli = parseInt(p.hargaBeli || 0, 10);
     const nilaiStok = Math.round(stokQty * hargaBeli);
-    const qtyKering = gudangKode === 'GKERING' ? stokQty : 0;
-    const qtyBasah = gudangKode === 'GBASAH' ? stokQty : 0;
-    const nilaiKering = gudangKode === 'GKERING' ? nilaiStok : 0;
-    const nilaiBasah = gudangKode === 'GBASAH' ? nilaiStok : 0;
+    const nilaiKering = Math.round(qtyKering * hargaBeli);
+    const nilaiBasah = Math.round(qtyBasah * hargaBeli);
 
     if (stokQty > 0) skuAktif += 1;
     summaryQtyKering += qtyKering;
@@ -326,11 +327,14 @@ export async function handleStokSaldo({
       nilaiStok,
       stokGudangKering: qtyKering,
       stokGudangBasah: qtyBasah,
-      stokByWarehouse: { [gudangKode]: stokQty },
-      stokTotal: stokQty,
+      stokByWarehouse: {
+        GKERING: qtyKering,
+        GBASAH: qtyBasah,
+      },
+      stokTotal: qtyKering + qtyBasah,
       nilaiGudangKering: nilaiKering,
       nilaiGudangBasah: nilaiBasah,
-      nilaiTotal: nilaiStok,
+      nilaiTotal: nilaiKering + nilaiBasah,
     });
   });
 

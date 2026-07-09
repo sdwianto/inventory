@@ -37,13 +37,21 @@ export async function handleProcurementExpenses({
   const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
   if (denied) return denied;
 
-  // Backfill data lama berjalan sebagai bg job (dedupe) — GET tidak diblokir operasi tulis.
+  // Backfill data lama — throttle: max sekali per 6 jam per tenant.
   if (tenantId) {
-    void enqueueJob(db, {
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const recentBackfill = await db.collection('bg_jobs').findOne({
       type: JOB_TYPES.HUTANG_BACKFILL,
       tenantId,
-      payload: { dedupeKey: 'hutang-backfill' },
-    }).then(() => scheduleJobProcessing(db, { limit: 1 })).catch(() => {});
+      createdAt: { $gte: sixHoursAgo },
+    });
+    if (!recentBackfill) {
+      void enqueueJob(db, {
+        type: JOB_TYPES.HUTANG_BACKFILL,
+        tenantId,
+        payload: { dedupeKey: 'hutang-backfill' },
+      }).then(() => scheduleJobProcessing(db, { limit: 1 })).catch(() => {});
+    }
   }
 
   const from = parseDateParam(url.searchParams.get('from'));

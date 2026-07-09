@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { poEstimasiForHutang } from '@/lib/api/hutang-variance-enrich';
+import { poEstimasiForHutang, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
 
 describe('poEstimasiForHutang', () => {
   const multiPo = {
@@ -35,5 +35,28 @@ describe('poEstimasiForHutang', () => {
 
   it('resolves vendor via noSO when vendorTenantId missing', () => {
     expect(poEstimasiForHutang(multiPo, { noSO: 'SO2' })).toBe(30000);
+  });
+});
+
+describe('resolveSoSnapshotForPo', () => {
+  it('prefers confirmed vendorSoSnapshot over stale submission without line items', () => {
+    const po = {
+      vendorSubmissions: [{
+        vendorTenantId: 'vendor1',
+        vendorSoId: 'so-1',
+        vendorNoSO: 'SO001',
+        vendorSo: { id: 'so-1', noSO: 'SO001', total: 1000, items: [] },
+      }],
+      vendorSoSnapshot: {
+        salesOrderId: 'so-1',
+        noSO: 'SO001',
+        total: 1000,
+        items: [{ kode: 'B887155', satuan: 'PCS', qty: 1 }],
+        confirmedAt: '2026-07-08T00:00:00Z',
+      },
+    };
+    const snap = resolveSoSnapshotForPo(po, { vendorTenantId: 'vendor1', salesOrderId: 'so-1' });
+    expect(snap?.items).toHaveLength(1);
+    expect(snap?.items?.[0].qty).toBe(1);
   });
 });

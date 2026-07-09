@@ -19,11 +19,13 @@ import {
   ensureStokLokasiRow,
 } from '@/lib/api/stok-lokasi';
 import { warehouseLabel } from '@/lib/api/warehouses';
-import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { resolveProductGudangKode, purgeOtherWarehouseRows } from '@/lib/api/product-warehouse';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import { createJournalIfNotExists } from '@/lib/api/journal';
+import { buildPenyesuaianJournalLines } from '@/lib/api/journal-lines';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -72,10 +74,21 @@ export async function handlePenyesuaian({
       keterangan: invBody.keterangan || '',
       userId: invBody.userId || '',
       userName: invBody.userName || '',
-      items: [],
+      items: [] as Array<{
+        stokId: string;
+        kode?: string;
+        nama?: string;
+        satuan?: string;
+        uomId?: string;
+        qtyEntered?: number;
+        gudangKode: string;
+        qtySistem: number;
+        qtyAktual: number;
+        selisih: number;
+      }>,
       createdAt: now,
     });
-    const adjustPlan: Array<{ prod: ReturnType<typeof asProductRow>; lokasiKode: string; lokasiLabel: string; qtyAktual: number; qtyEntered?: number; uomId?: string; satuan?: string }> = [];
+    const adjustPlan: Array<{ prod: ReturnType<typeof asProductRow>; lokasiKode: string; lokasiLabel: string; qtyAktual: number; qtyEntered?: number; uomId?: string; satuan?: string; hargaBeli: number }> = [];
     const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
     for (const it of items) {
       const stokId = itemStokId(it);
@@ -98,13 +111,14 @@ export async function handlePenyesuaian({
         qtyEntered: resolved.qty,
         uomId: resolved.uomId,
         satuan: resolved.satuan,
+        hargaBeli: parseInt(String(prod.hargaBeli || 0), 10),
       });
     }
 
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         for (const plan of adjustPlan) {
-          const { prod, lokasiKode, lokasiLabel, qtyAktual } = plan;
+          const { prod, lokasiKode, lokasiLabel, qtyAktual, hargaBeli } = plan;
           await ensureStokLokasiRow(txDb, tenantId, prod.id, lokasiKode, session);
           const row = await txDb.collection('stok_lokasi').findOne(
             { tenantId, stokId: prod.id, lokasiKode },
@@ -134,6 +148,25 @@ export async function handlePenyesuaian({
             satuan: plan.satuan || prod.satuan,
             hargaSatuan: prod.hargaBeli || 0,
           }), session ? { session } : {});
+          if (selisih !== 0) {
+            const jAmt = Math.round(Math.abs(selisih) * hargaBeli);
+            const jLines = buildPenyesuaianJournalLines({
+              noDoc: `${noPS}/${prod.kode}`,
+              amount: jAmt,
+              increase: selisih > 0,
+            });
+            if (jLines.length) {
+              await createJournalIfNotExists(txDb, {
+                tanggal: now,
+                keterangan: `Penyesuaian ${prod.kode} ${noPS}`,
+                sourceType: 'AUTO_PENYESUAIAN',
+                sourceId: `${doc.id}:${prod.id}`,
+                details: jLines,
+                userName: invBody.userName || '',
+                tenantId,
+              }, session);
+            }
+          }
         }
         await txDb.collection('penyesuaian_stok').insertOne(doc, session ? { session } : {});
       });

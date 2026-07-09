@@ -4,7 +4,7 @@ import type { Db } from 'mongodb';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { logoUrlFromSettings } from '@/lib/api/media-storage';
 
-export async function loadStoreSnapshot(db: Db, tenantId, tenantNameFallback = '') {
+export async function loadStoreSnapshot(db: Db, tenantId: string, tenantNameFallback = '') {
   const tid = tenantId || 'default';
   const s = await db.collection('tenant_settings').findOne({ tenantId: tid });
   const raw = {

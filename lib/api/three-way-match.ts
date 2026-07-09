@@ -135,7 +135,8 @@ export function resolveReceivedQtyForInvoiceLine(
   if (ks && index.receivedByKodeSatuan.has(ks)) {
     return index.receivedByKodeSatuan.get(ks)!;
   }
-  if (!invLine.uomId && !invLine.satuan && index.receivedByKodeLegacy.has(kode)) {
+  // Fallback kode saja bila GRN tidak punya UOM/satuan (invoice bisa punya satuan).
+  if (index.receivedByKodeLegacy.has(kode)) {
     return index.receivedByKodeLegacy.get(kode)!;
   }
   return 0;

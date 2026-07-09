@@ -11,6 +11,7 @@ import {
 } from '@/lib/api/warehouses';
 import { productFilterById } from '@/lib/api/tenant-operational';
 import { syncProductStokFromLokasi } from '@/lib/api/stok-lokasi';
+import { txOpts } from '@/lib/api/transaction';
 
 export const DEFAULT_PRODUCT_GUDANG: WarehouseCode = 'GKERING';
 
@@ -72,27 +73,32 @@ export async function setProductWarehouseStock(
   stokId: string,
   gudangKode: string,
   qty: number | string,
+  session?: import('mongodb').ClientSession,
 ): Promise<SetWarehouseStockResult> {
   const tid = tenantId || 'default';
   const kode = normalizeWarehouseKode(gudangKode);
   if (!isValidWarehouseKode(kode)) {
     return { error: 'Gudang produk tidak valid' };
   }
-  await purgeOtherWarehouseRows(db, tid, stokId, kode);
+  await purgeOtherWarehouseRows(db, tid, stokId, kode, session);
   const next = parseFloat(String(qty)) || 0;
   const filter = { tenantId: tid, stokId, lokasiKode: kode };
-  const existing = await db.collection('stok_lokasi').findOne(filter);
+  const existing = await db.collection('stok_lokasi').findOne(filter, txOpts(session));
   if (existing) {
-    await db.collection('stok_lokasi').updateOne(filter, { $set: { qty: next, updatedAt: new Date() } });
+    await db.collection('stok_lokasi').updateOne(
+      filter,
+      { $set: { qty: next, updatedAt: new Date() } },
+      txOpts(session),
+    );
   } else {
     await db.collection('stok_lokasi').insertOne({
       id: uuidv4(),
       ...filter,
       qty: next,
       updatedAt: new Date(),
-    });
+    }, txOpts(session));
   }
-  const total = await syncProductStokFromLokasi(db, tid, stokId);
+  const total = await syncProductStokFromLokasi(db, tid, stokId, session);
   return { qty: total };
 }
 
@@ -139,7 +145,7 @@ export async function backfillProductGudangForTenant(db: Db, tenantId: string | 
       tenantId: tid, stokId: prod.id, lokasiKode: gudang,
     });
     const rowDoc = row as { qty?: number | string } | null;
-    const qty = rowDoc ? (parseFloat(String(rowDoc.qty)) || 0) : (parseFloat(String(prod.stok)) || 0);
+    const qty = rowDoc ? (parseFloat(String(rowDoc.qty)) || 0) : 0;
     await setProductWarehouseStock(db, tid, prod.id, gudang, qty);
   }
 

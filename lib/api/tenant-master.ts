@@ -23,6 +23,7 @@ export const REKENING_DEFAULTS = [
   { kode: '11020', nama: 'Kendaraan', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '11030', nama: 'Inventaris Kantor', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '20010', nama: 'Hutang Usaha', tipe: 'KEWAJIBAN', posisi: 'KREDIT' },
+  { kode: '20020', nama: 'Penerimaan Belum Ditagih', tipe: 'KEWAJIBAN', posisi: 'KREDIT' },
   { kode: '22010', nama: 'PPN Keluaran', tipe: 'KEWAJIBAN', posisi: 'KREDIT' },
   { kode: '21010', nama: 'Modal', tipe: 'EKUITAS', posisi: 'KREDIT' },
   { kode: '21110', nama: 'Laba Ditahan', tipe: 'EKUITAS', posisi: 'KREDIT' },
@@ -68,6 +69,7 @@ const MASTER_COLLECTIONS = [
 ] as const;
 
 let indexesEnsured = false;
+let rekeningDefaultsEnsured = false;
 
 function mongoErrorCode(e: unknown): number | undefined {
   return (e as { code?: number })?.code;
@@ -101,6 +103,21 @@ export async function ensureMasterDataIndexes(db: Db): Promise<void> {
   }
 
   await ensureProductCatalogIndexes(db);
+
+  if (!rekeningDefaultsEnsured) {
+    const tenantIds = new Set<string>(['default']);
+    for (const tid of await db.collection('rekening').distinct('tenantId') as string[]) {
+      if (tid) tenantIds.add(tid);
+    }
+    for (const tid of await db.collection('tenant_settings').distinct('tenantId') as string[]) {
+      if (tid) tenantIds.add(tid);
+    }
+    for (const tid of tenantIds) {
+      await ensureMissingRekeningDefaults(db, tid);
+    }
+    rekeningDefaultsEnsured = true;
+  }
+
   indexesEnsured = true;
 }
 
@@ -287,6 +304,31 @@ export function assertMasterDoc(
   return assertDocTenant(doc, auth);
 }
 
+export async function ensureMissingRekeningDefaults(
+  db: Db,
+  tenantId: string | null | undefined,
+): Promise<number> {
+  const tid = tenantId || 'default';
+  const existing = await db.collection('rekening')
+    .find({ tenantId: tid })
+    .project({ kode: 1 })
+    .toArray();
+  const have = new Set(existing.map((r) => String(r.kode)));
+  const missing = REKENING_DEFAULTS.filter((r) => !have.has(r.kode));
+  if (!missing.length) return 0;
+  const now = new Date();
+  await db.collection('rekening').insertMany(
+    missing.map((r) => ({
+      id: uuidv4(),
+      tenantId: tid,
+      ...r,
+      aktif: true,
+      createdAt: now,
+    })),
+  );
+  return missing.length;
+}
+
 export async function bootstrapTenantMasterData(
   db: Db,
   tenantId: string | null | undefined,
@@ -305,6 +347,8 @@ export async function bootstrapTenantMasterData(
         createdAt: new Date(),
       })),
     );
+  } else {
+    await ensureMissingRekeningDefaults(db, tid);
   }
 
   const lokCount = await db.collection('lokasi').countDocuments({ tenantId: tid });

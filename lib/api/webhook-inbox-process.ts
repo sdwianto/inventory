@@ -10,7 +10,7 @@ import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 
 const PRODUCT_EVENTS = new Set(['product.created', 'product.updated', 'product.deactivated']);
-const CPO_EVENTS = new Set(['sales_order.confirmed', 'sales_order.cancelled', 'delivery.shipped', 'invoice.posted']);
+const CPO_EVENTS = new Set(['sales_order.confirmed', 'sales_order.updated', 'sales_order.cancelled', 'delivery.shipped', 'invoice.posted']);
 
 const DASHBOARD_INVALIDATE_EVENTS = new Set([
   ...PRODUCT_EVENTS,
@@ -43,12 +43,12 @@ export async function processWebhookInboxEvent(
     if (event === 'product.deactivated') {
       result = {
         ...result,
-        ...(await deactivateProductFromVendor(db, customerTenantId, payload.product) || { action: 'skipped' }),
+        ...(await deactivateProductFromVendor(db, customerTenantId, payload.product as Record<string, unknown>) || { action: 'skipped' }),
       };
     } else {
       result = {
         ...result,
-        ...(await upsertProductFromVendor(db, customerTenantId, vendorTenantId, payload.product)),
+        ...(await upsertProductFromVendor(db, customerTenantId, vendorTenantId, payload.product as Record<string, unknown>)),
       };
     }
     if (DASHBOARD_INVALIDATE_EVENTS.has(event)) {
@@ -57,12 +57,12 @@ export async function processWebhookInboxEvent(
     return result;
   }
 
-  if (event === 'sales_order.confirmed') {
+  if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
     if (!payload.salesOrderId) throw new Error('salesOrderId wajib');
     await invalidateDashboardSnapshot(db, customerTenantId);
     return {
       ...result,
-      message: 'so_confirmed',
+      message: event === 'sales_order.updated' ? 'so_updated' : 'so_confirmed',
       cpoStatus: (result.cpoSync as { status?: string })?.status,
     };
   }

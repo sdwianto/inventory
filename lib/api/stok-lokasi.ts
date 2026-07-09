@@ -134,12 +134,13 @@ export async function getQtyStokLokasi(
   tenantId: string | null | undefined,
   stokId: string,
   lokasiKode: string | null | undefined,
+  session?: ClientSession,
 ): Promise<number | string> {
   const row = await db.collection<StokLokasiDoc>('stok_lokasi').findOne({
     tenantId: tenantId || 'default',
     stokId,
     lokasiKode: parseLokasiKode(lokasiKode),
-  });
+  }, txOpts(session));
   return row?.qty ?? 0;
 }
 
@@ -229,8 +230,8 @@ export async function getProductInventorySnapshot(
   if (!prod) return null;
   const rows = await db.collection<StokLokasiDoc>('stok_lokasi').find({ tenantId: tid, stokId }).toArray();
   const stokFromLokasi = rows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
-  const prodDoc = prod as { stok?: number | string; hargaBeli?: number | string };
-  const stok = rows.length > 0 ? stokFromLokasi : (parseFloat(String(prodDoc.stok)) || 0);
+  const stok = stokFromLokasi;
+  const prodDoc = prod as { hargaBeli?: number | string };
   return {
     stok,
     hargaBeli: parseInt(String(prodDoc.hargaBeli || 0), 10),
@@ -269,8 +270,7 @@ export async function ensureStokLokasiRow(
     txOpts(session),
   ) as StokLokasiDoc | null;
   if (existing) return existing;
-  const prodDoc = prod as { stok?: number | string } | null;
-  const qty = parseFloat(String(prodDoc?.stok || 0));
+  const qty = 0;
   // Upsert atomik — race dengan insert paralel tidak menggandakan baris (unique index).
   const doc = await db.collection('stok_lokasi').findOneAndUpdate(
     { tenantId: tid, stokId, lokasiKode: kode },
@@ -311,7 +311,9 @@ export async function transferStokBetweenLokasi(
   if ('error' in out) return out;
   const inn = await adjustStokLokasi(db, tenantId, stokId, tujuan, q, session);
   if ('error' in inn) {
-    if (!session) await adjustStokLokasi(db, tenantId, stokId, asal, q);
+    if (!session) {
+      throw new Error(`Transfer gagal tanpa transaksi: ${inn.error}`);
+    }
     return inn;
   }
   await syncProductStokFromLokasi(db, tenantId, stokId, session);

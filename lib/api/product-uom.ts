@@ -8,6 +8,7 @@ import {
 import { pickBaseUom } from '@/lib/uom/conversion';
 import { formatStockDualLabel } from '@/lib/uom/display';
 import { validateProdukGrupSatuan } from '@/lib/api/product-meta';
+import { syntheticBaseUomFromProduct } from '@/lib/uom/synthetic-uom';
 
 let indexesEnsured = false;
 
@@ -122,17 +123,29 @@ export function productDenormFromBaseUom(
   };
 }
 
+export function planProductUomDocs(
+  tenantId: string,
+  productId: string,
+  uoms: NormalizedUomInput[],
+): ProductUom[] {
+  const now = new Date();
+  return uoms.map((u) => buildUomDoc(tenantId, productId, u, now));
+}
+
 export async function insertProductUoms(
   db: Db,
   tenantId: string,
   productId: string,
   uoms: NormalizedUomInput[],
+  session?: import('mongodb').ClientSession,
 ): Promise<ProductUom[]> {
   await ensureProductUomIndexes(db);
-  const now = new Date();
-  const docs = uoms.map((u) => buildUomDoc(tenantId, productId, u, now));
+  const docs = planProductUomDocs(tenantId, productId, uoms);
   if (docs.length) {
-    await db.collection(PRODUCT_UOM_COLLECTION).insertMany(docs, { ordered: true });
+    await db.collection(PRODUCT_UOM_COLLECTION).insertMany(docs, {
+      ordered: true,
+      ...(session ? { session } : {}),
+    });
   }
   return docs;
 }
@@ -142,10 +155,14 @@ export async function replaceProductUoms(
   tenantId: string,
   productId: string,
   uoms: NormalizedUomInput[],
+  session?: import('mongodb').ClientSession,
 ): Promise<ProductUom[]> {
   await ensureProductUomIndexes(db);
-  await db.collection(PRODUCT_UOM_COLLECTION).deleteMany({ tenantId, productId });
-  return insertProductUoms(db, tenantId, productId, uoms);
+  await db.collection(PRODUCT_UOM_COLLECTION).deleteMany(
+    { tenantId, productId },
+    session ? { session } : {},
+  );
+  return insertProductUoms(db, tenantId, productId, uoms, session);
 }
 
 export async function replaceProductUomsFromVendor(
@@ -191,7 +208,10 @@ export async function listProductUoms(
     .find({ tenantId, productId, aktif: { $ne: false } })
     .sort({ sortOrder: 1, satuan: 1 })
     .toArray();
-  return rows as unknown as ProductUom[];
+  if (rows.length) return rows as unknown as ProductUom[];
+  const prod = await db.collection('products').findOne({ tenantId, id: productId }) as Record<string, unknown> | null;
+  if (!prod) return [];
+  return [syntheticBaseUomFromProduct(tenantId, productId, prod)];
 }
 
 export async function listProductUomsByProductIds(
@@ -209,6 +229,17 @@ export async function listProductUomsByProductIds(
     const list = map.get(row.productId) || [];
     list.push(row);
     map.set(row.productId, list);
+  }
+  const missing = productIds.filter((id) => !(map.get(id)?.length));
+  if (missing.length) {
+    const prods = await db.collection('products')
+      .find({ tenantId, id: { $in: missing } })
+      .project({ id: 1, satuan: 1, baseUomId: 1, barcode: 1, hargaEcer: 1, hargaGrosir: 1, hargaSpesial: 1 })
+      .toArray();
+    for (const prod of prods) {
+      const id = String(prod.id);
+      map.set(id, [syntheticBaseUomFromProduct(tenantId, id, prod as Record<string, unknown>)]);
+    }
   }
   return map;
 }
@@ -323,7 +354,16 @@ export async function persistStokDisplay(
     opts,
   ) as Record<string, unknown> | null;
   if (!prod) return;
-  const stok = qtyBase ?? (parseFloat(String(prod.stok)) || 0);
+  let stok: number;
+  if (qtyBase !== undefined) {
+    stok = qtyBase;
+  } else {
+    const rows = await db.collection<{ qty?: number | string }>('stok_lokasi')
+      .find({ tenantId, stokId: productId }, opts)
+      .project({ qty: 1 })
+      .toArray();
+    stok = rows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
+  }
   const uomCount = Number(prod.uomCount) || 0;
   let stokDisplay: string;
   if (uomCount <= 1) {

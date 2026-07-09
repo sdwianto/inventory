@@ -11,8 +11,8 @@ import { poEstimasiForHutang, resolveSoSnapshotForPo } from '@/lib/api/hutang-va
 import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
-import { createJournal } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines } from '@/lib/api/journal-lines';
+import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
+import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines } from '@/lib/api/journal-lines';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
@@ -471,27 +471,36 @@ export async function createHutangFromVendorInvoice(
     const ppnAmt = parseInt(String(hutang.ppn || 0), 10);
     const totalAmt = parseInt(String(hutang.total || 0), 10);
     const subTotal = Math.max(0, totalAmt - ppnAmt);
-    try {
-      await createJournal(txDb, {
-        tanggal: hutang.tanggal,
-        keterangan: `Tagihan vendor ${payload.noInvoice || noHutang}`,
-        sourceType: 'AUTO_HUTANG_VENDOR',
-        sourceId: hutang.id,
-        userName: payload.userName || 'System',
-        details: buildVendorHutangJournalLines({
-          noDoc: payload.noInvoice || noHutang,
-          subTotal,
-          ppn: ppnAmt,
-          total: totalAmt,
-        }),
-        tenantId: tid,
-      });
-    } catch (e) {
-      logger.warn('hutang journal skipped', {
-        hutangId: hutang.id,
-        error: e instanceof Error ? e.message : String(e),
-      });
+    let clearGrni = false;
+    if (payload.noDO) {
+      const grn = await txDb.collection('goods_receipts').findOne(
+        { tenantId: tid, noDO: payload.noDO },
+        txOpts(session),
+      );
+      if (grn?.id) {
+        const accrual = await txDb.collection('jurnal').findOne({
+          tenantId: tid,
+          sourceType: 'AUTO_GRN_ACCRUAL',
+          sourceId: String(grn.id),
+        }, txOpts(session));
+        clearGrni = Boolean(accrual);
+      }
     }
+    await createJournal(txDb, {
+      tanggal: hutang.tanggal,
+      keterangan: `Tagihan vendor ${payload.noInvoice || noHutang}`,
+      sourceType: 'AUTO_HUTANG_VENDOR',
+      sourceId: hutang.id,
+      userName: payload.userName || 'System',
+      details: buildVendorHutangJournalLines({
+        noDoc: payload.noInvoice || noHutang,
+        subTotal,
+        ppn: ppnAmt,
+        total: totalAmt,
+        clearGrni,
+      }),
+      tenantId: tid,
+    }, session);
 
     if (payload.noDO) {
       const grnFilter: Record<string, unknown> = {
@@ -555,43 +564,61 @@ export async function applyCreditNoteFromVendor(
   const now = new Date();
   const newTerbayar = (hutang.terbayar || 0) + reduce;
   const newSisa = hutang.total - newTerbayar;
-  const paidStatuses = new Set(['APPROVED', 'PAID_EXTERNAL', 'LUNAS']);
-  const newStatus = newSisa <= 0 && paidStatuses.has(hutang.approvalStatus)
-    ? 'PAID_EXTERNAL'
-    : hutang.status;
+  const fullyPaid = newSisa <= 0;
+  const settledStatus = fullyPaid ? 'LUNAS' : hutang.status;
+  const settledApproval = fullyPaid
+    ? (hutang.approvalStatus === 'APPROVED' || hutang.approvalStatus === 'PARTIAL' ? 'LUNAS' : hutang.approvalStatus)
+    : hutang.approvalStatus;
+  const cnSourceId = String(payload.creditNoteId || payload.noCN || `${hutang.id}-${now.getTime()}`);
 
-  await db.collection('hutang').updateOne(
-    { id: hutang.id },
-    {
-      $set: {
-        terbayar: newTerbayar,
-        sisa: newSisa,
-        status: newSisa <= 0 ? newStatus : hutang.status,
-        approvalStatus: newSisa <= 0 && hutang.approvalStatus === 'APPROVED'
-          ? 'PAID_EXTERNAL'
-          : hutang.approvalStatus,
-        updatedAt: now,
-      },
-      $push: {
-        creditNotes: {
-          creditNoteId: payload.creditNoteId,
-          noCN: payload.noCN,
-          amount: reduce,
-          postedAt: payload.postedAt || now,
-          items: Array.isArray(payload.items)
-            ? payload.items.map((it) => ({
-              lineId: it.lineId,
-              stokId: it.stokId,
-              uomId: it.uomId,
-              satuan: it.satuan,
-              qty: it.qty,
-              qtyBase: it.qtyBase,
-            }))
-            : undefined,
+  await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+    await txDb.collection('hutang').updateOne(
+      { id: hutang.id },
+      {
+        $set: {
+          terbayar: newTerbayar,
+          sisa: newSisa,
+          status: fullyPaid ? settledStatus : hutang.status,
+          approvalStatus: fullyPaid ? settledApproval : hutang.approvalStatus,
+          updatedAt: now,
         },
-      } as never,
-    },
-  );
+        $push: {
+          creditNotes: {
+            creditNoteId: payload.creditNoteId,
+            noCN: payload.noCN,
+            amount: reduce,
+            postedAt: payload.postedAt || now,
+            items: Array.isArray(payload.items)
+              ? payload.items.map((it) => ({
+                lineId: it.lineId,
+                stokId: it.stokId,
+                uomId: it.uomId,
+                satuan: it.satuan,
+                qty: it.qty,
+                qtyBase: it.qtyBase,
+              }))
+              : undefined,
+          },
+        } as never,
+      },
+      txOpts(session),
+    );
+    const cnLines = buildCreditNoteHutangJournalLines({
+      noDoc: payload.noCN || payload.creditNoteId || 'CN',
+      amount: reduce,
+    });
+    if (cnLines.length) {
+      await createJournalIfNotExists(txDb, {
+        tanggal: now,
+        keterangan: `Credit note vendor ${payload.noCN || payload.creditNoteId}`,
+        sourceType: 'AUTO_CN_VENDOR',
+        sourceId: cnSourceId,
+        userName: 'credit-note-webhook',
+        details: cnLines,
+        tenantId: tid,
+      }, session);
+    }
+  });
 
   return {
     action: 'credit_applied',

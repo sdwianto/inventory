@@ -10,8 +10,23 @@
     "lib/api/logger.ts",
     "lib/api/tenant-scope.ts",
     "lib/api/three-way-match.ts",
+    "lib/api/warehouse-qty.ts",
+    "lib/api/journal-lines.ts",
+    "lib/api/journal.ts",
+    "lib/api/stock-ledger.ts",
+    "lib/api/product-warehouse.ts",
+    "lib/api/period-lock.ts",
+    "lib/api/cash-bank-accounts.ts",
+    "lib/api/tenant-master.ts",
+    "lib/api/handlers/vendor-hutang.ts",
+    "lib/api/handlers/inventory-penyesuaian.ts",
+    "lib/api/handlers/inventory-kartu.ts",
+    "lib/api/handlers/pages.ts",
+    "lib/uom/display.ts",
     "tests/unit/transaction.test.ts",
     "tests/unit/three-way-match.test.ts",
-    "tests/unit/tenant-scope.test.ts"
+    "tests/unit/tenant-scope.test.ts",
+    "tests/unit/warehouse-qty.test.ts",
+    "tests/unit/journal-lines-inventory.test.ts"
   ]
 }

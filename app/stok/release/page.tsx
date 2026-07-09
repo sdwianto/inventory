@@ -39,6 +39,13 @@ const STATUS_STYLE: Record<string, string> = {
 const CAN_CREATE = ['GUDANG', 'ADMIN', 'MASTER'];
 const CAN_APPROVE = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
+function qtyAtLokasi(p: JsonObject, lokasiKode: string): number {
+  const byWh = asObject(p.stokByWarehouse);
+  const kode = lokasiKode.trim().toUpperCase();
+  if (kode && kode in byWh) return num(byWh[kode]);
+  return num(p.stokQty ?? p.stokTotal);
+}
+
 function ReleaseInventoryPageContent() {
   const user = useSessionUser();
   const [showForm, setShowForm] = useState(false);
@@ -64,6 +71,17 @@ function ReleaseInventoryPageContent() {
   const [pickerQ, setPickerQ] = useState('');
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
+
+  useEffect(() => {
+    if (!form.lokasiKode || form.items.length === 0) return;
+    setForm((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => ({
+        ...it,
+        stokAvail: qtyAtLokasi(it, prev.lokasiKode),
+      })),
+    }));
+  }, [form.lokasiKode]);
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.inventoryReleases.list,
@@ -192,7 +210,8 @@ function ReleaseInventoryPageContent() {
         uomId,
         satuan: defaultUom?.satuan || p.satuan,
         qty: 1,
-        stokAvail: p.stokQty ?? p.stokTotal ?? 0,
+        stokAvail: qtyAtLokasi(p, form.lokasiKode),
+        stokByWarehouse: p.stokByWarehouse,
       }],
     });
     setPickerOpen(false);
@@ -249,7 +268,7 @@ function ReleaseInventoryPageContent() {
 
   const filteredProducts = products.filter((p) => {
     if (str(p.gudangKode, 'GKERING') !== form.lokasiKode) return false;
-    if (num(p.stokQty ?? p.stokTotal) <= 0) return false;
+    if (qtyAtLokasi(p, form.lokasiKode) <= 0) return false;
     if (!pickerQ) return true;
     const q = pickerQ.toLowerCase();
     return str(p.nama).toLowerCase().includes(q) || str(p.kode).toLowerCase().includes(q);
@@ -420,7 +439,7 @@ function ReleaseInventoryPageContent() {
           <Input placeholder="Cari..." value={pickerQ} onChange={(e) => setPickerQ(e.target.value)} />
           <div className="overflow-y-auto flex-1 space-y-1">
             {filteredProducts.map((p) => {
-              const avail = num(p.stokQty ?? p.stokTotal);
+              const avail = qtyAtLokasi(p, form.lokasiKode);
               return (
                 <button
                   key={str(p.id)}

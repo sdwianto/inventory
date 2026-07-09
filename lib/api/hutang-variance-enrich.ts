@@ -8,6 +8,7 @@ import {
   buildVendorSoSnapshot,
   mergeVendorSoSnapshots,
   resolveSoTotals,
+  type VendorSoSnapshot,
 } from '@/lib/api/vendor-so-snapshot';
 
 import type { HutangDoc } from '@/types/documents';
@@ -123,8 +124,42 @@ function submissionToSnapshot(sub: JsonObject | null | undefined) {
   });
 }
 
+function rootSnapshotForHutang(
+  po: JsonObject,
+  hutang: HutangDoc | null,
+): VendorSoSnapshot | null {
+  const root = po.vendorSoSnapshot as VendorSoSnapshot | undefined;
+  if (!root) return null;
+  const soId = hutang?.salesOrderId || po.vendorSoId;
+  const noSO = hutang?.noSO || po.vendorNoSO;
+  if (soId && root.salesOrderId && String(root.salesOrderId) !== String(soId)) return null;
+  if (noSO && root.noSO && String(root.noSO) !== String(noSO)) return null;
+  return root;
+}
+
+/** Utamakan snapshot dengan lebih banyak baris (biasanya hasil sales_order.confirmed). */
+function preferSnapshot(
+  fromSubmission: VendorSoSnapshot | null,
+  fromRoot: VendorSoSnapshot | null,
+): VendorSoSnapshot | null {
+  if (!fromSubmission) return fromRoot;
+  if (!fromRoot) return fromSubmission;
+  const subItems = fromSubmission.items?.length || 0;
+  const rootItems = fromRoot.items?.length || 0;
+  if (rootItems > subItems) return fromRoot;
+  if (rootItems === subItems && rootItems > 0) {
+    const subAt = fromSubmission.confirmedAt ? new Date(fromSubmission.confirmedAt).getTime() : 0;
+    const rootAt = fromRoot.confirmedAt ? new Date(fromRoot.confirmedAt).getTime() : 0;
+    if (rootAt > subAt) return fromRoot;
+  }
+  return fromSubmission;
+}
+
 /** Pilih snapshot SO yang cocok dengan tagihan (multi-vendor / multi-SO). */
-export function resolveSoSnapshotForPo(po: JsonObject | null | undefined, hutang: HutangDoc | null = null) {
+export function resolveSoSnapshotForPo(
+  po: JsonObject | null | undefined,
+  hutang: HutangDoc | null = null,
+): VendorSoSnapshot | null {
   if (!po) return null;
 
   const subs = (Array.isArray(po.vendorSubmissions) ? po.vendorSubmissions : []) as JsonObject[];
@@ -132,23 +167,25 @@ export function resolveSoSnapshotForPo(po: JsonObject | null | undefined, hutang
   const soId = hutang?.salesOrderId;
   const noSO = hutang?.noSO;
 
+  const rootSnap = rootSnapshotForHutang(po, hutang);
+
   if (vTenant && subs.length) {
     const byTenant = subs.find((s) => s.vendorTenantId === vTenant);
-    const snap = submissionToSnapshot(byTenant);
+    const snap = preferSnapshot(submissionToSnapshot(byTenant), rootSnap);
     if (snap) return snap;
   }
   if (soId && subs.length) {
     const byId = subs.find((s) => s.vendorSoId === soId);
-    const snap = submissionToSnapshot(byId);
+    const snap = preferSnapshot(submissionToSnapshot(byId), rootSnap);
     if (snap) return snap;
   }
   if (noSO && subs.length) {
     const byNo = subs.find((s) => s.vendorNoSO === noSO);
-    const snap = submissionToSnapshot(byNo);
+    const snap = preferSnapshot(submissionToSnapshot(byNo), rootSnap);
     if (snap) return snap;
   }
 
-  if (po.vendorSoSnapshot) return po.vendorSoSnapshot;
+  if (rootSnap) return rootSnap;
 
   if (subs.length) {
     const snaps = subs.map(submissionToSnapshot).filter(Boolean);
@@ -231,9 +268,23 @@ export async function resolveHutangVariance(
 
 type LineQtyRow = { kode: string; uomId?: string; satuan?: string; qty: number };
 
+function normalizeKode(kode: string): string {
+  return String(kode || '').trim().toUpperCase();
+}
+
+function normalizeSatuan(satuan?: string): string {
+  return String(satuan || '').trim().toUpperCase();
+}
+
 function lineBucketKey(kode: string, uomId?: string, satuan?: string): string {
-  const uom = String(uomId || satuan || '').trim() || '_default';
-  return `${String(kode || '').trim()}::${uom}`;
+  const k = normalizeKode(kode);
+  if (!k) return '';
+  // Prioritas satuan agar baris PO (uomId lokal) dan invoice (satuan vendor) tetap satu bucket.
+  const sat = normalizeSatuan(satuan);
+  if (sat) return `${k}::${sat}`;
+  const uom = String(uomId || '').trim();
+  if (uom) return `${k}::${uom}`;
+  return `${k}::_default`;
 }
 
 function collectLineQty(items: JsonObject[], qtyField: string): Map<string, LineQtyRow> {
@@ -288,7 +339,7 @@ export function buildLineVarianceByUom(params: {
     rows.push({
       kode: po?.kode || so?.kode || inv?.kode || key.split('::')[0],
       uomId: po?.uomId || so?.uomId || inv?.uomId,
-      satuan: po?.satuan || so?.satuan || inv?.satuan || key.split('::')[1] || '—',
+      satuan: po?.satuan || so?.satuan || inv?.satuan || (key.split('::')[1] === '_default' ? '—' : key.split('::')[1]) || '—',
       poQty,
       soQty,
       invoiceQty,
@@ -297,7 +348,9 @@ export function buildLineVarianceByUom(params: {
     });
   }
 
-  return rows.sort((a, b) => a.kode.localeCompare(b.kode) || a.satuan.localeCompare(b.satuan));
+  return rows
+    .filter((row) => row.poQty !== 0 || row.soQty !== 0 || row.invoiceQty !== 0)
+    .sort((a, b) => a.kode.localeCompare(b.kode) || a.satuan.localeCompare(b.satuan));
 }
 
 export async function backfillHutangVarianceFields(db: Db, tenantId: string | null | undefined) {

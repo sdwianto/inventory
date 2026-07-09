@@ -12,32 +12,37 @@ import {
   bulkReplaceProductUoms,
 } from '@/lib/api/product-uom';
 
-function parseVendorPrices(product) {
+function parseVendorPrices(product: Record<string, unknown>) {
   return {
-    hargaBeli: parseInt(product.hargaBeli || 0, 10),
-    hargaGrosir: parseInt(product.hargaGrosir || 0, 10),
-    hargaSpesial: parseInt(product.hargaSpesial || 0, 10),
-    hargaEcer: parseInt(product.hargaEcer || 0, 10),
+    hargaBeli: parseInt(String(product.hargaBeli || 0), 10),
+    hargaGrosir: parseInt(String(product.hargaGrosir || 0), 10),
+    hargaSpesial: parseInt(String(product.hargaSpesial || 0), 10),
+    hargaEcer: parseInt(String(product.hargaEcer || 0), 10),
   };
 }
 
-export function vendorProductSnapshot(product) {
+export function vendorProductSnapshot(product: Record<string, unknown>) {
   const prices = parseVendorPrices(product);
   return {
-    id: product.id,
-    kode: product.kode,
-    barcode: product.barcode || '',
-    nama: product.nama,
-    grup: product.grup || 'Umum',
-    satuan: product.satuan || 'PCS',
+    id: product.id != null ? String(product.id) : '',
+    kode: product.kode != null ? String(product.kode) : '',
+    barcode: product.barcode != null ? String(product.barcode) : '',
+    nama: product.nama != null ? String(product.nama) : '',
+    grup: product.grup != null ? String(product.grup) : 'Umum',
+    satuan: product.satuan != null ? String(product.satuan) : 'PCS',
     aktif: product.aktif !== false,
-    vendorTenantId: product.vendorTenantId || product.tenantId || null,
-    vendorTenantName: product.vendorTenantName || null,
+    vendorTenantId: product.vendorTenantId != null ? String(product.vendorTenantId) : (product.tenantId != null ? String(product.tenantId) : null),
+    vendorTenantName: product.vendorTenantName != null ? String(product.vendorTenantName) : null,
     ...prices,
   };
 }
 
-export async function upsertProductFromVendor(db: Db, customerTenantId, vendorTenantId, product) {
+export async function upsertProductFromVendor(
+  db: Db,
+  customerTenantId: string,
+  vendorTenantId: string | null | undefined,
+  product: Record<string, unknown>,
+) {
   const tid = customerTenantId || 'default';
   const snap = vendorProductSnapshot(product);
   const vTenant = snap.vendorTenantId || vendorTenantId || null;
@@ -209,7 +214,11 @@ export async function syncVendorProductUoms(
   }
 }
 
-export async function deactivateProductFromVendor(db: Db, customerTenantId, product) {
+export async function deactivateProductFromVendor(
+  db: Db,
+  customerTenantId: string,
+  product: Record<string, unknown>,
+) {
   const tid = customerTenantId || 'default';
   const vTenant = product?.vendorTenantId || product?.tenantId;
   const filter: Record<string, unknown> = { tenantId: tid, syncSource: 'sales.app' };
@@ -226,6 +235,6 @@ export async function deactivateProductFromVendor(db: Db, customerTenantId, prod
   return r.modifiedCount ? { kode: product.kode, action: 'deactivated' } : null;
 }
 
-export function isVendorSyncedProduct(doc) {
+export function isVendorSyncedProduct(doc: Record<string, unknown> | null | undefined) {
   return doc?.syncSource === 'sales.app';
 }

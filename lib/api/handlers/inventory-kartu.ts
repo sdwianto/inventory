@@ -1,6 +1,7 @@
 import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { findMasterDoc, resolveOperationalScope } from '@/lib/api/tenant-master';
+import { guardPosting } from '@/lib/api/period-lock';
 import { withOperationalFilter } from '@/lib/api/tenant-operational';
 import { requireRole, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { ledgerSaldoForProduct, reconcileProductStockFromLedger } from '@/lib/api/stock-ledger';
@@ -115,11 +116,11 @@ export async function handleStokKartu({
       if (p) {
         const tid = String(p.tenantId || scopeAuth?.tenantId || 'default');
         const uoms = productUoms.length ? productUoms : await listProductUoms(db, tid, productId);
+        ledgerSaldo = await ledgerSaldoForProduct(db, tid, productId);
         product = {
           ...clean(p) as Record<string, unknown>,
-          stokDisplay: formatStockDualLabel(parseFloat(String(p.stok)) || 0, uoms),
+          stokDisplay: formatStockDualLabel(ledgerSaldo, uoms),
         };
-        ledgerSaldo = await ledgerSaldoForProduct(db, tid, productId);
       }
     }
     return ok({
@@ -139,6 +140,8 @@ export async function handleStokKartu({
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: invBody, request });
     if (denied) return denied;
+    const locked = await guardPosting(db, scopeAuth, invBody);
+    if (locked) return locked;
     const productId = invBody.productId || '';
     if (!productId) return err('productId wajib');
     const p = await findMasterDoc(db, 'products', scopeAuth, { id: productId });

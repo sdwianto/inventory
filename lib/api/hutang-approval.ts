@@ -3,10 +3,11 @@ import type { Db } from 'mongodb';
 
 import type { HutangDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
+import type { AuthContext } from '@/types/auth';
 
 const APPROVABLE_PO_STATUSES = new Set(['RECEIVED', 'INVOICED']);
 
-export async function actorSnapshot(db: Db, auth) {
+export async function actorSnapshot(db: Db, auth: AuthContext | null | undefined) {
   let userName = String(auth?.name || auth?.email || '').trim();
   let role = auth?.role || '';
   if (auth?.userId) {
@@ -23,7 +24,11 @@ export async function actorSnapshot(db: Db, auth) {
   };
 }
 
-export async function assertCanApproveInvoice(db: Db, hutang, { overrideMatch = false } = {}) {
+export async function assertCanApproveInvoice(
+  db: Db,
+  hutang: HutangDoc,
+  { overrideMatch = false }: { overrideMatch?: boolean } = {},
+) {
   const approval = hutang.approvalStatus || hutang.status;
   if (approval !== 'PENDING_REVIEW') {
     return { ok: false, error: 'Tagihan tidak dalam status menunggu review' };

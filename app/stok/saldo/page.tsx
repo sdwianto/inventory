@@ -41,9 +41,13 @@ interface StockRow {
   hargaBeli?: number;
   stokQty?: number;
   stokTotal?: number;
+  stokGudangKering?: number;
+  stokGudangBasah?: number;
   stokDisplay?: string;
   nilaiStok?: number;
   nilaiTotal?: number;
+  nilaiGudangKering?: number;
+  nilaiGudangBasah?: number;
 }
 
 interface StockTrend {
@@ -270,7 +274,13 @@ export default function SaldoGudangPage() {
                 <tr>
                   <th className="px-3 py-2 text-left">Kode</th>
                   <th className="px-3 py-2 text-left">Nama Produk</th>
-                  <th className="px-3 py-2 text-left">Gudang</th>
+                  <th className="px-3 py-2 text-left">Gudang Home</th>
+                  {showAllGudang && (
+                    <>
+                      <th className="px-3 py-2 text-right">Qty Kering</th>
+                      <th className="px-3 py-2 text-right">Qty Basah</th>
+                    </>
+                  )}
                   <th className="px-3 py-2 text-center">Satuan</th>
                   <th className="px-3 py-2 text-right">Harga Beli</th>
                   <th className="px-3 py-2 text-right">Qty Stok</th>
@@ -279,10 +289,10 @@ export default function SaldoGudangPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={7} className="text-center py-10 text-slate-400">Memuat...</td></tr>
+                  <tr><td colSpan={showAllGudang ? 9 : 7} className="text-center py-10 text-slate-400">Memuat...</td></tr>
                 )}
                 {!loading && !stockRows.length && (
-                  <tr><td colSpan={7} className="text-center py-10 text-slate-400">
+                  <tr><td colSpan={showAllGudang ? 9 : 7} className="text-center py-10 text-slate-400">
                     {!gudangFilter.GKERING && !gudangFilter.GBASAH
                       ? 'Pilih minimal satu gudang'
                       : 'Belum ada stok di gudang yang dipilih'}
@@ -301,6 +311,12 @@ export default function SaldoGudangPage() {
                         {r.gudangNama || warehouseName(r.gudangKode || 'GKERING')}
                       </span>
                     </td>
+                    {showAllGudang && (
+                      <>
+                        <td className="px-3 py-2 text-right font-mono text-amber-800">{formatNumber(r.stokGudangKering ?? 0)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-blue-800">{formatNumber(r.stokGudangBasah ?? 0)}</td>
+                      </>
+                    )}
                     <td className="px-3 py-2 text-center text-xs">{r.satuan}</td>
                     <td className="px-3 py-2 text-right text-xs">{formatIDR(r.hargaBeli || 0)}</td>
                     <td className="px-3 py-2 text-right font-semibold" title={productStockTitle({ stok: r.stokQty ?? r.stokTotal, stokDisplay: r.stokDisplay })}>
@@ -311,7 +327,7 @@ export default function SaldoGudangPage() {
                 ))}
                 {!loading && stockRows.length > 0 && (
                   <tr className="border-t bg-slate-50 font-semibold">
-                    <td className="px-3 py-2" colSpan={5}>
+                    <td className="px-3 py-2" colSpan={showAllGudang ? 6 : 4}>
                       Total ({filteredTotals.sku} SKU
                       {!showAllGudang && ' — filter gudang'})
                     </td>

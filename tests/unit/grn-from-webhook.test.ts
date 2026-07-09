@@ -77,6 +77,20 @@ describe('resolveLocalUomForGrnLine', () => {
     expect(res.qtyBase).toBe(36);
   });
 
+  it('prefers webhook qtyBase over satuan factor when both present', async () => {
+    const cache = new Map<string, ProductUom[]>();
+    cache.set('p1', uoms);
+    const res = await resolveLocalUomForGrnLine(
+      mockDb(new Map()),
+      'sppg',
+      'p1',
+      { qty: 2, satuan: 'BOX', qtyBase: 20 },
+      cache,
+    );
+    expect(res.uomId).toBe('local-box');
+    expect(res.qtyBase).toBe(20);
+  });
+
   it('uses qtyBase from webhook when provided', async () => {
     const cache = new Map<string, ProductUom[]>();
     cache.set('p1', uoms);
@@ -98,6 +112,21 @@ describe('resolveLocalUomForGrnLine', () => {
       'sppg',
       'p1',
       { uomId: 'unknown-uom', qty: 2, qtyBase: 20, satuan: 'BOX' },
+      cache,
+    );
+    expect(res.qtyBase).toBe(20);
+    // Satuan BOX masih bisa dipetakan ke local UOM
+    expect(res.uomId).toBe('local-box');
+  });
+
+  it('preserves qtyBase when neither vendorUomId nor satuan match', async () => {
+    const cache = new Map<string, ProductUom[]>();
+    cache.set('p1', uoms);
+    const res = await resolveLocalUomForGrnLine(
+      mockDb(new Map()),
+      'sppg',
+      'p1',
+      { uomId: 'unknown-uom', qty: 2, qtyBase: 20, satuan: 'PACK' },
       cache,
     );
     expect(res.qtyBase).toBe(20);

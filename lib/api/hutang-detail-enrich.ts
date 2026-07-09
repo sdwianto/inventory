@@ -21,12 +21,12 @@ export type VendorBillingSnapshot = {
 
 function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapshot {
   const picked = sanitizeStoreSettings({
-    companyName: src.companyName || src.vendorTenantName || src.vendorName || '',
-    companyAddress: src.companyAddress || src.address || '',
-    companyPhone: src.companyPhone || src.phone || '',
-    companyNPWP: src.companyNPWP || src.npwp || '',
-    logoBase64: src.logoBase64 || src.vendorLogoBase64 || '',
-    logoUrl: src.logoUrl || src.vendorLogoUrl || '',
+    companyName: String(src.companyName || src.vendorTenantName || src.vendorName || ''),
+    companyAddress: String(src.companyAddress || src.address || ''),
+    companyPhone: String(src.companyPhone || src.phone || ''),
+    companyNPWP: String(src.companyNPWP || src.npwp || ''),
+    logoBase64: String(src.logoBase64 || src.vendorLogoBase64 || ''),
+    logoUrl: String(src.logoUrl || src.vendorLogoUrl || ''),
     showLogoOnInvoice: src.showLogoOnInvoice !== false,
   });
   return {
@@ -106,8 +106,8 @@ const VENDOR_PROFILE_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function loadVendorBillingProfile(
   db: Db,
-  customerTenantId,
-  vendorTenantId,
+  customerTenantId: string,
+  vendorTenantId: string | null | undefined,
   { forceRefresh = false }: { forceRefresh?: boolean } = {},
 ) {
   const tid = customerTenantId || 'default';
@@ -235,13 +235,14 @@ export async function enrichInvoiceItems(db: Db, customerTenantId: string, hutan
 
 export async function buildHutangDetailEnrichment(
   db: Db,
-  hutang,
+  hutang: HutangDoc,
   { forceRefresh = false }: { forceRefresh?: boolean } = {},
 ) {
   const tid = hutang.tenantId || 'default';
-  const vendorTenantId = hutang.vendorTenantId || hutang.vendorBillingSnapshot?.vendorTenantId;
+  const vendorTenantId = hutang.vendorTenantId
+    || (hutang.vendorBillingSnapshot as VendorBillingSnapshot | undefined)?.vendorTenantId;
 
-  const snap = hutang.vendorBillingSnapshot;
+  const snap = hutang.vendorBillingSnapshot as VendorBillingSnapshot | undefined;
   let vendorBilling;
   const snapLogo = logoUrlFromSettings(snap);
   if (snap?.companyName && !forceRefresh) {
@@ -280,16 +281,16 @@ export async function buildHutangDetailEnrichment(
     itemsFull,
     totals: {
       itemsSubTotal,
-      subTotal: hutang.subTotal || itemsSubTotal,
-      ppn: hutang.ppn || 0,
-      total: hutang.total || 0,
-      penyesuaian: Math.max(0, (hutang.total || 0) - (hutang.subTotal || itemsSubTotal) - (hutang.ppn || 0)),
+      subTotal: num(hutang.subTotal) || itemsSubTotal,
+      ppn: num(hutang.ppn) || 0,
+      total: num(hutang.total) || 0,
+      penyesuaian: Math.max(0, num(hutang.total) - (num(hutang.subTotal) || itemsSubTotal) - num(hutang.ppn)),
     },
   };
 }
 
-export function vendorBillingFromPayload(payload, vendorTenantId) {
-  const nested = payload.vendor || payload.vendorStore || {};
+export function vendorBillingFromPayload(payload: Record<string, unknown>, vendorTenantId: string | null | undefined) {
+  const nested = (payload.vendor || payload.vendorStore || {}) as Record<string, unknown>;
   return normalizeVendorBillingForStorage({
     vendorTenantId: vendorTenantId || payload.vendorTenantId || null,
     companyName: nested.companyName || payload.vendorCompanyName || payload.vendorName || '',

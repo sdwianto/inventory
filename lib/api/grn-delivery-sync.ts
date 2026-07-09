@@ -9,7 +9,7 @@ import { normalizeTenantId } from '@/lib/api/tenant-scope';
  * Perbarui noDO / noSO / vendorTenantId / snapshot GRN dari sales.app.
  * Mengurangi mismatch noDO stale vs deliveryId yang masih valid.
  */
-export async function syncGrnDeliveryFromSales(db: Db, tenantId, grn) {
+export async function syncGrnDeliveryFromSales(db: Db, tenantId: string, grn: Record<string, unknown>) {
   const tid = normalizeTenantId(grn?.tenantId || tenantId);
   const access = await resolveSalesApiAccess(db, tid, grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined);
   if (!access) {
@@ -20,9 +20,9 @@ export async function syncGrnDeliveryFromSales(db: Db, tenantId, grn) {
   }
 
   const params = new URLSearchParams({ customerTenantId: tid });
-  if (grn.vendorDeliveryId) params.set('deliveryId', grn.vendorDeliveryId);
-  if (grn.noDO) params.set('noDO', grn.noDO);
-  if (grn.vendorTenantId) params.set('vendorTenantId', grn.vendorTenantId);
+  if (grn.vendorDeliveryId) params.set('deliveryId', String(grn.vendorDeliveryId));
+  if (grn.noDO) params.set('noDO', String(grn.noDO));
+  if (grn.vendorTenantId) params.set('vendorTenantId', String(grn.vendorTenantId));
 
   let res;
   try {

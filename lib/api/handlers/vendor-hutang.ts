@@ -22,8 +22,9 @@ import {
   stripHutangListSnapshot,
 } from '@/lib/api/hutang-filters';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
-import { buildHutangPaymentJournalLines } from '@/lib/api/journal-lines';
-import { createJournal } from '@/lib/api/journal';
+import { buildHutangPaymentJournalLines, buildPaidExternalJournalLines } from '@/lib/api/journal-lines';
+import { resolveKasRekening } from '@/lib/api/cash-bank-accounts';
+import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import type { HandlerContext } from '@/types/api/handler';
 
@@ -226,6 +227,8 @@ export async function handleVendorHutang({
       soItems: (soSnap?.items || []) as import('@/types/json').JsonObject[],
       invoiceItems: (doc.items || []) as import('@/types/json').JsonObject[],
     });
+    const soLineDataAvailable = (soSnap?.items?.length || 0) > 0;
+    const poStatus = linkedPo ? String(linkedPo.status || '') : '';
     if (
       (doc.poEstimasiTotal || 0) !== variance.poEstimasiTotal
       || (doc.soTotal || 0) !== variance.soTotal
@@ -267,6 +270,8 @@ export async function handleVendorHutang({
         varianceSoToInvoice: variance.varianceSoToInvoice,
         varianceGrnToInvoice: variance.varianceGrnToInvoice,
         lineVarianceByUom,
+        soLineDataAvailable,
+        poStatus,
       },
     });
   }
@@ -285,7 +290,7 @@ export async function handleVendorHutang({
     const check = await assertCanApproveInvoice(db, hutang, {
       overrideMatch: hutangBody.overrideMatch === true,
     });
-    if (!check.ok) return err(check.error, check.code === 'MATCH_EXCEPTION' ? 409 : 400);
+    if (!check.ok) return err(check.error || 'Gagal menyetujui tagihan', check.code === 'MATCH_EXCEPTION' ? 409 : 400);
 
     const now = new Date();
     const approver = await actorSnapshot(db, auth);
@@ -359,22 +364,47 @@ export async function handleVendorHutang({
 
     const now = new Date();
     const marker = await actorSnapshot(db, auth);
-    await db.collection('hutang').updateOne(
-      { id: hutang.id },
-      {
-        $set: {
-          approvalStatus: 'PAID_EXTERNAL',
-          status: 'PAID_EXTERNAL',
-          terbayar: hutang.total,
-          sisa: 0,
-          paidExternalAt: now,
-          paidExternalBy: marker,
-          paidExternalNote: hutangBody.note || 'Pembayaran di luar sistem',
-          updatedAt: now,
-        },
-      },
-    );
-    await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
+    const tenantId = String(hutang.tenantId || auth?.tenantId || 'default');
+    const sisa = Number(hutang.sisa || hutang.total || 0);
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        await txDb.collection('hutang').updateOne(
+          { id: hutang.id },
+          {
+            $set: {
+              approvalStatus: 'PAID_EXTERNAL',
+              status: 'PAID_EXTERNAL',
+              terbayar: hutang.total,
+              sisa: 0,
+              paidExternalAt: now,
+              paidExternalBy: marker,
+              paidExternalNote: hutangBody.note || 'Pembayaran di luar sistem',
+              updatedAt: now,
+            },
+          },
+          txOpts(session),
+        );
+        const payLines = buildPaidExternalJournalLines({
+          noDoc: hutang.noInvoice || hutang.noHutang || String(hutang.id),
+          amount: sisa,
+        });
+        if (payLines.length) {
+          await createJournalIfNotExists(txDb, {
+            tanggal: now,
+            keterangan: `Pelunasan eksternal ${hutang.noHutang || hutang.noInvoice}`,
+            sourceType: 'AUTO_PELUNASAN_EKSTERNAL',
+            sourceId: hutang.id,
+            details: payLines,
+            userName: hutangBody.userName || auth?.name || '',
+            tenantId,
+          }, session);
+        }
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Gagal menandai lunas eksternal';
+      return err(msg, 400);
+    }
+    await invalidateDashboardSnapshot(db, tenantId);
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));
   }
@@ -402,6 +432,14 @@ export async function handleVendorHutang({
 
     const tenantId = hutang.tenantId || auth?.tenantId || 'default';
     const now = new Date();
+    const kasRek = await resolveKasRekening(
+      db,
+      tenantId,
+      hutangBody.kasRekeningKode as string | undefined,
+      hutangBody.metode as string | undefined,
+    );
+
+    const paymentId = uuidv4();
 
     // Saldo + pembayaran + jurnal satu unit atomik.
     // Guard `sisa >= amount` di query — dua pembayaran bersamaan tidak bisa overpay.
@@ -420,9 +458,9 @@ export async function handleVendorHutang({
             },
             {
               $set: {
-                status: { $cond: [{ $lte: ['$sisa', 0] }, 'PAID_EXTERNAL', 'PARTIAL'] },
+                status: { $cond: [{ $lte: ['$sisa', 0] }, 'LUNAS', 'PARTIAL'] },
                 approvalStatus: {
-                  $cond: [{ $lte: ['$sisa', 0] }, 'PAID_EXTERNAL', '$approvalStatus'],
+                  $cond: [{ $lte: ['$sisa', 0] }, 'LUNAS', '$approvalStatus'],
                 },
               },
             },
@@ -432,24 +470,27 @@ export async function handleVendorHutang({
         if (!updated) throw new Error('Pembayaran melebihi sisa hutang (sudah berubah — muat ulang halaman)');
 
         await txDb.collection('hutang_pembayaran').insertOne(stampTenantId(tenantId, {
-          id: uuidv4(),
+          id: paymentId,
           hutangId: hutang.id,
           tanggal: now,
           amount,
           metode: hutangBody.metode || 'TUNAI',
+          kasRekeningKode: kasRek.kode,
           keterangan: hutangBody.keterangan || '',
           userName: hutangBody.userName || '',
         }), txOpts(session));
 
-        await createJournal(txDb, {
+        await createJournalIfNotExists(txDb, {
           tanggal: now,
           keterangan: `Pelunasan hutang ${hutang.noHutang || hutang.noInvoice}`,
           sourceType: 'AUTO_PELUNASAN_HUTANG',
-          sourceId: hutang.id,
+          sourceId: paymentId,
           details: buildHutangPaymentJournalLines({
             noDoc: hutang.noInvoice || hutang.noHutang || String(hutang.id),
             amount,
             metode: hutangBody.metode || 'TUNAI',
+            kasRekeningKode: kasRek.kode,
+            kasRekeningNama: kasRek.nama,
           }),
           userName: hutangBody.userName || '',
           tenantId,

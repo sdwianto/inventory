@@ -141,7 +141,7 @@ export async function refreshGrnProducts(db: Db, grn: GrnDoc, productMaps: Produ
   return { ...grn, items: uniqueItems, status: newStatus };
 }
 
-export async function refreshUnresolvedGrnsForTenant(db: Db, tenantId) {
+export async function refreshUnresolvedGrnsForTenant(db: Db, tenantId: string) {
   const tid = tenantId || 'default';
   const grns = await db.collection('goods_receipts').find({
     tenantId: tid,
@@ -164,7 +164,7 @@ export async function refreshUnresolvedGrnsForTenant(db: Db, tenantId) {
   return updated;
 }
 
-export async function refreshGrnsForProductKode(db: Db, tenantId, kode) {
+export async function refreshGrnsForProductKode(db: Db, tenantId: string, kode: string) {
   const tid = tenantId || 'default';
   const trimmed = String(kode || '').trim();
   if (!trimmed) return 0;

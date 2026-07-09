@@ -15,6 +15,8 @@ import { payableHutangFilter, approvalStatusFilter, stripHutangListSnapshot } fr
 import { buildProductSearchFilter, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { ensureProdukMetaForTenant } from '@/lib/api/product-meta';
+import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import type { HandlerContext } from '@/types/api/handler';
 
 function mapHutangRow(h: Record<string, unknown>, today: Date) {
@@ -111,6 +113,15 @@ export async function handlePages({
       .limit(fetchLimit)
       .toArray();
     const enriched = await enrichProductsVendorNames(db, tenantId, list);
+    const stokMap = enriched.length
+      ? await getStokByWarehouseBatch(db, tenantId, enriched.map((p) => String(p.id)))
+      : new Map<string, Record<string, number>>();
+    for (const p of enriched) {
+      const byWh = stokMap.get(String(p.id)) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+      (p as Record<string, unknown>).stokByWarehouse = byWh;
+      const gudang = String(p.gudangKode || 'GKERING').toUpperCase();
+      (p as Record<string, unknown>).stokGudangQty = byWh[gudang] ?? 0;
+    }
     const cleaned = enriched.map(clean);
     const { items, hasMore } = sliceCursorPage(cleaned, limit);
     const last = list[Math.min(list.length, limit) - 1] as Record<string, unknown> | undefined;

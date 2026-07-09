@@ -1,19 +1,31 @@
 // Hitung estimasi belanja dari baris PO customer.
 
-export function computeLineEstimasi(it) {
-  const qty = parseFloat(it.qty) || 0;
-  const estimasiHarga = parseInt(it.estimasiHarga || it.hargaBeliReferensi || 0, 10);
+export type PoEstimasiLine = Record<string, unknown> & {
+  qty?: number | string;
+  estimasiHarga?: number | string;
+  hargaBeliReferensi?: number | string;
+  estimasiJumlah?: number;
+  localStokId?: string;
+  vendorTenantId?: string;
+  vendorKode?: string;
+  kode?: string;
+  uomId?: string;
+};
+
+export function computeLineEstimasi(it: PoEstimasiLine) {
+  const qty = parseFloat(String(it.qty)) || 0;
+  const estimasiHarga = parseInt(String(it.estimasiHarga || it.hargaBeliReferensi || 0), 10);
   const estimasiJumlah = Math.round(qty * estimasiHarga);
   return { ...it, qty, estimasiHarga, estimasiJumlah };
 }
 
-export function sumPoEstimasi(items) {
-  return (items || []).reduce((s, it) => s + (it.estimasiJumlah || 0), 0);
+export function sumPoEstimasi(items: PoEstimasiLine[]) {
+  return (items || []).reduce((s: number, it) => s + (Number(it.estimasiJumlah) || 0), 0);
 }
 
 /** Gabung baris PO dengan produk + satuan yang sama. */
-export function mergePoItemsByStokId(items) {
-  const map = new Map();
+export function mergePoItemsByStokId(items: PoEstimasiLine[]) {
+  const map = new Map<string, ReturnType<typeof computeLineEstimasi>>();
   for (const raw of items || []) {
     const it = computeLineEstimasi(raw);
     const baseKey = it.localStokId || `${it.vendorTenantId || ''}:${it.vendorKode || it.kode || ''}`;
@@ -25,7 +37,7 @@ export function mergePoItemsByStokId(items) {
     if (prev) {
       map.set(key, computeLineEstimasi({
         ...prev,
-        qty: (parseFloat(prev.qty) || 0) + (parseFloat(it.qty) || 0),
+        qty: (parseFloat(String(prev.qty)) || 0) + (parseFloat(String(it.qty)) || 0),
       }));
     } else {
       map.set(key, it);
@@ -34,7 +46,7 @@ export function mergePoItemsByStokId(items) {
   return [...map.values()];
 }
 
-export function applyPoEstimasiTotals(items) {
+export function applyPoEstimasiTotals(items: PoEstimasiLine[]) {
   const enriched = (items || []).map(computeLineEstimasi);
   return { items: enriched, estimasiTotal: sumPoEstimasi(enriched) };
 }

@@ -1,10 +1,30 @@
 import type { Db } from 'mongodb';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
-import { buildVendorSoSnapshot } from '@/lib/api/vendor-so-snapshot';
-import { findMatchingGrnLine, findMatchingVendorWebhookLine } from '@/lib/uom/match-vendor-line';
+import { syncCpoFromSoPayload } from '@/lib/api/cpo-line-cancel-sync';
+import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
+import type { JsonObject } from '@/types/json';
 
-function findCpoFilter(tenantId, payload) {
+type CpoLine = JsonObject & {
+  qty?: number | string;
+  qtyShipped?: number;
+  qtyReceived?: number;
+};
+
+type CpoDoc = JsonObject & {
+  id?: string;
+  noPO?: string;
+  status?: string;
+  items?: CpoLine[];
+  vendorSoId?: string;
+  vendorNoSO?: string;
+  vendorNoDO?: string;
+  vendorNoDOMap?: Record<string, string | null>;
+  vendorNoInvoice?: string;
+  vendorInvoiceId?: string;
+};
+
+function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
   const base = { tenantId };
   if (payload.customerPoId) return { ...base, id: payload.customerPoId };
   if (payload.noPO) return { ...base, noPO: payload.noPO };
@@ -13,68 +33,88 @@ function findCpoFilter(tenantId, payload) {
   return null;
 }
 
-function rollupShipStatus(items) {
+function rollupShipStatus(items: CpoLine[]) {
   if (!items?.length) return 'SHIPPED';
-  const allShipped = items.every((it) => (it.qtyShipped || 0) >= (it.qty || 0));
-  const anyShipped = items.some((it) => (it.qtyShipped || 0) > 0);
+  const allShipped = items.every((it) => (Number(it.qtyShipped) || 0) >= (parseFloat(String(it.qty)) || 0));
+  const anyShipped = items.some((it) => (Number(it.qtyShipped) || 0) > 0);
   if (allShipped) return 'SHIPPED';
   if (anyShipped) return 'PARTIAL_SHIPPED';
   return 'CONFIRMED';
 }
 
-function rollupReceiveStatus(items) {
+function rollupReceiveStatus(items: CpoLine[]) {
   if (!items?.length) return 'RECEIVED';
-  const allReceived = items.every((it) => (it.qtyReceived || 0) >= (it.qty || 0));
-  const anyReceived = items.some((it) => (it.qtyReceived || 0) > 0);
+  const allReceived = items.every((it) => (Number(it.qtyReceived) || 0) >= (parseFloat(String(it.qty)) || 0));
+  const anyReceived = items.some((it) => (Number(it.qtyReceived) || 0) > 0);
   if (allReceived) return 'RECEIVED';
   if (anyReceived) return 'PARTIAL_RECEIVED';
   return 'SHIPPED';
 }
 
-export async function syncCpoFromVendorEvent(db: Db, tenantId, event, payload) {
+export async function syncCpoFromVendorEvent(
+  db: Db,
+  tenantId: string,
+  event: string,
+  payload: Record<string, unknown>,
+) {
   const filter = findCpoFilter(tenantId, payload);
   if (!filter) return { action: 'skipped', reason: 'no_po_reference' };
 
-  const po = await db.collection('customer_purchase_orders').findOne(filter);
+  const po = await db.collection('customer_purchase_orders').findOne(filter) as CpoDoc | null;
   if (!po) return { action: 'not_found', filter };
 
   const now = new Date();
   const patch: Record<string, unknown> = { updatedAt: now, lastVendorEvent: event, lastVendorEventAt: now };
 
-  if (event === 'sales_order.confirmed') {
-    patch.status = 'CONFIRMED';
-    patch.confirmedAt = payload.confirmedAt ? new Date(payload.confirmedAt) : now;
+  if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
+    const soSynced = syncCpoFromSoPayload(po, payload, now);
+    if (event === 'sales_order.confirmed') {
+      patch.status = 'CONFIRMED';
+      patch.confirmedAt = payload.confirmedAt ? new Date(String(payload.confirmedAt)) : now;
+    } else if (soSynced.status) {
+      patch.status = soSynced.status;
+    }
     patch.vendorSoId = payload.salesOrderId || po.vendorSoId;
     patch.vendorNoSO = payload.noSO || po.vendorNoSO;
-    const soSnap = buildVendorSoSnapshot(payload);
-    if (soSnap) patch.vendorSoSnapshot = soSnap;
+    patch.items = soSynced.items;
+    if (soSynced.vendorSoSnapshot) patch.vendorSoSnapshot = soSynced.vendorSoSnapshot;
+    if (soSynced.cancelledSoLines) patch.cancelledSoLines = soSynced.cancelledSoLines;
+    const subs = Array.isArray(po.vendorSubmissions) ? [...po.vendorSubmissions] as JsonObject[] : [];
+    if (subs.length && soSynced.vendorSoSnapshot) {
+      const soId = String(payload.salesOrderId || '');
+      const noSO = String(payload.noSO || '');
+      patch.vendorSubmissions = subs.map((sub) => {
+        const match = (soId && sub.vendorSoId === soId) || (noSO && sub.vendorNoSO === noSO);
+        return match ? { ...sub, vendorSo: payload } : sub;
+      });
+    }
   } else if (event === 'sales_order.cancelled') {
     patch.status = 'CANCELLED';
-    patch.cancelledAt = payload.cancelledAt ? new Date(payload.cancelledAt) : now;
+    patch.cancelledAt = payload.cancelledAt ? new Date(String(payload.cancelledAt)) : now;
     patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
   } else if (event === 'delivery.shipped') {
     const usedShip = new Set<number>();
-    const webhookItems = Array.isArray(payload.items) ? payload.items : [];
+    const webhookItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
     const items = (po.items || []).map((line) => {
-      const shipped = findMatchingVendorWebhookLine(line, webhookItems, usedShip);
+      const shipped = findMatchingVendorWebhookLine(line as LocalPoLineLike, webhookItems, usedShip);
       const add = parseFloat(String(shipped?.qty)) || 0;
-      return { ...line, qtyShipped: (line.qtyShipped || 0) + add };
+      return { ...line, qtyShipped: (Number(line.qtyShipped) || 0) + add };
     });
     patch.items = items;
     patch.status = rollupShipStatus(items);
-    patch.shippedAt = payload.shippedAt ? new Date(payload.shippedAt) : now;
+    patch.shippedAt = payload.shippedAt ? new Date(String(payload.shippedAt)) : now;
     patch.vendorNoDO = payload.noDO || po.vendorNoDO;
     if (payload.vendorTenantId) {
       const map = { ...(po.vendorNoDOMap || {}) };
-      map[payload.vendorTenantId] = payload.noDO || map[payload.vendorTenantId] || null;
+      map[String(payload.vendorTenantId)] = (payload.noDO as string) || map[String(payload.vendorTenantId)] || null;
       patch.vendorNoDOMap = map;
     }
   } else if (event === 'invoice.posted') {
     patch.status = 'INVOICED';
-    patch.invoicedAt = payload.postedAt ? new Date(payload.postedAt) : now;
+    patch.invoicedAt = payload.postedAt ? new Date(String(payload.postedAt)) : now;
     patch.vendorNoInvoice = payload.noInvoice || po.vendorNoInvoice;
     patch.vendorInvoiceId = payload.invoiceId || po.vendorInvoiceId;
-    patch.invoiceTotal = parseInt(payload.total || 0, 10);
+    patch.invoiceTotal = parseInt(String(payload.total || 0), 10);
   }
 
   await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
@@ -82,20 +122,20 @@ export async function syncCpoFromVendorEvent(db: Db, tenantId, event, payload) {
 }
 
 /** Update qty diterima setelah GRN diposting. */
-export async function syncCpoOnGrnPosted(db: Db, grn) {
+export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
   if (!grn?.noPO) return { action: 'skipped' };
   const po = await db.collection('customer_purchase_orders').findOne({
     tenantId: grn.tenantId,
     noPO: grn.noPO,
-  });
+  }) as CpoDoc | null;
   if (!po) return { action: 'not_found' };
 
   const usedGrn = new Set<number>();
-  const grnItems = Array.isArray(grn.items) ? grn.items : [];
+  const grnItems = Array.isArray(grn.items) ? grn.items as JsonObject[] : [];
   const items = (po.items || []).map((line) => {
-    const recv = findMatchingGrnLine(line, grnItems, usedGrn);
+    const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
     const add = parseFloat(String(recv?.qtyReceived)) || 0;
-    return { ...line, qtyReceived: (line.qtyReceived || 0) + add };
+    return { ...line, qtyReceived: (Number(line.qtyReceived) || 0) + add };
   });
 
   const receiveStatus = rollupReceiveStatus(items);

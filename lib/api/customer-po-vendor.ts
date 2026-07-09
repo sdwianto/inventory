@@ -136,6 +136,7 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     }
 
     enriched.push({
+      lineId: it.lineId ? String(it.lineId) : undefined,
       kode: vendorKode,
       vendorStokId,
       vendorTenantId: itemVendorTenantId,

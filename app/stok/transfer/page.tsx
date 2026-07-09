@@ -1,6 +1,6 @@
 'use client';
-import { str, num, asArray, type JsonObject } from '@/types/json';
-import { useState } from 'react';
+import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +25,15 @@ import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 
+function qtyAtLokasi(p: JsonObject, lokasiKode: string): number {
+  const byWh = asObject(p.stokByWarehouse);
+  const kode = lokasiKode.trim().toUpperCase();
+  if (!kode) return 0;
+  const v = byWh[kode];
+  if (v == null) return 0;
+  return parseFloat(String(v)) || 0;
+}
+
 export default function TransferPage() {
   const [showForm, setShowForm] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -34,6 +43,21 @@ export default function TransferPage() {
   const [saving, setSaving] = useState(false);
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
+
+  useEffect(() => {
+    if (!form.lokasiAsal || form.items.length === 0) return;
+    setForm((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => {
+        const stokBase = qtyAtLokasi(it, prev.lokasiAsal);
+        const factor = parseFloat(String(it.factorToBase)) || 1;
+        const stokLine = factor <= 0 || factor === 1
+          ? stokBase
+          : Math.round((stokBase / factor) * 1000) / 1000;
+        return { ...it, stokSistemBase: stokBase, stokSistem: stokLine };
+      }),
+    }));
+  }, [form.lokasiAsal]);
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.transfer.list,
@@ -54,6 +78,10 @@ export default function TransferPage() {
   >([queryKeys.transfer.all, queryKeys.products.all]);
 
   const addItem = async (p: JsonObject) => {
+    if (!form.lokasiAsal) {
+      toast.error('Pilih lokasi asal terlebih dahulu');
+      return;
+    }
     const id = str(p.id);
     const defaultUom = await fetchDefaultProductUom(id);
     const uomId = defaultUom?.id || '';
@@ -61,7 +89,7 @@ export default function TransferPage() {
       toast.error('Sudah ada');
       return;
     }
-    const stokBase = num(p.stok);
+    const stokBase = qtyAtLokasi(p, form.lokasiAsal);
     setForm({
       ...form,
       items: [...form.items, {
@@ -70,6 +98,8 @@ export default function TransferPage() {
         qty: 1, hargaBeli: p.hargaBeli,
         stokSistemBase: stokBase,
         stokSistem: qtyInUom(stokBase, defaultUom),
+        factorToBase: defaultUom?.factorToBase ?? 1,
+        stokByWarehouse: p.stokByWarehouse,
       }],
     });
     setShowPicker(false);
@@ -79,8 +109,8 @@ export default function TransferPage() {
       ...form,
       items: form.items.map((it, idx) => {
         if (idx !== i) return it;
-        const stokBase = num(it.stokSistemBase ?? it.stokSistem);
-        return { ...it, uomId: uom.id, satuan: uom.satuan, stokSistem: qtyInUom(stokBase, uom) };
+        const stokBase = num(it.stokSistemBase ?? qtyAtLokasi(it, form.lokasiAsal));
+        return { ...it, uomId: uom.id, satuan: uom.satuan, factorToBase: uom.factorToBase, stokSistem: qtyInUom(stokBase, uom) };
       }),
     });
   };
@@ -210,7 +240,7 @@ export default function TransferPage() {
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader><DialogTitle>Pilih Produk</DialogTitle></DialogHeader>
-          <ProductPickerSearch open={showPicker} onSelect={addItem} />
+          <ProductPickerSearch open={showPicker} withWarehouseStock lokasiKode={form.lokasiAsal} onSelect={addItem} />
         </DialogContent>
       </Dialog>
     </>

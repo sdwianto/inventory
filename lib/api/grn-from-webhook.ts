@@ -30,6 +30,9 @@ export async function resolveLocalUomForGrnLine(
   const uoms = uomsCache.get(localStokId) || [];
   const vendorUomId = vendorItem.uomId ? String(vendorItem.uomId) : '';
   const qty = parseFloat(String(vendorItem.qty)) || 0;
+  const qtyBaseFromWebhook = vendorItem.qtyBase != null
+    ? parseFloat(String(vendorItem.qtyBase))
+    : undefined;
 
   if (vendorUomId) {
     const local = uoms.find((u) => u.vendorUomId === vendorUomId || u.id === vendorUomId);
@@ -38,8 +41,8 @@ export async function resolveLocalUomForGrnLine(
         uomId: local.id,
         satuan: local.satuan,
         factorToBase: local.factorToBase,
-        qtyBase: vendorItem.qtyBase != null
-          ? parseFloat(String(vendorItem.qtyBase))
+        qtyBase: qtyBaseFromWebhook != null && !Number.isNaN(qtyBaseFromWebhook)
+          ? qtyBaseFromWebhook
           : qty * local.factorToBase,
       };
     }
@@ -53,17 +56,18 @@ export async function resolveLocalUomForGrnLine(
         uomId: bySat.id,
         satuan: bySat.satuan,
         factorToBase: bySat.factorToBase,
-        qtyBase: qty * bySat.factorToBase,
+        qtyBase: qtyBaseFromWebhook != null && !Number.isNaN(qtyBaseFromWebhook)
+          ? qtyBaseFromWebhook
+          : qty * bySat.factorToBase,
       };
     }
   }
 
-  const qtyBaseFromWebhook = vendorItem.qtyBase != null
-    ? parseFloat(String(vendorItem.qtyBase))
-    : undefined;
   return {
     satuan: vendorItem.satuan ? String(vendorItem.satuan) : undefined,
-    qtyBase: qtyBaseFromWebhook,
+    qtyBase: qtyBaseFromWebhook != null && !Number.isNaN(qtyBaseFromWebhook)
+      ? qtyBaseFromWebhook
+      : undefined,
   };
 }
 

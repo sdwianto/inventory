@@ -64,7 +64,7 @@ export default function PenyesuaianPage() {
     }
     const gudangKode = str(p.gudangKode, 'GKERING').toUpperCase();
     const stokByWarehouse = asObject(p.stokByWarehouse);
-    const qtySistemBase = num(stokByWarehouse[gudangKode] ?? p.stok);
+    const qtySistemBase = num(stokByWarehouse[gudangKode] ?? 0);
     const qtyDisplay = qtyInUom(qtySistemBase, defaultUom);
     setItems([...items, {
       stokId: p.id, kode: p.kode, nama: p.nama,

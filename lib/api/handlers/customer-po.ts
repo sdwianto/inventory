@@ -33,11 +33,13 @@ import {
   encodeCursor,
 } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import { guardPosting } from '@/lib/api/period-lock';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { findProductUomsByIds } from '@/lib/api/product-uom';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
+import { enrichPoListWithSoCancelState, pullSoCancelStateForPo } from '@/lib/api/cpo-so-pull-sync';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 
 interface CustomerPoBody extends Record<string, unknown> {
@@ -201,13 +203,13 @@ async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
     }
     return computeLineEstimasi({
       lineId: String(it.lineId || uuidv4()),
-      localStokId: it.localStokId,
-      vendorStokId,
-      vendorTenantId,
-      vendorKode,
-      kode: it.kode || vendorKode,
-      nama: it.nama,
-      satuan,
+      localStokId: it.localStokId != null ? String(it.localStokId) : undefined,
+      vendorStokId: vendorStokId != null ? String(vendorStokId) : undefined,
+      vendorTenantId: vendorTenantId != null ? String(vendorTenantId) : undefined,
+      vendorKode: vendorKode != null ? String(vendorKode) : undefined,
+      kode: it.kode != null ? String(it.kode) : (vendorKode != null ? String(vendorKode) : undefined),
+      nama: it.nama != null ? String(it.nama) : undefined,
+      satuan: satuan != null ? String(satuan) : undefined,
       uomId: String(it.uomId || ''),
       vendorUomId: String(vendorUomId || ''),
       qty: parseFloat(String(it.qty)) || 0,
@@ -307,7 +309,7 @@ export async function handleCustomerPo({
       const { items, hasMore } = sliceCursorPage(rows, limit);
       const last = items[items.length - 1] as Record<string, unknown> | undefined;
       return ok({
-        items: await enrichPoPeople(db, items),
+        items: await enrichPoListWithSoCancelState(db, await enrichPoPeople(db, items)),
         hasMore,
         nextCursor: hasMore && last ? encodeCursor(last, 'tanggal') : null,
       });
@@ -317,7 +319,7 @@ export async function handleCustomerPo({
       .sort({ tanggalKedatangan: -1, tanggal: -1 })
       .limit(300)
       .toArray();
-    return ok(await enrichPoPeople(db, list));
+    return ok(await enrichPoListWithSoCancelState(db, await enrichPoPeople(db, list)));
   }
 
   // POST /customer-purchase-orders/sync-pending — antrian kirim otomatis ke sales.app
@@ -369,10 +371,13 @@ export async function handleCustomerPo({
 
     const tenantId = tenantIdForWrite(scopeAuth, poBody);
     const now = new Date();
-    const noPO = poBody.noPO || await nextDocNumber(db, tenantId, 'CPO', 'CPO');
     const tanggalKedatangan = poBody.tanggalKedatangan
       ? new Date(poBody.tanggalKedatangan)
       : (poBody.tanggal ? new Date(poBody.tanggal) : now);
+    const locked = await guardPosting(db, scopeAuth, poBody, tanggalKedatangan);
+    if (locked) return locked;
+
+    const noPO = poBody.noPO || await nextDocNumber(db, tenantId, 'CPO', 'CPO');
 
     const poItems = await mapPoItems(db, tenantId, poBody.items);
     const doc = {
@@ -425,6 +430,9 @@ export async function handleCustomerPo({
     }
     if (!poBody.items?.length) return err('Minimal satu item');
 
+    const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
+    if (locked) return locked;
+
     const tenantId = po.tenantId || 'default';
     const now = new Date();
     const tanggalKedatangan = poBody.tanggalKedatangan
@@ -461,6 +469,8 @@ export async function handleCustomerPo({
       return err('Hanya PO DRAFT atau REJECTED yang bisa diajukan', 400);
     }
     if (!po.items?.length) return err('PO kosong', 400);
+    const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
+    if (locked) return locked;
     if (
       scopeAuth!.role === 'GUDANG'
       && po.createdBy?.userId !== scopeAuth!.userId
@@ -506,6 +516,8 @@ export async function handleCustomerPo({
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
     if (denied) return denied;
+    const locked = await guardPosting(db, scopeAuth, body as Record<string, unknown>);
+    if (locked) return locked;
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
@@ -518,6 +530,29 @@ export async function handleCustomerPo({
     const enriched = await enrichOnePo(db, result.po);
     await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
     return ok({ ...enriched, vendorSynced: result.vendorSynced, vendorSyncError: result.vendorSyncError });
+  }
+
+  // POST /customer-purchase-orders/:id/sync-so-lines — tarik cancel baris SO dari sales.app
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-so-lines' && method === 'POST') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+
+    const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
+    if (!po) return err('PO tidak ditemukan', 404);
+    if (!String(po.noPO || '')) return err('PO tanpa noPO', 400);
+
+    const result = await pullSoCancelStateForPo(db, po as JsonObject);
+    const updated = result.updated
+      ? await db.collection('customer_purchase_orders').findOne({ id: po.id })
+      : po;
+    if (result.error && !result.updated) {
+      return err(`Gagal sync SO: ${result.error}`, 502);
+    }
+    return ok({
+      ...(await enrichOnePo(db, updated)),
+      synced: result.updated,
+      message: result.updated ? 'Baris PO diselaraskan dengan SO sales.app' : 'Sudah selaras dengan SO sales.app',
+    });
   }
 
   // POST /customer-purchase-orders/:id/sync-vendor — kirim ulang PO APPROVED ke sales.app
@@ -637,6 +672,9 @@ export async function handleCustomerPo({
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
     if (po.status !== 'DRAFT') return err('PO sudah dikirim atau sedang menunggu approval', 400);
+
+    const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
+    if (locked) return locked;
 
     const result = await completePoWithVendorSync(db, po, await actorSnapshot(db, auth));
     if ('error' in result && result.error) return err(result.error, result.status || 400);

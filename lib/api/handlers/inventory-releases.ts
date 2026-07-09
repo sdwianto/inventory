@@ -217,6 +217,8 @@ export async function handleInventoryReleases({
     const doc = await loadRelease(db, scopeAuth, path[1]);
     if (!doc) return err('Tidak ditemukan', 404);
     if (doc.status !== 'DRAFT') return err('Hanya draft yang bisa diajukan', 400);
+    const locked = await guardPosting(db, scopeAuth, releaseBody, String(doc.tanggal || doc.createdAt || ''));
+    if (locked) return locked;
     if (doc.createdBy?.userId !== auth.userId && !auth.isMaster && auth.role !== 'ADMIN') {
       return err('Hanya pembuat yang bisa mengajukan', 403);
     }

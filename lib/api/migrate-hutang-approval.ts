@@ -1,7 +1,7 @@
 import type { Db } from 'mongodb';
 // Backfill tagihan vendor lama (OUTSTANDING tanpa approvalStatus) → APPROVED.
 
-export async function backfillLegacyVendorInvoices(db: Db, tenantId) {
+export async function backfillLegacyVendorInvoices(db: Db, tenantId?: string) {
   const filter: Record<string, unknown> = {
     referenceType: 'VENDOR_INVOICE',
     approvalStatus: { $exists: false },

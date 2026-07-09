@@ -9,6 +9,8 @@ import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { createJournal } from '@/lib/api/journal';
+import { buildGrnAccrualJournalLines } from '@/lib/api/journal-lines';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
@@ -103,6 +105,29 @@ export async function postGoodsReceipt(
         lokasiKodes: [...lokasiSet],
       },
     }, session);
+
+    const accrualSub = parseInt(String(stock.receivedTotal || 0), 10);
+    if (accrualSub > 0) {
+      const existingAccrual = await txDb.collection('jurnal').findOne({
+        tenantId,
+        sourceType: 'AUTO_GRN_ACCRUAL',
+        sourceId: grn.id,
+      }, txOpts(session));
+      if (!existingAccrual) {
+        await createJournal(txDb, {
+          tanggal: now,
+          keterangan: `GRN ${grn.noGRN || grn.id}`,
+          sourceType: 'AUTO_GRN_ACCRUAL',
+          sourceId: grn.id,
+          userName: typeof body?.userName === 'string' ? body.userName : 'System',
+          details: buildGrnAccrualJournalLines({
+            noDoc: String(grn.noGRN || grn.id),
+            subTotal: accrualSub,
+          }),
+          tenantId,
+        }, session);
+      }
+    }
 
     return { lokasiSet, invoicePatch };
   });

@@ -1,11 +1,11 @@
 // Pencatatan mutasi stok ke kartu stok + penyesuaian (audit trail).
 
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode, setProductWarehouseStock } from '@/lib/api/product-warehouse';
-import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { txOpts } from '@/lib/api/transaction';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import type { AuthContext } from '@/types/auth';
 
@@ -27,6 +27,7 @@ interface RecordMasterStockChangeParams {
   qtyAfter: number | string;
   auth?: AuthContext | null;
   reason?: string;
+  session?: ClientSession;
 }
 
 function genNoPenyesuaian(): string {
@@ -47,6 +48,7 @@ export async function recordMasterProductStockChange(
     qtyAfter,
     auth,
     reason = 'Penyesuaian via edit master produk',
+    session,
   }: RecordMasterStockChangeParams,
 ): Promise<{ noPenyesuaian: string; selisih: number } | null> {
   const before = parseFloat(String(qtyBefore)) || 0;
@@ -98,19 +100,17 @@ export async function recordMasterProductStockChange(
     penyesuaianId: penyesuaianDoc.id,
   });
 
-  await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-    await txDb.collection('penyesuaian_stok').insertOne(penyesuaianDoc, txOpts(session));
-    await txDb.collection('stok_kartu').insertOne(kartuDoc, txOpts(session));
-    await writeAuditLog(txDb, {
-      tenantId: tid,
-      action: 'STOCK_ADJUSTMENT',
-      entityType: 'penyesuaian_stok',
-      entityId: penyesuaianDoc.id as string,
-      summary: `${noPS}: ${product.kode} selisih ${selisih}`,
-      ...auditActor(auth),
-      metadata: { stokId: product.id, selisih, lokasiKode },
-    }, session);
-  });
+  await db.collection('penyesuaian_stok').insertOne(penyesuaianDoc, txOpts(session));
+  await db.collection('stok_kartu').insertOne(kartuDoc, txOpts(session));
+  await writeAuditLog(db, {
+    tenantId: tid,
+    action: 'STOCK_ADJUSTMENT',
+    entityType: 'penyesuaian_stok',
+    entityId: penyesuaianDoc.id as string,
+    summary: `${noPS}: ${product.kode} selisih ${selisih}`,
+    ...auditActor(auth),
+    metadata: { stokId: product.id, selisih, lokasiKode },
+  }, session);
 
   return { noPenyesuaian: noPS, selisih };
 }

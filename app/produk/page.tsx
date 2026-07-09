@@ -25,6 +25,7 @@ import TenantScopeField, { tenantLabel, type TenantOption } from '@/components/T
 import { withActingTenantQuery } from '@/lib/tenant-api';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/lib/vendor-price';
+import { productStockLabel, productStockTitle } from '@/lib/uom/display';
 import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib/produk/constants';
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
@@ -665,10 +666,23 @@ export default function ProdukPage() {
                     </td>
                     <td className="px-3 py-2 text-right">
                       <span
-                        className={`font-semibold ${num(p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}
-                        title={str(p.stokDisplay) && str(p.stokDisplay) !== str(p.stok) ? `Base: ${str(p.stok)}` : undefined}
+                        className={`font-semibold ${num(p.stokGudangQty ?? p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}
+                        title={productStockTitle({
+                          stok: num(p.stok),
+                          stokDisplay: str(p.stokDisplay) || undefined,
+                          gudangKode: str(p.gudangKode, 'GKERING'),
+                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
+                          stokGudangQty: num(p.stokGudangQty),
+                        })}
                       >
-                        {str(p.stokDisplay) || str(p.stok)}
+                        {productStockLabel({
+                          stok: num(p.stok),
+                          stokDisplay: str(p.stokDisplay) || undefined,
+                          satuan: str(p.satuan),
+                          gudangKode: str(p.gudangKode, 'GKERING'),
+                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
+                          stokGudangQty: num(p.stokGudangQty),
+                        })}
                       </span>
                     </td>
                     {canManageProducts && (

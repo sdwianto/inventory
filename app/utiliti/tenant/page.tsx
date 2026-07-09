@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Building2, Upload, Save, ImageIcon, X, Eye } from 'lucide-react';
+import { Building2, Upload, Save, ImageIcon, X, Eye, Unlock } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
 import { invalidateTenantCache } from '@/lib/tenant-client';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
@@ -24,6 +24,7 @@ export default function TenantSetupPage() {
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
     showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '', logoUrl: '',
     ppnPercent: 11,
+    periodLockedUntil: '' as string,
     features: {
       multiUomEnabled: true,
       offlineQueueEnabled: true,
@@ -53,6 +54,9 @@ export default function TenantSetupPage() {
           reportSnapshotsEnabled: true,
           ...(settingsData.features as Record<string, boolean> | undefined),
         },
+        periodLockedUntil: settingsData.periodLockedUntil
+          ? String(settingsData.periodLockedUntil).slice(0, 10)
+          : '',
       }));
     });
   }, [settingsData, tenantId]);
@@ -96,13 +100,23 @@ export default function TenantSetupPage() {
 
   const removeLogo = () => setForm(f => ({ ...f, logoBase64: '', logoUrl: '' }));
 
+  const clearPeriodLock = () => {
+    setForm((f) => ({ ...f, periodLockedUntil: '' }));
+    toast.message('Tutup buku dibuka — klik Simpan untuk menerapkan');
+  };
+
   const save = async () => {
     setSaving(true);
     try {
       await saveMutation.mutateAsync({
         url: '/api/tenant/settings',
         method: 'PUT',
-        body: form,
+        body: {
+          ...form,
+          periodLockedUntil: form.periodLockedUntil
+            ? new Date(`${form.periodLockedUntil}T23:59:59`).toISOString()
+            : null,
+        },
       });
       invalidateTenantCache();
       toast.success('Pengaturan tenant tersimpan. Logo akan muncul di semua dokumen.');
@@ -166,6 +180,17 @@ export default function TenantSetupPage() {
               <div className="border-t pt-3 grid grid-cols-2 gap-3">
                 <div className="col-span-2"><Label>Footer Struk Kasir</Label><Input value={form.receiptFooterText} onChange={e => setForm({...form, receiptFooterText: e.target.value})} placeholder="Terima Kasih" /></div>
                 <div><Label>PPN (%)</Label><Input type="number" value={form.ppnPercent} onChange={e => setForm({...form, ppnPercent: parseInt(e.target.value || '0')})} /></div>
+                <div><Label>Tutup Buku Sampai</Label>
+                  <div className="flex gap-2">
+                    <Input type="date" value={form.periodLockedUntil || ''} onChange={e => setForm({...form, periodLockedUntil: e.target.value})} className="flex-1" />
+                    {form.periodLockedUntil && (
+                      <Button type="button" variant="outline" onClick={clearPeriodLock} title="Buka periode (hapus kunci tutup buku)">
+                        <Unlock className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">Transaksi dengan tanggal ≤ tanggal ini diblokir (GRN, penyesuaian, hutang, PO). Klik ikon buka untuk menghapus kunci.</p>
+                </div>
                 <div className="col-span-2 grid grid-cols-2 gap-2">
                   <label className="flex items-center gap-2 text-sm bg-slate-50 px-3 py-2 rounded cursor-pointer">
                     <input type="checkbox" checked={form.showLogoOnReceipt !== false} onChange={e => setForm({...form, showLogoOnReceipt: e.target.checked})} />

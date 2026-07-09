@@ -120,6 +120,17 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
+  const syncSoLines = useCallback(async (id: string) => {
+    const res = await fetchOrQueue(`/api/customer-purchase-orders/${id}/sync-so-lines`, {
+      method: 'POST',
+      offlineLabel: `Sync baris SO PO ${id}`,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal sync SO');
+    await reload();
+    return data;
+  }, [reload]);
+
   const createPO = useCallback(async (
     payload: Record<string, unknown>,
     optimisticRow?: JsonObject,
@@ -171,5 +182,5 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
-  return { requestApproval, approve, reject, submit, syncVendor, syncVendorForVendor, createPO, updatePO };
+  return { requestApproval, approve, reject, submit, syncVendor, syncVendorForVendor, syncSoLines, createPO, updatePO };
 }

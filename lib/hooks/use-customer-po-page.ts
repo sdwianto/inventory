@@ -306,7 +306,9 @@ export function useCustomerPoPage() {
   const handleSelectDate = (date: Date) => {
     setSelectedDate(dateKey(date));
     setShowAll(false);
-    setMonth(startOfMonth(date));
+    setExpandedId(null);
+    const nextMonth = startOfMonth(date);
+    if (dateKey(month) !== dateKey(nextMonth)) setMonth(nextMonth);
   };
 
   const addLine = () => setLines([...lines, emptyPoLine()]);
@@ -532,6 +534,22 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
+  const syncSoLinesPo = async (id: string) => {
+    setSubmitting(id);
+    try {
+      const data = await poMutations.syncSoLines(id);
+      if (data.synced) {
+        toast.success('Baris PO diselaraskan dengan SO sales.app');
+      } else {
+        toast.info(data.message || 'Sudah selaras dengan SO sales.app');
+      }
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal sync baris SO');
+    }
+    setSubmitting('');
+  };
+
   const rejectPo = async (id: string, reason = 'Ditolak admin') => {
     setSubmitting(id);
     try {
@@ -627,6 +645,7 @@ export function useCustomerPoPage() {
     approvePo,
     syncVendorPo,
     syncVendorForVendorPo,
+    syncSoLinesPo,
     rejectPo,
     submitPo,
     vendorNameById,

@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
-import { str, num } from '@/types/json';
+import { str, num, asObject } from '@/types/json';
 import { productStockLabel, productStockTitle } from '@/lib/uom/display';
 
 interface ProductPickerSearchProps {
   open: boolean;
   withWarehouseStock?: boolean;
+  lokasiKode?: string;
   onSelect: (product: JsonObject) => void;
   limit?: number;
 }
@@ -17,6 +18,7 @@ interface ProductPickerSearchProps {
 export default function ProductPickerSearch({
   open,
   withWarehouseStock = false,
+  lokasiKode = '',
   onSelect,
   limit = 50,
 }: ProductPickerSearchProps) {
@@ -53,7 +55,17 @@ export default function ProductPickerSearch({
         {!loading && items.length === 0 && (
           <div className="p-3 text-sm text-slate-400">Ketik untuk mencari produk</div>
         )}
-        {items.map((p) => (
+        {items.map((p) => {
+          const stockCtx = {
+            stok: num(p.stok),
+            stokDisplay: str(p.stokDisplay) || undefined,
+            satuan: str(p.satuan),
+            gudangKode: str(p.gudangKode),
+            lokasiKode: lokasiKode || str(p.gudangKode),
+            stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
+            stokGudangQty: num(p.stokGudangQty),
+          };
+          return (
           <button
             key={str(p.id)}
             type="button"
@@ -66,19 +78,17 @@ export default function ProductPickerSearch({
             </span>
             <span
               className="text-xs text-slate-500 shrink-0 font-medium"
-              title={productStockTitle({
-                stok: num(p.stok),
-                stokDisplay: str(p.stokDisplay) || undefined,
-              })}
+              title={productStockTitle(stockCtx)}
             >
-              {productStockLabel({
-                stok: num(p.stok),
-                stokDisplay: str(p.stokDisplay) || undefined,
-                satuan: str(p.satuan),
+              {productStockLabel(withWarehouseStock ? stockCtx : {
+                stok: stockCtx.stok,
+                stokDisplay: stockCtx.stokDisplay,
+                satuan: stockCtx.satuan,
               })}
             </span>
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

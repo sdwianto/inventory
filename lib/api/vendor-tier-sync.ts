@@ -4,7 +4,11 @@ import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 
 import { upsertVendorTenant } from '@/lib/api/vendor-tenants';
 
-export async function syncVendorTiersFromSales(db: Db, customerTenantId, config) {
+export async function syncVendorTiersFromSales(
+  db: Db,
+  customerTenantId: string,
+  config: Record<string, unknown>,
+) {
   const ctid = String(config.customerTenantId || customerTenantId || '').trim().toLowerCase();
   if (!ctid) return { error: 'customerTenantId tidak ada' };
 
@@ -32,7 +36,7 @@ export async function syncVendorTiersFromSales(db: Db, customerTenantId, config)
     );
   }
 
-  const primaryVendor = config.vendorTenantId;
+  const primaryVendor = String(config.vendorTenantId || '');
   const primaryTier = tierMap[primaryVendor] || vendors[0]?.tierHargaDefault || 'ECER';
   const now = new Date();
   await db.collection('integration_settings').updateOne(
@@ -43,7 +47,7 @@ export async function syncVendorTiersFromSales(db: Db, customerTenantId, config)
   return { synced: vendors.length, tierMap, tierHargaDefault: String(primaryTier).toUpperCase() };
 }
 
-export async function getVendorTierMap(db: Db, customerTenantId) {
+export async function getVendorTierMap(db: Db, customerTenantId: string) {
   const tid = customerTenantId || 'default';
   const rows = await db.collection('vendor_tenants').find({ tenantId: tid }).toArray();
   const map: Record<string, unknown> = {};

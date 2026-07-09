@@ -2,6 +2,7 @@
 
 export const INTEGRATION_WEBHOOK_EVENTS = [
   'sales_order.confirmed',
+  'sales_order.updated',
   'sales_order.cancelled',
   'delivery.shipped',
   'invoice.posted',
@@ -13,6 +14,7 @@ export const INTEGRATION_WEBHOOK_EVENTS = [
 
 export const CUSTOMER_INVENTORY_EVENTS = [
   'sales_order.confirmed',
+  'sales_order.updated',
   'sales_order.cancelled',
   'delivery.shipped',
   'invoice.posted',

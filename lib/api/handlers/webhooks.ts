@@ -13,7 +13,16 @@ type WebhookBody = JsonObject & {
 };
 
 function dedupeSourceId(event: string, payload: JsonObject): string | null {
-  if (event === 'sales_order.confirmed') return String(payload.salesOrderId || '') || null;
+  if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
+    const rev = payload.updatedAt || payload.confirmedAt || payload.revision;
+    const soId = String(payload.salesOrderId || '');
+    if (soId && rev) return `${soId}:${rev}`;
+    if (soId && event === 'sales_order.updated' && payload.cancelledLine) {
+      const cl = payload.cancelledLine as JsonObject;
+      return `${soId}:cancel:${cl.lineId || cl.kode || ''}:${cl.cancelledAt || ''}`;
+    }
+    return soId || null;
+  }
   const product = payload.product as JsonObject | undefined;
   return String(
     payload.deliveryId || payload.invoiceId || payload.creditNoteId

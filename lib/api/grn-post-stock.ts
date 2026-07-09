@@ -62,6 +62,22 @@ export async function applyGrnStockPosting(
     .toArray();
   const prodById = new Map(products.map((p) => [p.id, p]));
 
+  const lokasiKeysPre = [...new Set(lineInputs.map((l) => {
+    const prod = prodById.get(l.it.localStokId) as Record<string, unknown> | undefined;
+    const kode = prod ? resolveProductGudangKode(prod) : '';
+    return lokasiKey(String(l.it.localStokId), kode);
+  }))].map((k) => {
+    const [stokId, lokasiKode] = k.split(':');
+    return { stokId, lokasiKode };
+  });
+  const existingLokasiPre = lokasiKeysPre.length
+    ? await db.collection('stok_lokasi').find({
+      tenantId: tid,
+      $or: lokasiKeysPre.map(({ stokId, lokasiKode }) => ({ stokId, lokasiKode })),
+    }).toArray()
+    : [];
+  const lokasiByKey = new Map(existingLokasiPre.map((r) => [lokasiKey(r.stokId, r.lokasiKode), r]));
+
   const lokasiDeltas = new Map<string, number>();
   const productState = new Map<string, {
     oldQty: number;
@@ -91,9 +107,12 @@ export async function applyGrnStockPosting(
     lokasiDeltas.set(lk, (lokasiDeltas.get(lk) || 0) + qtyBase);
 
     let state = productState.get(String(it.localStokId));
+    const lkInit = lokasiKey(String(it.localStokId), lokasiKode);
+    const rowInit = lokasiByKey.get(lkInit);
+    const lokasiQty = parseFloat(String((rowInit as { qty?: unknown })?.qty)) || 0;
     if (!state) {
       state = {
-        oldQty: parseFloat(String(prod.stok)) || 0,
+        oldQty: lokasiQty,
         oldBeli: parseInt(String(prod.hargaBeli || 0), 10),
         newBeli: parseInt(String(prod.hargaBeli || 0), 10),
         prod,
@@ -137,14 +156,6 @@ export async function applyGrnStockPosting(
     const [stokId, kode] = k.split(':');
     return { stokId, lokasiKode: kode };
   });
-
-  const existingLokasi = lokasiKeys.length
-    ? await db.collection('stok_lokasi').find({
-      tenantId: tid,
-      $or: lokasiKeys.map(({ stokId, lokasiKode }) => ({ stokId, lokasiKode })),
-    }).toArray()
-    : [];
-  const lokasiByKey = new Map(existingLokasi.map((r) => [lokasiKey(r.stokId, r.lokasiKode), r]));
 
   const stokLokasiBulk: Record<string, unknown>[] = [];
   for (const [lk, delta] of lokasiDeltas) {

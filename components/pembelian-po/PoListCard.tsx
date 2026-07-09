@@ -33,6 +33,7 @@ export type PoListCardProps = {
   onSubmit: () => void;
   onSyncVendor: () => void;
   onSyncVendorForVendor?: (vendorTenantId: string) => void;
+  onSyncSoLines?: () => void;
   onApprove: () => void;
   onReject: (reason: string) => void;
 };
@@ -53,6 +54,7 @@ export default function PoListCard({
   onSubmit,
   onSyncVendor,
   onSyncVendorForVendor,
+  onSyncSoLines,
   onApprove,
   onReject,
 }: PoListCardProps) {
@@ -109,6 +111,19 @@ export default function PoListCard({
             </div>
           </div>
         </button>
+        {!!vendorSoLabel && onSyncSoLines && !isOptimistic && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 border-slate-300 text-slate-700 hover:bg-slate-50"
+            onClick={onSyncSoLines}
+            disabled={isSubmitting}
+            title="Tarik status cancel baris dari SO sales.app"
+          >
+            <RefreshCw className={`w-3 h-3 mr-1 ${isSubmitting ? 'animate-spin' : ''}`} />
+            Sync SO
+          </Button>
+        )}
         {canEdit && !isOptimistic && (
           <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit}>
             <Pencil className="w-3 h-3 mr-1" />
@@ -261,19 +276,41 @@ export default function PoListCard({
               </tr>
             </thead>
             <tbody>
-              {poItems.map((it: JsonObject) => (
-                <tr key={str(it.lineId || it.kode)} className="border-b border-slate-100 last:border-0">
-                  <td className="py-1.5 pr-2 font-mono">{str(it.kode)}</td>
-                  <td className="py-1.5 pr-2">{str(it.nama)}</td>
+              {poItems.map((it: JsonObject) => {
+                const cancelled = it.cancelled === true;
+                return (
+                <tr
+                  key={str(it.lineId || it.kode)}
+                  className={`border-b border-slate-100 last:border-0 ${cancelled ? 'bg-rose-50/70 text-slate-400' : ''}`}
+                >
+                  <td className={`py-1.5 pr-2 font-mono ${cancelled ? 'line-through' : ''}`}>{str(it.kode)}</td>
+                  <td className={`py-1.5 pr-2 ${cancelled ? 'line-through' : ''}`}>
+                    {str(it.nama)}
+                    {cancelled && (
+                      <span className="ml-1.5 inline-block text-[10px] font-medium px-1 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 no-underline align-middle">
+                        Dibatalkan
+                      </span>
+                    )}
+                  </td>
                   <td className="py-1.5 text-right whitespace-nowrap text-slate-600">
                     {it.estimasiHarga ? formatIDR(num(it.estimasiHarga)) : '—'}
                   </td>
-                  <td className="py-1.5 text-right whitespace-nowrap">{formatNumber(num(it.qty))}</td>
+                  <td className="py-1.5 text-right whitespace-nowrap">
+                    {cancelled
+                      ? <span className="line-through">{formatNumber(num(it.qtyOriginal ?? it.qty))}</span>
+                      : formatNumber(num(it.qty))}
+                  </td>
                   <td className="py-1.5 text-center text-slate-600">{str(it.satuan) || '—'}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
+          {poItems.some((it) => it.cancelled) && (
+            <p className="text-[10px] text-rose-600 mt-2">
+              Baris dicoret = item dibatalkan di sales.app (SO vendor). Item aktif tetap diproses.
+            </p>
+          )}
           {(!!po.vendorNoDO || !!po.vendorNoInvoice) && (
             <div className="mt-2 text-xs text-slate-600">
               {!!po.vendorNoDO && <span className="mr-3">DO: {str(po.vendorNoDO)}</span>}

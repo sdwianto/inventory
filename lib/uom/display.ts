@@ -55,7 +55,26 @@ export function formatKartuMutasiLabel(row: {
 }
 
 /** Label stok produk untuk tabel/picker — prefer stokDisplay dari API. */
-export function productStockLabel(p: { stok?: number; stokDisplay?: string; satuan?: string }): string {
+export function productStockLabel(p: {
+  stok?: number;
+  stokDisplay?: string;
+  satuan?: string;
+  gudangKode?: string;
+  lokasiKode?: string;
+  stokByWarehouse?: Record<string, number | string>;
+  stokGudangQty?: number | string;
+}): string {
+  const loc = String(p.lokasiKode || p.gudangKode || '').trim().toUpperCase();
+  if (loc && p.stokByWarehouse && loc in p.stokByWarehouse) {
+    const qty = parseFloat(String(p.stokByWarehouse[loc])) || 0;
+    const unit = p.satuan ? ` ${p.satuan}` : '';
+    return `${formatQty(qty)}${unit}`;
+  }
+  if (p.stokGudangQty != null && loc) {
+    const qty = parseFloat(String(p.stokGudangQty)) || 0;
+    const unit = p.satuan ? ` ${p.satuan}` : '';
+    return `${formatQty(qty)}${unit}`;
+  }
   if (p.stokDisplay) return p.stokDisplay;
   const qty = parseFloat(String(p.stok)) || 0;
   const unit = p.satuan ? ` ${p.satuan}` : '';
@@ -63,7 +82,23 @@ export function productStockLabel(p: { stok?: number; stokDisplay?: string; satu
 }
 
 /** Tooltip base qty bila tampilan dual berbeda dari angka mentah. */
-export function productStockTitle(p: { stok?: number; stokDisplay?: string }): string | undefined {
+export function productStockTitle(p: {
+  stok?: number;
+  stokDisplay?: string;
+  gudangKode?: string;
+  lokasiKode?: string;
+  stokByWarehouse?: Record<string, number | string>;
+  stokGudangQty?: number | string;
+}): string | undefined {
+  const loc = String(p.lokasiKode || p.gudangKode || '').trim().toUpperCase();
+  if (loc && p.stokByWarehouse && loc in p.stokByWarehouse) {
+    const whQty = parseFloat(String(p.stokByWarehouse[loc])) || 0;
+    const raw = parseFloat(String(p.stok));
+    if (Number.isFinite(raw) && Math.abs(whQty - raw) > 0.001) {
+      return `Total semua gudang: ${formatQty(raw)}`;
+    }
+    return undefined;
+  }
   const raw = parseFloat(String(p.stok));
   if (p.stokDisplay && Number.isFinite(raw) && p.stokDisplay !== String(p.stok)) {
     return `Base: ${formatQty(raw)}`;

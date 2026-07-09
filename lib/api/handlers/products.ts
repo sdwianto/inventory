@@ -28,6 +28,9 @@ import { recordMasterProductStockChange } from '@/lib/api/stock-ledger';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
 import { parseCursorPageParams, applyAscStringIdCursor, encodeStringCursor, sliceCursorPage } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { stampTenantId } from '@/lib/api/tenant-operational';
+import { warehouseLabel } from '@/lib/api/warehouses';
 import {
   validateAndNormalizeUomInputs,
   resolveUomInputsFromProductBody,
@@ -35,6 +38,7 @@ import {
 } from '@/lib/uom/conversion';
 import {
   insertProductUoms,
+  planProductUomDocs,
   replaceProductUoms,
   deleteProductUoms,
   listProductUoms,
@@ -224,7 +228,7 @@ export async function handleProducts({
     }
 
     const productId = uuidv4();
-    const uomDocs = await insertProductUoms(db, tenantId, productId, uomParsed.uoms);
+    const uomDocs = planProductUomDocs(tenantId, productId, uomParsed.uoms);
     const baseUom = pickBaseUom(uomDocs);
     if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
     const denorm = productDenormFromBaseUom(baseUom);
@@ -247,18 +251,33 @@ export async function handleProducts({
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    await db.collection('products').insertOne(doc);
-    await setProductWarehouseStock(db, tenantId, doc.id, gudangKode, doc.stok || 0);
-    if ((doc.stok || 0) > 0) {
-      await recordMasterProductStockChange(db, {
-        tenantId,
-        product: doc,
-        gudangKode,
-        qtyBefore: 0,
-        qtyAfter: doc.stok || 0,
-        auth: scopeAuth,
-        reason: 'Stok awal produk baru',
+    const initialStok = doc.stok || 0;
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        await txDb.collection('products').insertOne(doc, txOpts(session));
+        await insertProductUoms(txDb, tenantId, productId, uomParsed.uoms, session);
+        const wh = await setProductWarehouseStock(txDb, tenantId, doc.id, gudangKode, initialStok, session);
+        if ('error' in wh) throw new Error(wh.error);
+        if (initialStok > 0) {
+          const lokasiLabel = `${gudangKode} - ${warehouseLabel(gudangKode)}`;
+          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
+            id: uuidv4(),
+            stokId: doc.id,
+            lokasi: lokasiLabel,
+            lokasiKode: gudangKode,
+            tanggal: new Date(),
+            noTransaksi: `INIT-${doc.kode}`,
+            keterangan: 'Stok awal produk baru',
+            sourceType: 'MASTER_PRODUK',
+            masuk: initialStok,
+            keluar: 0,
+            hargaSatuan: doc.hargaBeli || 0,
+          }), txOpts(session));
+        }
       });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Gagal menyimpan produk';
+      return err(msg, 500);
     }
     await refreshGrnsForProductKode(db, tenantId, doc.kode);
     await invalidateDashboardSnapshot(db, tenantId);
@@ -423,6 +442,7 @@ export async function handleProducts({
 
       const tid = existing.tenantId || 'default';
       const grup = String(update.grup ?? existing.grup ?? 'Umum').trim();
+      let uomToWrite: import('@/lib/uom/types').NormalizedUomInput[] | null = null;
 
       if (!isVendorSyncedProduct(existing)) {
         if (Array.isArray(productBody.uoms) && productBody.uoms.length > 0) {
@@ -432,7 +452,8 @@ export async function handleProducts({
           if (multiUomDenied) return err(multiUomDenied, 403);
           const uomPrep = await prepareProductUomsForWrite(db, tid, grup, uomParsed.uoms, id);
           if ('error' in uomPrep) return err(uomPrep.error, 400);
-          const uomDocs = await replaceProductUoms(db, tid, id, uomParsed.uoms);
+          uomToWrite = uomParsed.uoms;
+          const uomDocs = planProductUomDocs(tid, id, uomParsed.uoms);
           const baseUom = pickBaseUom(uomDocs);
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
@@ -452,7 +473,8 @@ export async function handleProducts({
           if (multiUomDeniedLegacy) return err(multiUomDeniedLegacy, 403);
           const uomPrep = await prepareProductUomsForWrite(db, tid, grup, uomParsed.uoms, id);
           if ('error' in uomPrep) return err(uomPrep.error, 400);
-          const uomDocs = await replaceProductUoms(db, tid, id, uomParsed.uoms);
+          uomToWrite = uomParsed.uoms;
+          const uomDocs = planProductUomDocs(tid, id, uomParsed.uoms);
           const baseUom = pickBaseUom(uomDocs);
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
@@ -484,24 +506,57 @@ export async function handleProducts({
       const stokDiubah = update.stok !== undefined;
       if (stokDiubah) {
         const gudang = resolveProductGudangKode({ ...existing, ...update });
-        const qtyBefore = await getQtyStokLokasi(db, tid, id, gudang);
         const qtyAfter = parseFloat(String(update.stok || 0));
-        await setProductWarehouseStock(db, tid, id, gudang, qtyAfter);
-        await recordMasterProductStockChange(db, {
-          tenantId: tid,
-          product: { ...existing, ...update, id },
-          gudangKode: gudang,
-          qtyBefore,
-          qtyAfter,
-          auth: userAuth,
-          reason: productBody.stokAlasan || 'Penyesuaian via edit master produk',
-        });
-        update.stok = await syncProductStokFromLokasi(db, tid, id);
+        const mergedProduct = { ...existing, ...update, id };
+        try {
+          await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+            if (uomToWrite) {
+              await replaceProductUoms(txDb, tid, id, uomToWrite, session);
+            }
+            const qtyBefore = await getQtyStokLokasi(txDb, tid, id, gudang, session);
+            const wh = await setProductWarehouseStock(txDb, tid, id, gudang, qtyAfter, session);
+            if ('error' in wh) throw new Error(wh.error);
+            await recordMasterProductStockChange(txDb, {
+              tenantId: tid,
+              product: mergedProduct,
+              gudangKode: gudang,
+              qtyBefore,
+              qtyAfter,
+              auth: userAuth,
+              reason: productBody.stokAlasan || 'Penyesuaian via edit master produk',
+              session,
+            });
+            update.stok = wh.qty;
+            await txDb.collection('products').updateOne(
+              withTenantFilter(scopeAuth, { id }),
+              { $set: update },
+              txOpts(session),
+            );
+          });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : 'Gagal menyimpan perubahan stok produk';
+          return err(msg, 400);
+        }
+      } else if (uomToWrite) {
+        try {
+          await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+            await replaceProductUoms(txDb, tid, id, uomToWrite!, session);
+            await txDb.collection('products').updateOne(
+              withTenantFilter(scopeAuth, { id }),
+              { $set: update },
+              txOpts(session),
+            );
+          });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : 'Gagal menyimpan satuan produk';
+          return err(msg, 400);
+        }
+      } else {
+        await db.collection('products').updateOne(
+          withTenantFilter(scopeAuth, { id }),
+          { $set: update },
+        );
       }
-      await db.collection('products').updateOne(
-        withTenantFilter(scopeAuth, { id }),
-        { $set: update },
-      );
       await invalidateDashboardSnapshot(db, tid);
       const doc = await findMasterDoc(db, 'products', auth, { id });
       if (!doc) return ok(clean(doc));

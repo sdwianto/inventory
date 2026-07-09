@@ -42,4 +42,6 @@ export interface HutangPaymentJournalParams {
   noDoc: string;
   amount: number;
   metode?: string;
+  kasRekeningKode?: string;
+  kasRekeningNama?: string;
 }

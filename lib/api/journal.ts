@@ -54,3 +54,21 @@ export async function createJournal(
   await db.collection('jurnal').insertOne(doc, txOpts(session));
   return doc;
 }
+
+/** Skip insert when a journal with the same source already exists (idempotent posting). */
+export async function createJournalIfNotExists(
+  db: Db,
+  params: CreateJournalParams,
+  session?: ClientSession,
+): Promise<JournalEntry | null> {
+  const tid = params.tenantId || 'default';
+  if (params.sourceId) {
+    const existing = await db.collection('jurnal').findOne({
+      tenantId: tid,
+      sourceType: params.sourceType,
+      sourceId: String(params.sourceId),
+    }, txOpts(session));
+    if (existing) return existing as unknown as JournalEntry;
+  }
+  return createJournal(db, params, session);
+}

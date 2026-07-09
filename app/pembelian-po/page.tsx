@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import {
   CalendarDays, Plus, RefreshCw, ShoppingBag,
 } from 'lucide-react';
-import { formatArrivalLabel } from '@/lib/po-calendar';
+import { formatArrivalLabel, type PoArrivalFields } from '@/lib/po-calendar';
 import { useCustomerPoPage } from '@/lib/hooks/use-customer-po-page';
 
 function CustomerPoPageContent() {
@@ -67,6 +67,7 @@ function CustomerPoPageContent() {
     approvePo,
     syncVendorPo,
     syncVendorForVendorPo,
+    syncSoLinesPo,
     rejectPo,
     submitPo,
     vendorNameById,
@@ -117,7 +118,7 @@ function CustomerPoPageContent() {
               <h2 className="font-semibold text-sm">Kalender Kedatangan</h2>
             </div>
             <PoCalendar
-              pos={list as unknown as never[]}
+              pos={list as PoArrivalFields[]}
               month={month}
               onMonthChange={setMonth}
               selectedDate={selectedDate}
@@ -177,6 +178,7 @@ function CustomerPoPageContent() {
                       onSubmit={() => submitPo(poId)}
                       onSyncVendor={() => syncVendorPo(poId)}
                       onSyncVendorForVendor={(vendorTenantId) => syncVendorForVendorPo(poId, vendorTenantId)}
+                      onSyncSoLines={() => syncSoLinesPo(poId)}
                       onApprove={() => approvePo(poId)}
                       onReject={(reason) => rejectPo(poId, reason)}
                     />
