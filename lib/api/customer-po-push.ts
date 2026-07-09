@@ -5,6 +5,11 @@ import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
 import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
+import {
+  enrichSubmissionsWithSoFromSales,
+  extractPushedVendorSo,
+  summarizeVendorNoSo,
+} from '@/lib/api/customer-po-so-extract';
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import type { JsonObject } from '@/types/json';
 
@@ -96,12 +101,13 @@ export async function pushPoToVendor(db: Db, po: Record<string, unknown>, tenant
         });
         continue;
       }
+      const soDoc = extractPushedVendorSo(pushed.vendorSo as JsonObject);
       submissions.push({
         vendorTenantId,
         status: 'SYNCED',
-        vendorSoId: (pushed.vendorSo as JsonObject | undefined)?.id,
-        vendorNoSO: (pushed.vendorSo as JsonObject | undefined)?.noSO,
-        vendorSo: pushed.vendorSo || null,
+        vendorSoId: soDoc.id || soDoc.salesOrderId,
+        vendorNoSO: soDoc.noSO,
+        vendorSo: soDoc,
         itemCount: items.length,
       });
     }
@@ -129,19 +135,22 @@ export async function finalizePoSubmission(
   approver: Record<string, unknown> | null | undefined,
   { partialFailures = [] }: { partialFailures?: JsonObject[] } = {},
 ) {
-  const primary = submissions[0] || {};
+  const syncedSubs = submissions.length
+    ? await enrichSubmissionsWithSoFromSales(db, po as JsonObject, submissions)
+    : submissions;
+  const primary = syncedSubs[0] || {};
   const now = new Date();
-  const allSubs = [...submissions, ...partialFailures];
+  const allSubs = [...syncedSubs, ...partialFailures];
   const hasFailures = partialFailures.length > 0;
   const patch: Record<string, unknown> = {
-    status: submissions.length ? 'SUBMITTED' : 'APPROVED',
+    status: syncedSubs.length ? 'SUBMITTED' : 'APPROVED',
     vendorSubmissions: allSubs,
-    vendorTenantId: submissions.length === 1 ? primary.vendorTenantId : (submissions.length ? 'multi' : po.vendorTenantId),
+    vendorTenantId: syncedSubs.length === 1 ? primary.vendorTenantId : (syncedSubs.length ? 'multi' : po.vendorTenantId),
     vendorSoId: primary.vendorSoId,
-    vendorNoSO: submissions.length === 1
+    vendorNoSO: syncedSubs.length === 1
       ? primary.vendorNoSO
-      : submissions.map((s) => s.vendorNoSO).filter(Boolean).join(', '),
-    submittedAt: submissions.length ? now : po.submittedAt || null,
+      : summarizeVendorNoSo(syncedSubs),
+    submittedAt: syncedSubs.length ? now : po.submittedAt || null,
     updatedAt: now,
     vendorSyncPending: hasFailures,
     vendorSyncError: hasFailures
@@ -156,7 +165,7 @@ export async function finalizePoSubmission(
     };
     patch.approvedAt = now;
   }
-  const soSnaps = submissions.map((sub) => buildVendorSoSnapshot({
+  const soSnaps = syncedSubs.map((sub) => buildVendorSoSnapshot({
     ...(sub.vendorSo as JsonObject),
     salesOrderId: sub.vendorSoId,
     noSO: sub.vendorNoSO,

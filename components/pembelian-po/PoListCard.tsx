@@ -108,10 +108,15 @@ export default function PoListCard({
                   SO vendor: {vendorSoLabel}
                 </span>
               )}
+              {!vendorSoLabel && ['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED'].includes(poStatus) && !isOptimistic && (
+                <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0 text-amber-700">
+                  Nomor SO belum tersinkron — refresh halaman atau klik Sync SO
+                </span>
+              )}
             </div>
           </div>
         </button>
-        {!!vendorSoLabel && onSyncSoLines && !isOptimistic && (
+        {onSyncSoLines && !isOptimistic && ['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED', 'PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED'].includes(poStatus) && (
           <Button
             size="sm"
             variant="outline"
@@ -253,6 +258,11 @@ export default function PoListCard({
             <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">
               <span className="font-medium text-slate-700">SO vendor:</span>{' '}
               {vendorSoLabel}
+            </p>
+          )}
+          {!vendorSoLabel && ['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED'].includes(poStatus) && !isOptimistic && (
+            <p className="text-xs text-amber-800 mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
+              Nomor SO belum tersinkron dari sales.app. Refresh halaman atau gunakan tombol <strong>Sync SO</strong>.
             </p>
           )}
           {!!po.catatan && (

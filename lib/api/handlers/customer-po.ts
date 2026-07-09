@@ -39,7 +39,8 @@ import { findProductUomsByIds } from '@/lib/api/product-uom';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
-import { enrichPoListWithSoCancelState, pullSoCancelStateForPo } from '@/lib/api/cpo-so-pull-sync';
+import { enrichPoListWithSoCancelState, pullSoCancelStateForPo, backfillPoVendorSoFromSales } from '@/lib/api/cpo-so-pull-sync';
+import { poHasVendorSoNumbers } from '@/lib/api/customer-po-so-extract';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 
 interface CustomerPoBody extends Record<string, unknown> {
@@ -160,6 +161,14 @@ async function enrichPoPeople(db: Db, list) {
 
 async function enrichOnePo(db: Db, po) {
   const [enriched] = await enrichPoPeople(db, [po]);
+  if (po && !poHasVendorSoNumbers(po as JsonObject)) {
+    await backfillPoVendorSoFromSales(db, po as JsonObject);
+    const fresh = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    if (fresh) {
+      const [withPeople] = await enrichPoPeople(db, [fresh]);
+      return withPeople;
+    }
+  }
   return enriched;
 }
 
@@ -541,7 +550,17 @@ export async function handleCustomerPo({
     if (!po) return err('PO tidak ditemukan', 404);
     if (!String(po.noPO || '')) return err('PO tanpa noPO', 400);
 
-    const result = await pullSoCancelStateForPo(db, po as JsonObject);
+    let working = po as JsonObject;
+    if (!poHasVendorSoNumbers(working)) {
+      const backfill = await backfillPoVendorSoFromSales(db, working);
+      if (backfill.updated) {
+        working = await db.collection('customer_purchase_orders').findOne({ id: po.id }) as JsonObject;
+      } else if (backfill.error && !poHasVendorSoNumbers(working)) {
+        return err(`Gagal ambil nomor SO: ${backfill.error}`, 502);
+      }
+    }
+
+    const result = await pullSoCancelStateForPo(db, working);
     const updated = result.updated
       ? await db.collection('customer_purchase_orders').findOne({ id: po.id })
       : po;
