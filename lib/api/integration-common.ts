@@ -51,6 +51,29 @@ export function getSetupToken(): string | null {
   return 'dev_pair_token_local_only';
 }
 
+/** Pastikan URL webhook inventory lengkap (`…/api/webhooks/sales`), bukan hanya origin. */
+export function normalizeInventoryWebhookUrl(raw: string): string {
+  const url = String(raw || '').trim();
+  if (!url) return 'http://localhost:3001/api/webhooks/sales';
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, '') || '/';
+    if (path === '/' || path === '') {
+      u.pathname = '/api/webhooks/sales';
+      return u.toString().replace(/\/$/, '');
+    }
+    if (!path.includes('/api/webhooks/')) {
+      u.pathname = '/api/webhooks/sales';
+      return u.toString().replace(/\/$/, '');
+    }
+    return u.toString().replace(/\/$/, '');
+  } catch {
+    const base = url.replace(/\/$/, '');
+    if (/\/api\/webhooks\/sales$/i.test(base)) return base;
+    return `${base}/api/webhooks/sales`;
+  }
+}
+
 export function inventoryPairUrl(inventoryWebhookUrl: string): string {
   const url = String(inventoryWebhookUrl || '').trim();
   if (!url) return 'http://localhost:3001/api/integrations/pair';

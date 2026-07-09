@@ -41,7 +41,7 @@ const INVENTORY_URL = envInv || PROD_INVENTORY_DEFAULT;
 const STALE_MS = 15 * 60 * 1000;
 
 const uri = process.env.MONGO_URL || process.env.MONGODB_URI;
-const dbName = process.env.DB_NAME || 'inventory_customer';
+const dbName = process.env.INVENTORY_DB_NAME || process.env.DB_NAME || 'inventory_customer';
 
 if (!uri) {
   console.error('MONGO_URL / MONGODB_URI tidak ada');

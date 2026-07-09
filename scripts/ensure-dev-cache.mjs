@@ -1,36 +1,69 @@
 #!/usr/bin/env node
 /**
- * Hindari cache Turbopack usang setelah migrasi route API ke TypeScript.
- * .next lama bisa masih mereferensikan app/api/[[...path]]/route.js yang sudah tidak ada.
+ * Hapus .next jika cache dev rusak/usang:
+ * - proxy.js stale setelah migrasi middleware → proxy.ts
+ * - routes.d.ts korup (crash/OOM saat compile) → route API/ERP 404 di dev
+ * - hash app/api/[[...path]]/route.ts berubah
  */
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 const NEXT_DIR = '.next';
 const CACHE_DIR = '.cache';
 const STAMP_FILE = path.join(CACHE_DIR, 'dev-route-stamp');
 const ROUTE_TS = 'app/api/[[...path]]/route.ts';
 
-if (!fs.existsSync(ROUTE_TS)) {
-  process.exit(0);
-}
-
-const hash = crypto.createHash('md5').update(fs.readFileSync(ROUTE_TS)).digest('hex');
-
 function clearNext(reason) {
-  console.log(`[dev] ${reason}`);
-  fs.rmSync(NEXT_DIR, { recursive: true, force: true });
+  console.warn(`[dev] Cache .next usang (${reason}) — membersihkan sebelum start...`);
+  rmSync(NEXT_DIR, { recursive: true, force: true });
 }
 
-if (fs.existsSync(STAMP_FILE)) {
-  const stampStale = fs.readFileSync(STAMP_FILE, 'utf8').trim() !== hash;
-  if (stampStale) {
-    clearNext('Menghapus cache .next (API route berubah)');
+let stale = false;
+
+const routesTypesPath = '.next/dev/types/routes.d.ts';
+if (existsSync(routesTypesPath)) {
+  try {
+    const src = readFileSync(routesTypesPath, 'utf8');
+    if (/^\/[a-z][^"\n]*": \{\}/m.test(src)) stale = true;
+    if (!stale && src.includes('PageRoutes = never') && src.includes('"/dashboard"')) stale = true;
+    if (!stale && !src.includes('/api/[[...path]]')) stale = true;
+  } catch {
+    /* ignore */
   }
-} else if (fs.existsSync(NEXT_DIR)) {
-  clearNext('Menghapus cache .next usang (belum ada stamp dev)');
 }
 
-fs.mkdirSync(CACHE_DIR, { recursive: true });
-fs.writeFileSync(STAMP_FILE, hash);
+if (!stale) {
+  const hasProxyTs = existsSync('proxy.ts');
+  const hasProxyJs = existsSync('proxy.js');
+  const middlewarePath = '.next/dev/server/middleware.js';
+
+  if (hasProxyTs && !hasProxyJs && existsSync(middlewarePath)) {
+    try {
+      const src = readFileSync(middlewarePath, 'utf8');
+      if (src.includes('proxy.js')) stale = true;
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+if (!stale && existsSync(ROUTE_TS)) {
+  const hash = createHash('md5').update(readFileSync(ROUTE_TS)).digest('hex');
+  if (existsSync(STAMP_FILE)) {
+    if (readFileSync(STAMP_FILE, 'utf8').trim() !== hash) stale = true;
+  } else if (existsSync(NEXT_DIR)) {
+    stale = true;
+  }
+  if (!stale) {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(STAMP_FILE, hash);
+    process.exit(0);
+  }
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(STAMP_FILE, hash);
+}
+
+if (stale) {
+  clearNext('typed routes / proxy / API route');
+}
