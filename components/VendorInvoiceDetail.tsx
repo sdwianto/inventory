@@ -112,9 +112,15 @@ export default function VendorInvoiceDetail({
               </Button>
             </>
           )}
-          {approval === 'APPROVED' && (
-            <Button variant="outline" onClick={onMarkPaid} disabled={markingPaid}>
-              {markingPaid ? '...' : 'Tandai lunas (bayar luar sistem)'}
+          {approval === 'APPROVED' && onMarkPaid && (
+            <Button
+              variant="outline"
+              onClick={onMarkPaid}
+              disabled={markingPaid}
+              className="border-green-600 text-green-700 hover:bg-green-50"
+            >
+              <Check className="w-4 h-4 mr-1" />
+              {markingPaid ? '...' : 'Tandai Lunas (bayar diluar sistem)'}
             </Button>
           )}
         </div>

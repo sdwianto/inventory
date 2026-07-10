@@ -7,6 +7,7 @@ import { hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import {
   buildVendorSoSnapshot,
   mergeVendorSoSnapshots,
+  normalizeVendorSoSnapshotLines,
   resolveSoTotals,
   type VendorSoSnapshot,
 } from '@/lib/api/vendor-so-snapshot';
@@ -172,24 +173,24 @@ export function resolveSoSnapshotForPo(
   if (vTenant && subs.length) {
     const byTenant = subs.find((s) => s.vendorTenantId === vTenant);
     const snap = preferSnapshot(submissionToSnapshot(byTenant), rootSnap);
-    if (snap) return snap;
+    if (snap) return normalizeVendorSoSnapshotLines(snap);
   }
   if (soId && subs.length) {
     const byId = subs.find((s) => s.vendorSoId === soId);
     const snap = preferSnapshot(submissionToSnapshot(byId), rootSnap);
-    if (snap) return snap;
+    if (snap) return normalizeVendorSoSnapshotLines(snap);
   }
   if (noSO && subs.length) {
     const byNo = subs.find((s) => s.vendorNoSO === noSO);
     const snap = preferSnapshot(submissionToSnapshot(byNo), rootSnap);
-    if (snap) return snap;
+    if (snap) return normalizeVendorSoSnapshotLines(snap);
   }
 
-  if (rootSnap) return rootSnap;
+  if (rootSnap) return normalizeVendorSoSnapshotLines(rootSnap);
 
   if (subs.length) {
     const snaps = subs.map(submissionToSnapshot).filter(Boolean);
-    return mergeVendorSoSnapshots(snaps);
+    return normalizeVendorSoSnapshotLines(mergeVendorSoSnapshots(snaps));
   }
 
   return null;
@@ -309,7 +310,11 @@ function collectLineQty(items: JsonObject[], qtyField: string): Map<string, Line
     const kode = String(it.kode || it.vendorKode || it.localKode || '').trim();
     if (!kode) continue;
     const key = lineBucketKey(kode, String(it.uomId || ''), String(it.satuan || ''));
-    const qty = parseFloat(String(it[qtyField] ?? it.qty ?? 0)) || 0;
+    const qty = parseFloat(String(
+      qtyField === 'qty'
+        ? (it.qty ?? it.qtyOrdered ?? 0)
+        : (it[qtyField] ?? it.qty ?? it.qtyOrdered ?? 0),
+    )) || 0;
     const prev = map.get(key);
     if (prev) prev.qty += qty;
     else {

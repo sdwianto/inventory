@@ -23,6 +23,22 @@ describe('buildLineVarianceByUom', () => {
     expect(pcs?.varianceSoToInvoice).toBe(-2);
   });
 
+  it('reads qtyOrdered when qty missing on SO snapshot lines', () => {
+    const rows = buildLineVarianceByUom({
+      poItems: [{ kode: 'B618394', satuan: 'PCS', qty: 2 }],
+      soItems: [{ kode: 'B618394', satuan: 'PCS', qtyOrdered: 2 }],
+      invoiceItems: [{ kode: 'B618394', satuan: 'PCS', qty: 2 }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      poQty: 2,
+      soQty: 2,
+      invoiceQty: 2,
+      variancePoToSo: 0,
+      varianceSoToInvoice: 0,
+    });
+  });
+
   it('merges PO (uomId) and invoice (satuan only) into one row', () => {
     const rows = buildLineVarianceByUom({
       poItems: [{ kode: 'B887155', uomId: 'local-uom-pcs', satuan: 'PCS', qty: 1 }],

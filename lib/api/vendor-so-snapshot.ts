@@ -3,6 +3,7 @@
 export interface VendorSoLineSnapshot {
   kode?: string;
   qty?: number;
+  qtyOrdered?: number;
   harga?: number;
   jumlah?: number;
   uomId?: string;
@@ -23,6 +24,7 @@ export interface VendorSoSnapshot {
 type VendorSoLineInput = {
   jumlah?: number | string;
   qty?: number | string;
+  qtyOrdered?: number | string;
   harga?: number | string;
   kode?: string;
   uomId?: string;
@@ -67,7 +69,7 @@ export function buildVendorSoSnapshot(payload: Record<string, unknown> | null | 
 
   const rawItems = Array.isArray(payload.items) ? payload.items as VendorSoLineInput[] : [];
   const items = rawItems.map((it) => {
-    const qty = parseFloat(String(it.qty)) || 0;
+    const qty = parseFloat(String(it.qty ?? it.qtyOrdered ?? 0)) || 0;
     const harga = parseInt(String(it.harga || 0), 10);
     const jumlah = lineJumlah(it);
     return { kode: it.kode, qty, harga, jumlah, uomId: it.uomId, qtyBase: it.qtyBase, satuan: it.satuan };
@@ -91,6 +93,18 @@ export function buildVendorSoSnapshot(payload: Record<string, unknown> | null | 
     items,
     confirmedAt: payload.confirmedAt ? new Date(String(payload.confirmedAt)) : new Date(),
   };
+}
+
+/** Normalisasi qty baris snapshot lama yang hanya punya qtyOrdered (dari sales.app). */
+export function normalizeVendorSoSnapshotLines(
+  snapshot: VendorSoSnapshot | null | undefined,
+): VendorSoSnapshot | null {
+  if (!snapshot) return null;
+  const items = (snapshot.items || []).map((it) => {
+    const qty = parseFloat(String(it.qty ?? it.qtyOrdered ?? 0)) || 0;
+    return { ...it, qty };
+  });
+  return { ...snapshot, items };
 }
 
 /** Gabung beberapa snapshot SO (multi-vendor) menjadi satu ringkasan. */

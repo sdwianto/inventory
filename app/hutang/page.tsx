@@ -152,14 +152,19 @@ export default function HutangVendorPage() {
 
   const doApprove = async () => {
     if (!detail) return;
+    const hutangId = str(detail.id);
     setActing('approve');
     try {
-      await approve(str(detail.id), {
+      await approve(hutangId, {
         overrideMatch,
         note: overrideMatch ? 'Disetujui dengan override match' : '',
       });
-      toast.success('Tagihan disetujui');
-      setDetail(null);
+      const fresh = await queryClient.fetchQuery({
+        queryKey: queryKeys.hutang.detail(hutangId),
+        queryFn: () => fetchJson<JsonObject>(`/api/hutang/${hutangId}`),
+      });
+      setDetail(fresh);
+      toast.success('Tagihan disetujui — tandai lunas jika sudah dibayar di luar sistem');
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
       else toast.error(e instanceof Error ? e.message : String(e));

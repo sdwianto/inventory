@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { poEstimasiForHutang, resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
+import { buildVendorSoSnapshot, normalizeVendorSoSnapshotLines } from '@/lib/api/vendor-so-snapshot';
 
 describe('poEstimasiForHutang', () => {
   const multiPo = {
@@ -58,5 +59,21 @@ describe('resolveSoSnapshotForPo', () => {
     const snap = resolveSoSnapshotForPo(po, { vendorTenantId: 'vendor1', salesOrderId: 'so-1' });
     expect(snap?.items).toHaveLength(1);
     expect(snap?.items?.[0].qty).toBe(1);
+  });
+
+  it('normalizes legacy snapshot lines that only have qtyOrdered', () => {
+    const snap = buildVendorSoSnapshot({
+      noSO: 'SO001',
+      total: 184348,
+      items: [{ kode: 'B618394', qtyOrdered: 2, harga: 1000, jumlah: 2000 }],
+    });
+    expect(snap?.items?.[0].qty).toBe(2);
+
+    const legacy = normalizeVendorSoSnapshotLines({
+      noSO: 'SO001',
+      total: 184348,
+      items: [{ kode: 'B618394', qtyOrdered: 2, harga: 1000, jumlah: 2000 }],
+    });
+    expect(legacy?.items?.[0].qty).toBe(2);
   });
 });

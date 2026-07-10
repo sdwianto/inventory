@@ -217,7 +217,9 @@ export async function handleVendorHutang({
       soItems: (soSnap?.items || []) as import('@/types/json').JsonObject[],
       invoiceItems: (doc.items || []) as import('@/types/json').JsonObject[],
     });
-    const soLineDataAvailable = (soSnap?.items?.length || 0) > 0;
+    const soLineDataAvailable = (soSnap?.items || []).some(
+      (it) => (parseFloat(String(it.qty ?? it.qtyOrdered ?? 0)) || 0) > 0,
+    );
     const poStatus = linkedPo ? String(linkedPo.status || '') : '';
     if (
       (doc.poEstimasiTotal || 0) !== variance.poEstimasiTotal
