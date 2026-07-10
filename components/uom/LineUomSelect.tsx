@@ -26,7 +26,13 @@ export default function LineUomSelect({
   }
   if (uoms.length <= 1) {
     const u = uoms[0] || defaultUom;
-    return <span className={`text-xs uppercase ${className}`}>{u?.satuan || '—'}</span>;
+    return (
+      <div
+        className={`h-9 px-2 flex items-center rounded-md border bg-slate-50 text-xs font-medium uppercase ${className}`}
+      >
+        {u?.satuan || '—'}
+      </div>
+    );
   }
 
   return (
@@ -37,7 +43,7 @@ export default function LineUomSelect({
         const next = uoms.find((u) => u.id === e.target.value);
         if (next) onChange(next);
       }}
-      className={`text-xs border rounded px-1 py-0.5 uppercase max-w-[5.5rem] ${className}`}
+      className={`h-9 w-full text-xs border rounded-md px-2 uppercase ${className}`}
     >
       {uoms.map((u) => (
         <option key={u.id} value={u.id}>

@@ -448,8 +448,8 @@ export default function PenerimaanPage() {
                   <div className="font-medium truncate">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</div>
                   <div className="text-xs text-slate-500 truncate">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}</div>
                 </div>
-                <div className="min-w-0">
-                  <Label className="text-xs">Gudang</Label>
+                <div className="min-w-0 flex flex-col gap-1">
+                  <Label className="text-xs block">Gudang</Label>
                   <div className={`h-9 px-2 flex items-center rounded-md border text-xs font-medium truncate ${
                     str(gudangMap[rowKey], 'GKERING') === 'GBASAH'
                       ? 'bg-blue-50 text-blue-800 border-blue-200'
@@ -458,8 +458,8 @@ export default function PenerimaanPage() {
                     {warehouseName(str(gudangMap[rowKey], 'GKERING'))}
                   </div>
                 </div>
-                <div className="min-w-0">
-                  <Label className="text-xs">Satuan</Label>
+                <div className="min-w-0 flex flex-col gap-1">
+                  <Label className="text-xs block">Satuan</Label>
                   {localStokId ? (
                     <LineUomSelect
                       stokId={localStokId}
@@ -487,8 +487,8 @@ export default function PenerimaanPage() {
                     </div>
                   )}
                 </div>
-                <div className="min-w-0">
-                  <Label className="text-xs">Qty terima</Label>
+                <div className="min-w-0 flex flex-col gap-1">
+                  <Label className="text-xs block">Qty terima</Label>
                   <Input
                     type="number"
                     min={0}
