@@ -49,7 +49,7 @@ export function usePoMutations(
     id: string,
     optimisticPatch: Record<string, unknown>,
     run: () => Promise<Response>,
-    opts?: { keepOnAmbiguous?: boolean },
+    opts?: { keepOnAmbiguous?: boolean; skipReload?: boolean },
   ): Promise<JsonObject> => {
     assertPersistedPoId(id);
     let snapshot: JsonObject[] = [];
@@ -66,7 +66,11 @@ export function usePoMutations(
         throw new PoMutationAmbiguousError(String(data.error || ''), id);
       }
       if (!ok) throw new Error(String(data.error || 'Gagal'));
-      await reload();
+      if (opts?.skipReload) {
+        setList((prev) => patchPoList(prev, id, data as JsonObject));
+      } else {
+        await reload();
+      }
       return data as JsonObject;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
@@ -99,7 +103,7 @@ export function usePoMutations(
         method: 'POST',
         offlineLabel: `Setujui PO ${id}`,
       }),
-      { keepOnAmbiguous: true },
+      { keepOnAmbiguous: true, skipReload: true },
     );
   }, [withOptimistic]);
 
@@ -124,7 +128,7 @@ export function usePoMutations(
         method: 'POST',
         offlineLabel: `Kirim PO ${id}`,
       }),
-      { keepOnAmbiguous: true },
+      { keepOnAmbiguous: true, skipReload: true },
     );
   }, [withOptimistic]);
 
@@ -136,7 +140,7 @@ export function usePoMutations(
         method: 'POST',
         offlineLabel: `Sync vendor PO ${id}`,
       }),
-      { keepOnAmbiguous: true },
+      { keepOnAmbiguous: true, skipReload: true },
     );
   }, [withOptimistic]);
 
@@ -192,7 +196,6 @@ export function usePoMutations(
           return prependPoToList(withoutTemp, data as JsonObject);
         });
       }
-      await reload();
       return data as JsonObject;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
@@ -220,6 +223,7 @@ export function usePoMutations(
         body: JSON.stringify(payload),
         offlineLabel: `Ubah PO ${id}`,
       }),
+      { skipReload: true },
     );
   }, [withOptimistic]);
 
