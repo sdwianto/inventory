@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import { MongoClient } from 'mongodb';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-const prodEnv = join(__dir, '../../sales/sales/.env.production.local');
+const prodEnv = join(__dir, '../../../sales/sales/.env.production.local');
 const SALES_URL = 'https://sales-dawam.vercel.app';
 
 function loadEnv() {
