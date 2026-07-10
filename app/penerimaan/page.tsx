@@ -88,7 +88,7 @@ export default function PenerimaanPage() {
   } = useCursorQuery<JsonObject>(
     listKey,
     '/api/pages/penerimaan',
-    { limit: 100, refetchInterval: 10_000 },
+    { limit: 100, refetchInterval: 5_000, staleTime: 5_000 },
   );
   const { postGrn: postGrnMutation, replayInvoice: replayInvoiceMutation, syncFromSales: syncFromSalesMutation } = useGrnMutations(
     listKey,

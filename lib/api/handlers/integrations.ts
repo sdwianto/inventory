@@ -22,6 +22,7 @@ import {
   getJobByIdAccessible,
 } from '@/lib/api/bg-jobs';
 import { requireMaster } from '@/lib/api/require-auth';
+import { handleIntegrationInbound } from '@/lib/api/handlers/integration-inbound';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
 const PROBE_REFRESH_MS = 60 * 1000;
@@ -91,6 +92,9 @@ async function enqueueCatalogSync(db: Db, tenantId: string) {
 export async function handleIntegrations({
   db, route, method, body, auth, url, request, path,
 }: HandlerContext) {
+  const inbound = await handleIntegrationInbound({ db, route, method, body, auth, url, request, path });
+  if (inbound) return inbound;
+
   const intBody = parseHandlerBody(body);
   const scopeOpts = { url, body: intBody, request };
   if (route === '/integrations/status' && method === 'GET') {

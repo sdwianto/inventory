@@ -26,7 +26,13 @@ export function useCursorQuery<T>(
     limit = 100,
     enabled = true,
     refetchInterval,
-  }: { limit?: number; enabled?: boolean; refetchInterval?: number | false } = {},
+    staleTime = 60_000,
+  }: {
+    limit?: number;
+    enabled?: boolean;
+    refetchInterval?: number | false;
+    staleTime?: number;
+  } = {},
 ) {
   const query = useInfiniteQuery({
     queryKey,
@@ -38,7 +44,7 @@ export function useCursorQuery<T>(
     getNextPageParam: (lastPage) =>
       lastPage?.hasMore && lastPage?.nextCursor ? lastPage.nextCursor : undefined,
     enabled: Boolean(baseUrl) && enabled,
-    staleTime: 60_000,
+    staleTime,
     refetchInterval: refetchInterval === false ? false : refetchInterval,
     refetchOnWindowFocus: true,
   });
