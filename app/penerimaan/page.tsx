@@ -161,9 +161,18 @@ export default function PenerimaanPage() {
   const replayInvoice = async (id: string, noGRN?: unknown) => {
     setReplayingInvoice(id);
     try {
-      await replayInvoiceMutation(id);
-      toast.success(`Faktur ${noGRN} — diproses di background`);
-      setPollInvoiceGrnId(id);
+      const data = await replayInvoiceMutation(id);
+      if (data.invoiceSyncStatus === 'PENDING' || data.invoiceSync?.async) {
+        toast.info(`Faktur ${noGRN} — masih diproses…`);
+        setPollInvoiceGrnId(id);
+      } else if (data.noInvoice) {
+        toast.success(`Faktur ${data.noInvoice} siap`);
+        invalidateHutangBadges();
+      } else if (data.invoiceSyncStatus === 'FAILED') {
+        toast.warning(`Faktur gagal: ${data.invoiceSyncError || 'cek sales.app'}`);
+      } else {
+        toast.success(`Faktur ${noGRN} — selesai`);
+      }
     } catch (e) {
       if (e instanceof OfflineQueuedError) {
         toast.info('Replay faktur disimpan offline — akan disinkron saat online');
