@@ -6,7 +6,7 @@ import type { AuthContext } from '@/types/auth';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 
 const COLLECTION = 'dashboard_snapshots';
-const TTL_MS = 2 * 60_000;
+const TTL_MS = 5 * 60_000;
 
 let indexesEnsured = false;
 

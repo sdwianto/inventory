@@ -25,12 +25,12 @@ export async function handleStokKartu({
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     const productId = url.searchParams.get('productId') || '';
+    if (!productId) return err('productId wajib untuk kartu stok', 400);
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
-    const limitParam = parseInt(url.searchParams.get('limit') || '500', 10);
-    const limit = Math.min(Math.max(limitParam || 500, 50), 2000);
-    let filter: Record<string, unknown> = {};
-    if (productId) filter.stokId = productId;
+    const limitParam = parseInt(url.searchParams.get('limit') || '200', 10);
+    const limit = Math.min(Math.max(limitParam || 200, 50), 500);
+    let filter: Record<string, unknown> = { stokId: productId };
     if (from || to) {
       const tanggal: Record<string, unknown> = {};
       if (from) tanggal.$gte = new Date(from);

@@ -26,7 +26,11 @@ export async function handleMaintenanceReports({
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
   const assetId = url.searchParams.get('assetId');
+  const wrLimit = Math.min(
+    Math.max(parseInt(url.searchParams.get('limit') || '500', 10) || 500, 50),
+    500,
+  );
 
-  const report = await fetchMaintenanceReport(db, scopeAuth, { from, to, assetId });
+  const report = await fetchMaintenanceReport(db, scopeAuth, { from, to, assetId, wrLimit });
   return ok(report);
 }

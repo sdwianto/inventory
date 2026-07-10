@@ -14,7 +14,6 @@ import {
 import { payableHutangFilter, approvalStatusFilter, stripHutangListSnapshot } from '@/lib/api/hutang-filters';
 import { buildProductSearchFilter, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
-import { ensureProdukMetaForTenant } from '@/lib/api/product-meta';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import type { HandlerContext } from '@/types/api/handler';
@@ -98,7 +97,7 @@ export async function handlePages({
   if (route === '/pages/produk') {
     const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
-    if (!tenantId) return ok({ items: [], meta: { grup: [], satuan: [] } });
+    if (!tenantId) return ok({ items: [], hasMore: false, nextCursor: null });
 
     const q = (url.searchParams.get('q') || '').trim();
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
@@ -125,20 +124,10 @@ export async function handlePages({
     const cleaned = enriched.map(clean);
     const { items, hasMore } = sliceCursorPage(cleaned, limit);
     const last = list[Math.min(list.length, limit) - 1] as Record<string, unknown> | undefined;
-    const meta = await Promise.all([
-      db.collection('produk_grup').find({ tenantId }).sort({ nama: 1 }).toArray(),
-      db.collection('produk_satuan').find({ tenantId }).sort({ nama: 1 }).toArray(),
-    ]);
-    await ensureProdukMetaForTenant(db, tenantId);
-    const [grupRows, satuanRows] = meta;
     return ok({
       items,
       hasMore,
       nextCursor: hasMore && last ? encodeStringCursor(last, 'nama') : null,
-      meta: {
-        grup: grupRows.map(clean),
-        satuan: satuanRows.map(clean),
-      },
     });
   }
 

@@ -70,8 +70,10 @@ function emptyTrendBucket(key: string, label: string): TrendBucket {
 }
 
 async function aggregateOpeningBefore(db: HandlerContext['db'], tid: string, since: Date) {
+  const cap = new Date(since);
+  cap.setMonth(cap.getMonth() - 24);
   const rows = await db.collection('stok_kartu').aggregate([
-    { $match: { tenantId: tid, tanggal: { $lt: since } } },
+    { $match: { tenantId: tid, tanggal: { $gte: cap, $lt: since } } },
     {
       $group: {
         _id: { $ifNull: ['$lokasiKode', '$lokasi'] },
@@ -90,6 +92,12 @@ async function aggregateOpeningBefore(db: HandlerContext['db'], tid: string, sin
     else if (lok === 'GBASAH') basah += net;
   }
   return { kering, basah, total: kering + basah };
+}
+
+function resolveTrendGranularity(months: number, requested?: string | null): 'day' | 'month' {
+  const g = (requested || '').toLowerCase();
+  if (g === 'day' || g === 'month') return g;
+  return months <= 1 ? 'day' : 'month';
 }
 
 async function buildStockTrend(
@@ -267,7 +275,11 @@ export async function handleStokSaldo({
   const trendMonths = Math.min(24, Math.max(1, parseInt(url.searchParams.get('trendMonths') || '3', 10)));
 
   if (part === 'trend') {
-    const trend = await buildStockTrend(db, tid, { months: trendMonths, granularity: 'day' });
+    const granularity = resolveTrendGranularity(
+      trendMonths,
+      url.searchParams.get('granularity'),
+    );
+    const trend = await buildStockTrend(db, tid, { months: trendMonths, granularity });
     return ok({ trend });
   }
 

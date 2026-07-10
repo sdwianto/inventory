@@ -1,12 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
-import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useCursorQuery, type CursorPage } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
-import { primeProductUomsCacheFromProducts } from '@/lib/hooks/use-product-uoms';
-import type { ProductUom } from '@/lib/uom/types';
 
 type InfinitePoData = {
   pages: CursorPage<JsonObject>[];
@@ -59,31 +57,5 @@ export function useCustomerPoList() {
     loadMore,
     reload,
     setList,
-  };
-}
-
-export function useCustomerPoProducts() {
-  const query = useApiQuery<{ items?: JsonObject[] } | JsonObject[]>(
-    queryKeys.products.list({ limit: 200, withWarehouseStock: true }),
-    '/api/products?limit=200&withWarehouseStock=1&includeUom=1',
-    { staleTime: 120_000 },
-  );
-
-  const products = Array.isArray(query.data)
-    ? query.data
-    : (query.data?.items || []);
-
-  useEffect(() => {
-    if (!products.length) return;
-    primeProductUomsCacheFromProducts(
-      products as Array<{ id?: string; uoms?: ProductUom[] }>,
-    );
-  }, [products]);
-
-  const reloadProducts = useCallback(() => query.refetch(), [query.refetch]);
-
-  return {
-    products,
-    reloadProducts,
   };
 }

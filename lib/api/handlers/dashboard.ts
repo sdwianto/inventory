@@ -138,6 +138,7 @@ export async function handleDashboard({
     approvedMonthAgg,
     inventoryAgg,
     spendingAgg,
+    maintenance,
   ] = await Promise.all([
     db.collection('customer_purchase_orders').aggregate([
       { $match: tenantPo },
@@ -222,6 +223,7 @@ export async function handleDashboard({
       },
       { $sort: { _id: 1 } },
     ]).toArray() as Promise<MonthAggRow[]>,
+    fetchMaintenanceDashboardStats(db, scopeAuth, now),
   ]);
 
   const poByStatus = (poAgg as { _id?: string; count: number }[])
@@ -253,7 +255,6 @@ export async function handleDashboard({
   const approvedMonthRow = approvedMonthAgg[0] as { total?: number } | undefined;
 
   const grnSummary = grnSummaryFromAgg(grnAgg);
-  const maintenance = await fetchMaintenanceDashboardStats(db, scopeAuth, now);
 
   const payload = {
     summary: {

@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { queryKeys } from '@/lib/query-keys';
+import { invalidateDashboardAndStockCaches } from '@/lib/hooks/invalidate-operational';
 import type { SessionUser } from '@/types/auth';
 
 const STORAGE_KEY = 'vendor-catalog-auto-sync-at';
@@ -75,8 +76,7 @@ export function useVendorCatalogAutoSync(user: SessionUser | null) {
       setJobId(null);
 
       if (status === 'DONE') {
-        void queryClient.invalidateQueries({ queryKey: ['pages'] });
-        void queryClient.invalidateQueries({ queryKey: ['products'] });
+        invalidateDashboardAndStockCaches(queryClient);
         void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all });
         window.dispatchEvent(
           new CustomEvent('vendor-catalog-synced', { detail: jobData.result || jobData }),

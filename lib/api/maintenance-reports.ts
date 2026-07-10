@@ -126,6 +126,7 @@ export interface MaintenanceReportOptions {
   from?: string | null;
   to?: string | null;
   assetId?: string | null;
+  wrLimit?: number;
 }
 
 export async function fetchMaintenanceReport(
@@ -143,10 +144,12 @@ export async function fetchMaintenanceReport(
   };
   if (options.assetId) wrFilter.assetId = options.assetId;
 
+  const wrLimit = Math.min(Math.max(options.wrLimit || 500, 50), 500);
+
   const wrList = await db.collection(MAINTENANCE_REQUESTS_COLLECTION)
     .find(wrFilter)
     .sort({ createdAt: -1 })
-    .limit(2000)
+    .limit(wrLimit)
     .toArray() as MaintenanceRequestDoc[];
 
   const wrIds = wrList.map((w) => String(w.id)).filter(Boolean);
@@ -350,6 +353,8 @@ export async function fetchMaintenanceReport(
 
   return {
     period: { from: from.toISOString(), to: to.toISOString() },
+    truncated: wrList.length >= wrLimit,
+    wrLimit,
     summary: {
       totalWr: wrList.length,
       closedWr: closedCount,

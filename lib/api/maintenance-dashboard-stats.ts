@@ -52,11 +52,16 @@ export async function fetchMaintenanceDashboardStats(
   const tenantWr = withTenantFilter(scopeAuth, {});
   const tenantAssets = withTenantFilter(scopeAuth, { status: 'IN_REPAIR' });
 
-  const maintenancePos = await db.collection('customer_purchase_orders')
-    .find(withTenantFilter(scopeAuth, { maintenanceRequestId: { $exists: true, $ne: null } }))
-    .project({ noPO: 1 })
-    .toArray();
-  const maintenancePoNos = maintenancePos.map((p) => p.noPO).filter(Boolean) as string[];
+  const maintenancePoNos = await db.collection('customer_purchase_orders').distinct('noPO', {
+    ...withTenantFilter(scopeAuth, {
+      maintenanceRequestId: { $exists: true, $ne: null },
+      noPO: { $exists: true, $nin: [null, ''] },
+      $or: [
+        { tanggal: { $gte: sixMonthsAgo } },
+        { createdAt: { $gte: sixMonthsAgo } },
+      ],
+    }),
+  }) as string[];
 
   const [
     pendingApproval,
@@ -71,6 +76,7 @@ export async function fetchMaintenanceDashboardStats(
     releaseCostAgg,
     serviceCostAgg,
     grnCostAgg,
+    pmStats,
   ] = await Promise.all([
     db.collection(MAINTENANCE_REQUESTS_COLLECTION).countDocuments(
       withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' }),
@@ -187,6 +193,7 @@ export async function fetchMaintenanceDashboardStats(
         },
       ]).toArray() as Promise<MonthAggRow[]>
       : Promise.resolve([] as MonthAggRow[]),
+    countScheduleDueStats(db, withTenantFilter(scopeAuth, {}), now),
   ]);
 
   const releaseMonthTotal = releaseCostMonth.reduce(
@@ -208,8 +215,6 @@ export async function fetchMaintenanceDashboardStats(
     monthTotals.set(row._id, (monthTotals.get(row._id) || 0) + (row.total || 0));
   }
   const costByMonth = buildCostMonths(now, [...monthTotals.entries()].map(([_id, total]) => ({ _id, total })));
-
-  const pmStats = await countScheduleDueStats(db, withTenantFilter(scopeAuth, {}), now);
 
   const WR_COLORS: Record<string, string> = {
     DRAFT: '#94a3b8',
