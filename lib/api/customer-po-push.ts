@@ -14,30 +14,52 @@ import {
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import type { JsonObject } from '@/types/json';
 
+const VENDOR_PUSH_RETRIES = 2;
+
 export type PushPoToVendorResult =
   | { error: string; partialFailures?: JsonObject[] }
   | { submissions: JsonObject[]; partialFailures?: JsonObject[] };
 
 export type PushPoToVendorOptions = {
-  /** Timeout per vendor (ms). Default 15s — bg job memakai lebih panjang. */
+  /** Timeout per vendor per attempt (ms). */
   timeoutMs?: number;
 };
 
-export async function pushPoGroupToVendor(
+function sleep(ms: number) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+function isTimeoutError(msg: string) {
+  return /timeout|aborted|tidak merespons/i.test(msg);
+}
+
+/** Wake cold Vercel lambda sebelum push berat. */
+export async function warmUpSalesApp(salesUrl: string): Promise<void> {
+  try {
+    await fetch(`${salesUrl.replace(/\/$/, '')}/api/`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch {
+    /* ignore — warm-up best effort */
+  }
+}
+
+async function pushPoGroupOnce(
   db: Db,
-  { tenantId, config, po, vendorTenantId, items, timeoutMs = 15_000 }: {
+  { tenantId, config, po, vendorTenantId, items, timeoutMs }: {
     tenantId: string;
     config: { salesAppUrl: string };
     po: Record<string, unknown>;
     vendorTenantId: string;
     items: JsonObject[];
-    timeoutMs?: number;
+    timeoutMs: number;
   },
 ) {
-  const salesUrl = config.salesAppUrl;
+  const salesUrl = config.salesAppUrl.replace(/\/$/, '');
   const apiKey = await getSalesApiKeyForVendor(db, tenantId, vendorTenantId);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['X-Api-Key'] = apiKey;
+  headers['Idempotency-Key'] = `cpo-push:${String(po.id)}:${vendorTenantId}`;
 
   let res: Response;
   try {
@@ -74,13 +96,33 @@ export async function pushPoGroupToVendor(
   return { vendorSo: data, vendorTenantId };
 }
 
+export async function pushPoGroupToVendor(
+  db: Db,
+  args: {
+    tenantId: string;
+    config: { salesAppUrl: string };
+    po: Record<string, unknown>;
+    vendorTenantId: string;
+    items: JsonObject[];
+    timeoutMs?: number;
+  },
+) {
+  const timeoutMs = args.timeoutMs ?? 45_000;
+  let last = await pushPoGroupOnce(db, { ...args, timeoutMs });
+  for (let attempt = 1; attempt < VENDOR_PUSH_RETRIES && last.error && isTimeoutError(last.error); attempt += 1) {
+    await sleep(1_500 * attempt);
+    last = await pushPoGroupOnce(db, { ...args, timeoutMs });
+  }
+  return last;
+}
+
 export async function pushPoToVendor(
   db: Db,
   po: Record<string, unknown>,
   tenantId: string,
   opts: PushPoToVendorOptions = {},
 ): Promise<PushPoToVendorResult> {
-  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const timeoutMs = opts.timeoutMs ?? 45_000;
   const config = await getIntegrationConfig(db, tenantId);
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) {
@@ -95,21 +137,32 @@ export async function pushPoToVendor(
 
   const submissions: JsonObject[] = [];
   const partialFailures: JsonObject[] = [];
+  const existingSubs = ((po.vendorSubmissions || []) as JsonObject[]);
+  const syncedByVendor = new Map(
+    existingSubs
+      .filter((s) => s.status === 'SYNCED')
+      .map((s) => [String(s.vendorTenantId), s]),
+  );
   try {
     const groups = grouped.groups || [];
-    const pushedRows = await Promise.all(
-      groups.map(({ vendorTenantId, items }) => pushPoGroupToVendor(db, {
+    const needsPush = groups.some((g) => !syncedByVendor.has(g.vendorTenantId));
+    if (needsPush) await warmUpSalesApp(config.salesAppUrl);
+
+    for (const { vendorTenantId, items } of groups) {
+      const alreadySynced = syncedByVendor.get(vendorTenantId);
+      if (alreadySynced) {
+        submissions.push(alreadySynced);
+        continue;
+      }
+
+      const pushed = await pushPoGroupToVendor(db, {
         tenantId,
         config,
         po,
         vendorTenantId,
         items,
         timeoutMs,
-      })),
-    );
-    for (let i = 0; i < groups.length; i += 1) {
-      const { vendorTenantId, items } = groups[i];
-      const pushed = pushedRows[i];
+      });
       if (pushed.error) {
         partialFailures.push({
           vendorTenantId,

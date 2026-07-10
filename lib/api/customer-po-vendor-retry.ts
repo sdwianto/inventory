@@ -3,7 +3,7 @@
 import type { Db } from 'mongodb';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
-import { pushPoGroupToVendor, finalizePoSubmission } from '@/lib/api/customer-po-push';
+import { pushPoGroupToVendor, finalizePoSubmission, warmUpSalesApp } from '@/lib/api/customer-po-push';
 import type { JsonObject } from '@/types/json';
 
 export async function retryVendorSyncForSingleVendor(
@@ -22,6 +22,7 @@ export async function retryVendorSyncForSingleVendor(
   if (!group) return { error: `Tidak ada baris untuk vendor ${vendorTenantId}`, status: 400 };
 
   const config = await getIntegrationConfig(db, tenantId, vendorTenantId);
+  await warmUpSalesApp(config.salesAppUrl);
   const pushed = await pushPoGroupToVendor(db, {
     tenantId,
     config,
