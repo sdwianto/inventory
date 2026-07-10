@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
-import { invalidateOperationalCaches } from '@/lib/hooks/invalidate-operational';
+import { invalidateGrnCaches } from '@/lib/hooks/invalidate-operational';
 
 export const GRN_QUERY_KEY = ['goods-receipts'];
 
@@ -24,6 +24,6 @@ export function useGrnInvoiceStatus(grnId: string | null | undefined, enabled = 
 export function useInvalidateGrn() {
   const qc = useQueryClient();
   return () => {
-    invalidateOperationalCaches(qc, { broadcast: 'grn' });
+    invalidateGrnCaches(qc, { broadcast: 'grn' });
   };
 }

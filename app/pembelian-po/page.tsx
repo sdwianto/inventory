@@ -49,9 +49,9 @@ function CustomerPoPageContent() {
     catatan,
     setCatatan,
     saving,
-    synced,
     vendorTierMap,
     defaultTier,
+    onProductPick,
     openCreate,
     openEdit,
     canEditPo,
@@ -212,9 +212,9 @@ function CustomerPoPageContent() {
         catatan={catatan}
         onCatatanChange={setCatatan}
         saving={saving}
-        synced={synced}
         vendorTierMap={vendorTierMap}
         defaultTier={defaultTier}
+        onProductPick={onProductPick}
         onAddLine={addLine}
         onRemoveLine={removeLine}
         onSelectProduct={selectProduct}

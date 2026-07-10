@@ -27,8 +27,8 @@ import {
   isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
 import { canEditCustomerPo } from '@/lib/pembelian-po/permissions';
-import { useCustomerPoList, useCustomerPoProducts } from '@/hooks/useCustomerPoData';
-import { fetchDefaultProductUom, primeUomsForStokIds } from '@/lib/hooks/use-product-uoms';
+import { useCustomerPoList } from '@/hooks/useCustomerPoData';
+import { fetchDefaultProductUom, primeProductUomsCacheFromProducts } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { patchPoEstimasiLineOnUomChange } from '@/lib/uom/line-patch';
 import type { ProductUom } from '@/lib/uom/types';
@@ -37,7 +37,7 @@ import { usePoMutations } from '@/lib/hooks/use-po-mutations';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
-import { invalidateOperationalCaches } from '@/lib/hooks/invalidate-operational';
+import { invalidatePoCaches } from '@/lib/hooks/invalidate-operational';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { PoMutationAmbiguousError } from '@/lib/pembelian-po/mutation-errors';
 
@@ -47,7 +47,7 @@ export function useCustomerPoPage() {
   const { list, reload: reloadList, setList, hasMore, loadMore, loadingMore } = useCustomerPoList();
   const poMutations = usePoMutations(setList, async () => { await reloadList(); });
   const syncPendingMutation = useApiMutation([queryKeys.customerPurchaseOrders.all]);
-  const { products, reloadProducts } = useCustomerPoProducts();
+  const [productCache, setProductCache] = useState<Record<string, JsonObject>>({});
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -72,6 +72,36 @@ export function useCustomerPoPage() {
 
   usePrimeLineItemUoms(createOpen || Boolean(editingPo), lines.map((l) => str(l.localStokId)));
 
+  const rememberProduct = useCallback((product: JsonObject) => {
+    const id = str(product.id);
+    if (!id) return;
+    setProductCache((prev) => (prev[id] ? prev : { ...prev, [id]: product }));
+    primeProductUomsCacheFromProducts([product as { id?: string; uoms?: ProductUom[] }]);
+  }, []);
+
+  const loadProductsByIds = useCallback(async (ids: string[]) => {
+    const missing = [...new Set(ids.filter(Boolean))].filter((id) => !productCache[id]);
+    if (!missing.length) return;
+    try {
+      const data = await fetchJson<JsonObject[] | { items?: JsonObject[] }>(
+        `/api/products?ids=${missing.join(',')}&includeUom=1&withWarehouseStock=1`,
+      );
+      const rows = Array.isArray(data) ? data : (data?.items || []);
+      if (!rows.length) return;
+      setProductCache((prev) => {
+        const next = { ...prev };
+        for (const p of rows) {
+          const id = str(p.id);
+          if (id) next[id] = p;
+        }
+        return next;
+      });
+      primeProductUomsCacheFromProducts(rows as Array<{ id?: string; uoms?: ProductUom[] }>);
+    } catch {
+      // Produk opsional untuk tampilan form — gagal muat tidak memblokir edit.
+    }
+  }, [productCache]);
+
   const loadVendorTiers = useCallback(() => {
     fetchJson('/api/integrations/vendor-tiers')
       .then((data) => {
@@ -90,15 +120,13 @@ export function useCustomerPoPage() {
 
   useEffect(() => {
     void reloadList();
-    void reloadProducts();
     loadVendorTiers();
     const onCatalogSynced = () => {
-      void reloadProducts();
       loadVendorTiers();
     };
     window.addEventListener('vendor-catalog-synced', onCatalogSynced);
     return () => window.removeEventListener('vendor-catalog-synced', onCatalogSynced);
-  }, [reloadList, reloadProducts, loadVendorTiers]);
+  }, [reloadList, loadVendorTiers]);
 
   useEffect(() => {
     const wrId = searchParams.get('wrId');
@@ -125,17 +153,15 @@ export function useCustomerPoPage() {
   const canDirectSubmit = (PO_CAN_DIRECT_SUBMIT as readonly string[]).includes(String(user?.role || ''));
   const canApprove = (PO_CAN_APPROVE as readonly string[]).includes(String(user?.role || ''));
 
-  const synced = products.filter((p) => p.syncSource === 'sales.app');
-
   const vendorNameById = useMemo(() => {
     const map = { ...vendorNameMap };
-    for (const p of products) {
+    for (const p of Object.values(productCache)) {
       const id = str(p.vendorTenantId);
       const name = str(p.vendorTenantName);
       if (id && name && name !== id && !map[id]) map[id] = name;
     }
     return map;
-  }, [vendorNameMap, products]);
+  }, [vendorNameMap, productCache]);
 
   const pendingVendorSyncCount = useMemo(
     () => (Array.isArray(list) ? list : []).filter(
@@ -158,7 +184,7 @@ export function useCustomerPoPage() {
         const syncedRows = asArray(result.synced) as JsonObject[];
         if (syncedRows.length > 0) {
           void reloadList();
-          invalidateOperationalCaches(queryClient);
+          invalidatePoCaches(queryClient);
           const labels = syncedRows.map((s) => {
             const noPo = str(s.noPO);
             const noSo = str(s.vendorNoSO);
@@ -188,14 +214,14 @@ export function useCustomerPoPage() {
     let startedAsyncJob = false;
     try {
       const data = await syncPendingMutation.mutateAsync({
-        url: '/api/customer-purchase-orders/sync-pending?inline=1',
+        url: '/api/customer-purchase-orders/sync-pending',
         offlineLabel: 'Sync PO pending ke vendor',
       }) as JsonObject;
       if (data.async === false) {
         const syncedRows = asArray(data.synced) as JsonObject[];
         if (syncedRows.length > 0) {
           await reloadList();
-          invalidateOperationalCaches(queryClient);
+          invalidatePoCaches(queryClient);
           const labels = syncedRows.map((s) => str(s.noPO)).filter(Boolean).join(', ');
           toast.success(`${syncedRows.length} PO terkirim ke vendor`, { description: labels });
         } else if (data.error) {
@@ -215,7 +241,7 @@ export function useCustomerPoPage() {
       const syncedRows = asArray(data.synced) as JsonObject[];
       if (syncedRows.length > 0) {
         await reloadList();
-        invalidateOperationalCaches(queryClient);
+        invalidatePoCaches(queryClient);
         const labels = syncedRows.map((s) => str(s.noPO)).filter(Boolean).join(', ');
         toast.success(`${syncedRows.length} PO terkirim otomatis ke vendor`, {
           description: labels,
@@ -263,7 +289,7 @@ export function useCustomerPoPage() {
     const itemIds = asArray(po.items)
       .map((it) => str(asObject(it).localStokId || asObject(it).stokId))
       .filter(Boolean);
-    void primeUomsForStokIds(itemIds);
+    void loadProductsByIds(itemIds);
   };
 
   const canEditPo = (po: JsonObject) => {
@@ -277,7 +303,7 @@ export function useCustomerPoPage() {
   const buildItemsPayload = () => {
     const map = new Map<string, JsonObject>();
     for (const l of lines) {
-      const p = products.find((x) => x.id === l.localStokId);
+      const p = productCache[str(l.localStokId)];
       if (!p || !l.qty) continue;
       if (!p.vendorStokId && p.syncSource !== 'sales.app') continue;
       const qty = num(l.qty);
@@ -318,7 +344,13 @@ export function useCustomerPoPage() {
 
   const addLine = () => setLines([...lines, emptyPoLine()]);
 
-  const selectProduct = async (i: number, id: string) => {
+  const pickProduct = useCallback((index: number, product: JsonObject) => {
+    rememberProduct(product);
+    void selectProduct(index, str(product.id), product);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- selectProduct stabil via closure baris form
+  }, [rememberProduct, lines, productCache, vendorTierMap, defaultTier]);
+
+  async function selectProduct(i: number, id: string, picked?: JsonObject | null) {
     if (!id) {
       updateLine(i, { localStokId: '', uomId: '', satuan: '', factorToBase: undefined, estimasiHarga: '', estimasiManual: false });
       return;
@@ -329,7 +361,15 @@ export function useCustomerPoPage() {
     const existingIdx = lines.findIndex(
       (l, idx) => idx !== i && l.localStokId === id && str(l.uomId) === uomId,
     );
-    const p = synced.find((x) => x.id === id);
+    let p: JsonObject | null | undefined = picked || productCache[id];
+    if (!p) {
+      try {
+        p = await fetchJson<JsonObject>(`/api/products/${id}`);
+        rememberProduct(p);
+      } catch {
+        p = null;
+      }
+    }
     if (existingIdx >= 0) {
       const addQty = num(lines[i].qty, 1);
       const mergedQty = num(lines[existingIdx].qty) + addQty;
@@ -348,7 +388,7 @@ export function useCustomerPoPage() {
       estimasiHarga: poEstimasiFromProduct(p, vendorTierMap as Record<string, string>, defaultTier) || '',
       estimasiManual: false,
     });
-  };
+  }
 
   const updateFormItemUom = (i: number, uom: ProductUom) => {
     const line = lines[i];
@@ -371,9 +411,9 @@ export function useCustomerPoPage() {
   const updateLine = (i: number, patch: JsonObject) => setLines(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
 
   const lineDetails = useMemo(() => lines.map((l): JsonObject & { product: JsonObject | null } => {
-    const p = synced.find((x) => x.id === l.localStokId);
+    const p = productCache[str(l.localStokId)];
     return { ...l, product: p || null };
-  }), [lines, synced]);
+  }), [lines, productCache]);
 
   const lineSummary = useMemo(() => {
     const filled = lineDetails.filter((l) => l.product && l.qty);
@@ -543,7 +583,7 @@ export function useCustomerPoPage() {
       if (data.async || (data.vendorSyncPending && !data.vendorSynced)) {
         toast.warning(data.vendorSyncError ? String(data.vendorSyncError) : 'Kirim vendor belum selesai');
       } else {
-        invalidateOperationalCaches(queryClient);
+        invalidatePoCaches(queryClient);
         toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
       }
     } catch (e) {
@@ -683,9 +723,9 @@ export function useCustomerPoPage() {
     catatan,
     setCatatan,
     saving,
-    synced,
     vendorTierMap,
     defaultTier,
+    onProductPick: pickProduct,
     openCreate,
     openEdit,
     canEditPo,

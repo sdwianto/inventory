@@ -34,9 +34,9 @@ export type PoFormDialogProps = {
   catatan: string;
   onCatatanChange: (value: string) => void;
   saving: boolean;
-  synced: JsonObject[];
   vendorTierMap: JsonObject;
   defaultTier: string;
+  onProductPick?: (index: number, product: JsonObject) => void;
   onAddLine: () => void;
   onRemoveLine: (index: number) => void;
   onSelectProduct: (index: number, id: string) => void;
@@ -58,9 +58,9 @@ export default function PoFormDialog({
   catatan,
   onCatatanChange,
   saving,
-  synced,
   vendorTierMap,
   defaultTier,
+  onProductPick,
   onAddLine,
   onRemoveLine,
   onSelectProduct,
@@ -132,9 +132,11 @@ export default function PoFormDialog({
                       <div className="w-full min-w-0 sm:col-span-1">
                         <span className="text-xs text-slate-400 sm:hidden mb-1 block">Baris {i + 1}</span>
                         <ProductSearchSelect
-                          products={synced}
+                          syncSource="sales.app"
+                          selectedProduct={l.product}
                           value={str(l.localStokId)}
                           onChange={(id) => onSelectProduct(i, id)}
+                          onProductPick={onProductPick ? (p) => onProductPick(i, p) : undefined}
                           placeholder="Cari / pilih produk…"
                         />
                         {l.product && (

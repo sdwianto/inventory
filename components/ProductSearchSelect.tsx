@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { vendorDisplayName } from '@/lib/vendor-display';
 import ProductStockReminder from '@/components/ProductStockReminder';
+import { fetchJson } from '@/lib/fetch-json';
+import { primeProductUomsCacheFromProducts } from '@/lib/hooks/use-product-uoms';
+import type { ProductUom } from '@/lib/uom/types';
 
 import type { JsonObject } from '@/types/json';
 import { str } from '@/types/json';
@@ -30,23 +33,76 @@ function productSearchText(p: JsonObject) {
 }
 
 export default function ProductSearchSelect({
-  products = [],
   value,
   onChange,
+  onProductPick,
+  selectedProduct,
+  syncSource,
+  withWarehouseStock = true,
   placeholder = 'Cari / pilih produk…',
   className,
 }: {
-  products?: JsonObject[];
   value?: string;
   onChange: (id: string) => void;
+  onProductPick?: (product: JsonObject) => void;
+  selectedProduct?: JsonObject | null;
+  syncSource?: string;
+  withWarehouseStock?: boolean;
   placeholder?: string;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const selected = useMemo(
-    () => products.find((p) => str(p.id) === value) || null,
-    [products, value],
-  );
+  const [q, setQ] = useState('');
+  const [items, setItems] = useState<JsonObject[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [resolved, setResolved] = useState<JsonObject | null>(selectedProduct || null);
+
+  useEffect(() => {
+    if (selectedProduct) setResolved(selectedProduct);
+  }, [selectedProduct]);
+
+  useEffect(() => {
+    if (!value) {
+      setResolved(null);
+      return;
+    }
+    if (resolved && str(resolved.id) === value) return;
+    let cancelled = false;
+    fetchJson<JsonObject>(`/api/products/${value}`)
+      .then((p) => {
+        if (cancelled || !p?.id) return;
+        setResolved(p);
+        primeProductUomsCacheFromProducts([p as { id?: string; uoms?: ProductUom[] }]);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [value, resolved]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const t = setTimeout(() => {
+      setLoading(true);
+      let url = `/api/products?q=${encodeURIComponent(q)}&limit=50&includeUom=1`;
+      if (withWarehouseStock) url += '&withWarehouseStock=1';
+      if (syncSource) url += `&syncSource=${encodeURIComponent(syncSource)}`;
+      fetchJson<JsonObject[] | { items?: JsonObject[] }>(url)
+        .then((data) => {
+          const rows = Array.isArray(data) ? data : (data?.items || []);
+          setItems(rows);
+          if (rows.length) {
+            primeProductUomsCacheFromProducts(rows as Array<{ id?: string; uoms?: ProductUom[] }>);
+          }
+        })
+        .catch(() => setItems([]))
+        .finally(() => setLoading(false));
+    }, q ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [open, q, syncSource, withWarehouseStock]);
+
+  const selected = useMemo(() => {
+    if (resolved && str(resolved.id) === value) return resolved;
+    return items.find((p) => str(p.id) === value) || null;
+  }, [resolved, items, value]);
 
   return (
     <Popover open={open} onOpenChange={setOpen} modal>
@@ -75,16 +131,25 @@ export default function ProductSearchSelect({
             return itemValue.includes(search.toLowerCase()) ? 1 : 0;
           }}
         >
-          <CommandInput placeholder="Ketik kode, nama, grup, vendor…" />
+          <CommandInput
+            placeholder="Ketik kode, nama, grup, vendor…"
+            value={q}
+            onValueChange={setQ}
+          />
           <CommandList className="max-h-56">
-            <CommandEmpty>Produk tidak ditemukan.</CommandEmpty>
+            {loading && <div className="p-3 text-sm text-slate-500">Memuat…</div>}
+            {!loading && items.length === 0 && (
+              <CommandEmpty>{q ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk…'}</CommandEmpty>
+            )}
             <CommandGroup>
-              {products.map((p) => (
+              {items.map((p) => (
                 <CommandItem
                   key={str(p.id)}
                   value={productSearchText(p)}
                   onSelect={() => {
                     const pid = str(p.id);
+                    setResolved(p);
+                    onProductPick?.(p);
                     onChange(pid === value ? '' : pid);
                     setOpen(false);
                   }}

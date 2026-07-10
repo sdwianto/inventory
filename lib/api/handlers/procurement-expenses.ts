@@ -6,7 +6,7 @@ import { ok } from '@/lib/api/db';
 import { requireRole } from '@/lib/api/require-auth';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
-import { resolveHutangVariance } from '@/lib/api/hutang-variance-enrich';
+import { readHutangVarianceFromDoc } from '@/lib/api/hutang-variance-enrich';
 import type { HutangDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
@@ -60,13 +60,6 @@ export async function handleProcurementExpenses({
   let filter = withTenantFilter(scopeAuth, { referenceType: 'VENDOR_INVOICE' });
   const list = await db.collection('hutang').find(filter).sort({ approvedAt: -1, tanggal: -1 }).limit(2000).toArray();
 
-  const poNos = [...new Set(list.map((h) => h.noPO).filter(Boolean))];
-  const poTenant = tenantId;
-  const poList = poNos.length
-    ? await db.collection('customer_purchase_orders').find({ tenantId: poTenant, noPO: { $in: poNos } }).toArray()
-    : [];
-  const poByNo = new Map(poList.map((p) => [p.noPO, p]));
-
   const approvedStatuses = new Set(['APPROVED', 'PAID_EXTERNAL', 'OUTSTANDING', 'PARTIAL', 'LUNAS']);
 
   const inRange = (h: HutangDoc) => {
@@ -93,8 +86,7 @@ export async function handleProcurementExpenses({
   const byMonthMap = new Map();
   const rows: JsonObject[] = [];
   for (const h of approvedRows) {
-    const po = h.noPO ? poByNo.get(h.noPO) as JsonObject | undefined : null;
-    const variance = await resolveHutangVariance(db, h as HutangDoc, po || null);
+    const variance = readHutangVarianceFromDoc(h as HutangDoc);
     const inv = variance.invoiceTotal;
     const poEst = variance.poEstimasiTotal;
     const so = variance.soTotal;

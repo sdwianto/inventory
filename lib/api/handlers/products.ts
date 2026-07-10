@@ -145,10 +145,12 @@ export async function handleProducts({
 
     const q = (url.searchParams.get('q') || '').trim();
     const grup = url.searchParams.get('grup') || '';
+    const syncSource = (url.searchParams.get('syncSource') || '').trim();
     const idsParam = (url.searchParams.get('ids') || '').trim();
     const skip = Math.max(parseInt(url.searchParams.get('skip') || '0', 10) || 0, 0);
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     if (grup) filter.grup = grup;
+    if (syncSource) filter.syncSource = syncSource;
     if (idsParam) {
       const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);
       if (ids.length) filter.id = { $in: ids };

@@ -25,17 +25,27 @@ function patchGrnInCache(
   };
 }
 
+function grnPatchFromResponse(data: JsonObject): Partial<JsonObject> {
+  const invoiceSync = data.invoiceSync as JsonObject | undefined;
+  return {
+    status: data.status || 'POSTED',
+    invoiceSyncStatus: data.invoiceSyncStatus || invoiceSync?.status,
+    invoiceSyncError: data.invoiceSyncError,
+    noInvoice: data.noInvoice,
+    lokasi: data.lokasi,
+    receivedTotal: data.receivedTotal,
+    postedAt: data.postedAt,
+    hutangId: data.hutangId,
+    items: data.items,
+  };
+}
+
 export function useGrnMutations(
   listKey: QueryKey,
   reload: () => Promise<void>,
   invalidateGrn: () => void,
 ) {
   const qc = useQueryClient();
-
-  const refreshAfterMutation = useCallback(async () => {
-    invalidateGrn();
-    await reload();
-  }, [invalidateGrn, reload]);
 
   const postGrn = useCallback(async (
     grnId: string,
@@ -56,14 +66,15 @@ export function useGrnMutations(
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal');
-      await refreshAfterMutation();
+      qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, grnId, grnPatchFromResponse(data)));
+      invalidateGrn();
       return data;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
       if (previous) qc.setQueryData(listKey, previous);
       throw e;
     }
-  }, [qc, listKey, refreshAfterMutation]);
+  }, [qc, listKey, invalidateGrn]);
 
   const replayInvoice = useCallback(async (id: string) => {
     const previous = qc.getQueryData<GrnPages>(listKey);
@@ -78,14 +89,15 @@ export function useGrnMutations(
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal buat faktur');
-      await refreshAfterMutation();
+      qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, id, grnPatchFromResponse(data)));
+      invalidateGrn();
       return data;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
       if (previous) qc.setQueryData(listKey, previous);
       throw e;
     }
-  }, [qc, listKey, refreshAfterMutation]);
+  }, [qc, listKey, invalidateGrn]);
 
   const syncFromSales = useCallback(async () => {
     const res = await fetchOrQueue('/api/goods-receipts/sync-shipped', {
@@ -94,9 +106,10 @@ export function useGrnMutations(
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Gagal sync');
-    await refreshAfterMutation();
+    invalidateGrn();
+    await reload();
     return { res, data };
-  }, [refreshAfterMutation]);
+  }, [invalidateGrn, reload]);
 
   return { postGrn, replayInvoice, syncFromSales };
 }

@@ -130,7 +130,6 @@ export default function PenerimaanPage() {
     }
     setPollInvoiceGrnId(null);
     invalidateGrn();
-    reload();
     if (status === 'DONE') invalidateHutangBadges();
   });
 

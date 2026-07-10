@@ -217,6 +217,22 @@ export async function grnReceivedTotalForHutang(db: Db, hutang: HutangDoc) {
   return grns.reduce((sum, grn) => sum + (parseInt(String(grn.receivedTotal || 0), 10) || 0), 0);
 }
 
+/** Baca variance dari field tersimpan di dokumen hutang — tanpa query tambahan. */
+export function readHutangVarianceFromDoc(hutang: HutangDoc) {
+  const invoiceTotal = parseInt(String(hutang.total || 0), 10);
+  const poEstimasiTotal = parseInt(String(hutang.poEstimasiTotal || 0), 10);
+  const soTotal = parseInt(String(hutang.soTotal || 0), 10);
+  const grnReceivedTotal = parseInt(String(hutang.grnReceivedTotal || 0), 10);
+  const nums = buildVarianceNumbers({ poEstimasiTotal, soTotal, invoiceTotal });
+  return {
+    ...nums,
+    grnReceivedTotal,
+    customerPoId: hutang.customerPoId || null,
+    soSubTotal: parseInt(String(hutang.soSubTotal || 0), 10) || soTotal,
+    varianceGrnToInvoice: invoiceTotal - grnReceivedTotal,
+  };
+}
+
 export function buildVarianceNumbers({ poEstimasiTotal = 0, soTotal = 0, invoiceTotal = 0 }) {
   const po = parseInt(String(poEstimasiTotal || 0), 10);
   const so = parseInt(String(soTotal || 0), 10);
@@ -367,6 +383,7 @@ export async function backfillHutangVarianceFields(db: Db, tenantId: string | nu
 
   let updated = 0;
   const now = new Date();
+  const bulkOps: { updateOne: { filter: { id: string }; update: { $set: Record<string, unknown> } } }[] = [];
 
   for (const hutang of rows) {
     const po = hutang.noPO ? poByNo.get(String(hutang.noPO)) : null;
@@ -380,22 +397,30 @@ export async function backfillHutangVarianceFields(db: Db, tenantId: string | nu
 
     if (!needsUpdate) continue;
 
-    await db.collection('hutang').updateOne(
-      { id: hutang.id },
-      {
-        $set: {
-          poEstimasiTotal: variance.poEstimasiTotal,
-          soTotal: variance.soTotal,
-          soSubTotal: variance.soSubTotal,
-          grnReceivedTotal: variance.grnReceivedTotal,
-          variancePoToSo: variance.variancePoToSo,
-          varianceSoToInvoice: variance.varianceSoToInvoice,
-          customerPoId: variance.customerPoId,
-          updatedAt: now,
+    bulkOps.push({
+      updateOne: {
+        filter: { id: hutang.id },
+        update: {
+          $set: {
+            poEstimasiTotal: variance.poEstimasiTotal,
+            soTotal: variance.soTotal,
+            soSubTotal: variance.soSubTotal,
+            grnReceivedTotal: variance.grnReceivedTotal,
+            variancePoToSo: variance.variancePoToSo,
+            varianceSoToInvoice: variance.varianceSoToInvoice,
+            customerPoId: variance.customerPoId,
+            updatedAt: now,
+          },
         },
       },
-    );
-    updated += 1;
+    });
+  }
+
+  const BATCH = 200;
+  for (let i = 0; i < bulkOps.length; i += BATCH) {
+    const chunk = bulkOps.slice(i, i + BATCH);
+    const result = await db.collection('hutang').bulkWrite(chunk);
+    updated += result.modifiedCount || 0;
   }
 
   return { updated, scanned: rows.length };
