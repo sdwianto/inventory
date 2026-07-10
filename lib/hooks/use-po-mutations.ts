@@ -4,6 +4,11 @@ import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
 import { fetchOrQueue, OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
+import {
+  isAmbiguousHttpStatus,
+  isAmbiguousNetworkError,
+  PoMutationAmbiguousError,
+} from '@/lib/pembelian-po/mutation-errors';
 
 function assertPersistedPoId(id: string) {
   if (isPendingOptimisticPo({ id })) {
@@ -23,6 +28,19 @@ function prependPoToList(list: JsonObject[], row: JsonObject): JsonObject[] {
   return [row, ...list];
 }
 
+async function parseJsonResponse(res: Response): Promise<{ data: JsonObject; ok: boolean }> {
+  let data: JsonObject = {};
+  try {
+    data = await res.json() as JsonObject;
+  } catch {
+    if (isAmbiguousHttpStatus(res.status)) {
+      throw new PoMutationAmbiguousError();
+    }
+    throw new Error(`Respons server tidak valid (HTTP ${res.status})`);
+  }
+  return { data, ok: res.ok };
+}
+
 export function usePoMutations(
   setList: Dispatch<SetStateAction<JsonObject[]>>,
   reload: () => Promise<void>,
@@ -31,7 +49,8 @@ export function usePoMutations(
     id: string,
     optimisticPatch: Record<string, unknown>,
     run: () => Promise<Response>,
-  ) => {
+    opts?: { keepOnAmbiguous?: boolean },
+  ): Promise<JsonObject> => {
     assertPersistedPoId(id);
     let snapshot: JsonObject[] = [];
     setList((prev) => {
@@ -41,12 +60,21 @@ export function usePoMutations(
 
     try {
       const res = await run();
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
+      const { data, ok } = await parseJsonResponse(res);
+      if (!ok && isAmbiguousHttpStatus(res.status)) {
+        await reload();
+        throw new PoMutationAmbiguousError(String(data.error || ''), id);
+      }
+      if (!ok) throw new Error(String(data.error || 'Gagal'));
       await reload();
-      return data;
+      return data as JsonObject;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
+      if (e instanceof PoMutationAmbiguousError) throw e;
+      if (opts?.keepOnAmbiguous && isAmbiguousNetworkError(e)) {
+        await reload();
+        throw new PoMutationAmbiguousError(undefined, id);
+      }
       setList(snapshot);
       throw e;
     }
@@ -71,6 +99,7 @@ export function usePoMutations(
         method: 'POST',
         offlineLabel: `Setujui PO ${id}`,
       }),
+      { keepOnAmbiguous: true },
     );
   }, [withOptimistic]);
 
@@ -90,22 +119,24 @@ export function usePoMutations(
   const submit = useCallback(async (id: string) => {
     return withOptimistic(
       id,
-      { status: 'APPROVED', vendorSyncPending: true },
+      { status: 'APPROVED', approvalStatus: 'APPROVED', vendorSyncPending: true },
       () => fetchOrQueue(`/api/customer-purchase-orders/${id}/submit`, {
         method: 'POST',
         offlineLabel: `Kirim PO ${id}`,
       }),
+      { keepOnAmbiguous: true },
     );
   }, [withOptimistic]);
 
   const syncVendor = useCallback(async (id: string) => {
     return withOptimistic(
       id,
-      { vendorSyncStatus: 'SYNCING' },
+      { vendorSyncPending: true, vendorSyncStatus: 'SYNCING' },
       () => fetchOrQueue(`/api/customer-purchase-orders/${id}/sync-vendor`, {
         method: 'POST',
         offlineLabel: `Sync vendor PO ${id}`,
       }),
+      { keepOnAmbiguous: true },
     );
   }, [withOptimistic]);
 
@@ -117,16 +148,17 @@ export function usePoMutations(
         method: 'POST',
         offlineLabel: `Sync vendor ${vendorTenantId} PO ${id}`,
       }),
+      { keepOnAmbiguous: true },
     );
   }, [withOptimistic]);
 
-  const syncSoLines = useCallback(async (id: string) => {
+  const syncSoLines = useCallback(async (id: string): Promise<JsonObject> => {
     const res = await fetchOrQueue(`/api/customer-purchase-orders/${id}/sync-so-lines`, {
       method: 'POST',
       offlineLabel: `Sync baris SO PO ${id}`,
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Gagal sync SO');
+    const { data, ok } = await parseJsonResponse(res);
+    if (!ok) throw new Error(String(data.error || 'Gagal sync SO'));
     await reload();
     return data;
   }, [reload]);
@@ -134,7 +166,7 @@ export function usePoMutations(
   const createPO = useCallback(async (
     payload: Record<string, unknown>,
     optimisticRow?: JsonObject,
-  ) => {
+  ): Promise<JsonObject> => {
     let snapshot: JsonObject[] = [];
     setList((prev) => {
       snapshot = prev;
@@ -148,8 +180,12 @@ export function usePoMutations(
         body: JSON.stringify(payload),
         offlineLabel: 'Buat PO customer',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal');
+      const { data, ok } = await parseJsonResponse(res);
+      if (!ok && isAmbiguousHttpStatus(res.status)) {
+        await reload();
+        throw new PoMutationAmbiguousError('PO mungkin sudah tersimpan — memuat daftar…');
+      }
+      if (!ok) throw new Error(String(data.error || 'Gagal'));
       if (optimisticRow) {
         setList((prev) => {
           const withoutTemp = prev.filter((row) => String(row.id) !== String(optimisticRow.id));
@@ -157,9 +193,14 @@ export function usePoMutations(
         });
       }
       await reload();
-      return data;
+      return data as JsonObject;
     } catch (e) {
       if (e instanceof OfflineQueuedError) throw e;
+      if (e instanceof PoMutationAmbiguousError) throw e;
+      if (isAmbiguousNetworkError(e)) {
+        await reload();
+        throw new PoMutationAmbiguousError('PO mungkin sudah tersimpan — memuat daftar…');
+      }
       setList(snapshot);
       throw e;
     }

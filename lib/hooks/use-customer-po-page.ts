@@ -39,6 +39,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { invalidateOperationalCaches } from '@/lib/hooks/invalidate-operational';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { PoMutationAmbiguousError } from '@/lib/pembelian-po/mutation-errors';
 
 export function useCustomerPoPage() {
   const queryClient = useQueryClient();
@@ -428,6 +429,9 @@ export function useCustomerPoPage() {
         setCreateOpen(false);
         setEditingPo(null);
         setWrMeta(null);
+      } else if (e instanceof PoMutationAmbiguousError) {
+        toast.info('Memuat daftar PO…', { description: e.message });
+        await reloadList();
       } else {
         toast.error(e instanceof Error ? e.message : String(e));
       }
@@ -497,19 +501,26 @@ export function useCustomerPoPage() {
     setSubmitting(id);
     try {
       const data = await poMutations.approve(id);
-      trackVendorSyncJob(data.vendorSyncJobId);
-      if (data.vendorSyncPending || data.async) {
+      trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
+      if (data.retried) {
+        toast.info('Mengirim ulang ke vendor di background…');
+      } else if (data.vendorSyncPending || data.async) {
         toast.success('PO disetujui', {
           description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
         });
-      } else if (data.vendorSubmissions?.length > 1) {
+      } else if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
         toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
       } else {
         toast.success(`Disetujui & dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal menyetujui — tidak dapat menghubungi server');
+      else if (e instanceof PoMutationAmbiguousError) {
+        toast.info('Memuat status PO…', { description: e.message });
+        await reloadList();
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Gagal menyetujui — tidak dapat menghubungi server');
+      }
     }
     setSubmitting('');
   };
@@ -518,10 +529,20 @@ export function useCustomerPoPage() {
     setSubmitting(id);
     try {
       const data = await poMutations.syncVendor(id);
-      toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
+      trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
+      if (data.async || data.vendorSyncPending) {
+        toast.info('Mengirim ulang ke vendor di background…');
+      } else {
+        toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
+      }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
+      else if (e instanceof PoMutationAmbiguousError) {
+        toast.info('Memuat status PO…', { description: e.message });
+        await reloadList();
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
+      }
     }
     setSubmitting('');
   };
@@ -549,7 +570,7 @@ export function useCustomerPoPage() {
       if (data.synced) {
         toast.success('Baris PO diselaraskan dengan SO sales.app');
       } else {
-        toast.info(data.message || 'Sudah selaras dengan SO sales.app');
+        toast.info(typeof data.message === 'string' ? data.message : 'Sudah selaras dengan SO sales.app');
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
@@ -574,19 +595,26 @@ export function useCustomerPoPage() {
     setSubmitting(id);
     try {
       const data = await poMutations.submit(id);
-      trackVendorSyncJob(data.vendorSyncJobId);
-      if (data.vendorSyncPending || data.async) {
+      trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
+      if (data.retried) {
+        toast.info(typeof data.message === 'string' ? data.message : 'Mengirim ulang ke vendor di background…');
+      } else if (data.vendorSyncPending || data.async) {
         toast.success('PO dikirim (disetujui)', {
           description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
         });
-      } else if (data.vendorSubmissions?.length > 1) {
+      } else if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
         toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
       } else {
         toast.success(`Dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
-      else toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
+      else if (e instanceof PoMutationAmbiguousError) {
+        toast.info('Memuat status PO…', { description: e.message });
+        await reloadList();
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Gagal kirim — tidak dapat menghubungi server');
+      }
     }
     setSubmitting('');
   };

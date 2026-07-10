@@ -19,7 +19,6 @@ import {
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
-import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
 import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
@@ -61,14 +60,23 @@ interface ActorInput {
   role?: string;
 }
 
-/** Snapshot pengguna untuk audit — selalu isi userName (lookup DB jika session kosong). */
+/** Status PO yang boleh pull nomor SO dari sales.app (HTTP). */
+const SO_BACKFILL_STATUSES = new Set([
+  'SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED',
+  'PARTIAL_SHIPPED', 'SHIPPED', 'PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED',
+]);
+
+/** Snapshot pengguna untuk audit — lookup DB hanya jika nama kosong di session. */
 async function actorSnapshot(db: Db, auth: ActorInput | null | undefined) {
   let userName = String(auth?.name || auth?.email || '').trim();
   let role = auth?.role || '';
-  if (auth?.userId) {
-    const u = await db.collection('users').findOne({ id: auth.userId });
+  if (auth?.userId && !userName) {
+    const u = await db.collection('users').findOne(
+      { id: auth.userId },
+      { projection: { name: 1, email: 1, role: 1 } },
+    );
     if (u) {
-      if (!userName) userName = String(u.name || u.email || '').trim();
+      userName = String(u.name || u.email || '').trim();
       if (!role) role = u.role || '';
     }
   }
@@ -158,15 +166,22 @@ async function enrichPoPeople(db: Db, list) {
   return enriched;
 }
 
-async function enrichOnePo(db: Db, po) {
+async function enrichOnePo(
+  db: Db,
+  po,
+  opts?: { skipSalesBackfill?: boolean },
+) {
   const [enriched] = await enrichPoPeople(db, [po]);
-  if (po && !poHasVendorSoNumbers(po as JsonObject)) {
-    await backfillPoVendorSoFromSales(db, po as JsonObject);
-    const fresh = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    if (fresh) {
-      const [withPeople] = await enrichPoPeople(db, [fresh]);
-      return withPeople;
-    }
+  if (opts?.skipSalesBackfill) return enriched;
+  if (!po || poHasVendorSoNumbers(po as JsonObject)) return enriched;
+  const st = String(po.status || '');
+  if (!SO_BACKFILL_STATUSES.has(st)) return enriched;
+
+  await backfillPoVendorSoFromSales(db, po as JsonObject);
+  const fresh = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+  if (fresh) {
+    const [withPeople] = await enrichPoPeople(db, [fresh]);
+    return withPeople;
   }
   return enriched;
 }
@@ -281,10 +296,6 @@ async function approvePoAndQueueVendorSync(db: Db, po, approverSnap) {
   };
 }
 
-async function retryVendorSync(db: Db, po, approverSnap) {
-  return retryVendorSyncForPo(db, po, approverSnap);
-}
-
 export async function handleCustomerPo({
   db, route, method, path, body, url, auth, request,
 }: HandlerContext): Promise<NextResponse | null> {
@@ -394,7 +405,7 @@ export async function handleCustomerPo({
       }
     }
 
-    return ok(await enrichOnePo(db, doc));
+    return ok(await enrichOnePo(db, doc, { skipSalesBackfill: true }));
   }
 
   // PUT /customer-purchase-orders/:id — edit PO (DRAFT / PENDING_APPROVAL)
@@ -434,7 +445,7 @@ export async function handleCustomerPo({
 
     await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    return ok(await enrichOnePo(db, updated));
+    return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
   // POST /customer-purchase-orders/:id/request-approval — Supervisor ajukan ke Admin
@@ -488,7 +499,7 @@ export async function handleCustomerPo({
       { $set: approvalPatch },
     );
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    return ok(await enrichOnePo(db, updated));
+    return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
   // POST /customer-purchase-orders/:id/approve — Admin setujui (sync vendor opsional / ditunda)
@@ -502,13 +513,27 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
+    if (po.status === 'APPROVED' && po.vendorSyncPending !== false) {
+      const tenantId = String(po.tenantId || 'default');
+      const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
+      const enriched = await enrichOnePo(db, po, { skipSalesBackfill: true });
+      return ok({
+        ...enriched,
+        vendorSynced: false,
+        vendorSyncPending: true,
+        vendorSyncJobId: jobId,
+        async: true,
+        retried: true,
+        reused,
+      }, 202);
+    }
     if (po.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
 
     const approverSnap = await actorSnapshot(db, auth);
     const result = await approvePoAndQueueVendorSync(db, po, approverSnap);
     if ('error' in result && result.error) return err(result.error, result.status || 400);
 
-    const enriched = await enrichOnePo(db, result.po);
+    const enriched = await enrichOnePo(db, result.po, { skipSalesBackfill: true });
     await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
     return ok({
       ...enriched,
@@ -552,7 +577,7 @@ export async function handleCustomerPo({
     });
   }
 
-  // POST /customer-purchase-orders/:id/sync-vendor — kirim ulang PO APPROVED ke sales.app
+  // POST /customer-purchase-orders/:id/sync-vendor — antrian kirim ulang ke sales.app
   if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && path.length === 3 && method === 'POST') {
     const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
@@ -561,13 +586,21 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (po.status !== 'APPROVED') return err('Hanya PO berstatus APPROVED yang menunggu kirim ke vendor', 400);
+    if (!['APPROVED', 'SUBMITTED'].includes(String(po.status))) {
+      return err('Hanya PO berstatus APPROVED/SUBMITTED yang bisa dikirim ulang ke vendor', 400);
+    }
 
-    const result = await retryVendorSync(db, po, await actorSnapshot(db, auth));
-    if ('error' in result && result.error) return err(result.error, result.status || 502);
-
-    const enriched = await enrichOnePo(db, result.po);
-    return ok({ ...enriched, vendorSynced: true });
+    const tenantId = String(po.tenantId || 'default');
+    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
+    const enriched = await enrichOnePo(db, po, { skipSalesBackfill: true });
+    return ok({
+      ...enriched,
+      vendorSyncPending: true,
+      vendorSyncJobId: jobId,
+      async: true,
+      reused,
+      message: 'Kirim ulang ke vendor berjalan di background',
+    }, 202);
   }
 
   // POST /customer-purchase-orders/:id/sync-vendor/:vendorTenantId — retry satu vendor gagal
@@ -656,7 +689,7 @@ export async function handleCustomerPo({
       },
     );
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    return ok(await enrichOnePo(db, updated));
+    return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
   // POST /customer-purchase-orders/:id/submit — Admin kirim langsung (tanpa approval)
@@ -668,6 +701,23 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
+
+    if (po.status === 'APPROVED' && po.vendorSyncPending !== false) {
+      const tenantId = String(po.tenantId || 'default');
+      const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
+      const enriched = await enrichOnePo(db, po, { skipSalesBackfill: true });
+      return ok({
+        ...enriched,
+        vendorSynced: false,
+        vendorSyncPending: true,
+        vendorSyncJobId: jobId,
+        async: true,
+        retried: true,
+        reused,
+        message: 'PO sudah disetujui — mengirim ulang ke vendor di background',
+      }, 202);
+    }
+
     if (po.status !== 'DRAFT') return err('PO sudah dikirim atau sedang menunggu approval', 400);
 
     const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
@@ -676,7 +726,7 @@ export async function handleCustomerPo({
     const result = await approvePoAndQueueVendorSync(db, po, await actorSnapshot(db, auth));
     if ('error' in result && result.error) return err(result.error, result.status || 400);
 
-    const enriched = await enrichOnePo(db, result.po);
+    const enriched = await enrichOnePo(db, result.po, { skipSalesBackfill: true });
     return ok({
       ...enriched,
       vendorSynced: result.vendorSynced,

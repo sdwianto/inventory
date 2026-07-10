@@ -1,14 +1,11 @@
-/** Enqueue + kick PO_VENDOR_SYNC tanpa menahan respons HTTP (Vercel `after`). */
+/** Enqueue PO_VENDOR_SYNC + picu worker terpisah (tanpa blok HTTP request). */
 
-import { after } from 'next/server';
 import type { Db } from 'mongodb';
-import { connectToMongo } from '@/lib/api/db';
 import {
   enqueueJob,
-  processJobById,
-  scheduleJobProcessing,
   JOB_TYPES,
 } from '@/lib/api/bg-jobs';
+import { kickBgWorker } from '@/lib/api/worker-kick';
 
 export async function enqueueAndKickPoVendorSync(
   db: Db,
@@ -25,15 +22,7 @@ export async function enqueueAndKickPoVendorSync(
     payload,
   });
 
-  after(async () => {
-    try {
-      const freshDb = await connectToMongo();
-      await processJobById(freshDb, jobId);
-    } catch (e) {
-      console.warn('[po-vendor-sync] background kick failed:', e instanceof Error ? e.message : e);
-    }
-  });
-  scheduleJobProcessing(db, { limit: 2 });
+  void kickBgWorker({ limit: 2 });
 
   return { jobId, reused };
 }
