@@ -1,5 +1,7 @@
 /** Picu worker bg_jobs di instance terpisah — jangan proses job berat di lambda request user. */
 
+const PROD_INVENTORY_DEFAULT = 'https://penarukan2.vercel.app';
+
 export async function kickBgWorker(opts?: { limit?: number; baseUrl?: string }): Promise<boolean> {
   const secret = String(process.env.WORKER_SECRET || process.env.CRON_SECRET || '').trim();
   if (!secret) return false;
@@ -11,9 +13,11 @@ export async function kickBgWorker(opts?: { limit?: number; baseUrl?: string }):
     || process.env.NEXT_PUBLIC_VERCEL_URL
     || '',
   ).trim();
-  if (!raw) return false;
-
-  const base = raw.startsWith('http') ? raw.replace(/\/$/, '') : `https://${raw.replace(/\/$/, '')}`;
+  const base = (() => {
+    if (!raw) return PROD_INVENTORY_DEFAULT;
+    if (/localhost|127\.0\.0\.1/i.test(raw)) return PROD_INVENTORY_DEFAULT;
+    return raw.startsWith('http') ? raw.replace(/\/$/, '') : `https://${raw.replace(/\/$/, '')}`;
+  })();
   const limit = Math.min(5, Math.max(1, opts?.limit ?? 2));
 
   try {

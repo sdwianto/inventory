@@ -37,6 +37,7 @@
         "verify:production:full": "node scripts/verify-production-env.mjs --mongo --login",
         "verify:api-key": "node scripts/verify-api-key-match.mjs",
         "repair:procurement": "node scripts/repair-procurement.mjs",
+        "replay:po-vendor": "node scripts/replay-po-vendor-sync.mjs",
         "repair:api-key": "node scripts/repair-integration-api-key.mjs",
         "p0:stabilize": "node scripts/p0-stabilize.mjs",
         "doctor:integration": "node scripts/integration-doctor.mjs",

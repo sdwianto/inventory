@@ -1,11 +1,35 @@
-/** Enqueue PO_VENDOR_SYNC + picu worker terpisah (tanpa blok HTTP request). */
+/** Enqueue PO_VENDOR_SYNC + picu worker (HTTP) dengan fallback proses job di after(). */
 
+import { after } from 'next/server';
 import type { Db } from 'mongodb';
+import { connectToMongo } from '@/lib/api/db';
 import {
   enqueueJob,
+  processJobById,
   JOB_TYPES,
 } from '@/lib/api/bg-jobs';
 import { kickBgWorker } from '@/lib/api/worker-kick';
+
+const PROD_INVENTORY_URL = 'https://penarukan2.vercel.app';
+
+function workerBaseUrl(): string {
+  const env = String(process.env.INVENTORY_APP_URL || '').replace(/\/$/, '');
+  if (env && !/localhost|127\.0\.0\.1/i.test(env)) return env;
+  return PROD_INVENTORY_URL;
+}
+
+async function triggerWorker(jobId: string): Promise<boolean> {
+  const kicked = await kickBgWorker({ limit: 2, baseUrl: workerBaseUrl() });
+  if (kicked) return true;
+  try {
+    const freshDb = await connectToMongo();
+    await processJobById(freshDb, jobId);
+    return true;
+  } catch (e) {
+    console.warn('[po-vendor-sync] inline process failed:', e instanceof Error ? e.message : e);
+    return false;
+  }
+}
 
 export async function enqueueAndKickPoVendorSync(
   db: Db,
@@ -22,7 +46,11 @@ export async function enqueueAndKickPoVendorSync(
     payload,
   });
 
-  void kickBgWorker({ limit: 2 });
+  void triggerWorker(jobId);
+
+  after(async () => {
+    await triggerWorker(jobId);
+  });
 
   return { jobId, reused };
 }
