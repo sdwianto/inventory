@@ -22,7 +22,11 @@ function buildUrl(base: string, limit: number, cursor: string | null) {
 export function useCursorQuery<T>(
   queryKey: QueryKey,
   baseUrl: string | null | undefined,
-  { limit = 100, enabled = true }: { limit?: number; enabled?: boolean } = {},
+  {
+    limit = 100,
+    enabled = true,
+    refetchInterval,
+  }: { limit?: number; enabled?: boolean; refetchInterval?: number | false } = {},
 ) {
   const query = useInfiniteQuery({
     queryKey,
@@ -35,6 +39,8 @@ export function useCursorQuery<T>(
       lastPage?.hasMore && lastPage?.nextCursor ? lastPage.nextCursor : undefined,
     enabled: Boolean(baseUrl) && enabled,
     staleTime: 60_000,
+    refetchInterval: refetchInterval === false ? false : refetchInterval,
+    refetchOnWindowFocus: true,
   });
 
   const items = (query.data?.pages ?? []).flatMap((p) => p.items ?? []);

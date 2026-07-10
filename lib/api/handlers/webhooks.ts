@@ -5,6 +5,7 @@ import { ok, err } from '@/lib/api/db';
 import { verifyWebhookSecret } from '@/lib/api/webhook-verify';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { INLINE_WEBHOOK_EVENTS, runWebhookInboxInline } from '@/lib/api/webhook-inbox-process';
 
 type WebhookBody = JsonObject & {
   event?: string;
@@ -73,7 +74,7 @@ export async function handleWebhooks({
   if (existing?.status === 'PROCESSED') {
     return ok({ message: 'already_processed', dedupeKey, result: existing.result });
   }
-  if (existing?.status === 'PENDING' || existing?.status === 'RUNNING') {
+  if ((existing?.status === 'PENDING' || existing?.status === 'RUNNING') && !INLINE_WEBHOOK_EVENTS.has(event)) {
     return ok({ message: 'accepted', dedupeKey, async: true });
   }
 
@@ -96,6 +97,29 @@ export async function handleWebhooks({
     await db.collection('webhook_inbox').updateOne(
       { dedupeKey },
       { $set: { status: 'PENDING', processError: null, updatedAt: now } },
+    );
+  }
+
+  if (INLINE_WEBHOOK_EVENTS.has(event)) {
+    const inline = await runWebhookInboxInline(db, {
+      dedupeKey,
+      event,
+      payload,
+      customerTenantId,
+      vendorTenantId,
+    });
+    if (inline.ok) {
+      return ok({
+        message: 'processed',
+        event,
+        dedupeKey,
+        inline: true,
+        ...inline.result,
+      });
+    }
+    await db.collection('webhook_inbox').updateOne(
+      { dedupeKey },
+      { $set: { status: 'PENDING', processError: inline.error, updatedAt: new Date() } },
     );
   }
 

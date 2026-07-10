@@ -25,6 +25,54 @@ export interface WebhookProcessInput {
   vendorTenantId?: string;
 }
 
+/** Event yang harus diproses sinkron — GRN harus ada sebelum response webhook (serverless tanpa worker). */
+export const INLINE_WEBHOOK_EVENTS = new Set(['delivery.shipped']);
+
+export async function runWebhookInboxInline(
+  db: Db,
+  input: WebhookProcessInput & { dedupeKey: string },
+): Promise<
+  | { ok: true; result: Record<string, unknown> }
+  | { ok: false; error: string; result: Record<string, unknown> }
+> {
+  const { dedupeKey, ...processInput } = input;
+  await db.collection('webhook_inbox').updateOne(
+    { dedupeKey },
+    { $set: { status: 'RUNNING', updatedAt: new Date() } },
+  );
+
+  try {
+    const result = await processWebhookInboxEvent(db, processInput);
+    await db.collection('webhook_inbox').updateOne(
+      { dedupeKey },
+      {
+        $set: {
+          status: 'PROCESSED',
+          result,
+          processError: null,
+          processedAt: new Date(),
+        },
+      },
+    );
+    return { ok: true, result };
+  } catch (e) {
+    const processError = e instanceof Error ? e.message : String(e);
+    const result = { error: processError };
+    await db.collection('webhook_inbox').updateOne(
+      { dedupeKey },
+      {
+        $set: {
+          status: 'FAILED',
+          result,
+          processError,
+          processedAt: new Date(),
+        },
+      },
+    );
+    return { ok: false, error: processError, result };
+  }
+}
+
 export async function processWebhookInboxEvent(
   db: Db,
   { event, payload, customerTenantId, vendorTenantId }: WebhookProcessInput,
