@@ -98,14 +98,55 @@ function tenantQuery(tenantId?: string): Record<string, string> {
   return { tenantId: tid };
 }
 
-async function countCollection(db: Db, name: string, tenantId?: string): Promise<number | null> {
+function isFullTenantPurge(filter: Record<string, unknown>): boolean {
+  return Object.keys(filter).length === 0;
+}
+
+async function countCollectionRows(
+  db: Db,
+  name: string,
+  filter: Record<string, unknown>,
+  existingNames: Set<string>,
+): Promise<number | null> {
+  if (!existingNames.has(name)) return null;
   try {
-    const cols = await db.listCollections({ name }).toArray();
-    if (!cols.length) return null;
-    return db.collection(name).countDocuments(tenantQuery(tenantId));
+    return await db.collection(name).countDocuments(filter);
   } catch {
     return null;
   }
+}
+
+async function purgeOneCollection(
+  db: Db,
+  name: string,
+  filter: Record<string, unknown>,
+  existingNames: Set<string>,
+  options: { fastDrop: boolean; preserveBgJobIds: string[] },
+): Promise<CollectionCount> {
+  if (!existingNames.has(name)) {
+    return { skipped: true, before: 0, deleted: 0 };
+  }
+
+  const collFilter = (): Record<string, unknown> => {
+    if (name === 'bg_jobs' && options.preserveBgJobIds.length) {
+      return { ...filter, id: { $nin: options.preserveBgJobIds } };
+    }
+    return filter;
+  };
+
+  const f = collFilter();
+  const canDrop = options.fastDrop && (name !== 'bg_jobs' || !options.preserveBgJobIds.length);
+
+  if (canDrop) {
+    const before = await db.collection(name).estimatedDocumentCount().catch(async () => (
+      db.collection(name).countDocuments({})
+    ));
+    await db.collection(name).drop();
+    return { before, deleted: before };
+  }
+
+  const r = await db.collection(name).deleteMany(f);
+  return { before: r.deletedCount, deleted: r.deletedCount };
 }
 
 /** Purge satu database MongoDB (inventory lokal atau fallback sales). */
@@ -123,6 +164,7 @@ export async function purgeSandboxDatabase(
   const existingNames = new Set(
     (await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name),
   );
+  const fastDrop = confirm && isFullTenantPurge(filter);
 
   const collectionFilter = (name: string): Record<string, unknown> => {
     if (name === 'bg_jobs' && preserveBgJobIds.length) {
@@ -131,42 +173,42 @@ export async function purgeSandboxDatabase(
     return filter;
   };
 
-  if (!confirm) {
-    for (const name of SANDBOX_TRANSACTION_COLLECTIONS) {
-      if (!existingNames.has(name)) {
-        counts[name] = { skipped: true, before: 0, deleted: 0 };
-        continue;
-      }
-      const before = await db.collection(name).countDocuments(collectionFilter(name));
-      counts[name] = { dryRun: true, before };
-    }
-  } else {
-    const deletions = await Promise.all(
-      SANDBOX_TRANSACTION_COLLECTIONS.map(async (name) => {
+  const collectionResults = await Promise.all(
+    SANDBOX_TRANSACTION_COLLECTIONS.map(async (name) => {
+      if (!confirm) {
         if (!existingNames.has(name)) {
           return [name, { skipped: true, before: 0, deleted: 0 } as CollectionCount] as const;
         }
-        const r = await db.collection(name).deleteMany(collectionFilter(name));
-        return [name, { before: r.deletedCount, deleted: r.deletedCount } as CollectionCount] as const;
-      }),
-    );
-    for (const [name, info] of deletions) {
-      counts[name] = info;
-    }
+        const before = await db.collection(name).countDocuments(collectionFilter(name));
+        return [name, { dryRun: true, before } as CollectionCount] as const;
+      }
+      const info = await purgeOneCollection(db, name, filter, existingNames, {
+        fastDrop,
+        preserveBgJobIds,
+      });
+      return [name, info] as const;
+    }),
+  );
+  for (const [name, info] of collectionResults) {
+    counts[name] = info;
   }
 
   if (confirm) {
     const now = new Date();
-    const stokLok = await db.collection('stok_lokasi').updateMany(filter, {
-      $set: { qty: 0, qtyReserved: 0, updatedAt: now },
-    });
-    const products = await db.collection('products').updateMany(filter, {
-      $set: { stok: 0, updatedAt: now },
-    });
-    const assetsRepair = await db.collection('assets').updateMany(
-      { ...filter, status: 'IN_REPAIR' },
-      { $set: { status: 'ACTIVE', updatedAt: now } },
-    );
+    const [stokLok, products, assetsRepair] = await Promise.all([
+      db.collection('stok_lokasi').updateMany(filter, {
+        $set: { qty: 0, qtyReserved: 0, updatedAt: now },
+      }),
+      db.collection('products').updateMany(filter, {
+        $set: { stok: 0, updatedAt: now },
+      }),
+      existingNames.has('assets')
+        ? db.collection('assets').updateMany(
+          { ...filter, status: 'IN_REPAIR' },
+          { $set: { status: 'ACTIVE', updatedAt: now } },
+        )
+        : Promise.resolve({ modifiedCount: 0 }),
+    ]);
     counts._stock_reset = {
       stok_lokasi: stokLok.modifiedCount,
       products: products.modifiedCount,
@@ -175,24 +217,15 @@ export async function purgeSandboxDatabase(
       in_repair: assetsRepair.modifiedCount,
     };
   } else {
-    const stokBefore = await countCollection(db, 'stok_lokasi', tenantId);
+    const [stokBefore, inRepairBefore] = await Promise.all([
+      countCollectionRows(db, 'stok_lokasi', filter, existingNames),
+      countCollectionRows(db, 'assets', { ...filter, status: 'IN_REPAIR' }, existingNames),
+    ]);
     counts._stock_reset = {
       dryRun: true,
       stok_lokasi_rows: stokBefore,
       note: 'qty/qtyReserved/stok → 0',
     };
-    let inRepairBefore: number | null = null;
-    try {
-      const cols = await db.listCollections({ name: 'assets' }).toArray();
-      if (cols.length) {
-        inRepairBefore = await db.collection('assets').countDocuments({
-          ...filter,
-          status: 'IN_REPAIR',
-        });
-      }
-    } catch {
-      inRepairBefore = null;
-    }
     counts._asset_reset = {
       dryRun: true,
       in_repair: inRepairBefore,
@@ -253,19 +286,17 @@ export async function previewSandboxPurge(
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
   const { tenantId, includeSales = true } = options;
 
-  const inventory = await purgeSandboxDatabase(
-    inventoryDb,
-    'inventory',
-    inventoryDb.databaseName,
-    tenantId,
-    false,
-  );
+  const [inventory, sales] = await Promise.all([
+    purgeSandboxDatabase(
+      inventoryDb,
+      'inventory',
+      inventoryDb.databaseName,
+      tenantId,
+      false,
+    ),
+    includeSales ? previewSalesPurge(client, tenantId) : Promise.resolve(null),
+  ]);
 
-  if (!includeSales) {
-    return { inventory, sales: null };
-  }
-
-  const sales = await previewSalesPurge(client, tenantId);
   return { inventory, sales };
 }
 
@@ -277,20 +308,18 @@ export async function executeSandboxPurge(
   const { tenantId, includeSales = true, preserveBgJobIds } = options;
   const purgeOpts = preserveBgJobIds?.length ? { preserveBgJobIds } : undefined;
 
-  const inventory = await purgeSandboxDatabase(
-    inventoryDb,
-    'inventory',
-    inventoryDb.databaseName,
-    tenantId,
-    true,
-    purgeOpts,
-  );
+  const [inventory, sales] = await Promise.all([
+    purgeSandboxDatabase(
+      inventoryDb,
+      'inventory',
+      inventoryDb.databaseName,
+      tenantId,
+      true,
+      purgeOpts,
+    ),
+    includeSales ? executeSalesPurge(client, tenantId) : Promise.resolve(null),
+  ]);
 
-  if (!includeSales) {
-    return { inventory, sales: null };
-  }
-
-  const sales = await executeSalesPurge(client, tenantId);
   return { inventory, sales };
 }
 
@@ -320,14 +349,30 @@ export async function runSandboxResetJob(
   inventoryDb: Db,
   options: { tenantId?: string; includeSales?: boolean; preserveJobId?: string } = {},
 ) {
+  const { updateJobProgress } = await import('@/lib/api/bg-jobs');
   const { getMongoClient } = await import('@/lib/api/db');
   const client = await getMongoClient();
   const preserveBgJobIds = options.preserveJobId ? [options.preserveJobId] : undefined;
+  const includeSales = options.includeSales !== false;
+
+  await updateJobProgress(inventoryDb, options.preserveJobId, {
+    message: includeSales
+      ? 'Menghapus transaksi inventory + sales…'
+      : 'Menghapus transaksi inventory…',
+    phase: 'purge',
+  });
+
   const result = await executeSandboxPurge(inventoryDb, client, {
     tenantId: options.tenantId,
-    includeSales: options.includeSales,
+    includeSales,
     preserveBgJobIds,
   });
+
+  await updateJobProgress(inventoryDb, options.preserveJobId, {
+    message: 'Selesai',
+    phase: 'done',
+  });
+
   return {
     tenantId: options.tenantId || null,
     scope: options.tenantId ? 'tenant' : 'all',

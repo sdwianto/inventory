@@ -77,7 +77,7 @@ export function useBgJob(jobId: string | null | undefined) {
       if (query.state.error) return false;
       const status = String((stream.data ?? query.state.data)?.status || '');
       if (TERMINAL.has(status)) return false;
-      if (!status || status === 'PENDING' || status === 'RUNNING') return 2000;
+      if (!status || status === 'PENDING' || status === 'RUNNING') return 1000;
       return false;
     },
   });

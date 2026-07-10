@@ -14,7 +14,7 @@ import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchJson } from '@/lib/fetch-json';
-import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
 
 type CountInfo =
   | { skipped: true; before: 0; deleted: 0 }
@@ -416,8 +416,8 @@ export default function SandboxResetPage() {
               </Button>
               {resetting && resetJobId && (
                 <p className="text-xs text-slate-500">
-                  Menghapus transaksi di background — jangan tutup halaman sampai selesai.
-                  {resetJobStatus && resetJobStatus !== 'PENDING' ? ` Status: ${resetJobStatus}` : ''}
+                  {jobProgressMessage(resetJob?.progress) || 'Menghapus transaksi di background…'}
+                  {resetJobStatus && resetJobStatus !== 'PENDING' ? ` · ${resetJobStatus}` : ''}
                 </p>
               )}
             </div>
