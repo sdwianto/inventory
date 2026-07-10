@@ -1,10 +1,11 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import type { LucideIcon } from 'lucide-react';
 import { getUser, clearUser, syncSessionUser } from '@/lib/auth-client';
 import type { SessionUser } from '@/types/auth';
@@ -172,6 +173,7 @@ export default function AppShell({ children }: AppShellProps) {
 
   const { data: liveBadges } = useNavBadges(Boolean(user));
   const badgeSource = liveBadges;
+  const prevGrnPendingRef = useRef<number | null>(null);
 
   useVendorCatalogAutoSync(user);
 
@@ -264,6 +266,26 @@ export default function AppShell({ children }: AppShellProps) {
     wrPending: showWrBadge ? (Number(badgeSource?.wrPending) || 0) : 0,
     pmOverdue: pmBadgeCount,
   };
+
+  useEffect(() => {
+    if (!showGrnBadge) return;
+    const pending = navBadges.grnPending;
+    const prev = prevGrnPendingRef.current;
+    if (prev != null && pending > prev) {
+      const delta = pending - prev;
+      toast.info(
+        delta === 1
+          ? 'GRN baru dari pengiriman vendor — siap diterima'
+          : `${delta} GRN baru dari pengiriman vendor`,
+        {
+          action: pathname === '/penerimaan'
+            ? undefined
+            : { label: 'Lihat', onClick: () => router.push('/penerimaan') },
+        },
+      );
+    }
+    prevGrnPendingRef.current = pending;
+  }, [navBadges.grnPending, showGrnBadge, pathname, router]);
 
   const debouncedOperationalRefresh = useMemo(
     () => debounce(() => invalidateOperationalCaches(queryClient), 300),
