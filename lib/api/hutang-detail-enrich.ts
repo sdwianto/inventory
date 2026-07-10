@@ -266,6 +266,21 @@ export async function buildHutangDetailEnrichment(
       logoBase64: mergedLogo,
       source: snap?.companyName ? 'snapshot+enrich' : loaded.source,
     };
+
+    if (hutang.id) {
+      const toStore = normalizeVendorBillingForStorage({
+        vendorTenantId: vendorTenantId || loaded.vendorTenantId,
+        companyName: vendorBilling.companyName,
+        companyAddress: vendorBilling.companyAddress,
+        companyPhone: vendorBilling.companyPhone,
+        companyNPWP: vendorBilling.companyNPWP,
+        logoUrl: vendorBilling.logoUrl,
+      });
+      void db.collection('hutang').updateOne(
+        { tenantId: tid, id: hutang.id },
+        { $set: { vendorBillingSnapshot: toStore, updatedAt: new Date() } },
+      );
+    }
   }
 
   const [customerBilling, itemsFull] = await Promise.all([

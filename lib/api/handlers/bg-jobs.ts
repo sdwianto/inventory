@@ -11,6 +11,7 @@ import {
 } from '@/lib/api/worker-auth';
 import { requireRole } from '@/lib/api/require-auth';
 import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
+import { backfillProductGudangForTenant } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleBgJobs({
@@ -86,6 +87,26 @@ export async function handleBgJobs({
       if (!tenantId) return err('Tenant operasional wajib', 400);
       const result = await runProcurementRepair(db, tenantId);
       return ok({ message: 'Perbaikan procurement selesai', ...result });
+    }
+    return err('Method not allowed', 405);
+  }
+
+  if (route === '/bg-jobs/backfill-product-gudang') {
+    if (method === 'GET') {
+      return ok({
+        message: 'Backfill gudang produk — gunakan POST (MASTER/ADMIN/OWNER).',
+        method: 'POST',
+        hint: 'fetch("/api/bg-jobs/backfill-product-gudang", { method: "POST", credentials: "include" })',
+      });
+    }
+    if (method === 'POST') {
+      const deniedRole = requireRole(auth, ['MASTER', 'ADMIN', 'OWNER']);
+      if (deniedRole) return deniedRole;
+      const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+      if (denied) return denied;
+      if (!tenantId) return err('Tenant operasional wajib', 400);
+      const result = await backfillProductGudangForTenant(db, tenantId);
+      return ok({ message: 'Backfill gudang produk selesai', tenantId, ...result });
     }
     return err('Method not allowed', 405);
   }

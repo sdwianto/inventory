@@ -392,17 +392,25 @@ export default function ProdukPage() {
   };
 
   const fetchExportRows = async () => {
+    const EXPORT_MAX = 2000;
     let base = `/api/products?q=${encodeURIComponent(debouncedQ)}&includeUom=1`;
     base = withActingTenantQuery(base, filterTenantId, isMaster);
-    const all = await fetchAllCursorPages<JsonObject>(base, { limit: 500 });
+    const all = await fetchAllCursorPages<JsonObject>(base, {
+      limit: 500,
+      maxPages: Math.ceil(EXPORT_MAX / 500),
+    });
     const filtered = all.filter((p) => gudangFilter[str(p.gudangKode, 'GKERING') as keyof typeof gudangFilter]);
     if (filtered.length === 0) throw new Error('Tidak ada data untuk diekspor');
-    return flattenProductsForExport(filtered);
+    const capped = filtered.slice(0, EXPORT_MAX);
+    return {
+      rows: flattenProductsForExport(capped),
+      truncated: filtered.length > EXPORT_MAX || all.length >= EXPORT_MAX,
+    };
   };
 
   const exportData = async (format: ListExportFormat) => {
     try {
-      const rows = await fetchExportRows();
+      const { rows, truncated } = await fetchExportRows();
       const stamp = new Date().toISOString().slice(0, 10);
       const tenantPart = filterTenantId ? `-${filterTenantId}` : '';
       await runListExport(format, {
@@ -411,7 +419,11 @@ export default function ProdukPage() {
         columns: getExportColumns(),
         rows,
       });
-      toast.success(`${rows.length} produk diekspor`);
+      toast.success(
+        truncated
+          ? `${rows.length} produk diekspor (maks 2000 — persempit filter untuk data lengkap)`
+          : `${rows.length} produk diekspor`,
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }

@@ -1,6 +1,7 @@
 // Dashboard inventory-app — PO, stok gudang, belanja pengadaan.
 
 import type { NextResponse } from 'next/server';
+import type { Db } from 'mongodb';
 import { ok } from '@/lib/api/db';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { warehouseLabel, WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -52,16 +53,16 @@ interface SpendingMonth {
   count: number;
 }
 
+interface GrnStatusAggRow {
+  _id?: string;
+  count?: number;
+}
+
 interface InventoryAggRow {
   _id: string;
   qty?: number;
   nilai?: number;
   skuCount?: number;
-}
-
-interface GrnStatusAggRow {
-  _id?: string;
-  count?: number;
 }
 
 function grnSummaryFromAgg(rows: GrnStatusAggRow[]) {
@@ -95,6 +96,53 @@ function buildSpendingMonths(now: Date, aggRows: MonthAggRow[]): SpendingMonth[]
     });
   }
   return months;
+}
+
+async function aggregateInventoryByWarehouse(
+  db: Db,
+  tenantStok: Record<string, unknown>,
+): Promise<InventoryAggRow[]> {
+  const rows = await db.collection('stok_lokasi').aggregate([
+    { $match: tenantStok },
+    {
+      $group: {
+        _id: { lokasi: '$lokasiKode', stokId: '$stokId' },
+        qty: { $sum: { $ifNull: ['$qty', 0] } },
+      },
+    },
+  ]).toArray();
+
+  const stokIds = [...new Set(rows.map((r) => String(r._id?.stokId || '')).filter(Boolean))];
+  const priceMap = new Map<string, number>();
+  if (stokIds.length) {
+    const { lokasiKode: _drop, ...tenantOnly } = tenantStok as { lokasiKode?: unknown };
+    const products = await db.collection('products')
+      .find({ ...tenantOnly, id: { $in: stokIds } })
+      .project({ id: 1, hargaBeli: 1 })
+      .toArray();
+    for (const p of products) {
+      priceMap.set(String(p.id), parseInt(String(p.hargaBeli || 0), 10) || 0);
+    }
+  }
+
+  const invMap: Record<string, { qty: number; nilai: number; skuCount: number }> = {};
+  for (const row of rows) {
+    const kode = String(row._id?.lokasi || 'GKERING');
+    const qty = parseFloat(String(row.qty || 0)) || 0;
+    const harga = priceMap.get(String(row._id?.stokId || '')) || 0;
+    const cur = invMap[kode] || { qty: 0, nilai: 0, skuCount: 0 };
+    cur.qty += qty;
+    cur.nilai += qty * harga;
+    cur.skuCount += 1;
+    invMap[kode] = cur;
+  }
+
+  return WAREHOUSE_CODES.map((kode) => ({
+    _id: kode,
+    qty: invMap[kode]?.qty || 0,
+    nilai: invMap[kode]?.nilai || 0,
+    skuCount: invMap[kode]?.skuCount || 0,
+  }));
 }
 
 export async function handleDashboard({
@@ -167,45 +215,7 @@ export async function handleDashboard({
       { $match: { expenseDate: { $gte: monthStart } } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$total', 0] } } } },
     ]).toArray(),
-    db.collection('stok_lokasi').aggregate([
-      { $match: tenantStok },
-      {
-        $lookup: {
-          from: 'products',
-          let: { sid: '$stokId', tid: '$tenantId' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ['$id', '$$sid'] },
-                    { $eq: ['$tenantId', '$$tid'] },
-                  ],
-                },
-              },
-            },
-            { $project: { hargaBeli: 1 } },
-          ],
-          as: 'prod',
-        },
-      },
-      { $unwind: { path: '$prod', preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: '$lokasiKode',
-          qty: { $sum: { $ifNull: ['$qty', 0] } },
-          nilai: {
-            $sum: {
-              $multiply: [
-                { $ifNull: ['$qty', 0] },
-                { $ifNull: ['$prod.hargaBeli', 0] },
-              ],
-            },
-          },
-          skuCount: { $sum: 1 },
-        },
-      },
-    ]).toArray() as Promise<InventoryAggRow[]>,
+    aggregateInventoryByWarehouse(db, tenantStok),
     db.collection('hutang').aggregate([
       { $match: tenantHutang },
       {

@@ -103,7 +103,7 @@ function resolveTrendGranularity(months: number, requested?: string | null): 'da
 async function buildStockTrend(
   db: HandlerContext['db'],
   tenantId: string | null | undefined,
-  { months = 6, granularity = 'day' }: { months?: number; granularity?: string } = {},
+  { months = 6, granularity: requestedGranularity = 'day' }: { months?: number; granularity?: string } = {},
 ) {
   const tid = tenantId || 'default';
   const since = new Date();
@@ -111,6 +111,10 @@ async function buildStockTrend(
   since.setHours(0, 0, 0, 0);
   const until = new Date();
   until.setHours(23, 59, 59, 999);
+
+  let granularity = resolveTrendGranularity(months, requestedGranularity);
+  const daySpan = (until.getTime() - since.getTime()) / 86_400_000;
+  if (granularity === 'day' && daySpan > 31) granularity = 'month';
 
   const opening = await aggregateOpeningBefore(db, tid, since);
 

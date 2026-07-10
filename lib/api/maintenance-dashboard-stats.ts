@@ -52,7 +52,7 @@ export async function fetchMaintenanceDashboardStats(
   const tenantWr = withTenantFilter(scopeAuth, {});
   const tenantAssets = withTenantFilter(scopeAuth, { status: 'IN_REPAIR' });
 
-  const maintenancePoNos = await db.collection('customer_purchase_orders').distinct('noPO', {
+  const maintenancePoFilter = {
     ...withTenantFilter(scopeAuth, {
       maintenanceRequestId: { $exists: true, $ne: null },
       noPO: { $exists: true, $nin: [null, ''] },
@@ -61,7 +61,9 @@ export async function fetchMaintenanceDashboardStats(
         { createdAt: { $gte: sixMonthsAgo } },
       ],
     }),
-  }) as string[];
+  };
+
+  const maintenancePoNos = await db.collection('customer_purchase_orders').distinct('noPO', maintenancePoFilter) as string[];
 
   const [
     pendingApproval,

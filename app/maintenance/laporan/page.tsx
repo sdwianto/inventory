@@ -120,6 +120,13 @@ export default function MaintenanceLaporanPage() {
           </div>
         </div>
 
+        {report?.truncated === true && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Laporan dibatasi {num(report.wrLimit) || 500} work request terbaru dalam rentang tanggal.
+            Persempit filter tanggal atau aset untuk hasil lebih lengkap.
+          </div>
+        )}
+
         {isLoading ? (
           <div className="text-sm text-slate-500 py-12 text-center">Memuat laporan…</div>
         ) : (

@@ -17,6 +17,7 @@ interface IndexSpec {
 const INDEX_SPECS: IndexSpec[] = [
   { collection: 'jurnal', index: { tenantId: 1, tanggal: -1 }, name: 'idx_jurnal_tenant_tanggal' },
   { collection: 'stok_kartu', index: { tenantId: 1, stokId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_stok_tgl' },
+  { collection: 'stok_kartu', index: { tenantId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_tanggal' },
   { collection: 'stok_lokasi', index: { tenantId: 1, stokId: 1, lokasiKode: 1 }, name: 'idx_stok_lokasi_tenant_stok_gudang' },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_penyesuaian_tenant_tanggal' },
   { collection: 'hutang', index: { tenantId: 1, supplierId: 1, status: 1 }, name: 'idx_hutang_tenant_supplier' },
@@ -27,6 +28,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'hutang', index: { tenantId: 1, referenceType: 1, approvalStatus: 1 }, name: 'idx_hutang_tenant_ref_approval' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_cpo_tenant_tanggal' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, noPO: 1 }, name: 'idx_cpo_tenant_nopo' },
+  { collection: 'customer_purchase_orders', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_cpo_tenant_mwr' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, poChannel: 1, status: 1 }, name: 'idx_cpo_tenant_channel_status' },
   { collection: 'local_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_lpo_tenant_tanggal' },
   { collection: 'local_purchase_orders', index: { tenantId: 1, noPO: 1 }, name: 'idx_lpo_tenant_nopo', unique: true },
@@ -53,6 +55,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'goods_receipts', index: { tenantId: 1, tanggal: -1 }, name: 'idx_grn_tenant_tanggal' },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1 }, name: 'idx_grn_tenant_status' },
   { collection: 'goods_receipts', index: { tenantId: 1, noDO: 1 }, name: 'idx_grn_tenant_nodo' },
+  { collection: 'goods_receipts', index: { tenantId: 1, noPO: 1, postedAt: -1 }, name: 'idx_grn_tenant_nopo_posted' },
   { collection: 'goods_receipts', index: { tenantId: 1, vendorDeliveryId: 1 }, name: 'idx_grn_tenant_delivery' },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1, 'items.vendorKode': 1 }, name: 'idx_grn_tenant_status_kode' },
   { collection: 'bg_jobs', index: { status: 1, createdAt: 1 }, name: 'idx_bg_jobs_status_created' },
