@@ -425,7 +425,7 @@ export default function PenerimaanPage() {
       </div>
 
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-4xl w-[min(100vw-2rem,56rem)]">
           <DialogHeader>
             <DialogTitle>Terima Barang — {str(detail?.noGRN)}</DialogTitle>
           </DialogHeader>
@@ -434,20 +434,23 @@ export default function PenerimaanPage() {
             {supplierLabel(detail) !== '—' ? ` · Supplier: ${supplierLabel(detail)}` : ''}
             {' · '}Gudang mengikuti master produk (Kering/Basah tidak bisa dicampur)
           </p>
-          <div className="space-y-2 max-h-64 overflow-y-auto">
+          <div className="space-y-2 max-h-80 overflow-y-auto">
             {detailItems.map((it, idx) => {
               const rowKey = itemRowKey(it, idx);
               const localStokId = str(it.localStokId);
               const uomRow = uomMap[rowKey];
               return (
-              <div key={rowKey} className="flex flex-wrap items-end gap-2 text-sm border rounded p-2">
-                <div className="flex-1 min-w-[140px]">
+              <div
+                key={rowKey}
+                className="grid grid-cols-[minmax(0,1fr)_9rem_7rem_5.5rem] gap-3 items-end text-sm border rounded p-2"
+              >
+                <div className="min-w-0">
                   <div className="font-medium truncate">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</div>
-                  <div className="text-xs text-slate-500">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}</div>
+                  <div className="text-xs text-slate-500 truncate">{str(it.vendorKode)} · kirim: {formatNumber(num(it.qtyOrdered))} {str(it.satuan) || 'unit'}</div>
                 </div>
-                <div className="w-36">
+                <div className="min-w-0">
                   <Label className="text-xs">Gudang</Label>
-                  <div className={`h-9 px-3 flex items-center rounded-md border text-xs font-medium ${
+                  <div className={`h-9 px-2 flex items-center rounded-md border text-xs font-medium truncate ${
                     str(gudangMap[rowKey], 'GKERING') === 'GBASAH'
                       ? 'bg-blue-50 text-blue-800 border-blue-200'
                       : 'bg-amber-50 text-amber-800 border-amber-200'
@@ -455,9 +458,9 @@ export default function PenerimaanPage() {
                     {warehouseName(str(gudangMap[rowKey], 'GKERING'))}
                   </div>
                 </div>
-                {localStokId ? (
-                  <div className="w-28">
-                    <Label className="text-xs">Satuan</Label>
+                <div className="min-w-0">
+                  <Label className="text-xs">Satuan</Label>
+                  {localStokId ? (
                     <LineUomSelect
                       stokId={localStokId}
                       uomId={uomRow?.uomId || str(it.uomId)}
@@ -478,15 +481,20 @@ export default function PenerimaanPage() {
                         setQtyMap({ ...qtyMap, [rowKey]: patched.qty });
                       }}
                     />
-                  </div>
-                ) : null}
-                <div className="w-24">
+                  ) : (
+                    <div className="h-9 px-2 flex items-center rounded-md border bg-slate-50 text-xs text-slate-500">
+                      {str(it.satuan) || '—'}
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0">
                   <Label className="text-xs">Qty terima</Label>
                   <Input
                     type="number"
                     min={0}
                     max={num(it.qtyOrdered)}
                     step="any"
+                    className="h-9"
                     value={str(qtyMap[rowKey])}
                     onChange={(e) => setQtyMap({ ...qtyMap, [rowKey]: e.target.value })}
                   />
