@@ -25,7 +25,8 @@ function productLabel(p: JsonObject | null | undefined) {
 }
 
 function productSearchText(p: JsonObject) {
-  return [p.kode, p.nama, p.grup, p.barcode, p.vendorTenantId, p.vendorTenantName, p.satuan]
+  const vendor = vendorDisplayName(p);
+  return [p.kode, p.nama, p.grup, p.barcode, vendor, p.vendorTenantId, p.vendorTenantName, p.satuan]
     .map((v) => str(v))
     .filter(Boolean)
     .join(' ')

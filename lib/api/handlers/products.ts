@@ -11,7 +11,7 @@ import {
   resolveOperationalScope,
 } from '@/lib/api/tenant-master';
 import { assertMasterAccess } from '@/lib/api/tenant-validate';
-import { buildProductSearchFilter, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
+import { buildProductSearchFilter, mergeProductSearchWithVendorName, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { bulkDeleteMaster } from '@/lib/api/bulk-delete-master';
 import { getStokByWarehouseBatch, syncProductStokFromLokasi, getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -157,6 +157,7 @@ export async function handleProducts({
     }
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithUomBarcode(db, tenantId, q, filter);
+    filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
 
     const { pageMode, limit: pageLimit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
     const fetchLimit = pageMode ? pageLimit + 1 : pageLimit;

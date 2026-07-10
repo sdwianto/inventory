@@ -12,7 +12,7 @@ import {
   encodeStringCursor,
 } from '@/lib/api/cursor-page';
 import { payableHutangFilter, approvalStatusFilter, stripHutangListSnapshot } from '@/lib/api/hutang-filters';
-import { buildProductSearchFilter, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
+import { buildProductSearchFilter, mergeProductSearchWithVendorName, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -102,6 +102,7 @@ export async function handlePages({
     const q = (url.searchParams.get('q') || '').trim();
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     filter = withTenantFilter(scopeAuth, filter);
+    filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
     const { limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });
     const fetchLimit = limit + 1;
     const listFilter = applyAscStringIdCursor(filter, cursor, 'nama');

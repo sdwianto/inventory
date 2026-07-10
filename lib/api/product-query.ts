@@ -10,6 +10,12 @@ function escapeRegex(s: string): string {
 export function buildProductSearchFilter(q?: string | null): Filter<Record<string, unknown>> {
   const term = (q || '').trim();
   if (!term) return {};
+
+  const vendorClauses: Filter<Record<string, unknown>>[] = [
+    { vendorTenantName: { $regex: escapeRegex(term), $options: 'i' } },
+    { vendorTenantId: { $regex: escapeRegex(term), $options: 'i' } },
+  ];
+
   const isCodeLike = /^[A-Za-z0-9\-_.]+$/.test(term) && term.length <= 48;
   if (!isCodeLike && term.length >= 3) {
     return { $text: { $search: term } };
@@ -22,6 +28,7 @@ export function buildProductSearchFilter(q?: string | null): Filter<Record<strin
         { kode: { $regex: `^${escapeRegex(term)}`, $options: 'i' } },
         { barcode: { $regex: `^${escapeRegex(term)}`, $options: 'i' } },
         { nama: { $regex: escapeRegex(term), $options: 'i' } },
+        ...vendorClauses,
       ],
     };
   }
@@ -30,8 +37,58 @@ export function buildProductSearchFilter(q?: string | null): Filter<Record<strin
       { kode: { $regex: escapeRegex(term), $options: 'i' } },
       { nama: { $regex: escapeRegex(term), $options: 'i' } },
       { barcode: { $regex: escapeRegex(term), $options: 'i' } },
+      ...vendorClauses,
     ],
   };
+}
+
+/** Gabungkan filter produk dengan vendorTenantId yang cocok nama vendor. */
+export function mergeFilterWithVendorTenantIds(
+  filter: Filter<Record<string, unknown>>,
+  vendorTenantIds: string[],
+): Filter<Record<string, unknown>> {
+  if (!vendorTenantIds.length) return filter;
+  const vendorClause = { vendorTenantId: { $in: vendorTenantIds } };
+  if (filter.$text) {
+    return { $or: [filter, vendorClause] };
+  }
+  const existingOr = Array.isArray(filter.$or) ? [...filter.$or] : [];
+  if (!existingOr.length && Object.keys(filter).length === 0) {
+    return vendorClause;
+  }
+  if (!existingOr.length) {
+    return { $or: [filter, vendorClause] };
+  }
+  return { ...filter, $or: [...existingOr, vendorClause] };
+}
+
+/** Lookup vendor_tenants by name/id fragment — untuk produk yang belum punya vendorTenantName. */
+export async function findVendorTenantIdsByNameSearch(
+  db: import('mongodb').Db,
+  tenantId: string,
+  q: string | undefined | null,
+): Promise<string[]> {
+  const term = (q || '').trim();
+  if (!term || term.length < 2) return [];
+  const tid = tenantId || 'default';
+  const rows = await db.collection('vendor_tenants').find({
+    tenantId: tid,
+    $or: [
+      { vendorTenantName: { $regex: escapeRegex(term), $options: 'i' } },
+      { vendorTenantId: { $regex: escapeRegex(term), $options: 'i' } },
+    ],
+  }).project({ vendorTenantId: 1 }).limit(30).toArray();
+  return [...new Set(rows.map((r) => String(r.vendorTenantId)).filter(Boolean))];
+}
+
+export async function mergeProductSearchWithVendorName(
+  db: import('mongodb').Db,
+  tenantId: string,
+  q: string | undefined | null,
+  filter: Filter<Record<string, unknown>>,
+): Promise<Filter<Record<string, unknown>>> {
+  const vendorIds = await findVendorTenantIdsByNameSearch(db, tenantId, q);
+  return mergeFilterWithVendorTenantIds(filter, vendorIds);
 }
 
 export const PRODUCT_LIST_PROJECTION = {
