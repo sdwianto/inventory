@@ -188,7 +188,7 @@ export function useCustomerPoPage() {
     let startedAsyncJob = false;
     try {
       const data = await syncPendingMutation.mutateAsync({
-        url: '/api/customer-purchase-orders/sync-pending',
+        url: '/api/customer-purchase-orders/sync-pending?inline=1',
         offlineLabel: 'Sync PO pending ke vendor',
       }) as JsonObject;
       if (data.async === false) {
@@ -530,9 +530,11 @@ export function useCustomerPoPage() {
     try {
       const data = await poMutations.syncVendor(id);
       trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
-      if (data.async || data.vendorSyncPending) {
+      if (data.async || (data.vendorSyncPending && !data.vendorSynced)) {
         toast.info('Mengirim ulang ke vendor di background…');
       } else {
+        await reloadList();
+        invalidateOperationalCaches(queryClient);
         toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
       }
     } catch (e) {

@@ -19,6 +19,7 @@ import {
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
+import { retryVendorSyncForPo } from '@/lib/api/customer-po-vendor-sync';
 import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
@@ -590,17 +591,18 @@ export async function handleCustomerPo({
       return err('Hanya PO berstatus APPROVED/SUBMITTED yang bisa dikirim ulang ke vendor', 400);
     }
 
-    const tenantId = String(po.tenantId || 'default');
-    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
-    const enriched = await enrichOnePo(db, po, { skipSalesBackfill: true });
+    const result = await retryVendorSyncForPo(db, po, po.approvedBy);
+    if (result.error && !result.po) {
+      return err(String(result.error), typeof result.status === 'number' ? result.status : 502);
+    }
+    const enriched = await enrichOnePo(db, result.po || po);
     return ok({
       ...enriched,
-      vendorSyncPending: true,
-      vendorSyncJobId: jobId,
-      async: true,
-      reused,
-      message: 'Kirim ulang ke vendor berjalan di background',
-    }, 202);
+      vendorSynced: result.vendorSynced ?? !enriched.vendorSyncPending,
+      message: result.vendorSynced === false
+        ? 'Sebagian vendor gagal — ulangi per vendor'
+        : 'PO terkirim ke sales.app',
+    });
   }
 
   // POST /customer-purchase-orders/:id/sync-vendor/:vendorTenantId — retry satu vendor gagal

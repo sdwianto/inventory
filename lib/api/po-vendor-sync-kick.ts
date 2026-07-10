@@ -20,12 +20,15 @@ function workerBaseUrl(): string {
 
 async function triggerWorker(jobId: string): Promise<boolean> {
   const kicked = await kickBgWorker({ limit: 2, baseUrl: workerBaseUrl() });
-  if (kicked) return true;
   try {
     const freshDb = await connectToMongo();
     await processJobById(freshDb, jobId);
     return true;
   } catch (e) {
+    if (kicked) {
+      console.warn('[po-vendor-sync] kick ok but inline process failed:', e instanceof Error ? e.message : e);
+      return true;
+    }
     console.warn('[po-vendor-sync] inline process failed:', e instanceof Error ? e.message : e);
     return false;
   }
