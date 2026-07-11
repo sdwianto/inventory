@@ -61,7 +61,31 @@ describe('syncCpoFromVendorEvent', () => {
     expect(updates[0]?.status).toBe('SHIPPED');
   });
 
-  it('marks all PO lines on sales_order.cancelled webhook', async () => {
+  it('marks single PO line on sales_order.cancelled webhook without cancelling whole PO', async () => {
+    const multiItemPo = {
+      ...basePo,
+      status: 'CONFIRMED',
+      items: [
+        { lineId: 'l1', kode: 'B553057', nama: 'Abon', qty: 1, vendorTenantId: 'uddawam' },
+        { lineId: 'l2', kode: 'B711755', nama: 'Tempe', qty: 1, vendorTenantId: 'tempe' },
+      ],
+    };
+    const { db, updates } = mockDb(multiItemPo);
+    await syncCpoFromVendorEvent(db as never, 'sppg', 'sales_order.cancelled', {
+      customerPoId: 'cpo-1',
+      salesOrderId: 'so-tempe',
+      noSO: 'SO001',
+      vendorTenantId: 'tempe',
+      cancelledItems: [{ kode: 'B711755', qty: 1, reason: 'Item terakhir dibatalkan' }],
+      reason: 'Semua item dibatalkan',
+    });
+    expect(updates[0]?.status).toBe('PARTIAL_CANCELLED');
+    const items = updates[0]?.items as Array<{ kode?: string; cancelled?: boolean }>;
+    expect(items.find((r) => r.kode === 'B711755')?.cancelled).toBe(true);
+    expect(items.find((r) => r.kode === 'B553057')?.cancelled).toBeFalsy();
+  });
+
+  it('marks all PO lines on sales_order.cancelled when every line cancelled', async () => {
     const singleItemPo = {
       ...basePo,
       items: [{ lineId: 'l1', kode: 'B711755', nama: 'Tempe', qty: 1 }],

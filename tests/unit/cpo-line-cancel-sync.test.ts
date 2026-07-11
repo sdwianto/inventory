@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyCancelledLinesToPoItems,
-  applyFullSoCancelToPoItems,
+  applySoCancelledWebhookToPoItems,
   diffPoItemsAgainstActiveSo,
   syncCpoFromSoPayload,
 } from '@/lib/api/cpo-line-cancel-sync';
@@ -50,14 +50,19 @@ describe('cpo-line-cancel-sync', () => {
   });
 });
 
-describe('applyFullSoCancelToPoItems', () => {
-  it('marks all lines cancelled with audit when SO fully cancelled', () => {
-    const result = applyFullSoCancelToPoItems(
-      [{ lineId: 'l1', kode: 'B711755', nama: 'Tempe', qty: 1 }],
-      { reason: 'Semua item dibatalkan' },
+describe('applySoCancelledWebhookToPoItems', () => {
+  it('marks scoped vendor lines and returns PARTIAL_CANCELLED for multi-vendor PO', () => {
+    const result = applySoCancelledWebhookToPoItems(
+      [
+        { lineId: 'l1', kode: 'B553057', nama: 'Abon', qty: 1, vendorTenantId: 'uddawam' },
+        { lineId: 'l2', kode: 'B711755', nama: 'Tempe', qty: 1, vendorTenantId: 'tempe' },
+      ],
+      { cancelledItems: [{ kode: 'B711755', qty: 1, reason: 'Batal' }], vendorTenantId: 'tempe' },
       { salesOrderId: 'so-1', noSO: 'SO001' },
+      'CONFIRMED',
     );
-    expect(result.items[0].cancelled).toBe(true);
-    expect(result.cancelledSoLines?.length).toBe(1);
+    expect(result.status).toBe('PARTIAL_CANCELLED');
+    expect(result.items.find((r) => r.kode === 'B711755')?.cancelled).toBe(true);
+    expect(result.items.find((r) => r.kode === 'B553057')?.cancelled).toBeFalsy();
   });
 });

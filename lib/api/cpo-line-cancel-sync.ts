@@ -124,16 +124,19 @@ export function diffPoItemsAgainstActiveSo(
   });
 }
 
-function rollupPartialCancelStatus(items: CpoLine[], currentStatus?: string): string | undefined {
+function rollupPartialCancelStatus(items: CpoLine[], currentStatus?: string): string {
   const active = items.filter((l) => !l.cancelled);
   const cancelled = items.filter((l) => l.cancelled);
-  if (!cancelled.length) return currentStatus;
+  const st = String(currentStatus || '');
+  if (!cancelled.length) return st || 'SUBMITTED';
   if (!active.length) return 'CANCELLED';
-  if (['SUBMITTED', 'CONFIRMED', 'PARTIAL_SHIPPED', 'SHIPPED'].includes(String(currentStatus || ''))) {
+  if (['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED', 'CANCELLED'].includes(st)) {
     return 'PARTIAL_CANCELLED';
   }
-  return currentStatus;
+  return st;
 }
+
+export { rollupPartialCancelStatus };
 
 /** Sinkron payload webhook SO (updated/confirmed) ke dokumen PO. */
 export function syncCpoFromSoPayload(
@@ -180,36 +183,66 @@ export function syncCpoFromSoPayload(
     items,
     ...(soSnap ? { vendorSoSnapshot: soSnap } : {}),
     ...(cancelledSoLines?.length ? { cancelledSoLines } : {}),
-    ...(status && status !== po.status ? { status } : {}),
+    ...(status !== po.status ? { status } : {}),
   };
 }
 
-/** SO dibatalkan penuh — tandai semua baris PO + audit cancel. */
-export function applyFullSoCancelToPoItems(
+/** Webhook sales_order.cancelled — batalkan baris terkait SO/vendor saja (bukan seluruh PO multi-vendor). */
+export function applySoCancelledWebhookToPoItems(
   poItems: CpoLine[],
-  payload: { cancelledItems?: CpoLineCancelRecord[]; reason?: string; cancelReason?: string },
+  payload: {
+    cancelledItems?: CpoLineCancelRecord[];
+    reason?: string;
+    cancelReason?: string;
+    vendorTenantId?: string;
+  },
   meta: { salesOrderId?: string; noSO?: string },
+  currentStatus: string,
   now = new Date(),
-): { items: CpoLine[]; cancelledSoLines?: JsonObject[] } {
+): { items: CpoLine[]; cancelledSoLines?: JsonObject[]; status: string } {
   const explicit = Array.isArray(payload.cancelledItems)
     ? payload.cancelledItems as CpoLineCancelRecord[]
     : [];
   const reason = String(payload.reason || payload.cancelReason || 'SO dibatalkan di sales.app');
-  const toApply = explicit.length
-    ? explicit
-    : poItems.filter((l) => !l.cancelled).map((l) => ({
+  const vendor = String(payload.vendorTenantId || '').trim();
+
+  let toApply = explicit;
+  if (!explicit.length) {
+    const candidates = poItems.filter((l) => !l.cancelled);
+    const scoped = vendor
+      ? candidates.filter((l) => String(l.vendorTenantId || '') === vendor)
+      : candidates;
+    toApply = scoped.map((l) => ({
       lineId: l.lineId ? String(l.lineId) : undefined,
       kode: l.kode ? String(l.kode) : undefined,
       nama: l.nama ? String(l.nama) : undefined,
       qty: parseQty(l.qtyOriginal ?? l.qty),
       reason,
     }));
-  let items = applyCancelledLinesToPoItems(poItems, toApply, meta, now);
+  }
+
+  const items = applyCancelledLinesToPoItems(poItems, toApply, meta, now);
   let cancelledSoLines: JsonObject[] | undefined;
   for (const record of toApply) {
     cancelledSoLines = appendCancelAudit(cancelledSoLines, { ...record, ...meta }, now);
   }
-  return { items, ...(cancelledSoLines?.length ? { cancelledSoLines } : {}) };
+  const status = rollupPartialCancelStatus(items, currentStatus);
+  return {
+    items,
+    ...(cancelledSoLines?.length ? { cancelledSoLines } : {}),
+    status,
+  };
+}
+
+/** @deprecated gunakan applySoCancelledWebhookToPoItems */
+export function applyFullSoCancelToPoItems(
+  poItems: CpoLine[],
+  payload: { cancelledItems?: CpoLineCancelRecord[]; reason?: string; cancelReason?: string },
+  meta: { salesOrderId?: string; noSO?: string },
+  now = new Date(),
+): { items: CpoLine[]; cancelledSoLines?: JsonObject[] } {
+  const result = applySoCancelledWebhookToPoItems(poItems, payload, meta, 'SUBMITTED', now);
+  return { items: result.items, ...(result.cancelledSoLines ? { cancelledSoLines: result.cancelledSoLines } : {}) };
 }
 
 /** Enrich PO untuk tampilan — diff snapshot jika belum ada flag cancel. */

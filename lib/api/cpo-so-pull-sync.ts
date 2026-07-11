@@ -1,7 +1,7 @@
 /** Tarik status SO terbaru dari sales.app untuk sinkron cancel baris PO. */
 
 import type { Db } from 'mongodb';
-import { syncCpoFromSoPayload } from '@/lib/api/cpo-line-cancel-sync';
+import { syncCpoFromSoPayload, rollupPartialCancelStatus } from '@/lib/api/cpo-line-cancel-sync';
 import { fetchSoStatusForCustomerPo } from '@/lib/api/cpo-so-fetch';
 import {
   enrichSubmissionsWithSoFromSales,
@@ -148,7 +148,6 @@ export async function pullSoCancelStateForPo(
   });
   if (fetched.error || !fetched.payload) return { updated: false, error: fetched.error };
 
-  const preserveStatus = PRESERVE_PO_STATUS.has(String(po.status || ''));
   const payload = fetched.payload;
   const synced = syncCpoFromSoPayload(po, {
     salesOrderId: payload.salesOrderId,
@@ -164,8 +163,13 @@ export async function pullSoCancelStateForPo(
   });
 
   const itemsChanged = JSON.stringify(synced.items) !== JSON.stringify(po.items);
-  const nextStatus = preserveStatus ? String(po.status) : (synced.status || String(po.status));
-  const statusChanged = !preserveStatus && synced.status && synced.status !== po.status;
+  const reconciledStatus = synced.status || rollupPartialCancelStatus(
+    synced.items as Parameters<typeof rollupPartialCancelStatus>[0],
+    String(po.status || ''),
+  );
+  const preserveHard = ['PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED'].includes(String(po.status || ''));
+  const nextStatus = preserveHard ? String(po.status) : reconciledStatus;
+  const statusChanged = !preserveHard && nextStatus !== po.status;
   const auditChanged = JSON.stringify(synced.cancelledSoLines || []) !== JSON.stringify(po.cancelledSoLines || []);
   if (!itemsChanged && !statusChanged && !auditChanged) return { updated: false };
 
@@ -227,17 +231,27 @@ export async function enrichPoListWithSoCancelState(
 
   return posWithSo.map((po) => {
     const fresh = pulled.get(String(po.id));
+    const row = fresh || po;
+    const items = (row.items || []) as JsonObject[];
+    const repairedStatus = rollupPartialCancelStatus(items as Parameters<typeof rollupPartialCancelStatus>[0], String(row.status || ''));
+    if (repairedStatus !== row.status) {
+      void db.collection('customer_purchase_orders').updateOne(
+        { id: row.id },
+        { $set: { status: repairedStatus, updatedAt: new Date() }, ...(repairedStatus !== 'CANCELLED' ? { $unset: { cancelledAt: '', cancelReason: '' } } : {}) },
+      );
+      return { ...row, status: repairedStatus };
+    }
     if (fresh) return fresh;
-    const hasCancel = (po.items as JsonObject[] | undefined)?.some((it) => it.cancelled);
-    if (hasCancel) return po;
+    const hasCancel = items.some((it) => it.cancelled);
+    if (hasCancel) return row;
     const snapItems = (po.vendorSoSnapshot as JsonObject | undefined)?.items;
     if (!Array.isArray(snapItems) || !snapItems.length) return po;
     if (snapItems.length >= (po.items as JsonObject[]).length) return po;
-    const items = syncCpoFromSoPayload(po, {
+    const syncedItems = syncCpoFromSoPayload(po, {
       salesOrderId: po.vendorSoId,
       noSO: po.vendorNoSO,
       items: snapItems,
     }).items;
-    return { ...po, items };
+    return { ...po, items: syncedItems };
   });
 }

@@ -1,7 +1,7 @@
 import type { Db } from 'mongodb';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
-import { syncCpoFromSoPayload, applyFullSoCancelToPoItems } from '@/lib/api/cpo-line-cancel-sync';
+import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems } from '@/lib/api/cpo-line-cancel-sync';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import type { JsonObject } from '@/types/json';
 
@@ -111,22 +111,35 @@ export async function syncCpoFromVendorEvent(
       salesOrderId: String(payload.salesOrderId || po.vendorSoId || ''),
       noSO: String(payload.noSO || po.vendorNoSO || ''),
     };
-    const cancelSync = applyFullSoCancelToPoItems(
+    const cancelSync = applySoCancelledWebhookToPoItems(
       (Array.isArray(po.items) ? po.items : []) as CpoLine[],
       {
         cancelledItems: Array.isArray(payload.cancelledItems)
-          ? payload.cancelledItems as Parameters<typeof applyFullSoCancelToPoItems>[1]['cancelledItems']
+          ? payload.cancelledItems as Parameters<typeof applySoCancelledWebhookToPoItems>[1]['cancelledItems']
           : undefined,
         reason: String(payload.reason || payload.cancelReason || 'Dibatalkan vendor'),
+        vendorTenantId: payload.vendorTenantId ? String(payload.vendorTenantId) : undefined,
       },
       meta,
+      String(po.status || 'SUBMITTED'),
       now,
     );
-    patch.status = 'CANCELLED';
+    patch.status = cancelSync.status;
     patch.items = cancelSync.items;
     if (cancelSync.cancelledSoLines) patch.cancelledSoLines = cancelSync.cancelledSoLines;
-    patch.cancelledAt = payload.cancelledAt ? new Date(String(payload.cancelledAt)) : now;
-    patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
+    if (cancelSync.status === 'CANCELLED') {
+      patch.cancelledAt = payload.cancelledAt ? new Date(String(payload.cancelledAt)) : now;
+      patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
+    }
+    const subs = Array.isArray(po.vendorSubmissions) ? [...po.vendorSubmissions] as JsonObject[] : [];
+    if (subs.length) {
+      const soId = meta.salesOrderId;
+      const noSO = meta.noSO;
+      patch.vendorSubmissions = subs.map((sub) => {
+        const match = (soId && sub.vendorSoId === soId) || (noSO && sub.vendorNoSO === noSO);
+        return match ? { ...sub, status: 'CANCELLED', vendorSo: payload } : sub;
+      });
+    }
   } else if (event === 'delivery.shipped') {
     const usedShip = new Set<number>();
     const webhookItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
