@@ -181,6 +181,7 @@ function CustomerPoPageContent() {
                       onSyncSoLines={() => syncSoLinesPo(poId)}
                       onApprove={() => approvePo(poId)}
                       onReject={(reason) => rejectPo(poId, reason)}
+                      tenantName={str(user?.tenantName || user?.name)}
                     />
                   );
                 })}

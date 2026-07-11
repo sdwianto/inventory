@@ -10,12 +10,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  CheckCircle2, ChevronDown, ChevronRight, Pencil, RefreshCw, Send, XCircle,
+  CheckCircle2, ChevronDown, ChevronRight, Pencil, Printer, RefreshCw, Send, XCircle,
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
 import { poCreatorLabel, formatPoVendorSoDisplay, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
 import { canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
+import PrintPortal from '@/components/PrintPortal';
+import CustomerPoDocument from '@/components/CustomerPoDocument';
+import { printDocument } from '@/lib/doc-print';
+
+const PO_PRINT_ID = 'customer-po-a4-print';
 
 export type PoListCardProps = {
   po: JsonObject;
@@ -36,6 +41,7 @@ export type PoListCardProps = {
   onSyncSoLines?: () => void;
   onApprove: () => void;
   onReject: (reason: string) => void;
+  tenantName?: string;
 };
 
 export default function PoListCard({
@@ -57,9 +63,11 @@ export default function PoListCard({
   onSyncSoLines,
   onApprove,
   onReject,
+  tenantName,
 }: PoListCardProps) {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [printing, setPrinting] = useState(false);
 
   const poId = str(po.id);
   const isOptimistic = isPendingOptimisticPo(po);
@@ -78,6 +86,15 @@ export default function PoListCard({
     onReject(rejectReason || 'Ditolak admin');
     setRejectDialogOpen(false);
     setRejectReason('');
+  };
+
+  const handlePrint = async () => {
+    setPrinting(true);
+    try {
+      await printDocument(PO_PRINT_ID);
+    } finally {
+      setPrinting(false);
+    }
   };
 
   return (
@@ -197,6 +214,12 @@ export default function PoListCard({
       </div>
       {expanded && (
         <div className="border-t bg-slate-50/50 px-3 py-2 text-sm">
+          <div className="flex justify-end mb-2 no-print">
+            <Button type="button" size="sm" variant="outline" disabled={printing} onClick={handlePrint}>
+              <Printer className="w-3 h-3 mr-1" />
+              {printing ? '...' : 'Cetak PO'}
+            </Button>
+          </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 mb-2 pb-2 border-b border-slate-100">
             <span>
               <span className="font-medium text-slate-700">Dibuat oleh:</span>{' '}
@@ -364,6 +387,18 @@ export default function PoListCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {printing && (
+        <PrintPortal>
+          <div className="doc-print-host">
+            <CustomerPoDocument
+              po={po}
+              tenantName={tenantName}
+              vendorNameById={vendorNameById}
+              printId={PO_PRINT_ID}
+            />
+          </div>
+        </PrintPortal>
+      )}
     </div>
   );
 }

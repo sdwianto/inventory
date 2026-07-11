@@ -33,19 +33,33 @@ function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
   return null;
 }
 
+function lineQtyTarget(line: CpoLine): number {
+  if (line.cancelled) return 0;
+  return parseFloat(String(line.qty)) || 0;
+}
+
 function rollupShipStatus(items: CpoLine[]) {
-  if (!items?.length) return 'SHIPPED';
-  const allShipped = items.every((it) => (Number(it.qtyShipped) || 0) >= (parseFloat(String(it.qty)) || 0));
-  const anyShipped = items.some((it) => (Number(it.qtyShipped) || 0) > 0);
+  const active = items.filter((it) => lineQtyTarget(it) > 0);
+  if (!active.length) {
+    const anyShipped = items.some((it) => (Number(it.qtyShipped) || 0) > 0);
+    return anyShipped ? 'SHIPPED' : 'CONFIRMED';
+  }
+  const allShipped = active.every((it) => (Number(it.qtyShipped) || 0) >= lineQtyTarget(it));
+  const anyShipped = active.some((it) => (Number(it.qtyShipped) || 0) > 0)
+    || items.some((it) => it.cancelled && (Number(it.qtyShipped) || 0) > 0);
   if (allShipped) return 'SHIPPED';
   if (anyShipped) return 'PARTIAL_SHIPPED';
   return 'CONFIRMED';
 }
 
 function rollupReceiveStatus(items: CpoLine[]) {
-  if (!items?.length) return 'RECEIVED';
-  const allReceived = items.every((it) => (Number(it.qtyReceived) || 0) >= (parseFloat(String(it.qty)) || 0));
-  const anyReceived = items.some((it) => (Number(it.qtyReceived) || 0) > 0);
+  const active = items.filter((it) => lineQtyTarget(it) > 0);
+  if (!active.length) {
+    const anyReceived = items.some((it) => (Number(it.qtyReceived) || 0) > 0);
+    return anyReceived ? 'RECEIVED' : 'SHIPPED';
+  }
+  const allReceived = active.every((it) => (Number(it.qtyReceived) || 0) >= lineQtyTarget(it));
+  const anyReceived = active.some((it) => (Number(it.qtyReceived) || 0) > 0);
   if (allReceived) return 'RECEIVED';
   if (anyReceived) return 'PARTIAL_RECEIVED';
   return 'SHIPPED';
@@ -69,8 +83,12 @@ export async function syncCpoFromVendorEvent(
   if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
     const soSynced = syncCpoFromSoPayload(po, payload, now);
     if (event === 'sales_order.confirmed') {
-      patch.status = 'CONFIRMED';
       patch.confirmedAt = payload.confirmedAt ? new Date(String(payload.confirmedAt)) : now;
+      if (soSynced.status === 'PARTIAL_CANCELLED' || soSynced.status === 'CANCELLED') {
+        patch.status = soSynced.status;
+      } else {
+        patch.status = 'CONFIRMED';
+      }
     } else if (soSynced.status) {
       patch.status = soSynced.status;
     }
