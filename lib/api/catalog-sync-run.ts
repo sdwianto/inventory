@@ -3,7 +3,11 @@
 import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { bulkUpsertProductsFromVendor } from '@/lib/api/product-sync-batch';
-import { backfillVendorUomLinks } from '@/lib/api/product-sync';
+import {
+  backfillVendorUomLinks,
+  reconcileOrphanVendorProducts,
+  vendorCatalogKeyFromProduct,
+} from '@/lib/api/product-sync';
 import {
   upsertVendorTenantsFromCatalog,
   bulkUpsertVendorTenantNames,
@@ -58,6 +62,70 @@ async function fetchCatalogPage(
 /** Legacy monolithic response (sales lama tanpa pagination). */
 function isLegacyCatalogPayload(data: JsonObject): boolean {
   return data.hasMore === undefined && data.nextCursor === undefined && Array.isArray(data.products);
+}
+
+/** Ambil semua kunci produk aktif dari katalog sales (tanpa updatedSince) untuk rekonsiliasi. */
+async function fetchAllCatalogVendorKeys(
+  salesAppUrl: string,
+  headers: Record<string, string>,
+  onProgress?: (page: number, keyCount: number) => Promise<void>,
+): Promise<{ keys: Set<string>; ok: boolean }> {
+  const keys = new Set<string>();
+  let cursor: string | undefined;
+  let page = 0;
+
+  for (;;) {
+    page += 1;
+    const pageRes = await fetchCatalogPage(salesAppUrl, headers, { cursor, updatedSince: null });
+    if (!pageRes.ok) {
+      return { keys, ok: keys.size > 0 };
+    }
+
+    const data = pageRes.data;
+    const products = Array.isArray(data.products) ? data.products as JsonObject[] : [];
+    for (const p of products) {
+      const key = vendorCatalogKeyFromProduct(p);
+      if (key) keys.add(key);
+    }
+    if (onProgress) await onProgress(page, keys.size);
+
+    const hasMore = data.hasMore === true;
+    const nextCursor = data.nextCursor != null ? String(data.nextCursor) : '';
+    if (hasMore && nextCursor) {
+      cursor = nextCursor;
+      continue;
+    }
+    if (isLegacyCatalogPayload(data) || !hasMore) break;
+    break;
+  }
+
+  return { keys, ok: true };
+}
+
+async function runCatalogReconcile(
+  db: Db,
+  tenantId: string,
+  salesAppUrl: string,
+  headers: Record<string, string>,
+  jobId?: string,
+) {
+  await updateJobProgress(db, jobId, {
+    phase: 'reconcile',
+    message: 'Rekonsiliasi produk yang tidak ada di sales…',
+  });
+  const scan = await fetchAllCatalogVendorKeys(salesAppUrl, headers, async (page, keyCount) => {
+    await updateJobProgress(db, jobId, {
+      phase: 'reconcile',
+      page,
+      totalFetched: keyCount,
+      message: `Memindai katalog sales (halaman ${page})…`,
+    });
+  });
+  if (!scan.ok) {
+    return { deactivated: 0, sample: [] as string[], skipped: true };
+  }
+  const result = await reconcileOrphanVendorProducts(db, tenantId, scan.keys);
+  return { ...result, skipped: false };
 }
 
 export async function runCatalogSync(
@@ -118,6 +186,7 @@ export async function runCatalogSync(
 
     const products = Array.isArray(data.products) ? data.products as JsonObject[] : [];
     if (!products.length && page === 1 && !isLegacyCatalogPayload(data)) {
+      const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
       const now = new Date();
       await db.collection('integration_settings').updateOne(
         { tenantId },
@@ -129,7 +198,11 @@ export async function runCatalogSync(
         pages: 0,
         allTenants: true,
         incremental: !!lastSync,
-        message: 'Katalog sudah up-to-date',
+        reconciled: reconcile.deactivated,
+        reconciledSample: reconcile.sample,
+        message: reconcile.deactivated
+          ? `Katalog up-to-date — ${reconcile.deactivated} produk usang dinonaktifkan`
+          : 'Katalog sudah up-to-date',
       };
     }
 
@@ -168,6 +241,7 @@ export async function runCatalogSync(
     return { error: 'Katalog kosong di sales.app — pastikan ada produk aktif' };
   }
 
+  const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
   const namesBackfilled = await backfillProductVendorNames(db, tenantId);
   const uomBackfill = await backfillVendorUomLinks(db, tenantId);
   const tierSync = await syncVendorTiersFromSales(db, tenantId, config);
@@ -192,6 +266,8 @@ export async function runCatalogSync(
     uomVendorLinksBackfilled: uomBackfill.fixed,
     tierSync: tierSync?.error ? { error: tierSync.error } : tierSync,
     grnRefreshed,
+    reconciled: reconcile.deactivated,
+    reconciledSample: reconcile.sample,
     availableTenants,
   };
 }

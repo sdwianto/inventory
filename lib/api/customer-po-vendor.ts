@@ -150,6 +150,13 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
   for (const it of items || []) {
     const prod = resolveProduct(it, maps);
 
+    if (prod && prod.aktif === false) {
+      const label = String(prod.nama || prod.kode || it.nama || it.kode || '?');
+      return {
+        error: `Produk "${label}" sudah tidak aktif di sales.app — jalankan Sync Katalog atau pilih produk lain.`,
+      };
+    }
+
     const vendorStokId = String(prod?.vendorStokId || it.vendorStokId || '').trim();
     const vendorKode = prod?.kode || it.vendorKode || it.kode || '';
     const itemVendorTenantId = prod?.vendorTenantId || it.vendorTenantId || '';

@@ -269,6 +269,56 @@ export function isVendorSyncedProduct(doc: Record<string, unknown> | null | unde
   return doc?.syncSource === 'sales.app';
 }
 
+export function isVendorProductActive(doc: Record<string, unknown> | null | undefined) {
+  return doc?.aktif !== false;
+}
+
+/** Kunci unik produk vendor di katalog sales: vendorTenantId + vendorStokId. */
+export function vendorCatalogKey(vendorTenantId: string, vendorStokId: string): string {
+  return `${vendorTenantId}:${vendorStokId}`;
+}
+
+export function vendorCatalogKeyFromProduct(product: Record<string, unknown>): string | null {
+  const vTenant = String(product.vendorTenantId || product.tenantId || '').trim();
+  const vStok = String(product.id || product.vendorStokId || '').trim();
+  if (!vTenant || !vStok) return null;
+  return vendorCatalogKey(vTenant, vStok);
+}
+
+/** Nonaktifkan salinan inventory yang tidak lagi ada di katalog sales aktif. */
+export async function reconcileOrphanVendorProducts(
+  db: Db,
+  customerTenantId: string,
+  activeCatalogKeys: Set<string>,
+): Promise<{ deactivated: number; sample: string[] }> {
+  const tid = customerTenantId || 'default';
+  const rows = await db.collection('products').find({
+    tenantId: tid,
+    syncSource: 'sales.app',
+    aktif: { $ne: false },
+    vendorStokId: { $exists: true, $type: 'string', $ne: '' },
+    vendorTenantId: { $exists: true, $type: 'string', $ne: '' },
+  }).project({ id: 1, kode: 1, vendorStokId: 1, vendorTenantId: 1 }).toArray();
+
+  const orphanIds: string[] = [];
+  const sample: string[] = [];
+  for (const row of rows) {
+    const key = vendorCatalogKey(String(row.vendorTenantId), String(row.vendorStokId));
+    if (activeCatalogKeys.has(key)) continue;
+    orphanIds.push(String(row.id));
+    if (sample.length < 10) sample.push(String(row.kode || row.id));
+  }
+
+  if (!orphanIds.length) return { deactivated: 0, sample: [] };
+
+  const now = new Date();
+  const r = await db.collection('products').updateMany(
+    { tenantId: tid, id: { $in: orphanIds } },
+    { $set: { aktif: false, updatedAt: now } },
+  );
+  return { deactivated: r.modifiedCount, sample };
+}
+
 /** Perbaiki product_uom yang sudah disync tapi vendorUomId kosong (data lama / sync incremental). */
 export async function backfillVendorUomLinks(db: Db, customerTenantId: string) {
   const tid = customerTenantId || 'default';

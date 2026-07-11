@@ -207,4 +207,39 @@ describe('enrichPoItemsForVendor', () => {
       expect(result.items?.[0]?.satuan).toBe('PCS');
     }
   });
+
+  it('rejects inactive synced product', async () => {
+    const inactiveDb = {
+      collection: (name: string) => ({
+        find: () => ({
+          toArray: async () => {
+            if (name === 'products') {
+              return [{
+                id: 'lp1',
+                tenantId: 'sppg',
+                kode: 'B872426',
+                nama: 'Tempe Kecil',
+                vendorStokId: 'vp-old',
+                vendorTenantId: 'abiliyan',
+                syncSource: 'sales.app',
+                aktif: false,
+              }];
+            }
+            return [];
+          },
+        }),
+      }),
+    };
+
+    const result = await enrichPoItemsForVendor(inactiveDb as never, 'sppg', [{
+      localStokId: 'lp1',
+      qty: 1,
+      nama: 'Tempe Kecil',
+    }]);
+
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/tidak aktif/i);
+    }
+  });
 });

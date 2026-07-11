@@ -150,7 +150,10 @@ export async function handleProducts({
     const skip = Math.max(parseInt(url.searchParams.get('skip') || '0', 10) || 0, 0);
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     if (grup) filter.grup = grup;
-    if (syncSource) filter.syncSource = syncSource;
+    if (syncSource) {
+      filter.syncSource = syncSource;
+      if (syncSource === 'sales.app') filter.aktif = { $ne: false };
+    }
     if (idsParam) {
       const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);
       if (ids.length) filter.id = { $in: ids };
