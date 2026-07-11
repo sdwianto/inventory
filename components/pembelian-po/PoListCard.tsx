@@ -79,6 +79,7 @@ export default function PoListCard({
   const lastEditedBy = asObject(po.lastEditedBy);
   const poItems = asArray(po.items) as JsonObject[];
   const vendorSubs = asArray(po.vendorSubmissions) as JsonObject[];
+  const cancelledSoLines = asArray(po.cancelledSoLines) as JsonObject[];
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
 
@@ -329,6 +330,11 @@ export default function PoListCard({
                         Dibatalkan
                       </span>
                     )}
+                    {cancelled && !!it.cancelReason && (
+                      <div className="text-[10px] text-rose-600 mt-0.5 no-underline line-clamp-3">
+                        {str(it.cancelReason)}
+                      </div>
+                    )}
                   </td>
                   <td className="py-1.5 text-right whitespace-nowrap text-slate-600">
                     {it.estimasiHarga ? formatIDR(num(it.estimasiHarga)) : '—'}
@@ -348,6 +354,35 @@ export default function PoListCard({
             <p className="text-[10px] text-rose-600 mt-2">
               Baris dicoret = item dibatalkan di sales.app (SO vendor). Item aktif tetap diproses.
             </p>
+          )}
+          {cancelledSoLines.length > 0 && (
+            <div className="mt-3 border-t border-rose-100 pt-2 text-xs">
+              <p className="font-semibold text-rose-700 mb-1">Riwayat pembatalan SO vendor</p>
+              <ul className="space-y-1">
+                {cancelledSoLines.map((row, idx) => (
+                  <li key={idx} className="text-slate-600 bg-rose-50/50 rounded px-2 py-1">
+                    <span className="font-mono line-through">{str(row.kode)}</span>
+                    {' '}{str(row.nama)}
+                    {row.noSO ? ` · SO ${str(row.noSO)}` : ''}
+                    {row.reason ? (
+                      <span className="block text-[10px] text-rose-700 mt-0.5">{str(row.reason)}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {vendorSubs.some((s) => str(s.status) === 'CANCELLED') && (
+            <div className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded px-2 py-1.5">
+              <span className="font-medium">SO vendor dibatalkan:</span>
+              {vendorSubs.filter((s) => str(s.status) === 'CANCELLED').map((sub) => (
+                <div key={str(sub.vendorTenantId)} className="mt-0.5">
+                  {vendorNameById[str(sub.vendorTenantId)] || str(sub.vendorTenantId)}
+                  {sub.vendorNoSO ? ` (${str(sub.vendorNoSO)})` : ''}
+                  {sub.cancelReason ? ` — ${str(sub.cancelReason)}` : ''}
+                </div>
+              ))}
+            </div>
           )}
           {(!!po.vendorNoDO || !!po.vendorNoInvoice) && (
             <div className="mt-2 text-xs text-slate-600">

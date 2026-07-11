@@ -137,7 +137,7 @@ export async function syncCpoFromVendorEvent(
       const noSO = meta.noSO;
       patch.vendorSubmissions = subs.map((sub) => {
         const match = (soId && sub.vendorSoId === soId) || (noSO && sub.vendorNoSO === noSO);
-        return match ? { ...sub, status: 'CANCELLED', vendorSo: payload } : sub;
+        return match ? { ...sub, status: 'CANCELLED', cancelReason: payload.reason || payload.cancelReason, vendorSo: payload } : sub;
       });
     }
   } else if (event === 'delivery.shipped') {
