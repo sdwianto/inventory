@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyCancelledLinesToPoItems,
+  applyFullSoCancelToPoItems,
   diffPoItemsAgainstActiveSo,
   syncCpoFromSoPayload,
 } from '@/lib/api/cpo-line-cancel-sync';
@@ -46,5 +47,17 @@ describe('cpo-line-cancel-sync', () => {
     expect(result.status).toBe('PARTIAL_CANCELLED');
     expect(result.items?.filter((r) => r.cancelled)).toHaveLength(2);
     expect(result.cancelledSoLines?.length).toBeGreaterThan(0);
+  });
+});
+
+describe('applyFullSoCancelToPoItems', () => {
+  it('marks all lines cancelled with audit when SO fully cancelled', () => {
+    const result = applyFullSoCancelToPoItems(
+      [{ lineId: 'l1', kode: 'B711755', nama: 'Tempe', qty: 1 }],
+      { reason: 'Semua item dibatalkan' },
+      { salesOrderId: 'so-1', noSO: 'SO001' },
+    );
+    expect(result.items[0].cancelled).toBe(true);
+    expect(result.cancelledSoLines?.length).toBe(1);
   });
 });

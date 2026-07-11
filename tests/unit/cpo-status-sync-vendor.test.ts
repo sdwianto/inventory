@@ -60,4 +60,24 @@ describe('syncCpoFromVendorEvent', () => {
     });
     expect(updates[0]?.status).toBe('SHIPPED');
   });
+
+  it('marks all PO lines on sales_order.cancelled webhook', async () => {
+    const singleItemPo = {
+      ...basePo,
+      items: [{ lineId: 'l1', kode: 'B711755', nama: 'Tempe', qty: 1 }],
+    };
+    const { db, updates } = mockDb(singleItemPo);
+    await syncCpoFromVendorEvent(db as never, 'sppg', 'sales_order.cancelled', {
+      customerPoId: 'cpo-1',
+      salesOrderId: 'so-1',
+      noSO: 'SO001',
+      cancelledItems: [{ kode: 'B711755', qty: 1, reason: 'Item terakhir dibatalkan' }],
+      reason: 'Semua item dibatalkan',
+    });
+    expect(updates[0]?.status).toBe('CANCELLED');
+    const items = updates[0]?.items as Array<{ kode?: string; cancelled?: boolean }>;
+    expect(items).toHaveLength(1);
+    expect(items[0]?.cancelled).toBe(true);
+    expect((updates[0]?.cancelledSoLines as unknown[])?.length).toBeGreaterThan(0);
+  });
 });

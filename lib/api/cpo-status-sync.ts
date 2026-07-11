@@ -1,7 +1,7 @@
 import type { Db } from 'mongodb';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
-import { syncCpoFromSoPayload } from '@/lib/api/cpo-line-cancel-sync';
+import { syncCpoFromSoPayload, applyFullSoCancelToPoItems } from '@/lib/api/cpo-line-cancel-sync';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import type { JsonObject } from '@/types/json';
 
@@ -107,7 +107,24 @@ export async function syncCpoFromVendorEvent(
       });
     }
   } else if (event === 'sales_order.cancelled') {
+    const meta = {
+      salesOrderId: String(payload.salesOrderId || po.vendorSoId || ''),
+      noSO: String(payload.noSO || po.vendorNoSO || ''),
+    };
+    const cancelSync = applyFullSoCancelToPoItems(
+      (Array.isArray(po.items) ? po.items : []) as CpoLine[],
+      {
+        cancelledItems: Array.isArray(payload.cancelledItems)
+          ? payload.cancelledItems as Parameters<typeof applyFullSoCancelToPoItems>[1]['cancelledItems']
+          : undefined,
+        reason: String(payload.reason || payload.cancelReason || 'Dibatalkan vendor'),
+      },
+      meta,
+      now,
+    );
     patch.status = 'CANCELLED';
+    patch.items = cancelSync.items;
+    if (cancelSync.cancelledSoLines) patch.cancelledSoLines = cancelSync.cancelledSoLines;
     patch.cancelledAt = payload.cancelledAt ? new Date(String(payload.cancelledAt)) : now;
     patch.cancelReason = payload.reason || payload.cancelReason || 'Dibatalkan vendor';
   } else if (event === 'delivery.shipped') {

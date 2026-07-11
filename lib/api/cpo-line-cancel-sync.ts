@@ -184,6 +184,34 @@ export function syncCpoFromSoPayload(
   };
 }
 
+/** SO dibatalkan penuh — tandai semua baris PO + audit cancel. */
+export function applyFullSoCancelToPoItems(
+  poItems: CpoLine[],
+  payload: { cancelledItems?: CpoLineCancelRecord[]; reason?: string; cancelReason?: string },
+  meta: { salesOrderId?: string; noSO?: string },
+  now = new Date(),
+): { items: CpoLine[]; cancelledSoLines?: JsonObject[] } {
+  const explicit = Array.isArray(payload.cancelledItems)
+    ? payload.cancelledItems as CpoLineCancelRecord[]
+    : [];
+  const reason = String(payload.reason || payload.cancelReason || 'SO dibatalkan di sales.app');
+  const toApply = explicit.length
+    ? explicit
+    : poItems.filter((l) => !l.cancelled).map((l) => ({
+      lineId: l.lineId ? String(l.lineId) : undefined,
+      kode: l.kode ? String(l.kode) : undefined,
+      nama: l.nama ? String(l.nama) : undefined,
+      qty: parseQty(l.qtyOriginal ?? l.qty),
+      reason,
+    }));
+  let items = applyCancelledLinesToPoItems(poItems, toApply, meta, now);
+  let cancelledSoLines: JsonObject[] | undefined;
+  for (const record of toApply) {
+    cancelledSoLines = appendCancelAudit(cancelledSoLines, { ...record, ...meta }, now);
+  }
+  return { items, ...(cancelledSoLines?.length ? { cancelledSoLines } : {}) };
+}
+
 /** Enrich PO untuk tampilan — diff snapshot jika belum ada flag cancel. */
 export function enrichPoItemsForDisplay(po: JsonObject): JsonObject[] {
   const items = (Array.isArray(po.items) ? po.items : []) as CpoLine[];
