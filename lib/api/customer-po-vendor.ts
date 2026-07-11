@@ -2,9 +2,10 @@ import type { Db } from 'mongodb';
 // Siapkan baris PO untuk dikirim ke sales.app — kode produk = single source of truth di master.
 
 import type { JsonObject } from '@/types/json';
-import { findProductUomsByIds } from '@/lib/api/product-uom';
+import { findProductUomsByIds, listProductUomsByProductIds } from '@/lib/api/product-uom';
+import type { ProductUom } from '@/lib/uom/types';
 
-type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string };
+type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string; syncSource?: string };
 
 async function loadProductsBatch(db: Db, tenantId: string, items: JsonObject[]) {
   const tid = tenantId || 'default';
@@ -95,6 +96,39 @@ function resolveProduct(
   return null;
 }
 
+function normSatuan(s?: string | null): string {
+  return String(s || '').trim().toUpperCase();
+}
+
+/** Cari vendorUomId untuk push PO — toleran data lama / uomId stale setelah sync. */
+function resolveVendorUomId(
+  prod: ProductDoc,
+  localUom: ProductUom | undefined,
+  productUoms: ProductUom[],
+  satuanHint?: string,
+): string | undefined {
+  if (localUom?.vendorUomId) return localUom.vendorUomId;
+
+  const target = normSatuan(localUom?.satuan || satuanHint);
+  const linked = productUoms.find((u) => normSatuan(u.satuan) === target && u.vendorUomId);
+  if (linked?.vendorUomId) return linked.vendorUomId;
+
+  const baseLinked = productUoms.find((u) => u.isBase && u.vendorUomId);
+  if (baseLinked?.vendorUomId && (!target || normSatuan(baseLinked.satuan) === target)) {
+    return baseLinked.vendorUomId;
+  }
+
+  const vendorStokId = String(prod.vendorStokId || '').trim();
+  if (prod.syncSource === 'sales.app' && vendorStokId && localUom?.isBase !== false) {
+    const base = productUoms.find((u) => u.isBase) || productUoms[0];
+    if (base && (!target || normSatuan(base.satuan) === target)) {
+      return `legacy:${vendorStokId}`;
+    }
+  }
+
+  return undefined;
+}
+
 export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: JsonObject[]) {
   const tid = tenantId || 'default';
   const maps = await loadProductsBatch(db, tid, items);
@@ -102,12 +136,21 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     (items || []).map((it) => it.uomId).filter(Boolean).map(String),
   )];
   const uomById = await findProductUomsByIds(db, tid, uomIds);
+
+  const productIds = [...new Set(
+    (items || [])
+      .map((it) => resolveProduct(it, maps)?.id)
+      .filter(Boolean)
+      .map(String),
+  )];
+  const uomsByProduct = await listProductUomsByProductIds(db, tid, productIds);
+
   const enriched: JsonObject[] = [];
 
   for (const it of items || []) {
     const prod = resolveProduct(it, maps);
 
-    const vendorStokId = prod?.vendorStokId || it.vendorStokId || '';
+    const vendorStokId = String(prod?.vendorStokId || it.vendorStokId || '').trim();
     const vendorKode = prod?.kode || it.vendorKode || it.kode || '';
     const itemVendorTenantId = prod?.vendorTenantId || it.vendorTenantId || '';
 
@@ -121,18 +164,31 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     let satuan = it.satuan ? String(it.satuan) : undefined;
     let vendorUomId: string | undefined;
 
-    if (it.uomId) {
-      const localUom = uomById.get(String(it.uomId));
-      if (localUom) {
-        satuan = localUom.satuan;
-        vendorUomId = localUom.vendorUomId || undefined;
-        if (!vendorUomId) {
-          return {
-            error: `Satuan "${localUom.satuan}" untuk "${it.nama || vendorKode}" belum terhubung ke sales.app — jalankan Sync Katalog.`,
-          };
-        }
+    const productUoms = prod?.id ? (uomsByProduct.get(String(prod.id)) || []) : [];
+    let localUom = it.uomId ? uomById.get(String(it.uomId)) : undefined;
+    if (!localUom && it.uomId && productUoms.length) {
+      localUom = productUoms.find((u) => u.id === String(it.uomId));
+    }
+    if (!localUom && productUoms.length) {
+      const hint = normSatuan(it.satuan ? String(it.satuan) : undefined);
+      localUom = productUoms.find((u) => normSatuan(u.satuan) === hint)
+        || productUoms.find((u) => u.isBase)
+        || productUoms[0];
+    }
+
+    if (localUom || it.uomId || it.satuan) {
+      if (localUom) satuan = localUom.satuan;
+      vendorUomId = resolveVendorUomId(
+        prod || { vendorStokId, syncSource: 'sales.app' },
+        localUom,
+        productUoms,
+        it.satuan ? String(it.satuan) : undefined,
+      );
+      if (!vendorUomId) {
+        return {
+          error: `Satuan "${localUom?.satuan || it.satuan || '?'}" untuk "${it.nama || vendorKode}" belum terhubung ke sales.app — jalankan Sync Katalog.`,
+        };
       }
-      // If uomId not found, fall through to satuan resolution
     }
 
     enriched.push({

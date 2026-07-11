@@ -117,6 +117,29 @@ export async function upsertProductFromVendor(
   return { action: 'created', id: doc.id, kode: snap.kode, vendorTenantId: vTenant };
 }
 
+/** ID satuan dasar di sales.app untuk produk legacy (tanpa baris product_uom). */
+export function resolveVendorBaseUomId(
+  vendorProduct: Record<string, unknown>,
+  snap: ReturnType<typeof vendorProductSnapshot>,
+): string {
+  const fromCatalog = vendorProduct.baseUomId != null ? String(vendorProduct.baseUomId).trim() : '';
+  if (fromCatalog) return fromCatalog;
+  const vendorUoms = Array.isArray(vendorProduct.uoms) ? vendorProduct.uoms : [];
+  const base = vendorUoms.find((u) => (u as { isBase?: boolean }).isBase === true) || vendorUoms[0];
+  if (base && (base as { id?: string }).id) return String((base as { id: string }).id);
+  return `legacy:${snap.id}`;
+}
+
+function attachLegacyVendorUomIds(
+  uoms: NormalizedUomInput[],
+  vendorBaseUomId: string,
+): NormalizedUomInput[] {
+  return uoms.map((u) => ({
+    ...u,
+    vendorUomId: u.vendorUomId || (u.isBase ? vendorBaseUomId : undefined),
+  }));
+}
+
 function vendorUomsToInputs(
   vendorProduct: Record<string, unknown>,
   snap: ReturnType<typeof vendorProductSnapshot>,
@@ -144,7 +167,8 @@ function vendorUomsToInputs(
     hargaSpesial: snap.hargaSpesial,
   }));
   if ('error' in legacyParsed) return null;
-  return legacyParsed.uoms;
+  const vendorBaseUomId = resolveVendorBaseUomId(vendorProduct, snap);
+  return attachLegacyVendorUomIds(legacyParsed.uoms, vendorBaseUomId);
 }
 
 export async function bulkSyncVendorProductUoms(
@@ -203,7 +227,13 @@ export async function syncVendorProductUoms(
       hargaSpesial: snap.hargaSpesial,
     }));
     if ('error' in legacyParsed) return;
-    uomDocs = await replaceProductUoms(db, tenantId, localProductId, legacyParsed.uoms);
+    const vendorBaseUomId = resolveVendorBaseUomId(vendorProduct, snap);
+    uomDocs = await replaceProductUoms(
+      db,
+      tenantId,
+      localProductId,
+      attachLegacyVendorUomIds(legacyParsed.uoms, vendorBaseUomId),
+    );
   }
   const base = pickBaseUom(uomDocs);
   if (base) {
@@ -237,4 +267,45 @@ export async function deactivateProductFromVendor(
 
 export function isVendorSyncedProduct(doc: Record<string, unknown> | null | undefined) {
   return doc?.syncSource === 'sales.app';
+}
+
+/** Perbaiki product_uom yang sudah disync tapi vendorUomId kosong (data lama / sync incremental). */
+export async function backfillVendorUomLinks(db: Db, customerTenantId: string) {
+  const tid = customerTenantId || 'default';
+  const products = await db.collection('products').find({
+    tenantId: tid,
+    syncSource: 'sales.app',
+    vendorStokId: { $exists: true, $ne: '' },
+  }).project({ id: 1, vendorStokId: 1 }).toArray();
+
+  if (!products.length) return { fixed: 0 };
+
+  const productIds = products.map((p) => String(p.id));
+  const vendorStokByProduct = new Map(products.map((p) => [String(p.id), String(p.vendorStokId)]));
+
+  const broken = await db.collection('product_uom').find({
+    tenantId: tid,
+    productId: { $in: productIds },
+    aktif: { $ne: false },
+    $or: [
+      { vendorUomId: { $exists: false } },
+      { vendorUomId: '' },
+      { vendorUomId: null },
+    ],
+  }).toArray();
+
+  let fixed = 0;
+  const now = new Date();
+  for (const row of broken) {
+    const vendorStokId = vendorStokByProduct.get(String(row.productId));
+    if (!vendorStokId) continue;
+    const vendorUomId = row.isBase === true ? `legacy:${vendorStokId}` : undefined;
+    if (!vendorUomId) continue;
+    await db.collection('product_uom').updateOne(
+      { id: row.id },
+      { $set: { vendorUomId, updatedAt: now } },
+    );
+    fixed += 1;
+  }
+  return { fixed };
 }

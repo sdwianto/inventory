@@ -3,6 +3,7 @@
 import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { bulkUpsertProductsFromVendor } from '@/lib/api/product-sync-batch';
+import { backfillVendorUomLinks } from '@/lib/api/product-sync';
 import {
   upsertVendorTenantsFromCatalog,
   bulkUpsertVendorTenantNames,
@@ -168,6 +169,7 @@ export async function runCatalogSync(
   }
 
   const namesBackfilled = await backfillProductVendorNames(db, tenantId);
+  const uomBackfill = await backfillVendorUomLinks(db, tenantId);
   const tierSync = await syncVendorTiersFromSales(db, tenantId, config);
   const grnRefreshed = await refreshUnresolvedGrnsForTenant(db, tenantId);
   const vendorTenants = Object.keys(results.byVendor);
@@ -187,6 +189,7 @@ export async function runCatalogSync(
     vendorTenants,
     vendorTenantCount: vendorTenants.length,
     vendorNamesBackfilled: namesBackfilled,
+    uomVendorLinksBackfilled: uomBackfill.fixed,
     tierSync: tierSync?.error ? { error: tierSync.error } : tierSync,
     grnRefreshed,
     availableTenants,
