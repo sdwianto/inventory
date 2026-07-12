@@ -3,6 +3,7 @@ import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
 import { processPendingJobs, getJobByIdAccessible, enqueueJob, scheduleJobProcessing, JOB_TYPES, recoverStaleRunningJobs } from '@/lib/api/bg-jobs';
+import { shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 import {
   isWorkerProcessRoute,
   isWorkerAuditPurgeRoute,
@@ -58,8 +59,14 @@ export async function handleBgJobs({
   }
 
   if (isWorkerProcessRoute(method, route)) {
-    // Fail closed: hanya worker/cron dengan secret valid — tanpa fallback session.
     if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    if (!shouldUseLegacyBgPoll()) {
+      return ok({
+        legacyPollDisabled: true,
+        message: 'VPS menggunakan inventory-worker — HTTP poll dinonaktifkan (EE-10)',
+        at: new Date().toISOString(),
+      });
+    }
     const recovered = await recoverStaleRunningJobs(db);
     const results = await processPendingJobs(db, { limit: 15 });
     return ok({

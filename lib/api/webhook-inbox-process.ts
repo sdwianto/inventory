@@ -25,7 +25,19 @@ export interface WebhookProcessInput {
   vendorTenantId?: string;
 }
 
-/** Event yang harus diproses sinkron — GRN harus ada sebelum response webhook (serverless tanpa worker). */
+/** Event yang diproses sinkron — latency-critical (EE-3 PR-3c). */
+export function shouldProcessWebhookInline(event: string): boolean {
+  // Primary GRN path is DELIVERY_SHIP_PUSH → inventory API; webhook is fallback only.
+  if (event === 'delivery.shipped') {
+    return process.env.DEPLOYMENT_MODE !== 'vps';
+  }
+  if (process.env.DEPLOYMENT_MODE === 'vps') {
+    return event === 'sales_order.confirmed' || event === 'sales_order.updated';
+  }
+  return false;
+}
+
+/** @deprecated use shouldProcessWebhookInline — kept for imports */
 export const INLINE_WEBHOOK_EVENTS = new Set(['delivery.shipped']);
 
 export async function runWebhookInboxInline(

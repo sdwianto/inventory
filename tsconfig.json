@@ -36,6 +36,18 @@
       ],
       "@/app/*": [
         "./app/*"
+      ],
+      "@dawam/contracts": [
+        "./vendor/contracts/src/index.ts"
+      ],
+      "@dawam/contracts/*": [
+        "./vendor/contracts/src/*"
+      ],
+      "@dawam/platform": [
+        "./vendor/platform/src/index.ts"
+      ],
+      "@dawam/platform/*": [
+        "./vendor/platform/src/*"
       ]
     }
   },

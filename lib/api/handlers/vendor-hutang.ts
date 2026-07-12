@@ -16,6 +16,7 @@ import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval'
 import { backfixVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
 import { runHutangSyncPending } from '@/lib/api/hutang-sync-pending-run';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { shouldProcessJobInline } from '@/lib/api/execution-wave';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 import {
   payableHutangFilter,
@@ -147,6 +148,7 @@ export async function handleVendorHutang({
     });
 
     after(async () => {
+      if (!shouldProcessJobInline(JOB_TYPES.HUTANG_SYNC)) return;
       const { processJobById } = await import('@/lib/api/bg-jobs');
       const freshDb = await connectToMongo();
       await processJobById(freshDb, jobId);

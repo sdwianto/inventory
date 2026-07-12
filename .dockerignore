@@ -9,7 +9,6 @@ coverage
 npm-debug.log*
 .DS_Store
 tests
-scripts
 .emergent
 playwright-report
 test-results

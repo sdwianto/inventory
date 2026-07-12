@@ -17,6 +17,7 @@ import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
 import { refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
 import { updateJobProgress } from '@/lib/api/bg-jobs';
 import { salesFetchErrorMessage } from '@/lib/api/integration-common';
+import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
 import type { JsonObject } from '@/types/json';
 
 const CATALOG_PAGE_SIZE = 500;
@@ -135,7 +136,10 @@ export async function runCatalogSync(
   opts: { jobId?: string } = {},
 ) {
   const salesAppUrl = config.salesAppUrl || '';
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...buildTraceHttpHeaders(),
+  };
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (apiKey) headers['X-Api-Key'] = apiKey;
 

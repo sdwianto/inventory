@@ -1,0 +1,27 @@
+# Legacy bg_jobs access — shrink per EE migration PRs.
+# Remove a path only when it no longer touches bg_jobs directly.
+
+lib/api/bg-jobs.ts
+lib/api/health.ts
+lib/api/slo-check.ts
+lib/api/handlers/ops-dashboard.ts
+lib/api/handlers/integrations.ts
+lib/api/handlers/procurement-expenses.ts
+lib/api/handlers/bg-jobs.ts
+lib/api/handlers/vendor-hutang.ts
+lib/api/handlers/sandbox.ts
+lib/api/handlers/webhooks.ts
+lib/api/handlers/goods-receipts.ts
+lib/api/inventory-execution-handlers.ts
+lib/api/po-vendor-sync-kick.ts
+lib/api/execution-inline-grn.ts
+lib/api/grn-post.ts
+lib/api/catalog-sync-run.ts
+lib/api/integration-reconcile-run.ts
+lib/api/procurement-repair-run.ts
+lib/api/hutang-reconcile.ts
+lib/api/platform-pair.ts
+lib/api/hutang-repair-run.ts
+scripts/repair-procurement.mjs
+scripts/procurement-e2e-test.mjs
+scripts/diag-procurement-e2e.mjs

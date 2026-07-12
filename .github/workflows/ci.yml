@@ -12,6 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout Sales platform packages
+        uses: actions/checkout@v4
+        with:
+          repository: sdwianto/sales
+          ref: main
+          path: _vendor/sales
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -25,6 +32,19 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Typecheck @dawam packages
+        run: npm run typecheck:packages
+
+      - name: EE-12 platform consumer gate
+        run: npm run test:execution:ee12
+
+      - name: Execution boundary check
+        run: npm run check:execution-boundary
+
+      - name: Execution boundary check (strict)
+        run: npm run check:execution-boundary:strict
+        continue-on-error: true
 
       - name: Strict typecheck (core modules)
         run: npm run typecheck:strict
@@ -55,6 +75,13 @@ jobs:
     needs: quality
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout Sales platform packages
+        uses: actions/checkout@v4
+        with:
+          repository: sdwianto/sales
+          ref: main
+          path: _vendor/sales
 
       - uses: actions/setup-node@v4
         with:

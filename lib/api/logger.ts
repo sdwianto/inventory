@@ -1,9 +1,23 @@
 // Structured JSON logging for API / background jobs.
 
+import {
+  getCurrentCorrelationId,
+  getCurrentTraceId,
+} from '@/lib/execution/tracing/trace-context';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface LogFields {
   [key: string]: unknown;
+}
+
+function traceBindings(): LogFields {
+  const traceId = getCurrentTraceId();
+  const correlationId = getCurrentCorrelationId();
+  const out: LogFields = {};
+  if (traceId) out.traceId = traceId;
+  if (correlationId) out.correlationId = correlationId;
+  return out;
 }
 
 function emit(level: LogLevel, message: string, fields?: LogFields): void {
@@ -12,6 +26,7 @@ function emit(level: LogLevel, message: string, fields?: LogFields): void {
     level,
     service: 'inventory-app',
     message,
+    ...traceBindings(),
     ...fields,
   };
   const line = JSON.stringify(entry);

@@ -1,8 +1,12 @@
-/** Picu worker bg_jobs di instance terpisah — jangan proses job berat di lambda request user. */
+/** Picu worker bg_jobs — serverless / legacy poll only (EE-10). */
+
+import { shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 
 const PROD_INVENTORY_DEFAULT = 'https://penarukan2.vercel.app';
 
 export async function kickBgWorker(opts?: { limit?: number; baseUrl?: string }): Promise<boolean> {
+  if (!shouldUseLegacyBgPoll()) return false;
+
   const secret = String(process.env.WORKER_SECRET || process.env.CRON_SECRET || '').trim();
   if (!secret) return false;
 

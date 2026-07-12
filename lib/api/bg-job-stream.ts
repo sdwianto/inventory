@@ -2,7 +2,7 @@
 
 import { NextResponse } from 'next/server';
 
-const TERMINAL = new Set(['DONE', 'FAILED']);
+const TERMINAL = new Set(['DONE', 'FAILED', 'SUCCEEDED', 'DLQ', 'CANCELLED']);
 const MAX_STREAM_MS = 55_000;
 const POLL_MS = 1000;
 

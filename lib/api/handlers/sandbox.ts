@@ -18,6 +18,7 @@ import {
   summarizeSandboxCounts,
 } from '@/lib/api/sandbox-purge';
 import { enqueueJob, processJobById, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { shouldProcessJobInline } from '@/lib/api/execution-wave';
 import type { HandlerContext } from '@/types/api/handler';
 import { parseHandlerBody } from '@/types/api/handler';
 
@@ -131,11 +132,13 @@ export async function handleSandbox({
       payload: { tenantId, includeSales },
     });
 
-    after(async () => {
-      const freshDb = await connectToMongo();
-      await processJobById(freshDb, jobId);
-    });
-    scheduleJobProcessing(db, { limit: 1 });
+    if (shouldProcessJobInline(JOB_TYPES.SANDBOX_RESET)) {
+      after(async () => {
+        const freshDb = await connectToMongo();
+        await processJobById(freshDb, jobId);
+      });
+      scheduleJobProcessing(db, { limit: 1 });
+    }
 
     return ok({
       jobId,

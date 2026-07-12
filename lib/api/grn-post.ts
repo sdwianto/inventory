@@ -6,6 +6,7 @@ import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
 import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/lib/api/bg-jobs';
+import { shouldProcessGrnJobInline } from '@/lib/api/execution-inline-grn';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
@@ -165,24 +166,34 @@ export async function postGoodsReceipt(
       payload: { noGRN: grn.noGRN, noDO: grn.noDO },
     });
     jobId = enq.jobId;
-    const jobOutcome = await processJobById(db, enq.jobId);
     scheduleJobProcessing(db);
-    const refreshedPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
-    if (refreshedPosted) Object.assign(posted, refreshedPosted);
-    const finalStatus = posted.invoiceSyncStatus || 'PENDING';
-    if (jobOutcome && 'error' in jobOutcome && jobOutcome.error) {
-      invoiceSync = {
-        async: false,
-        jobId,
-        status: finalStatus,
-        error: jobOutcome.error,
-      };
+
+    if (shouldProcessGrnJobInline()) {
+      const jobOutcome = await processJobById(db, enq.jobId);
+      scheduleJobProcessing(db);
+      const refreshedPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
+      if (refreshedPosted) Object.assign(posted, refreshedPosted);
+      const finalStatus = posted.invoiceSyncStatus || 'PENDING';
+      if (jobOutcome && 'error' in jobOutcome && jobOutcome.error) {
+        invoiceSync = {
+          async: false,
+          jobId,
+          status: finalStatus,
+          error: jobOutcome.error,
+        };
+      } else {
+        invoiceSync = {
+          async: false,
+          jobId,
+          status: finalStatus,
+          noInvoice: posted.noInvoice,
+        };
+      }
     } else {
       invoiceSync = {
-        async: false,
+        async: true,
         jobId,
-        status: finalStatus,
-        noInvoice: posted.noInvoice,
+        status: posted.invoiceSyncStatus || 'PENDING',
       };
     }
   } else if (canSyncInvoice && syncInvoiceInline) {
@@ -206,17 +217,27 @@ export async function postGoodsReceipt(
         payload: { noGRN: grn.noGRN, noDO: grn.noDO, retryAfterInline: true },
       });
       jobId = enq.jobId;
-      const retryOutcome = await processJobById(db, enq.jobId);
       scheduleJobProcessing(db);
-      const retryPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
-      if (retryPosted) Object.assign(posted, retryPosted);
-      invoiceSync = {
-        ...invoiceSync,
-        async: false,
-        jobId: enq.jobId,
-        status: posted.invoiceSyncStatus || (retryOutcome && 'error' in retryOutcome ? 'FAILED' : 'PENDING'),
-        error: retryOutcome && 'error' in retryOutcome ? retryOutcome.error : invoiceSync.error,
-      };
+      if (shouldProcessGrnJobInline()) {
+        const retryOutcome = await processJobById(db, enq.jobId);
+        scheduleJobProcessing(db);
+        const retryPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
+        if (retryPosted) Object.assign(posted, retryPosted);
+        invoiceSync = {
+          ...invoiceSync,
+          async: false,
+          jobId: enq.jobId,
+          status: posted.invoiceSyncStatus || (retryOutcome && 'error' in retryOutcome ? 'FAILED' : 'PENDING'),
+          error: retryOutcome && 'error' in retryOutcome ? retryOutcome.error : invoiceSync.error,
+        };
+      } else {
+        invoiceSync = {
+          ...invoiceSync,
+          async: true,
+          jobId: enq.jobId,
+          status: 'PENDING',
+        };
+      }
     } else if (invoiceSync.skipped) {
       patch.invoiceSyncStatus = 'SKIPPED';
       patch.invoiceSyncError = invoiceSync.reason || null;
@@ -258,14 +279,19 @@ export async function replayGrnInvoiceAsync(
     grnId: grn.id,
     payload: { replay: true },
   });
-  await processJobById(db, enq.jobId);
   scheduleJobProcessing(db);
+
+  if (shouldProcessGrnJobInline()) {
+    await processJobById(db, enq.jobId);
+    scheduleJobProcessing(db);
+  }
+
   const refreshed = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
   const enriched = await enrichGrnDoc(db, refreshed);
   return {
     ...enriched,
     invoiceSync: {
-      async: false,
+      async: !shouldProcessGrnJobInline(),
       jobId: enq.jobId,
       status: refreshed?.invoiceSyncStatus || 'PENDING',
       noInvoice: refreshed?.noInvoice,

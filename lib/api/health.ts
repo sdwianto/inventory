@@ -17,6 +17,30 @@ export interface BgJobsHealth {
   workerStale: boolean;
 }
 
+export interface ExecutionPlatformHealth {
+  deploymentMode: string;
+  jobBusEnabled: boolean;
+  platformVersion: string;
+  messageBusAdapter: string;
+  executionWave?: string;
+}
+
+export function buildExecutionPlatformHealth(): ExecutionPlatformHealth {
+  const jobBusRaw = (process.env.JOB_BUS_ENABLED || '').trim().toLowerCase();
+  const wave = (process.env.EXECUTION_WAVE || '').trim();
+  return {
+    deploymentMode: (process.env.DEPLOYMENT_MODE || 'serverless').trim(),
+    jobBusEnabled: jobBusRaw === '1' || jobBusRaw === 'true',
+    platformVersion: (
+      process.env.EXECUTION_PLATFORM_VERSION
+      || process.env.PLATFORM_VERSION
+      || '1'
+    ).trim(),
+    messageBusAdapter: (process.env.MESSAGE_BUS_ADAPTER || 'noop').trim(),
+    ...(wave ? { executionWave: wave } : {}),
+  };
+}
+
 export interface HealthPayload {
   status: 'ok' | 'degraded';
   app: string;
@@ -38,6 +62,7 @@ export interface HealthPayload {
     };
     worker?: BgJobsHealth;
     slo?: import('@/lib/api/slo-check').SloChecks;
+    execution?: ExecutionPlatformHealth;
   };
   timestamp: string;
 }
@@ -144,6 +169,7 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
       ...(integrationReconcile ? { integrationReconcile } : {}),
       ...(worker ? { worker } : {}),
       slo,
+      execution: buildExecutionPlatformHealth(),
     },
     timestamp: new Date().toISOString(),
   };

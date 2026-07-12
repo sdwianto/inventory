@@ -2,17 +2,26 @@ import type { Db } from 'mongodb';
 // Antrian job background — invoice GRN, dll. (MongoDB-backed).
 
 import { v4 as uuidv4 } from 'uuid';
+import {
+  enqueue as executionEnqueue,
+  mapLegacyEnqueueInput,
+} from '@/lib/execution/queue/enqueue';
+import {
+  ensureExecutionJobIndexes,
+} from '@/lib/execution/queue/indexes';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
-import { notifyGrnPostedToSales } from '@/lib/api/grn-notify-sales';
-import { runCatalogSync } from '@/lib/api/catalog-sync-run';
-import { runHutangSyncPending } from '@/lib/api/hutang-sync-pending-run';
-import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
-import { processWebhookInboxEvent } from '@/lib/api/webhook-inbox-process';
-import { runGrnSyncShipped } from '@/lib/api/grn-sync-shipped-run';
-import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
-import { getIntegrationConfig } from '@/lib/api/integration-config';
+import { shouldUseExecutionEnqueue, shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
+import {
+  executeCatalogSyncJob,
+  executeHutangSyncJob,
+  executePoVendorSyncJob,
+  executeWebhookInboxJob,
+} from '@/lib/api/inventory-execution-handlers';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
+import { notifyGrnPostedToSales } from '@/lib/api/grn-notify-sales';
+import { runGrnSyncShipped } from '@/lib/api/grn-sync-shipped-run';
+import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 
 export const JOB_TYPES = {
   GRN_INVOICE_SYNC: 'GRN_INVOICE_SYNC',
@@ -49,7 +58,12 @@ type BgJob = JsonObject & {
   payload?: JsonObject;
   status: string;
   attempts?: number;
+  jobSchemaVersion?: number;
 };
+
+function isPlatformManagedJob(job: BgJob): boolean {
+  return job.jobSchemaVersion != null;
+}
 
 export async function ensureBgJobIndexes(db: Db) {
   if (indexesEnsured) return;
@@ -70,6 +84,7 @@ export async function ensureBgJobIndexes(db: Db) {
     const err = e as { code?: number; message?: string };
     if (err?.code !== 85 && err?.code !== 86) console.warn('bg_jobs index:', err.message);
   }
+  await ensureExecutionJobIndexes(db);
   indexesEnsured = true;
 }
 
@@ -94,8 +109,24 @@ export async function enqueueJob(
     payload?: JsonObject;
   },
 ) {
-  await ensureBgJobIndexes(db);
   const tid = normalizeTenantId(tenantId || 'default');
+
+  if (shouldUseExecutionEnqueue(type)) {
+    const mergedPayload = {
+      ...payload,
+      ...(grnId ? { grnId } : {}),
+    };
+    const input = mapLegacyEnqueueInput({
+      type,
+      tenantId: tid,
+      payload: mergedPayload,
+    });
+    const dedupeKey = payload.dedupeKey != null ? String(payload.dedupeKey) : undefined;
+    if (dedupeKey) input.dedupeKey = dedupeKey;
+    return executionEnqueue(db, input);
+  }
+
+  await ensureBgJobIndexes(db);
   const now = new Date();
 
   const dedupeKey = payload.dedupeKey ? String(payload.dedupeKey) : null;
@@ -207,66 +238,19 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
 }
 
 async function runCatalogSyncJob(db: Db, job: BgJob) {
-  const config = await getIntegrationConfig(db, job.tenantId);
-  if (!config.salesApiKey) return { error: 'Belum di-pair dengan sales.app' };
-  const result = await runCatalogSync(db, job.tenantId, config, { jobId: job.id });
-  if ('error' in result && result.error) {
-    return { error: result.error, offline: Boolean(result.offline) };
-  }
-  return result;
+  return executeCatalogSyncJob(db, job.tenantId, job.id);
 }
 
 async function runHutangSyncJob(db: Db, job: BgJob) {
-  const replaySales = job.payload?.replaySales === true;
-  const scopeAuth = { tenantId: job.tenantId } as import('@/types/auth').AuthContext;
-  return runHutangSyncPending(db, job.tenantId, scopeAuth, { replaySales });
+  return executeHutangSyncJob(db, job.tenantId, job.payload || {});
 }
 
 async function runPoVendorSyncJob(db: Db, job: BgJob) {
-  const scopeAuth = { tenantId: job.tenantId } as import('@/types/auth').AuthContext;
-  const poId = job.payload?.poId ? String(job.payload.poId) : undefined;
-  return runPoVendorSyncPending(db, scopeAuth, { poId });
+  return executePoVendorSyncJob(db, job.tenantId, job.payload || {});
 }
 
 async function runWebhookInboxJob(db: Db, job: BgJob) {
-  const { event, payload, customerTenantId, vendorTenantId, dedupeKey } = job.payload || {};
-  if (!event || !payload || !customerTenantId) {
-    return { error: 'Payload webhook tidak lengkap' };
-  }
-
-  let result: Record<string, unknown>;
-  let status = 'PROCESSED';
-  let processError: string | null = null;
-
-  try {
-    result = await processWebhookInboxEvent(db, {
-      event: String(event),
-      payload: payload as JsonObject,
-      customerTenantId: String(customerTenantId),
-      vendorTenantId: vendorTenantId ? String(vendorTenantId) : undefined,
-    });
-  } catch (e) {
-    status = 'FAILED';
-    processError = e instanceof Error ? e.message : String(e);
-    result = { error: processError };
-  }
-
-  if (dedupeKey) {
-    await db.collection('webhook_inbox').updateOne(
-      { dedupeKey: String(dedupeKey) },
-      {
-        $set: {
-          status,
-          result,
-          processError,
-          processedAt: new Date(),
-        },
-      },
-    );
-  }
-
-  if (status === 'FAILED') return { error: processError, result };
-  return { ok: true, result };
+  return executeWebhookInboxJob(db, job.payload || {});
 }
 
 export async function getJobById(db: Db, jobId: string, tenantId?: string | null) {
@@ -290,6 +274,14 @@ export async function getJobByIdAccessible(
 }
 
 export async function processJob(db: Db, job: BgJob) {
+  if (!shouldUseLegacyBgPoll()) {
+    return { skipped: true, reason: 'VPS menggunakan execution platform worker (EE-10)' };
+  }
+
+  if (isPlatformManagedJob(job)) {
+    return { skipped: true, reason: 'execution-platform job — use execution:worker' };
+  }
+
   const now = new Date();
   // Klaim atomik — dua worker paralel tidak memproses job yang sama.
   const claimed = await db.collection('bg_jobs').findOneAndUpdate(
@@ -417,10 +409,13 @@ export async function recoverStaleRunningJobs(
   db: Db,
   { maxAgeMs = STALE_RUNNING_MS } = {},
 ): Promise<number> {
+  if (!shouldUseLegacyBgPoll()) return 0;
+
   const cutoff = new Date(Date.now() - maxAgeMs);
   const res = await db.collection('bg_jobs').updateMany(
     {
       status: 'RUNNING',
+      jobSchemaVersion: { $exists: false },
       $or: [
         { updatedAt: { $lt: cutoff } },
         { startedAt: { $lt: cutoff } },
@@ -472,8 +467,12 @@ export async function requeueDeadLetterJobs(
   return res.modifiedCount;
 }
 
-/** Jalankan satu job segera — dipakai GRN invoice agar tidak antri di scheduler. */
+/** Jalankan satu job segera — serverless / legacy poll only (EE-10). */
 export async function processJobById(db: Db, jobId: string) {
+  if (!shouldUseLegacyBgPoll()) {
+    return { skipped: true, reason: 'VPS menggunakan execution platform worker (EE-10)' };
+  }
+
   const row = await db.collection('bg_jobs').findOne({ id: jobId });
   if (!row || row.status !== 'PENDING') return null;
   const job = row as unknown as BgJob;
@@ -485,11 +484,16 @@ export async function processPendingJobs(
   db: Db,
   { limit = 5, types = null }: { limit?: number; types?: string[] | null } = {},
 ) {
+  if (!shouldUseLegacyBgPoll()) {
+    return [{ skipped: true, reason: 'VPS menggunakan execution platform worker (EE-10)' }];
+  }
+
   await ensureBgJobIndexes(db);
   const recovered = await recoverStaleRunningJobs(db);
 
   const filter: Record<string, unknown> = {
     status: 'PENDING',
+    jobSchemaVersion: { $exists: false },
     $or: [
       { nextRunAt: null },
       { nextRunAt: { $exists: false } },
@@ -523,8 +527,10 @@ export async function processPendingJobs(
   return results;
 }
 
-/** Fire-and-forget — Node server melanjutkan setelah response terkirim. */
+/** Fire-and-forget — no-op on VPS when execution platform worker is active (EE-10). */
 export function scheduleJobProcessing(db: Db, { limit = 3 }: { limit?: number } = {}) {
+  if (!shouldUseLegacyBgPoll()) return;
+
   setImmediate(() => {
     processPendingJobs(db, { limit }).catch((e) => {
       console.warn('[bg-jobs] process error:', e instanceof Error ? e.message : e);

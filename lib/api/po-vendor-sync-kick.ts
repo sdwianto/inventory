@@ -9,6 +9,7 @@ import {
   JOB_TYPES,
 } from '@/lib/api/bg-jobs';
 import { kickBgWorker } from '@/lib/api/worker-kick';
+import { shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 
 const PROD_INVENTORY_URL = 'https://penarukan2.vercel.app';
 
@@ -19,6 +20,8 @@ function workerBaseUrl(): string {
 }
 
 async function triggerWorker(jobId: string): Promise<boolean> {
+  if (!shouldUseLegacyBgPoll()) return true;
+
   const kicked = await kickBgWorker({ limit: 2, baseUrl: workerBaseUrl() });
   try {
     const freshDb = await connectToMongo();

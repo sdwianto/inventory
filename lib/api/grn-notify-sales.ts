@@ -8,6 +8,7 @@ import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { syncGrnDeliveryFromSales } from '@/lib/api/grn-delivery-sync';
 import { salesFetchErrorMessage, integrationCorrelationId } from '@/lib/api/integration-common';
+import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
 
 function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record<string, unknown>) {
   if ((data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId) {
@@ -67,7 +68,7 @@ async function pollSalesGrnJob(
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     const res = await fetch(`${salesAppUrl}/api/bg-jobs/${encodeURIComponent(jobId)}`, {
-      headers: { 'X-Api-Key': salesApiKey },
+      headers: { 'X-Api-Key': salesApiKey, ...buildTraceHttpHeaders() },
       signal: AbortSignal.timeout(15000),
     });
     const job = await res.json() as Record<string, unknown>;
@@ -251,6 +252,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
       headers: {
         'Content-Type': 'application/json',
         'X-Api-Key': salesApiKey,
+        ...buildTraceHttpHeaders(),
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(90_000),

@@ -5,7 +5,7 @@ import { ok, err } from '@/lib/api/db';
 import { verifyWebhookSecret } from '@/lib/api/webhook-verify';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
-import { INLINE_WEBHOOK_EVENTS, runWebhookInboxInline } from '@/lib/api/webhook-inbox-process';
+import { shouldProcessWebhookInline, runWebhookInboxInline } from '@/lib/api/webhook-inbox-process';
 
 type WebhookBody = JsonObject & {
   event?: string;
@@ -74,7 +74,7 @@ export async function handleWebhooks({
   if (existing?.status === 'PROCESSED') {
     return ok({ message: 'already_processed', dedupeKey, result: existing.result });
   }
-  if ((existing?.status === 'PENDING' || existing?.status === 'RUNNING') && !INLINE_WEBHOOK_EVENTS.has(event)) {
+  if ((existing?.status === 'PENDING' || existing?.status === 'RUNNING') && !shouldProcessWebhookInline(event)) {
     return ok({ message: 'accepted', dedupeKey, async: true });
   }
 
@@ -100,7 +100,7 @@ export async function handleWebhooks({
     );
   }
 
-  if (INLINE_WEBHOOK_EVENTS.has(event)) {
+  if (shouldProcessWebhookInline(event)) {
     const inline = await runWebhookInboxInline(db, {
       dedupeKey,
       event,

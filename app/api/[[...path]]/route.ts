@@ -1,10 +1,13 @@
 // Thin API router — dispatches to domain handlers in /lib/api/handlers/*.
 
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import type { Db } from 'mongodb';
 import { connectToMongo, cors, ok, err } from '@/lib/api/db';
 import { logger } from '@/lib/api/logger';
 import { captureException } from '@/lib/api/sentry';
+import { runWithRequestTrace } from '@/lib/execution/tracing/trace-context';
+import { getExecutionMetricsSnapshot } from '@/lib/execution/metrics/prometheus';
+import { refreshObservabilityGauges } from '@/lib/execution/metrics/observability-collector';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
@@ -31,7 +34,8 @@ type RouteContext = { params: Promise<{ path?: string[] }> };
 /** Job processor + sync berat — perlu durasi lebih panjang di Vercel Pro. */
 export const maxDuration = 60;
 
-async function handleRoute(request: Request, context: RouteContext) {
+async function handleRoute(request: NextRequest, context: RouteContext) {
+  return runWithRequestTrace(request, async () => {
   const { path = [] } = (await context.params) || {};
   const route = `/${path.join('/')}`;
   const method = request.method;
@@ -53,6 +57,24 @@ async function handleRoute(request: Request, context: RouteContext) {
       // HTTP 503 hanya saat DB tidak terjangkau; SLO degraded tetap 200 + body.status.
       const httpStatus = health.checks.database === 'fail' ? 503 : 200;
       return ok(health, httpStatus);
+    }
+
+    if (route === '/internal/metrics' && method === 'GET') {
+      if (!verifyWorkerOrCronSecret(request)) {
+        return cors(err('Unauthorized', 401));
+      }
+      let metricsDb: Db | null = null;
+      try {
+        metricsDb = await connectToMongo();
+        if (metricsDb) await refreshObservabilityGauges(metricsDb);
+      } catch {
+        metricsDb = null;
+      }
+      const metrics = await getExecutionMetricsSnapshot(metricsDb ?? undefined);
+      return cors(new NextResponse(metrics, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' },
+      }));
     }
 
     if (route === '/auth/login' && method === 'POST') {
@@ -153,6 +175,7 @@ async function handleRoute(request: Request, context: RouteContext) {
     }
     return err(msg, 500);
   }
+  });
 }
 
 export const GET = handleRoute;
