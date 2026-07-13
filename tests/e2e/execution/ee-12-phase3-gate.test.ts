@@ -42,20 +42,30 @@ function isShimContent(content: string): boolean {
 }
 
 describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
-  it('vendor packages linked from Sales', () => {
-    expect(existsSync(resolve(ROOT, 'vendor/contracts/package.json'))).toBe(true);
-    expect(existsSync(resolve(ROOT, 'vendor/platform/package.json'))).toBe(true);
-    const contracts = JSON.parse(readFileSync(resolve(ROOT, 'vendor/contracts/package.json'), 'utf8'));
-    const platform = JSON.parse(readFileSync(resolve(ROOT, 'vendor/platform/package.json'), 'utf8'));
+  it('Sales packages available via _vendor/sales', () => {
+    const contractsPath = resolve(ROOT, 'node_modules/@dawam/contracts/package.json');
+    const platformPath = resolve(ROOT, 'node_modules/@dawam/platform/package.json');
+    const vendorContracts = resolve(ROOT, '_vendor/sales/packages/contracts/package.json');
+    const vendorPlatform = resolve(ROOT, '_vendor/sales/packages/platform/package.json');
+    expect(existsSync(contractsPath) || existsSync(vendorContracts)).toBe(true);
+    expect(existsSync(platformPath) || existsSync(vendorPlatform)).toBe(true);
+    const contracts = JSON.parse(readFileSync(
+      existsSync(contractsPath) ? contractsPath : vendorContracts,
+      'utf8',
+    ));
+    const platform = JSON.parse(readFileSync(
+      existsSync(platformPath) ? platformPath : vendorPlatform,
+      'utf8',
+    ));
     expect(contracts.name).toBe('@dawam/contracts');
     expect(platform.name).toBe('@dawam/platform');
     expect(platform.dependencies['@dawam/contracts']).toBe('1.0.0');
   });
 
-  it('package.json depends on vendored @dawam/*', () => {
+  it('package.json depends on _vendor/sales @dawam/*', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
-    expect(root.dependencies['@dawam/contracts']).toBe('file:./vendor/contracts');
-    expect(root.dependencies['@dawam/platform']).toBe('file:./vendor/platform');
+    expect(root.dependencies['@dawam/contracts']).toBe('file:./_vendor/sales/packages/contracts');
+    expect(root.dependencies['@dawam/platform']).toBe('file:./_vendor/sales/packages/platform');
     expect(root.scripts['test:execution:ee12']).toBeTruthy();
     expect(root.scripts['typecheck:packages']).toBeTruthy();
   });
@@ -93,7 +103,10 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
   });
 
   it('platform extract phase marker matches Sales', () => {
-    const index = readFileSync(resolve(ROOT, 'vendor/platform/src/index.ts'), 'utf8');
+    const platformIndex = resolve(ROOT, 'node_modules/@dawam/platform/src/index.ts');
+    const vendorIndex = resolve(ROOT, '_vendor/sales/packages/platform/src/index.ts');
+    const indexPath = existsSync(platformIndex) ? platformIndex : vendorIndex;
+    const index = readFileSync(indexPath, 'utf8');
     expect(index).toContain('DAWAM_PLATFORM_EXTRACT_PHASE = 2');
   });
 
@@ -119,10 +132,12 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(existsSync(resolve(ROOT, 'scripts/ci/check-execution-boundary.mjs'))).toBe(true);
   });
 
-  it('tsconfig + next.config alias workspace packages', () => {
+  it('tsconfig + next.config alias @dawam packages (_vendor/sales fallback)', () => {
     const ts = JSON.parse(readFileSync(resolve(ROOT, 'tsconfig.json'), 'utf8'));
-    expect(ts.compilerOptions.paths['@dawam/contracts'][0]).toContain('vendor/contracts');
-    expect(ts.compilerOptions.paths['@dawam/platform'][0]).toContain('vendor/platform');
+    expect(ts.compilerOptions.paths['@dawam/contracts'][0]).toContain('node_modules/@dawam/contracts');
+    expect(ts.compilerOptions.paths['@dawam/platform'][0]).toContain('node_modules/@dawam/platform');
+    expect(ts.compilerOptions.paths['@dawam/contracts'][1]).toContain('_vendor/sales/packages/contracts');
+    expect(ts.compilerOptions.paths['@dawam/platform'][1]).toContain('_vendor/sales/packages/platform');
     const next = readFileSync(resolve(ROOT, 'next.config.js'), 'utf8');
     expect(next).toContain("transpilePackages: ['@dawam/contracts', '@dawam/platform']");
   });

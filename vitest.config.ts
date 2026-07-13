@@ -1,8 +1,18 @@
-import { defineConfig } from 'vitest/config';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vitest/config';
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
+
+function resolvePackageRoot(scope: 'contracts' | 'platform') {
+  const nm = resolve(rootDir, `node_modules/@dawam/${scope}/src`);
+  const vendor = resolve(rootDir, `_vendor/sales/packages/${scope}/src`);
+  return existsSync(nm) ? nm : vendor;
+}
+
+const contractsRoot = resolvePackageRoot('contracts');
+const platformRoot = resolvePackageRoot('platform');
 
 export default defineConfig({
   test: {
@@ -19,14 +29,14 @@ export default defineConfig({
       { find: '@', replacement: rootDir },
       {
         find: /^@dawam\/platform\/(.+)$/,
-        replacement: resolve(rootDir, 'vendor/platform/src/$1.ts'),
+        replacement: `${platformRoot}/$1.ts`,
       },
       {
         find: /^@dawam\/contracts\/(.+)$/,
-        replacement: resolve(rootDir, 'vendor/contracts/src/$1.ts'),
+        replacement: `${contractsRoot}/$1.ts`,
       },
-      { find: '@dawam/contracts', replacement: resolve(rootDir, 'vendor/contracts/src/index.ts') },
-      { find: '@dawam/platform', replacement: resolve(rootDir, 'vendor/platform/src/index.ts') },
+      { find: '@dawam/contracts', replacement: `${contractsRoot}/index.ts` },
+      { find: '@dawam/platform', replacement: `${platformRoot}/index.ts` },
     ],
   },
 });

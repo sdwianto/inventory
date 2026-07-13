@@ -12,6 +12,20 @@ import { join, relative, resolve } from 'node:path';
 const ROOT = resolve(process.cwd());
 const LIB = join(ROOT, 'lib/execution');
 
+const SOURCE_CANDIDATES = [
+  join(ROOT, '../../sales/sales/packages'),
+  join(ROOT, '_vendor/sales/packages'),
+];
+
+function findSourcePackages() {
+  for (const base of SOURCE_CANDIDATES) {
+    if (existsSync(join(base, 'contracts/package.json')) && existsSync(join(base, 'platform/package.json'))) {
+      return base;
+    }
+  }
+  return null;
+}
+
 const SHIM_DIRS = [
   'queue',
   'runtime',
@@ -93,8 +107,12 @@ function writeApiTs() {
 }
 
 function main() {
-  if (!existsSync(join(ROOT, 'vendor/contracts/package.json'))) {
-    console.error('[ee12-consume] run: npm run ee12:vendor-platform');
+  const hasPackages =
+    existsSync(join(ROOT, 'node_modules/@dawam/contracts/package.json'))
+    || existsSync(join(ROOT, 'vendor/contracts/package.json'))
+    || findSourcePackages();
+  if (!hasPackages) {
+    console.error('[ee12-consume] run: npm run ee12:install-platform');
     process.exit(1);
   }
   console.info('[ee12-consume] writing contract shims');

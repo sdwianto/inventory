@@ -38,16 +38,20 @@
         "./app/*"
       ],
       "@dawam/contracts": [
-        "./vendor/contracts/src/index.ts"
+        "./node_modules/@dawam/contracts/src/index.ts",
+        "./_vendor/sales/packages/contracts/src/index.ts"
       ],
       "@dawam/contracts/*": [
-        "./vendor/contracts/src/*"
+        "./node_modules/@dawam/contracts/src/*",
+        "./_vendor/sales/packages/contracts/src/*"
       ],
       "@dawam/platform": [
-        "./vendor/platform/src/index.ts"
+        "./node_modules/@dawam/platform/src/index.ts",
+        "./_vendor/sales/packages/platform/src/index.ts"
       ],
       "@dawam/platform/*": [
-        "./vendor/platform/src/*"
+        "./node_modules/@dawam/platform/src/*",
+        "./_vendor/sales/packages/platform/src/*"
       ]
     }
   },
