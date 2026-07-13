@@ -33,7 +33,7 @@ const NM_EVENTS = join(ROOT, 'node_modules/@sdwianto/events');
 const NM_PLATFORM = join(ROOT, 'node_modules/@sdwianto/platform');
 const CONTRACTS_VERSION = '1.0.0';
 const EVENTS_VERSION = '1.0.0';
-const PLATFORM_VERSION = '1.0.1';
+const PLATFORM_VERSION = '1.0.2';
 
 const DIST_CANDIDATES = [
   join(VENDOR_SALES, 'packages/dist'),

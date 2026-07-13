@@ -19,7 +19,7 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
   it('ee12-install pins events + platform versions for registry path', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
     expect(script).toContain("const EVENTS_VERSION = '1.0.0'");
-    expect(script).toContain("const PLATFORM_VERSION = '1.0.1'");
+    expect(script).toContain("const PLATFORM_VERSION = '1.0.2'");
     expect(script).toContain('@sdwianto/events@${EVENTS_VERSION}');
     expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
   });
@@ -34,13 +34,13 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
     expect(pkg.version).toBe('1.0.0');
   });
 
-  it('platform vendor package is 1.0.1 with events dependency', () => {
+  it('platform vendor package is 1.0.2 with events dependency', () => {
     const vendor = resolve(ROOT, '_vendor/sales/packages/platform/package.json');
     const nm = resolve(ROOT, 'node_modules/@sdwianto/platform/package.json');
     const path = existsSync(nm) ? nm : vendor;
     expect(existsSync(path)).toBe(true);
     const pkg = JSON.parse(readFileSync(path, 'utf8'));
-    expect(pkg.version).toBe('1.0.1');
+    expect(pkg.version).toBe('1.0.2');
     expect(pkg.dependencies['@sdwianto/events']).toBe('1.0.0');
   });
 

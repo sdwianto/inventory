@@ -22,7 +22,7 @@ describe('EE-12 Phase 4 — Inventory registry consumer gate', () => {
     expect(existsSync(resolve(ROOT, 'node_modules/@sdwianto/events/package.json'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'node_modules/@sdwianto/platform/package.json'))).toBe(true);
     const platform = JSON.parse(readFileSync(resolve(ROOT, 'node_modules/@sdwianto/platform/package.json'), 'utf8'));
-    expect(platform.version).toBe('1.0.1');
+    expect(platform.version).toBe('1.0.2');
     expect(platform.dependencies['@sdwianto/contracts']).toBe('1.0.0');
     expect(platform.dependencies['@sdwianto/events']).toBe('1.0.0');
   });

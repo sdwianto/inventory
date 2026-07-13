@@ -51,7 +51,7 @@ describe('EE-13 — Inventory registry prod gate', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
     expect(script).toContain('packages/events');
     expect(script).toContain('@sdwianto/events@');
-    expect(script).toContain("const PLATFORM_VERSION = '1.0.1'");
+    expect(script).toContain("const PLATFORM_VERSION = '1.0.2'");
     expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
   });
 
