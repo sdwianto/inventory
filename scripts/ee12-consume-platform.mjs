@@ -134,7 +134,7 @@ function main() {
   generateRuntimeShims();
   writeSeedWrapper();
   writeApiTs();
-  console.info('[ee12-consume] done — run: npm run typecheck:packages && npm run typecheck');
+  console.info('[ee12-consume] done — run: npm run ee12:repair && npm run typecheck');
 }
 
 main();
