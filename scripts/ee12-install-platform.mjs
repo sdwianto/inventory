@@ -10,17 +10,18 @@
  * postinstall / ee12:repair: link node_modules/@sdwianto → _vendor
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
-  readFileSync,
+  mkdtempSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(process.cwd());
@@ -138,10 +139,35 @@ function copyRegistryIntoVendor(nmContracts, nmEvents, nmPlatform) {
   syncDir(PLATFORM_PKG, nmPlatform);
 }
 
+function writeGithubUserconfig(token) {
+  const dir = mkdtempSync(join(tmpdir(), 'ee12-npm-'));
+  const npmrc = join(dir, '.npmrc');
+  writeFileSync(
+    npmrc,
+    [
+      `@sdwianto:registry=${REGISTRY}`,
+      `//npm.pkg.github.com/:_authToken=${token}`,
+      '',
+    ].join('\n'),
+  );
+  return { dir, npmrc };
+}
+
 function installFromTarballs(dist) {
   console.info('[ee12-install] installing tarballs into node_modules');
-  execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save "${dist.contracts}" "${dist.events}" "${dist.platform}"`,
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      '--no-save',
+      '--legacy-peer-deps',
+      dist.contracts,
+      dist.events,
+      dist.platform,
+    ],
     { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EE12_INSTALLING: '1' } },
   );
   if (existsSync(NM_CONTRACTS) && existsSync(NM_EVENTS) && existsSync(NM_PLATFORM)) {
@@ -156,15 +182,33 @@ function installFromRegistry() {
     process.exit(1);
   }
   console.info('[ee12-install] GitHub Packages (SDWIANTO_REGISTRY=github)');
-  // Quote scoped packages; auth via // config flag (not --@scope:registry CLI).
-  execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save "@sdwianto/contracts@${CONTRACTS_VERSION}" "@sdwianto/events@${EVENTS_VERSION}" "@sdwianto/platform@${PLATFORM_VERSION}" --registry "${REGISTRY}" --//npm.pkg.github.com/:_authToken=${token}`,
-    {
-      cwd: ROOT,
-      stdio: 'inherit',
-      env: { ...process.env, EE12_INSTALLING: '1', NODE_AUTH_TOKEN: token },
-    },
-  );
+  const { dir, npmrc } = writeGithubUserconfig(token);
+  try {
+    // Scope registry in userconfig — peer deps (mongodb) still resolve from npmjs.
+    execFileSync(
+      'npm',
+      [
+        'install',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--no-save',
+        '--legacy-peer-deps',
+        `@sdwianto/contracts@${CONTRACTS_VERSION}`,
+        `@sdwianto/events@${EVENTS_VERSION}`,
+        `@sdwianto/platform@${PLATFORM_VERSION}`,
+        '--userconfig',
+        npmrc,
+      ],
+      {
+        cwd: ROOT,
+        stdio: 'inherit',
+        env: { ...process.env, EE12_INSTALLING: '1', NODE_AUTH_TOKEN: token },
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
   if (existsSync(NM_CONTRACTS) && existsSync(NM_EVENTS) && existsSync(NM_PLATFORM)) {
     copyRegistryIntoVendor(NM_CONTRACTS, NM_EVENTS, NM_PLATFORM);
     console.info('[ee12-install] copied node_modules/@sdwianto/* → _vendor/sales/packages/*');

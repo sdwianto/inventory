@@ -14,6 +14,7 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
     expect(smoke).toContain('test:execution:ee14');
     expect(smoke).toContain('typecheck:packages');
     expect(smoke).toContain('restoring local _vendor');
+    expect(smoke).toContain('finally');
   });
 
   it('ee12-install pins events + platform versions for registry path', () => {
@@ -22,7 +23,8 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
     expect(script).toContain("const PLATFORM_VERSION = '1.0.3'");
     expect(script).toContain('@sdwianto/events@${EVENTS_VERSION}');
     expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
-    expect(script).toContain('--registry');
+    expect(script).toContain('--userconfig');
+    expect(script).toContain('writeGithubUserconfig');
   });
 
   it('@sdwianto/events vendor package is 1.0.1', () => {

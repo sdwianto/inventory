@@ -24,9 +24,9 @@ describe('EE-13 — Inventory registry prod gate', () => {
   it('ee12-install supports SDWIANTO_REGISTRY=github with scoped registry flags', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
     expect(script).toContain('SDWIANTO_REGISTRY === \'github\'');
-    expect(script).toContain('--registry');
-    expect(script).toContain('npm.pkg.github.com');
-    expect(script).toContain('--//npm.pkg.github.com/:_authToken=');
+    expect(script).toContain('@sdwianto:registry=');
+    expect(script).toContain('--userconfig');
+    expect(script).toContain('writeGithubUserconfig');
     expect(script).toContain('EE12_FORCE_REGISTRY');
   });
 

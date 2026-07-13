@@ -6,6 +6,7 @@
  *   GITHUB_TOKEN=<read:packages> npm run ee13:registry-smoke
  *
  * Skips local Sales symlinks; forces registry install into node_modules.
+ * Always restores local _vendor from Sales monorepo (even on failure).
  */
 
 import { execSync } from 'node:child_process';
@@ -34,6 +35,16 @@ function removeVendorPackages() {
   if (existsSync(PLATFORM_PKG)) rmSync(PLATFORM_PKG, { recursive: true, force: true });
 }
 
+function restoreLocalVendor() {
+  console.info('[ee13-registry-smoke] restoring local _vendor from Sales monorepo…');
+  const restoreEnv = { ...process.env };
+  delete restoreEnv.SDWIANTO_REGISTRY;
+  delete restoreEnv.EE12_FORCE_REGISTRY;
+  delete restoreEnv.NODE_AUTH_TOKEN;
+  delete restoreEnv.GITHUB_TOKEN;
+  execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env: restoreEnv });
+}
+
 function main() {
   const token = process.env.GITHUB_TOKEN || process.env.NODE_AUTH_TOKEN;
   if (!token) {
@@ -50,30 +61,36 @@ function main() {
     NODE_AUTH_TOKEN: token,
   };
 
-  console.info('[ee13-registry-smoke] installing @sdwianto/* from GitHub Packages…');
-  execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env });
+  let failed = false;
+  try {
+    console.info('[ee13-registry-smoke] installing @sdwianto/* from GitHub Packages…');
+    execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] typecheck @sdwianto packages…');
-  execSync('npm run typecheck:packages', { cwd: ROOT, stdio: 'inherit', env });
+    console.info('[ee13-registry-smoke] typecheck @sdwianto packages…');
+    execSync('npm run typecheck:packages', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] EE-13 gate…');
-  execSync('npm run test:execution:ee13', { cwd: ROOT, stdio: 'inherit', env });
+    console.info('[ee13-registry-smoke] EE-13 gate…');
+    execSync('npm run test:execution:ee13', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] EE-12 gate…');
-  execSync('npm run test:execution:ee12', { cwd: ROOT, stdio: 'inherit', env });
+    console.info('[ee13-registry-smoke] EE-12 gate…');
+    execSync('npm run test:execution:ee12', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] EE-14 gate…');
-  execSync('npm run test:execution:ee14', { cwd: ROOT, stdio: 'inherit', env });
+    console.info('[ee13-registry-smoke] EE-14 gate…');
+    execSync('npm run test:execution:ee14', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] OK');
-
-  console.info('[ee13-registry-smoke] restoring local _vendor from Sales monorepo…');
-  const restoreEnv = { ...process.env };
-  delete restoreEnv.SDWIANTO_REGISTRY;
-  delete restoreEnv.EE12_FORCE_REGISTRY;
-  delete restoreEnv.NODE_AUTH_TOKEN;
-  delete restoreEnv.GITHUB_TOKEN;
-  execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env: restoreEnv });
+    console.info('[ee13-registry-smoke] OK');
+  } catch (err) {
+    failed = true;
+    console.error('[ee13-registry-smoke] FAILED — will restore local _vendor');
+    throw err;
+  } finally {
+    try {
+      restoreLocalVendor();
+    } catch (restoreErr) {
+      console.error('[ee13-registry-smoke] restore local _vendor also failed:', restoreErr?.message || restoreErr);
+      if (!failed) throw restoreErr;
+    }
+  }
 }
 
 main();
