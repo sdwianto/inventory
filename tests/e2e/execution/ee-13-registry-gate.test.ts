@@ -28,6 +28,11 @@ describe('EE-13 — Inventory registry prod gate', () => {
     expect(script).toContain('EE12_FORCE_REGISTRY');
   });
 
+  it('CI runs EE-13 gate', () => {
+    const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toContain('test:execution:ee13');
+  });
+
   it('local dev still pins file:_vendor/sales (registry is prod override)', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(root.dependencies['@dawam/contracts']).toBe('file:./_vendor/sales/packages/contracts');

@@ -45,6 +45,9 @@ jobs:
       - name: EE-12 platform consumer gate
         run: npm run test:execution:ee12
 
+      - name: EE-13 registry prod gate
+        run: npm run test:execution:ee13
+
       - name: Execution boundary check
         run: npm run check:execution-boundary
 
