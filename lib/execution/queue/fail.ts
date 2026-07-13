@@ -1,2 +1,2 @@
-/** @deprecated import from `@dawam/platform/queue/fail` — EE-12 Phase 3 shim */
-export * from '@dawam/platform/queue/fail';
+/** @deprecated import from `@sdwianto/platform/queue/fail` — EE-12 Phase 3 shim */
+export * from '@sdwianto/platform/queue/fail';

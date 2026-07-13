@@ -1,4 +1,4 @@
-/** @deprecated import from `@dawam/contracts` — EE-12 shim */
+/** @deprecated import from `@sdwianto/contracts` — EE-12 shim */
 export type {
   Job,
   JobStatus,
@@ -12,5 +12,5 @@ export type {
   JobCheckpoint,
   EnqueueInput,
   EnqueueResult,
-} from '@dawam/contracts';
-export { JOB_SCHEMA_VERSION } from '@dawam/contracts';
+} from '@sdwianto/contracts';
+export { JOB_SCHEMA_VERSION } from '@sdwianto/contracts';

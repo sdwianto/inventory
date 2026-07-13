@@ -37,20 +37,20 @@
       "@/app/*": [
         "./app/*"
       ],
-      "@dawam/contracts": [
-        "./node_modules/@dawam/contracts/src/index.ts",
+      "@sdwianto/contracts": [
+        "./node_modules/@sdwianto/contracts/src/index.ts",
         "./_vendor/sales/packages/contracts/src/index.ts"
       ],
-      "@dawam/contracts/*": [
-        "./node_modules/@dawam/contracts/src/*",
+      "@sdwianto/contracts/*": [
+        "./node_modules/@sdwianto/contracts/src/*",
         "./_vendor/sales/packages/contracts/src/*"
       ],
-      "@dawam/platform": [
-        "./node_modules/@dawam/platform/src/index.ts",
+      "@sdwianto/platform": [
+        "./node_modules/@sdwianto/platform/src/index.ts",
         "./_vendor/sales/packages/platform/src/index.ts"
       ],
-      "@dawam/platform/*": [
-        "./node_modules/@dawam/platform/src/*",
+      "@sdwianto/platform/*": [
+        "./node_modules/@sdwianto/platform/src/*",
         "./_vendor/sales/packages/platform/src/*"
       ]
     }

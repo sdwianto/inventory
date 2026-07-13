@@ -1,4 +1,4 @@
-/** @deprecated import from `@dawam/contracts` — EE-12 shim */
+/** @deprecated import from `@sdwianto/contracts` — EE-12 shim */
 export {
   JobNotFoundError,
   InvalidTransitionError,
@@ -15,4 +15,4 @@ export {
   AuthError,
   ConflictError,
   DependencyError,
-} from '@dawam/contracts';
+} from '@sdwianto/contracts';

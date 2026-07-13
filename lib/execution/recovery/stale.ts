@@ -1,2 +1,2 @@
-/** @deprecated import from `@dawam/platform/recovery/stale` — EE-12 Phase 3 shim */
-export * from '@dawam/platform/recovery/stale';
+/** @deprecated import from `@sdwianto/platform/recovery/stale` — EE-12 Phase 3 shim */
+export * from '@sdwianto/platform/recovery/stale';

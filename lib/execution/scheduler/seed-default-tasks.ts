@@ -4,7 +4,7 @@ import type { Db } from 'mongodb';
 import {
   ensureDefaultScheduledTasks as ensurePlatformDefaultTasks,
   type SeedScheduledTasksResult,
-} from '@dawam/platform/scheduler/seed-default-tasks';
+} from '@sdwianto/platform/scheduler/seed-default-tasks';
 import { DEFAULT_INVENTORY_SCHEDULED_TASKS } from './default-tasks';
 
 export type { SeedScheduledTasksResult };

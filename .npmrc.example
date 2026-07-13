@@ -1,6 +1,6 @@
 # @dawam scope — GitHub Packages (EE-13 prod)
 # Copy to .npmrc and set GITHUB_TOKEN with read:packages
-# Or use: DAWAM_REGISTRY=github GITHUB_TOKEN=... npm run ee12:install-platform
+# Or use: SDWIANTO_REGISTRY=github GITHUB_TOKEN=... npm run ee12:install-platform
 
-@dawam:registry=https://npm.pkg.github.com
+@sdwianto:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}

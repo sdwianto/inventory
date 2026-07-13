@@ -35,8 +35,8 @@ export default defineConfig({
         find: /^@dawam\/contracts\/(.+)$/,
         replacement: `${contractsRoot}/$1.ts`,
       },
-      { find: '@dawam/contracts', replacement: `${contractsRoot}/index.ts` },
-      { find: '@dawam/platform', replacement: `${platformRoot}/index.ts` },
+      { find: '@sdwianto/contracts', replacement: `${contractsRoot}/index.ts` },
+      { find: '@sdwianto/platform', replacement: `${platformRoot}/index.ts` },
     ],
   },
 });

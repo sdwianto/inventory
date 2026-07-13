@@ -36,7 +36,7 @@ function main() {
 
   const env = {
     ...process.env,
-    DAWAM_REGISTRY: 'github',
+    SDWIANTO_REGISTRY: 'github',
     EE12_FORCE_REGISTRY: '1',
     NODE_AUTH_TOKEN: token,
   };

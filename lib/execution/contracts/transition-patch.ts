@@ -1,3 +1,3 @@
-/** @deprecated import from `@dawam/contracts` — EE-12 shim */
-export type { TransitionPatch } from '@dawam/contracts';
-export { assertTransitionPatch } from '@dawam/contracts';
+/** @deprecated import from `@sdwianto/contracts` — EE-12 shim */
+export type { TransitionPatch } from '@sdwianto/contracts';
+export { assertTransitionPatch } from '@sdwianto/contracts';

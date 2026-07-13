@@ -1,6 +1,6 @@
 /** Canonical scheduled tasks for Inventory VPS (EE-9E subset — wave 1 empty). */
 
-import type { ScheduledTaskInput } from '@dawam/contracts';
+import type { ScheduledTaskInput } from '@sdwianto/contracts';
 import { JOB_TYPES } from '@/lib/api/bg-jobs';
 
 /** Enabled when maintenance worker runs with SCHEDULER_ENABLED=1 (post wave-3). */

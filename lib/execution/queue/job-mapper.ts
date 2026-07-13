@@ -1,2 +1,2 @@
-/** @deprecated import from `@dawam/platform/queue/job-mapper` — EE-12 Phase 3 shim */
-export * from '@dawam/platform/queue/job-mapper';
+/** @deprecated import from `@sdwianto/platform/queue/job-mapper` — EE-12 Phase 3 shim */
+export * from '@sdwianto/platform/queue/job-mapper';

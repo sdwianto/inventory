@@ -17,14 +17,14 @@ describe('EE-13 — Inventory registry prod gate', () => {
 
   it('.npmrc.example documents GitHub Packages', () => {
     const example = readFileSync(resolve(ROOT, '.npmrc.example'), 'utf8');
-    expect(example).toContain('@dawam:registry=https://npm.pkg.github.com');
+    expect(example).toContain('@sdwianto:registry=https://npm.pkg.github.com');
     expect(example).toContain('GITHUB_TOKEN');
   });
 
-  it('ee12-install supports DAWAM_REGISTRY=github with scoped registry flags', () => {
+  it('ee12-install supports SDWIANTO_REGISTRY=github with scoped registry flags', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
-    expect(script).toContain('DAWAM_REGISTRY === \'github\'');
-    expect(script).toContain('--@dawam:registry=https://npm.pkg.github.com');
+    expect(script).toContain('SDWIANTO_REGISTRY === \'github\'');
+    expect(script).toContain('--@sdwianto:registry=https://npm.pkg.github.com');
     expect(script).toContain('EE12_FORCE_REGISTRY');
   });
 
@@ -35,12 +35,12 @@ describe('EE-13 — Inventory registry prod gate', () => {
 
   it('CI checks out dawam/sales for platform packages', () => {
     const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
-    expect(ci).toContain('repository: dawam/sales');
+    expect(ci).toContain('repository: sdwianto/sales');
   });
 
   it('local dev still pins file:_vendor/sales (registry is prod override)', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
-    expect(root.dependencies['@dawam/contracts']).toBe('file:./_vendor/sales/packages/contracts');
-    expect(root.dependencies['@dawam/platform']).toBe('file:./_vendor/sales/packages/platform');
+    expect(root.dependencies['@sdwianto/contracts']).toBe('file:./_vendor/sales/packages/contracts');
+    expect(root.dependencies['@sdwianto/platform']).toBe('file:./_vendor/sales/packages/platform');
   });
 });

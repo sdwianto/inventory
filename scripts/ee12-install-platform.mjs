@@ -3,7 +3,7 @@
  * EE-12 — ensure ./_vendor/sales/packages/{contracts,platform} exist before npm install.
  *
  * Local: symlink package dirs → ../../sales/sales/packages/*
- * CI:    checkout dawam/sales to _vendor/sales (real tree)
+ * CI:    checkout sdwianto/sales to _vendor/sales (real tree)
  */
 
 import { execSync } from 'node:child_process';
@@ -68,8 +68,8 @@ function ensureCiCheckout() {
 
 function findDistTarballs() {
   for (const base of DIST_CANDIDATES) {
-    const contracts = join(base, `dawam-contracts-${VERSION}.tgz`);
-    const platform = join(base, `dawam-platform-${VERSION}.tgz`);
+    const contracts = join(base, `sdwianto-contracts-${VERSION}.tgz`);
+    const platform = join(base, `sdwianto-platform-${VERSION}.tgz`);
     if (existsSync(contracts) && existsSync(platform)) {
       return { contracts, platform };
     }
@@ -83,8 +83,8 @@ function installFromTarballs(dist) {
     `npm install --ignore-scripts --no-audit --no-fund --no-save "${dist.contracts}" "${dist.platform}"`,
     { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EE12_INSTALLING: '1' } },
   );
-  const nmContracts = join(ROOT, 'node_modules/@dawam/contracts');
-  const nmPlatform = join(ROOT, 'node_modules/@dawam/platform');
+  const nmContracts = join(ROOT, 'node_modules/@sdwianto/contracts');
+  const nmPlatform = join(ROOT, 'node_modules/@sdwianto/platform');
   if (existsSync(nmContracts) && existsSync(nmPlatform)) {
     mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
     linkDir(CONTRACTS_PKG, nmContracts);
@@ -95,21 +95,21 @@ function installFromTarballs(dist) {
 function installFromRegistry() {
   const token = process.env.NODE_AUTH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) {
-    console.error('[ee12-install] GITHUB_TOKEN or NODE_AUTH_TOKEN required for DAWAM_REGISTRY=github');
+    console.error('[ee12-install] GITHUB_TOKEN or NODE_AUTH_TOKEN required for SDWIANTO_REGISTRY=github');
     process.exit(1);
   }
-  console.info('[ee12-install] GitHub Packages (DAWAM_REGISTRY=github)');
+  console.info('[ee12-install] GitHub Packages (SDWIANTO_REGISTRY=github)');
   const auth = `--//npm.pkg.github.com/:_authToken=${token}`;
   execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save @dawam/contracts@${VERSION} @dawam/platform@${VERSION} --@dawam:registry=https://npm.pkg.github.com ${auth}`,
+    `npm install --ignore-scripts --no-audit --no-fund --no-save @sdwianto/contracts@${VERSION} @sdwianto/platform@${VERSION} --@sdwianto:registry=https://npm.pkg.github.com ${auth}`,
     {
       cwd: ROOT,
       stdio: 'inherit',
       env: { ...process.env, EE12_INSTALLING: '1', NODE_AUTH_TOKEN: token },
     },
   );
-  const nmContracts = join(ROOT, 'node_modules/@dawam/contracts');
-  const nmPlatform = join(ROOT, 'node_modules/@dawam/platform');
+  const nmContracts = join(ROOT, 'node_modules/@sdwianto/contracts');
+  const nmPlatform = join(ROOT, 'node_modules/@sdwianto/platform');
   if (existsSync(nmContracts) && existsSync(nmPlatform)) {
     mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
     linkDir(CONTRACTS_PKG, nmContracts);
@@ -121,7 +121,7 @@ function installFromRegistry() {
 function main() {
   if (process.env.EE12_INSTALLING === '1') return;
 
-  if (process.env.EE12_FORCE_REGISTRY === '1' && process.env.DAWAM_REGISTRY === 'github') {
+  if (process.env.EE12_FORCE_REGISTRY === '1' && process.env.SDWIANTO_REGISTRY === 'github') {
     installFromRegistry();
     return;
   }
@@ -133,7 +133,7 @@ function main() {
 
   if (ensureLocalPackageLinks()) return;
 
-  if (process.env.DAWAM_REGISTRY === 'github' && (process.env.GITHUB_TOKEN || process.env.NODE_AUTH_TOKEN)) {
+  if (process.env.SDWIANTO_REGISTRY === 'github' && (process.env.GITHUB_TOKEN || process.env.NODE_AUTH_TOKEN)) {
     installFromRegistry();
     return;
   }
@@ -147,7 +147,7 @@ function main() {
   console.error('[ee12-install] Cannot resolve @dawam packages.');
   console.error('  Local: ensure ../../sales/sales/packages exists (run: cd ../../sales/sales && git checkout HEAD -- packages)');
   console.error('  Or:    cd ../../sales/sales && npm run ee12:pack');
-  console.error('  CI:    checkout dawam/sales to _vendor/sales && npm run ee12:pack');
+  console.error('  CI:    checkout sdwianto/sales to _vendor/sales && npm run ee12:pack');
   console.error('  WARN:  never rm -rf _vendor/sales when it symlinks the whole sales repo');
   console.error(`  cwd: ${ROOT}`);
   process.exit(1);
