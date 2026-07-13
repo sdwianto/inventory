@@ -3,7 +3,7 @@
  * EE-12 — ensure ./_vendor/sales/packages/{contracts,platform} exist before npm install.
  *
  * Local: symlink package dirs → ../../sales/sales/packages/*
- * CI:    checkout sdwianto/sales to _vendor/sales (real tree)
+ * CI:    checkout dawam/sales to _vendor/sales (real tree)
  */
 
 import { execSync } from 'node:child_process';
@@ -147,7 +147,7 @@ function main() {
   console.error('[ee12-install] Cannot resolve @dawam packages.');
   console.error('  Local: ensure ../../sales/sales/packages exists (run: cd ../../sales/sales && git checkout HEAD -- packages)');
   console.error('  Or:    cd ../../sales/sales && npm run ee12:pack');
-  console.error('  CI:    checkout sdwianto/sales to _vendor/sales && npm run ee12:pack');
+  console.error('  CI:    checkout dawam/sales to _vendor/sales && npm run ee12:pack');
   console.error('  WARN:  never rm -rf _vendor/sales when it symlinks the whole sales repo');
   console.error(`  cwd: ${ROOT}`);
   process.exit(1);

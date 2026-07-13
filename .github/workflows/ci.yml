@@ -20,9 +20,11 @@ jobs:
       - name: Checkout Sales platform packages
         uses: actions/checkout@v4
         with:
-          repository: sdwianto/sales
+          repository: dawam/sales
           ref: main
           path: _vendor/sales
+          # PAT with read access to dawam/sales if repo private (secret: DAWAM_SALES_CHECKOUT_TOKEN)
+          token: ${{ secrets.DAWAM_SALES_CHECKOUT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Pack @dawam platform tarballs
         run: |
@@ -93,9 +95,11 @@ jobs:
       - name: Checkout Sales platform packages
         uses: actions/checkout@v4
         with:
-          repository: sdwianto/sales
+          repository: dawam/sales
           ref: main
           path: _vendor/sales
+          # PAT with read access to dawam/sales if repo private (secret: DAWAM_SALES_CHECKOUT_TOKEN)
+          token: ${{ secrets.DAWAM_SALES_CHECKOUT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Pack @dawam platform tarballs
         run: |
