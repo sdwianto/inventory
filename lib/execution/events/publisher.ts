@@ -1,2 +1,2 @@
-/** @deprecated import from `@sdwianto/platform/events/publisher` — EE-12 Phase 3 shim */
-export * from '@sdwianto/platform/events/publisher';
+/** @deprecated import from `@sdwianto/events` — EE-14 Phase 3 shim */
+export * from '@sdwianto/events';

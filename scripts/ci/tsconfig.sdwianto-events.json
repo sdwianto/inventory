@@ -11,10 +11,8 @@
     "esModuleInterop": true,
     "paths": {
       "@sdwianto/contracts": ["../../node_modules/@sdwianto/contracts/src/index.ts"],
-      "@sdwianto/contracts/*": ["../../node_modules/@sdwianto/contracts/src/*"],
-      "@sdwianto/events": ["../../node_modules/@sdwianto/events/src/index.ts"],
-      "@sdwianto/events/*": ["../../node_modules/@sdwianto/events/src/*"]
+      "@sdwianto/contracts/*": ["../../node_modules/@sdwianto/contracts/src/*"]
     }
   },
-  "include": ["../../node_modules/@sdwianto/platform/src/**/*.ts"]
+  "include": ["../../node_modules/@sdwianto/events/src/**/*.ts"]
 }

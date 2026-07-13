@@ -52,6 +52,14 @@
       "@sdwianto/platform/*": [
         "./node_modules/@sdwianto/platform/src/*",
         "./_vendor/sales/packages/platform/src/*"
+      ],
+      "@sdwianto/events": [
+        "./node_modules/@sdwianto/events/src/index.ts",
+        "./_vendor/sales/packages/events/src/index.ts"
+      ],
+      "@sdwianto/events/*": [
+        "./node_modules/@sdwianto/events/src/*",
+        "./_vendor/sales/packages/events/src/*"
       ]
     }
   },

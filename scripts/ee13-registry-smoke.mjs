@@ -15,6 +15,7 @@ import { join, resolve } from 'node:path';
 const ROOT = resolve(process.cwd());
 const VENDOR_SALES = join(ROOT, '_vendor/sales');
 const CONTRACTS_PKG = join(VENDOR_SALES, 'packages/contracts');
+const EVENTS_PKG = join(VENDOR_SALES, 'packages/events');
 const PLATFORM_PKG = join(VENDOR_SALES, 'packages/platform');
 
 function removeIfSymlink(path) {
@@ -26,8 +27,10 @@ function removeIfSymlink(path) {
 
 function removeVendorPackages() {
   removeIfSymlink(CONTRACTS_PKG);
+  removeIfSymlink(EVENTS_PKG);
   removeIfSymlink(PLATFORM_PKG);
   if (existsSync(CONTRACTS_PKG)) rmSync(CONTRACTS_PKG, { recursive: true, force: true });
+  if (existsSync(EVENTS_PKG)) rmSync(EVENTS_PKG, { recursive: true, force: true });
   if (existsSync(PLATFORM_PKG)) rmSync(PLATFORM_PKG, { recursive: true, force: true });
 }
 
@@ -53,8 +56,14 @@ function main() {
   console.info('[ee13-registry-smoke] typecheck @sdwianto packages…');
   execSync('npm run typecheck:packages', { cwd: ROOT, stdio: 'inherit', env });
 
+  console.info('[ee13-registry-smoke] EE-13 gate…');
+  execSync('npm run test:execution:ee13', { cwd: ROOT, stdio: 'inherit', env });
+
   console.info('[ee13-registry-smoke] EE-12 gate…');
   execSync('npm run test:execution:ee12', { cwd: ROOT, stdio: 'inherit', env });
+
+  console.info('[ee13-registry-smoke] EE-14 gate…');
+  execSync('npm run test:execution:ee14', { cwd: ROOT, stdio: 'inherit', env });
 
   console.info('[ee13-registry-smoke] OK');
 }

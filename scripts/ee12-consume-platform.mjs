@@ -19,7 +19,11 @@ const SOURCE_CANDIDATES = [
 
 function findSourcePackages() {
   for (const base of SOURCE_CANDIDATES) {
-    if (existsSync(join(base, 'contracts/package.json')) && existsSync(join(base, 'platform/package.json'))) {
+    if (
+      existsSync(join(base, 'contracts/package.json'))
+      && existsSync(join(base, 'events/package.json'))
+      && existsSync(join(base, 'platform/package.json'))
+    ) {
       return base;
     }
   }
@@ -62,6 +66,11 @@ function writeShim(file, platformSubpath) {
   writeFileSync(file, content, 'utf8');
 }
 
+function writeEventsPublisherShim(file) {
+  const content = `/** @deprecated import from \`@sdwianto/events\` — EE-14 Phase 3 shim */\nexport * from '@sdwianto/events';\n`;
+  writeFileSync(file, content, 'utf8');
+}
+
 function writeContractShims() {
   const contractsDir = join(LIB, 'contracts');
   const shims = {
@@ -89,6 +98,10 @@ function generateRuntimeShims() {
       const base = file.split('/').pop() || '';
       if (d === 'scheduler' && SKIP_SCHEDULER.has(base)) continue;
       const rel = relative(LIB, file).replace(/\\/g, '/').replace(/\.ts$/, '');
+      if (rel === 'events/publisher') {
+        writeEventsPublisherShim(file);
+        continue;
+      }
       writeShim(file, rel);
     }
   }

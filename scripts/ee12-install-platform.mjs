@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * EE-12 — ensure ./_vendor/sales/packages/{contracts,platform} exist before npm install.
+ * EE-12 — ensure ./_vendor/sales/packages/{contracts,events,platform} exist before npm install.
  *
  * Local: copy package dirs from ../../sales/sales/packages/* (npm file: rejects symlinks)
  * CI:    checkout sdwianto/sales to _vendor/sales (real tree)
@@ -26,10 +26,14 @@ const ROOT = resolve(process.cwd());
 const VENDOR_SALES = join(ROOT, '_vendor/sales');
 const LOCAL_SALES = resolve(ROOT, '../../sales/sales');
 const CONTRACTS_PKG = join(VENDOR_SALES, 'packages/contracts');
+const EVENTS_PKG = join(VENDOR_SALES, 'packages/events');
 const PLATFORM_PKG = join(VENDOR_SALES, 'packages/platform');
 const NM_CONTRACTS = join(ROOT, 'node_modules/@sdwianto/contracts');
+const NM_EVENTS = join(ROOT, 'node_modules/@sdwianto/events');
 const NM_PLATFORM = join(ROOT, 'node_modules/@sdwianto/platform');
-const VERSION = '1.0.0';
+const CONTRACTS_VERSION = '1.0.0';
+const EVENTS_VERSION = '1.0.0';
+const PLATFORM_VERSION = '1.0.1';
 
 const DIST_CANDIDATES = [
   join(VENDOR_SALES, 'packages/dist'),
@@ -64,8 +68,10 @@ function syncDir(target, src) {
 function packagesReady() {
   try {
     return existsSync(join(CONTRACTS_PKG, 'package.json'))
+      && existsSync(join(EVENTS_PKG, 'package.json'))
       && existsSync(join(PLATFORM_PKG, 'package.json'))
       && existsSync(join(CONTRACTS_PKG, 'src/index.ts'))
+      && existsSync(join(EVENTS_PKG, 'src/publisher.ts'))
       && existsSync(join(PLATFORM_PKG, 'src/queue/enqueue.ts'));
   } catch {
     return false;
@@ -74,10 +80,12 @@ function packagesReady() {
 
 function nodeModulesLinksOk() {
   if (!existsSync(join(NM_CONTRACTS, 'package.json'))) return false;
+  if (!existsSync(join(NM_EVENTS, 'package.json'))) return false;
   if (!existsSync(join(NM_PLATFORM, 'package.json'))) return false;
   if (!packagesReady()) return false;
   try {
     return realpathSync(NM_CONTRACTS) === realpathSync(CONTRACTS_PKG)
+      && realpathSync(NM_EVENTS) === realpathSync(EVENTS_PKG)
       && realpathSync(NM_PLATFORM) === realpathSync(PLATFORM_PKG);
   } catch {
     return false;
@@ -88,6 +96,7 @@ function assertPackagesReadyOrExit() {
   if (packagesReady()) return;
   console.error('[ee12-install] _vendor packages not ready:');
   console.error(`  contracts → ${CONTRACTS_PKG}`);
+  console.error(`  events    → ${EVENTS_PKG}`);
   console.error(`  platform  → ${PLATFORM_PKG}`);
   console.error('  Local: ensure ../../sales/sales/packages exists');
   console.error('  CI:    checkout sales to _vendor/sales && npm run ee12:pack');
@@ -96,11 +105,13 @@ function assertPackagesReadyOrExit() {
 
 function ensureLocalPackageCopies() {
   const localContracts = join(LOCAL_SALES, 'packages/contracts');
+  const localEvents = join(LOCAL_SALES, 'packages/events');
   const localPlatform = join(LOCAL_SALES, 'packages/platform');
   if (!existsSync(join(localContracts, 'package.json'))) return false;
 
   mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
   syncDir(CONTRACTS_PKG, localContracts);
+  syncDir(EVENTS_PKG, localEvents);
   syncDir(PLATFORM_PKG, localPlatform);
   console.info('[ee12-install] _vendor/sales/packages/* copied from Sales monorepo');
   return packagesReady();
@@ -108,29 +119,31 @@ function ensureLocalPackageCopies() {
 
 function findDistTarballs() {
   for (const base of DIST_CANDIDATES) {
-    const contracts = join(base, `sdwianto-contracts-${VERSION}.tgz`);
-    const platform = join(base, `sdwianto-platform-${VERSION}.tgz`);
-    if (existsSync(contracts) && existsSync(platform)) {
-      return { contracts, platform };
+    const contracts = join(base, `sdwianto-contracts-${CONTRACTS_VERSION}.tgz`);
+    const events = join(base, `sdwianto-events-${EVENTS_VERSION}.tgz`);
+    const platform = join(base, `sdwianto-platform-${PLATFORM_VERSION}.tgz`);
+    if (existsSync(contracts) && existsSync(events) && existsSync(platform)) {
+      return { contracts, events, platform };
     }
   }
   return null;
 }
 
-function copyRegistryIntoVendor(nmContracts, nmPlatform) {
+function copyRegistryIntoVendor(nmContracts, nmEvents, nmPlatform) {
   mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
   syncDir(CONTRACTS_PKG, nmContracts);
+  syncDir(EVENTS_PKG, nmEvents);
   syncDir(PLATFORM_PKG, nmPlatform);
 }
 
 function installFromTarballs(dist) {
   console.info('[ee12-install] installing tarballs into node_modules');
   execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save "${dist.contracts}" "${dist.platform}"`,
+    `npm install --ignore-scripts --no-audit --no-fund --no-save "${dist.contracts}" "${dist.events}" "${dist.platform}"`,
     { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EE12_INSTALLING: '1' } },
   );
-  if (existsSync(NM_CONTRACTS) && existsSync(NM_PLATFORM)) {
-    copyRegistryIntoVendor(NM_CONTRACTS, NM_PLATFORM);
+  if (existsSync(NM_CONTRACTS) && existsSync(NM_EVENTS) && existsSync(NM_PLATFORM)) {
+    copyRegistryIntoVendor(NM_CONTRACTS, NM_EVENTS, NM_PLATFORM);
   }
 }
 
@@ -143,15 +156,15 @@ function installFromRegistry() {
   console.info('[ee12-install] GitHub Packages (SDWIANTO_REGISTRY=github)');
   const auth = `--//npm.pkg.github.com/:_authToken=${token}`;
   execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save @sdwianto/contracts@${VERSION} @sdwianto/platform@${VERSION} --@sdwianto:registry=https://npm.pkg.github.com ${auth}`,
+    `npm install --ignore-scripts --no-audit --no-fund --no-save @sdwianto/contracts@${CONTRACTS_VERSION} @sdwianto/events@${EVENTS_VERSION} @sdwianto/platform@${PLATFORM_VERSION} --@sdwianto:registry=https://npm.pkg.github.com ${auth}`,
     {
       cwd: ROOT,
       stdio: 'inherit',
       env: { ...process.env, EE12_INSTALLING: '1', NODE_AUTH_TOKEN: token },
     },
   );
-  if (existsSync(NM_CONTRACTS) && existsSync(NM_PLATFORM)) {
-    copyRegistryIntoVendor(NM_CONTRACTS, NM_PLATFORM);
+  if (existsSync(NM_CONTRACTS) && existsSync(NM_EVENTS) && existsSync(NM_PLATFORM)) {
+    copyRegistryIntoVendor(NM_CONTRACTS, NM_EVENTS, NM_PLATFORM);
     console.info('[ee12-install] copied node_modules/@sdwianto/* → _vendor/sales/packages/*');
   }
 }
@@ -165,6 +178,7 @@ function ensureNodeModulesSdwianto() {
   console.info('[ee12-install] linking node_modules/@sdwianto/* → _vendor');
   mkdirSync(join(ROOT, 'node_modules/@sdwianto'), { recursive: true });
   linkDir(NM_CONTRACTS, CONTRACTS_PKG);
+  linkDir(NM_EVENTS, EVENTS_PKG);
   linkDir(NM_PLATFORM, PLATFORM_PKG);
 }
 

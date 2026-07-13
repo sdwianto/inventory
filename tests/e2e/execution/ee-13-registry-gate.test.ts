@@ -43,12 +43,27 @@ describe('EE-13 — Inventory registry prod gate', () => {
     expect(root.scripts['typecheck:packages']).toContain('typecheck-sdwianto-packages.mjs');
     expect(existsSync(resolve(ROOT, 'scripts/typecheck-sdwianto-packages.mjs'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-contracts.json'))).toBe(true);
+    expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-events.json'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-platform.json'))).toBe(true);
   });
 
-  it('local dev still pins file:_vendor/sales (registry is prod override)', () => {
+  it('ee12-install vendors contracts, events, and platform', () => {
+    const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
+    expect(script).toContain('packages/events');
+    expect(script).toContain('@sdwianto/events@');
+    expect(script).toContain("const PLATFORM_VERSION = '1.0.1'");
+    expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
+  });
+
+  it('CI runs EE-14 gate', () => {
+    const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toContain('test:execution:ee14');
+  });
+
+  it('local dev pins file:_vendor/sales for all @sdwianto packages', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(root.dependencies['@sdwianto/contracts']).toBe('file:./_vendor/sales/packages/contracts');
+    expect(root.dependencies['@sdwianto/events']).toBe('file:./_vendor/sales/packages/events');
     expect(root.dependencies['@sdwianto/platform']).toBe('file:./_vendor/sales/packages/platform');
   });
 });
