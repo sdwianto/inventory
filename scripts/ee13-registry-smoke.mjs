@@ -66,6 +66,14 @@ function main() {
   execSync('npm run test:execution:ee14', { cwd: ROOT, stdio: 'inherit', env });
 
   console.info('[ee13-registry-smoke] OK');
+
+  console.info('[ee13-registry-smoke] restoring local _vendor from Sales monorepo…');
+  const restoreEnv = { ...process.env };
+  delete restoreEnv.SDWIANTO_REGISTRY;
+  delete restoreEnv.EE12_FORCE_REGISTRY;
+  delete restoreEnv.NODE_AUTH_TOKEN;
+  delete restoreEnv.GITHUB_TOKEN;
+  execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env: restoreEnv });
 }
 
 main();

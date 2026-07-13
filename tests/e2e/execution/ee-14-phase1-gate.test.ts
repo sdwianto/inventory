@@ -5,7 +5,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { setExecutionEventBus } from '@sdwianto/events';
+import { publishJobEnqueuedEvent, setExecutionEventBus } from '@sdwianto/events';
+import { buildJobDocument } from '@/lib/execution/queue/enqueue';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 
@@ -43,7 +44,15 @@ describe('EE-14 Phase 1 — Inventory events consumer gate', () => {
         published.push(payload);
       },
     });
-    expect(published).toHaveLength(0);
+    await publishJobEnqueuedEvent(
+      buildJobDocument({
+        type: 'WEBHOOK_DELIVERY',
+        domain: 'integration',
+        tenantId: 't1',
+        payload: {},
+      }),
+    );
+    expect(published).toHaveLength(1);
     setExecutionEventBus(null);
   });
 });
