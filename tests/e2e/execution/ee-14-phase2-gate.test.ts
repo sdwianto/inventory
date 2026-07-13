@@ -44,9 +44,9 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
     expect(pkg.dependencies['@sdwianto/events']).toBe('1.0.0');
   });
 
-  it('ee13 registry gate documents platform-v1.0.1 consumer path', () => {
+  it('ee13 registry gate documents platform 1.0.2 consumer path', () => {
     const gate = readFileSync(resolve(ROOT, 'tests/e2e/execution/ee-13-registry-gate.test.ts'), 'utf8');
     expect(gate).toContain('packages/events');
-    expect(gate).toContain("const PLATFORM_VERSION = '1.0.1'");
+    expect(gate).toContain("const PLATFORM_VERSION = '1.0.2'");
   });
 });
