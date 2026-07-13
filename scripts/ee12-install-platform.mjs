@@ -93,16 +93,38 @@ function installFromTarballs(dist) {
 }
 
 function installFromRegistry() {
+  const token = process.env.NODE_AUTH_TOKEN || process.env.GITHUB_TOKEN;
+  if (!token) {
+    console.error('[ee12-install] GITHUB_TOKEN or NODE_AUTH_TOKEN required for DAWAM_REGISTRY=github');
+    process.exit(1);
+  }
   console.info('[ee12-install] GitHub Packages (DAWAM_REGISTRY=github)');
-  execSync('npm install --ignore-scripts --no-audit --no-fund --no-save @dawam/contracts@1.0.0 @dawam/platform@1.0.0', {
-    cwd: ROOT,
-    stdio: 'inherit',
-    env: { ...process.env, EE12_INSTALLING: '1' },
-  });
+  const auth = `--//npm.pkg.github.com/:_authToken=${token}`;
+  execSync(
+    `npm install --ignore-scripts --no-audit --no-fund --no-save @dawam/contracts@${VERSION} @dawam/platform@${VERSION} --@dawam:registry=https://npm.pkg.github.com ${auth}`,
+    {
+      cwd: ROOT,
+      stdio: 'inherit',
+      env: { ...process.env, EE12_INSTALLING: '1', NODE_AUTH_TOKEN: token },
+    },
+  );
+  const nmContracts = join(ROOT, 'node_modules/@dawam/contracts');
+  const nmPlatform = join(ROOT, 'node_modules/@dawam/platform');
+  if (existsSync(nmContracts) && existsSync(nmPlatform)) {
+    mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
+    linkDir(CONTRACTS_PKG, nmContracts);
+    linkDir(PLATFORM_PKG, nmPlatform);
+    console.info('[ee12-install] linked node_modules/@dawam/* → _vendor/sales/packages/*');
+  }
 }
 
 function main() {
   if (process.env.EE12_INSTALLING === '1') return;
+
+  if (process.env.EE12_FORCE_REGISTRY === '1' && process.env.DAWAM_REGISTRY === 'github') {
+    installFromRegistry();
+    return;
+  }
 
   if (ensureCiCheckout()) {
     console.info('[ee12-install] _vendor/sales/packages ready');
