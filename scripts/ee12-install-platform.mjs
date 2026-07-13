@@ -35,6 +35,7 @@ const NM_PLATFORM = join(ROOT, 'node_modules/@sdwianto/platform');
 const CONTRACTS_VERSION = '1.0.0';
 const EVENTS_VERSION = '1.0.1';
 const PLATFORM_VERSION = '1.0.3';
+const REGISTRY = 'https://npm.pkg.github.com';
 
 const DIST_CANDIDATES = [
   join(VENDOR_SALES, 'packages/dist'),
@@ -155,9 +156,9 @@ function installFromRegistry() {
     process.exit(1);
   }
   console.info('[ee12-install] GitHub Packages (SDWIANTO_REGISTRY=github)');
-  const auth = `--//npm.pkg.github.com/:_authToken=${token}`;
+  // Quote scoped packages; auth via // config flag (not --@scope:registry CLI).
   execSync(
-    `npm install --ignore-scripts --no-audit --no-fund --no-save @sdwianto/contracts@${CONTRACTS_VERSION} @sdwianto/events@${EVENTS_VERSION} @sdwianto/platform@${PLATFORM_VERSION} --@sdwianto:registry=https://npm.pkg.github.com ${auth}`,
+    `npm install --ignore-scripts --no-audit --no-fund --no-save "@sdwianto/contracts@${CONTRACTS_VERSION}" "@sdwianto/events@${EVENTS_VERSION}" "@sdwianto/platform@${PLATFORM_VERSION}" --registry "${REGISTRY}" --//npm.pkg.github.com/:_authToken=${token}`,
     {
       cwd: ROOT,
       stdio: 'inherit',

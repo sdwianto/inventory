@@ -24,7 +24,9 @@ describe('EE-13 — Inventory registry prod gate', () => {
   it('ee12-install supports SDWIANTO_REGISTRY=github with scoped registry flags', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
     expect(script).toContain('SDWIANTO_REGISTRY === \'github\'');
-    expect(script).toContain('--@sdwianto:registry=https://npm.pkg.github.com');
+    expect(script).toContain('--registry');
+    expect(script).toContain('npm.pkg.github.com');
+    expect(script).toContain('--//npm.pkg.github.com/:_authToken=');
     expect(script).toContain('EE12_FORCE_REGISTRY');
   });
 
@@ -36,6 +38,8 @@ describe('EE-13 — Inventory registry prod gate', () => {
   it('CI checks out sdwianto/sales for platform packages', () => {
     const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
     expect(ci).toContain('repository: sdwianto/sales');
+    expect(ci).toContain('secrets.SALES_REPO_TOKEN');
+    expect(ci).toContain('actions/checkout@v5');
   });
 
   it('typecheck:packages uses app-root TypeScript (registry-safe)', () => {

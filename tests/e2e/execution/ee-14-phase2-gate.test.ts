@@ -22,6 +22,7 @@ describe('EE-14 Phase 2 — Inventory registry consumer gate', () => {
     expect(script).toContain("const PLATFORM_VERSION = '1.0.3'");
     expect(script).toContain('@sdwianto/events@${EVENTS_VERSION}');
     expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
+    expect(script).toContain('--registry');
   });
 
   it('@sdwianto/events vendor package is 1.0.1', () => {
