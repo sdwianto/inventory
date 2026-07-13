@@ -24,7 +24,7 @@ describe('EE-14 Phase 1 — Inventory events consumer gate', () => {
     expect(existsSync(path)).toBe(true);
     const pkg = JSON.parse(readFileSync(path, 'utf8'));
     expect(pkg.name).toBe('@sdwianto/events');
-    expect(pkg.version).toBe('1.0.0');
+    expect(pkg.version).toBe('1.0.1');
   });
 
   it('lib/execution/events/publisher re-exports @sdwianto/events', () => {

@@ -33,8 +33,8 @@ const NM_CONTRACTS = join(ROOT, 'node_modules/@sdwianto/contracts');
 const NM_EVENTS = join(ROOT, 'node_modules/@sdwianto/events');
 const NM_PLATFORM = join(ROOT, 'node_modules/@sdwianto/platform');
 const CONTRACTS_VERSION = '1.0.0';
-const EVENTS_VERSION = '1.0.0';
-const PLATFORM_VERSION = '1.0.2';
+const EVENTS_VERSION = '1.0.1';
+const PLATFORM_VERSION = '1.0.3';
 
 const DIST_CANDIDATES = [
   join(VENDOR_SALES, 'packages/dist'),
@@ -102,14 +102,6 @@ function assertPackagesReadyOrExit() {
   console.error('  Local: ensure ../../sales/sales/packages exists');
   console.error('  CI:    checkout sales to _vendor/sales && npm run ee12:pack');
   process.exit(1);
-}
-
-function readPackageVersion(dir) {
-  try {
-    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version;
-  } catch {
-    return null;
-  }
 }
 
 function ensureLocalPackageCopies() {
@@ -199,11 +191,7 @@ function resolveVendorPackages() {
 
   const localContracts = join(LOCAL_SALES, 'packages/contracts/package.json');
   if (!process.env.CI && existsSync(localContracts)) {
-    const localVer = readPackageVersion(join(LOCAL_SALES, 'packages/platform'));
-    const vendorVer = packagesReady() ? readPackageVersion(PLATFORM_PKG) : null;
-    if (!packagesReady() || localVer !== vendorVer) {
-      return ensureLocalPackageCopies();
-    }
+    return ensureLocalPackageCopies();
   }
 
   if (packagesReady()) {

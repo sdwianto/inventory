@@ -65,7 +65,7 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(platform.name).toBe('@sdwianto/platform');
     expect(platform.dependencies['@sdwianto/contracts']).toBe('1.0.0');
     expect(platform.dependencies['@sdwianto/events']).toBe('1.0.0');
-    expect(platform.version).toBe('1.0.2');
+    expect(platform.version).toBe('1.0.3');
   });
 
   it('package.json depends on _vendor/sales @sdwianto/*', () => {
