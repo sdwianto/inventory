@@ -24,7 +24,7 @@ jobs:
           ref: main
           path: _vendor/sales
 
-      - name: Pack @dawam platform tarballs
+      - name: Pack @sdwianto platform tarballs
         run: |
           cd _vendor/sales
           npm install
@@ -39,7 +39,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Typecheck @dawam packages
+      - name: Typecheck @sdwianto packages
         run: npm run typecheck:packages
 
       - name: EE-12 platform consumer gate
@@ -97,7 +97,7 @@ jobs:
           ref: main
           path: _vendor/sales
 
-      - name: Pack @dawam platform tarballs
+      - name: Pack @sdwianto platform tarballs
         run: |
           cd _vendor/sales
           npm install

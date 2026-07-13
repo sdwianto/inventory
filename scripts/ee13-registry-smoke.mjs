@@ -24,6 +24,13 @@ function removeIfSymlink(path) {
   }
 }
 
+function removeVendorPackages() {
+  removeIfSymlink(CONTRACTS_PKG);
+  removeIfSymlink(PLATFORM_PKG);
+  if (existsSync(CONTRACTS_PKG)) rmSync(CONTRACTS_PKG, { recursive: true, force: true });
+  if (existsSync(PLATFORM_PKG)) rmSync(PLATFORM_PKG, { recursive: true, force: true });
+}
+
 function main() {
   const token = process.env.GITHUB_TOKEN || process.env.NODE_AUTH_TOKEN;
   if (!token) {
@@ -31,8 +38,7 @@ function main() {
     process.exit(1);
   }
 
-  removeIfSymlink(CONTRACTS_PKG);
-  removeIfSymlink(PLATFORM_PKG);
+  removeVendorPackages();
 
   const env = {
     ...process.env,
@@ -41,10 +47,10 @@ function main() {
     NODE_AUTH_TOKEN: token,
   };
 
-  console.info('[ee13-registry-smoke] installing @dawam/* from GitHub Packages…');
+  console.info('[ee13-registry-smoke] installing @sdwianto/* from GitHub Packages…');
   execSync('node scripts/ee12-install-platform.mjs', { cwd: ROOT, stdio: 'inherit', env });
 
-  console.info('[ee13-registry-smoke] typecheck @dawam packages…');
+  console.info('[ee13-registry-smoke] typecheck @sdwianto packages…');
   execSync('npm run typecheck:packages', { cwd: ROOT, stdio: 'inherit', env });
 
   console.info('[ee13-registry-smoke] EE-12 gate…');

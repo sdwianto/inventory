@@ -1,4 +1,4 @@
-# @dawam scope — GitHub Packages (EE-13 prod)
+# @sdwianto scope — GitHub Packages (EE-13 prod)
 # Copy to .npmrc and set GITHUB_TOKEN with read:packages
 # Or use: SDWIANTO_REGISTRY=github GITHUB_TOKEN=... npm run ee12:install-platform
 

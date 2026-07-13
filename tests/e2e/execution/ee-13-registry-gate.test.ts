@@ -33,9 +33,17 @@ describe('EE-13 — Inventory registry prod gate', () => {
     expect(ci).toContain('test:execution:ee13');
   });
 
-  it('CI checks out dawam/sales for platform packages', () => {
+  it('CI checks out sdwianto/sales for platform packages', () => {
     const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
     expect(ci).toContain('repository: sdwianto/sales');
+  });
+
+  it('typecheck:packages uses app-root TypeScript (registry-safe)', () => {
+    const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+    expect(root.scripts['typecheck:packages']).toContain('typecheck-sdwianto-packages.mjs');
+    expect(existsSync(resolve(ROOT, 'scripts/typecheck-sdwianto-packages.mjs'))).toBe(true);
+    expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-contracts.json'))).toBe(true);
+    expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-platform.json'))).toBe(true);
   });
 
   it('local dev still pins file:_vendor/sales (registry is prod override)', () => {

@@ -6,7 +6,7 @@ import { defineConfig } from 'vitest/config';
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
 function resolvePackageRoot(scope: 'contracts' | 'platform') {
-  const nm = resolve(rootDir, `node_modules/@dawam/${scope}/src`);
+  const nm = resolve(rootDir, `node_modules/@sdwianto/${scope}/src`);
   const vendor = resolve(rootDir, `_vendor/sales/packages/${scope}/src`);
   return existsSync(nm) ? nm : vendor;
 }
@@ -28,11 +28,11 @@ export default defineConfig({
     alias: [
       { find: '@', replacement: rootDir },
       {
-        find: /^@dawam\/platform\/(.+)$/,
+        find: /^@sdwianto\/platform\/(.+)$/,
         replacement: `${platformRoot}/$1.ts`,
       },
       {
-        find: /^@dawam\/contracts\/(.+)$/,
+        find: /^@sdwianto\/contracts\/(.+)$/,
         replacement: `${contractsRoot}/$1.ts`,
       },
       { find: '@sdwianto/contracts', replacement: `${contractsRoot}/index.ts` },

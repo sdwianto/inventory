@@ -1,0 +1,48 @@
+Now using node v22.12.0 (npm v11.6.0)
+=== ls vendor ===
+vendor/:
+total 12
+drwxr-xr-x  2 sdwianto sdwianto 4096 Jul 13 05:45 .
+drwxr-xr-x 23 sdwianto sdwianto 4096 Jul 13 05:45 ..
+-rw-r--r--  1 sdwianto sdwianto  143 Jul 13 05:39 .keep
+lrwxrwxrwx  1 sdwianto sdwianto   56 Jul 13 05:45 contracts -> /home/sdwianto/Assignment/sales/sales/packages/contracts
+lrwxrwxrwx  1 sdwianto sdwianto   55 Jul 13 05:45 platform -> /home/sdwianto/Assignment/sales/sales/packages/platform
+
+vendor/contracts/:
+total 28
+drwxr-xr-x 3 sdwianto sdwianto 4096 Jul 12 23:17 .
+drwxr-xr-x 5 sdwianto sdwianto 4096 Jul 13 05:42 ..
+-rw-r--r-- 1 sdwianto sdwianto  277 Jul 12 23:17 CHANGELOG.md
+-rw-r--r-- 1 sdwianto sdwianto  264 Jul 12 23:08 README.md
+-rw-r--r-- 1 sdwianto sdwianto  692 Jul 13 00:36 package.json
+drwxr-xr-x 2 sdwianto sdwianto 4096 Jul 12 23:17 src
+-rw-r--r-- 1 sdwianto sdwianto  290 Jul 12 23:08 tsconfig.json
+
+vendor/platform/:
+total 28
+drwxr-xr-x  3 sdwianto sdwianto 4096 Jul 13 00:36 .
+drwxr-xr-x  5 sdwianto sdwianto 4096 Jul 13 05:42 ..
+-rw-r--r--  1 sdwianto sdwianto  263 Jul 13 00:36 CHANGELOG.md
+-rw-r--r--  1 sdwianto sdwianto  170 Jul 12 23:08 README.md
+-rw-r--r--  1 sdwianto sdwianto  737 Jul 13 00:51 package.json
+drwxr-xr-x 16 sdwianto sdwianto 4096 Jul 12 23:22 src
+-rw-r--r--  1 sdwianto sdwianto  391 Jul 12 23:08 tsconfig.json
+=== ls sales packages ===
+-rw-r--r-- 1 sdwianto sdwianto 692 Jul 13 00:36 ../../sales/sales/packages/contracts/package.json
+-rw-r--r-- 1 sdwianto sdwianto 737 Jul 13 00:51 ../../sales/sales/packages/platform/package.json
+=== ee12-install ===
+[ee12-install] vendor/ ready (@dawam/* 1.0.0)
+EE12_EXIT=0
+=== vendor after install ===
+lrwxrwxrwx 1 sdwianto sdwianto 56 Jul 13 05:45 vendor/contracts -> /home/sdwianto/Assignment/sales/sales/packages/contracts
+/home/sdwianto/Assignment/sales/sales/packages/contracts
+=== npm install ===
+npm error code EMISSINGTARGET
+npm error Missing target in lock file: "file:vendor/contracts" is referenced by "node_modules/@dawam/contracts" but does not exist.
+npm error To fix:
+npm error 1. rm package-lock.json
+npm error 2. npm install
+npm error A complete log of this run can be found in: /home/sdwianto/.npm/_logs/2026-07-12T22_46_01_076Z-debug-0.log
+NPM_EXIT=1
+=== test ee12 ===
+tail: option used in invalid context -- 3

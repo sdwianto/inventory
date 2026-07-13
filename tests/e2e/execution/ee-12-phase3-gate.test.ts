@@ -62,7 +62,7 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(platform.dependencies['@sdwianto/contracts']).toBe('1.0.0');
   });
 
-  it('package.json depends on _vendor/sales @dawam/*', () => {
+  it('package.json depends on _vendor/sales @sdwianto/*', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(root.dependencies['@sdwianto/contracts']).toBe('file:./_vendor/sales/packages/contracts');
     expect(root.dependencies['@sdwianto/platform']).toBe('file:./_vendor/sales/packages/platform');
@@ -132,7 +132,7 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(existsSync(resolve(ROOT, 'scripts/ci/check-execution-boundary.mjs'))).toBe(true);
   });
 
-  it('tsconfig + next.config alias @dawam packages (_vendor/sales fallback)', () => {
+  it('tsconfig + next.config alias @sdwianto packages (_vendor/sales fallback)', () => {
     const ts = JSON.parse(readFileSync(resolve(ROOT, 'tsconfig.json'), 'utf8'));
     expect(ts.compilerOptions.paths['@sdwianto/contracts'][0]).toContain('node_modules/@sdwianto/contracts');
     expect(ts.compilerOptions.paths['@sdwianto/platform'][0]).toContain('node_modules/@sdwianto/platform');
