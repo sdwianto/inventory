@@ -8,9 +8,17 @@ const nextConfig = {
     ],
   },
   serverExternalPackages: ['mongodb'],
-  // Next.js 16 dev uses Turbopack by default; empty config acknowledges custom webpack is build-only
+  // Next 16.2 Turbopack does not honor webpack resolve.extensionAlias for
+  // TypeScript ESM (import '.../foo.js' → foo.ts). Use `npm run dev:webpack`
+  // (and production `next build --webpack` if configured) for @sdwianto/* packages.
   turbopack: {},
   webpack(config, { dev }) {
+    config.resolve = config.resolve ?? {};
+    config.resolve.extensionAlias = {
+      ...(config.resolve.extensionAlias ?? {}),
+      '.js': ['.ts', '.tsx', '.js'],
+      '.mjs': ['.mts', '.mjs'],
+    };
     if (dev) {
       // Used when running `npm run dev:webpack` (--webpack)
       config.watchOptions = {
