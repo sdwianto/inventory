@@ -155,7 +155,7 @@ function filterByRole(items: NavEntry[], role: string): NavEntry[] {
 export default function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUserState] = useState<SessionUser | null>(null);
+  const [user, setUserState] = useState<SessionUser | null>(() => getUser());
   const [now, setNow] = useState(new Date());
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
@@ -197,9 +197,6 @@ export default function AppShell({ children }: AppShellProps) {
   }, [user, wsTenantLabel, scopeId, lokasiList, branding]);
 
   useEffect(() => {
-    const cached = getUser();
-    if (cached) setUserState(cached);
-
     syncSessionUser().then((synced) => {
       if (!synced) {
         router.replace('/');

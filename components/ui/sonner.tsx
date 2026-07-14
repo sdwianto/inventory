@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Toaster as Sonner, type ToasterProps } from 'sonner';
 
-const Toaster = ({ theme = 'light', ...props }: ToasterProps) => {
-  const [mounted, setMounted] = useState(false);
+function subscribeNoop() {
+  return () => {};
+}
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+const Toaster = ({ theme = 'light', ...props }: ToasterProps) => {
+  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
 
   if (!mounted) return null;
 

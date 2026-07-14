@@ -56,28 +56,29 @@ export default function ProductSearchSelect({
   const [q, setQ] = useState('');
   const [items, setItems] = useState<JsonObject[]>([]);
   const [loading, setLoading] = useState(false);
-  const [resolved, setResolved] = useState<JsonObject | null>(selectedProduct || null);
+  const [fetched, setFetched] = useState<JsonObject | null>(null);
+
+  const resolved = useMemo(() => {
+    if (selectedProduct && (!value || str(selectedProduct.id) === value)) return selectedProduct;
+    if (!value) return null;
+    if (fetched && str(fetched.id) === value) return fetched;
+    return null;
+  }, [selectedProduct, value, fetched]);
 
   useEffect(() => {
-    if (selectedProduct) setResolved(selectedProduct);
-  }, [selectedProduct]);
-
-  useEffect(() => {
-    if (!value) {
-      setResolved(null);
-      return;
-    }
-    if (resolved && str(resolved.id) === value) return;
+    if (!value) return undefined;
+    if (selectedProduct && str(selectedProduct.id) === value) return undefined;
+    if (fetched && str(fetched.id) === value) return undefined;
     let cancelled = false;
     fetchJson<JsonObject>(`/api/products/${value}`)
       .then((p) => {
         if (cancelled || !p?.id) return;
-        setResolved(p);
+        setFetched(p);
         primeProductUomsCacheFromProducts([p as { id?: string; uoms?: ProductUom[] }]);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [value, resolved]);
+  }, [value, selectedProduct, fetched]);
 
   useEffect(() => {
     if (!open) return undefined;

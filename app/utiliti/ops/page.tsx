@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { Activity, AlertTriangle, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -35,8 +35,7 @@ function StatusBadge({ ok }: { ok: boolean }) {
 }
 
 export default function OpsDashboardPage() {
-  const [user, setUser] = useState<{ role?: string } | null>(null);
-  useEffect(() => { setUser(getUser()); }, []);
+  const [user] = useState<{ role?: string } | null>(() => getUser());
 
   const { data, isLoading, isError, refetch, isFetching } = useApiQuery<OpsDashboard>(
     queryKeys.ops.dashboard,

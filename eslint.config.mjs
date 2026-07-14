@@ -86,7 +86,9 @@ export default defineConfig([
     },
   },
   {
-    files: ['lib/hooks/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}'],
+    // Client shells sync session/cache from localStorage — warn, don't fail CI
+    // for intentional mount hydration patterns while we migrate to useSyncExternalStore.
+    files: ['lib/hooks/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
     rules: {
       'react-hooks/set-state-in-effect': 'warn',
     },

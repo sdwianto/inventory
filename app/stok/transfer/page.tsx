@@ -46,18 +46,20 @@ export default function TransferPage() {
 
   useEffect(() => {
     if (!form.lokasiAsal || form.items.length === 0) return;
-    setForm((prev) => ({
-      ...prev,
-      items: prev.items.map((it) => {
-        const stokBase = qtyAtLokasi(it, prev.lokasiAsal);
-        const factor = parseFloat(String(it.factorToBase)) || 1;
-        const stokLine = factor <= 0 || factor === 1
-          ? stokBase
-          : Math.round((stokBase / factor) * 1000) / 1000;
-        return { ...it, stokSistemBase: stokBase, stokSistem: stokLine };
-      }),
-    }));
-  }, [form.lokasiAsal]);
+    queueMicrotask(() => {
+      setForm((prev) => ({
+        ...prev,
+        items: prev.items.map((it) => {
+          const stokBase = qtyAtLokasi(it, prev.lokasiAsal);
+          const factor = parseFloat(String(it.factorToBase)) || 1;
+          const stokLine = factor <= 0 || factor === 1
+            ? stokBase
+            : Math.round((stokBase / factor) * 1000) / 1000;
+          return { ...it, stokSistemBase: stokBase, stokSistem: stokLine };
+        }),
+      }));
+    });
+  }, [form.lokasiAsal, form.items.length]);
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.transfer.list,

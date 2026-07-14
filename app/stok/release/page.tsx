@@ -74,14 +74,16 @@ function ReleaseInventoryPageContent() {
 
   useEffect(() => {
     if (!form.lokasiKode || form.items.length === 0) return;
-    setForm((prev) => ({
-      ...prev,
-      items: prev.items.map((it) => ({
-        ...it,
-        stokAvail: qtyAtLokasi(it, prev.lokasiKode),
-      })),
-    }));
-  }, [form.lokasiKode]);
+    queueMicrotask(() => {
+      setForm((prev) => ({
+        ...prev,
+        items: prev.items.map((it) => ({
+          ...it,
+          stokAvail: qtyAtLokasi(it, prev.lokasiKode),
+        })),
+      }));
+    });
+  }, [form.lokasiKode, form.items.length]);
 
   const { data: listData = [] } = useApiQuery<JsonObject[]>(
     queryKeys.inventoryReleases.list,

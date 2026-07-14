@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { WifiOff, CloudUpload, ChevronDown, ChevronUp, RotateCcw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -13,6 +13,19 @@ import {
 } from '@/lib/offline-mutation-queue';
 import { isOfflineQueueEnabled } from '@/lib/feature-flags-client';
 
+function subscribeNoop() {
+  return () => {};
+}
+
+function subscribeOnline(onStoreChange: () => void) {
+  window.addEventListener('online', onStoreChange);
+  window.addEventListener('offline', onStoreChange);
+  return () => {
+    window.removeEventListener('online', onStoreChange);
+    window.removeEventListener('offline', onStoreChange);
+  };
+}
+
 function formatLabel(row: OfflineMutation) {
   if (row.label) return row.label;
   try {
@@ -24,8 +37,8 @@ function formatLabel(row: OfflineMutation) {
 }
 
 export default function OfflineIndicator() {
-  const [mounted, setMounted] = useState(false);
-  const [online, setOnline] = useState(true);
+  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
+  const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
   const [pending, setPending] = useState(0);
   const [items, setItems] = useState<OfflineMutation[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -65,12 +78,10 @@ export default function OfflineIndicator() {
   }, [refreshPending]);
 
   useEffect(() => {
-    setMounted(true);
-    setOnline(navigator.onLine);
+    if (!mounted) return undefined;
     refreshPending();
 
     const handleOnline = () => {
-      setOnline(true);
       void (async () => {
         const { ok, failed, conflicts } = await replayOfflineMutations();
         refreshPending();
@@ -79,10 +90,8 @@ export default function OfflineIndicator() {
         for (const c of conflicts) showConflictToast(c);
       })();
     };
-    const handleOffline = () => setOnline(false);
 
     window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -101,12 +110,11 @@ export default function OfflineIndicator() {
 
     return () => {
       window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('erp-offline-queued', onQueued);
       window.removeEventListener('erp-scope-change', onScopeChange);
       window.removeEventListener('erp-offline-conflict', onConflict);
     };
-  }, [refreshPending, showConflictToast]);
+  }, [mounted, refreshPending, showConflictToast]);
 
   const handleRetryAll = () => {
     void (async () => {

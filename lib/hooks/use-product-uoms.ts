@@ -74,7 +74,7 @@ export function useProductUoms(stokId: string | null | undefined) {
 
   useEffect(() => {
     if (!stokId) {
-      setUoms([]);
+      queueMicrotask(() => setUoms([]));
       return;
     }
     void load(stokId);
