@@ -33,17 +33,19 @@ export function resolveLineQtyBaseFromUoms(
 ): ResolvedLineQty | { error: string } {
   const qty = parseQty(input.qty);
   if (input.uomId) {
-    const uom = uoms.find((u) => u.id === input.uomId);
-    if (uom) {
-      return {
-        qty,
-        qtyBase: lineQtyToBase(qty, uom),
-        uomId: uom.id,
-        satuan: uom.satuan,
-        factorToBase: uom.factorToBase,
-      };
+    let uom = uoms.find((u) => u.id === input.uomId);
+    const sat = input.satuan ? String(input.satuan).trim().toUpperCase() : '';
+    if (!uom && sat) {
+      uom = uoms.find((u) => u.satuan === sat);
     }
-    // If uomId not found, fall through to satuan resolution
+    if (!uom) return { error: 'Satuan produk tidak ditemukan (uomId)' };
+    return {
+      qty,
+      qtyBase: lineQtyToBase(qty, uom),
+      uomId: uom.id,
+      satuan: uom.satuan,
+      factorToBase: uom.factorToBase,
+    };
   }
   const sat = input.satuan ? String(input.satuan).trim().toUpperCase() : '';
   if (sat) {
