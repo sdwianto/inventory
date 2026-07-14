@@ -75,6 +75,7 @@
     ".next",
     "coverage",
     "tests/e2e",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "_vendor"
   ]
 }

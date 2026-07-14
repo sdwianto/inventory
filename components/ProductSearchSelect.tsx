@@ -150,7 +150,7 @@ export default function ProductSearchSelect({
                   value={productSearchText(p)}
                   onSelect={() => {
                     const pid = str(p.id);
-                    setResolved(p);
+                    setFetched(p);
                     onProductPick?.(p);
                     onChange(pid === value ? '' : pid);
                     setOpen(false);
