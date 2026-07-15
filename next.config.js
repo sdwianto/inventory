@@ -8,11 +8,12 @@ const nextConfig = {
     ],
   },
   serverExternalPackages: ['mongodb'],
-  // Next 16.2 Turbopack does not honor webpack resolve.extensionAlias for
-  // TypeScript ESM (import '.../foo.js' → foo.ts). Use `npm run dev:webpack`
-  // (and production `next build --webpack` if configured) for @sdwianto/* packages.
+  // Next 16 Turbopack does not honor webpack resolve.extensionAlias for
+  // TypeScript ESM (import '.../foo.js' → foo.ts). Production build uses --webpack
+  // (see package.json). Keep turbopack key so `next dev` stays valid.
   turbopack: {},
   webpack(config, { dev }) {
+    // @sdwianto/* packages ship TS sources with NodeNext ".js" import specifiers.
     config.resolve = config.resolve ?? {};
     config.resolve.extensionAlias = {
       ...(config.resolve.extensionAlias ?? {}),
