@@ -13,6 +13,10 @@ import {
   BG_JOBS_COLLECTION,
   EXECUTION_AUDIT_COLLECTION,
 } from '@/lib/execution/queue/constants';
+import {
+  createMockExecutionOutboxCollection,
+  isExecutionOutboxCollection,
+} from '../../helpers/mock-execution-outbox-collection';
 import { priorityOrder, classificationOrder } from '@/lib/execution/queue/sort-keys';
 import { setExecutionEventBus } from '@/lib/execution/events/publisher';
 import { setJobBusAdapter } from '@/lib/execution/dispatcher/bus-adapter';
@@ -148,6 +152,9 @@ function createIntegrationMockDb() {
           createIndex: vi.fn().mockResolvedValue(undefined),
           insertOne: vi.fn().mockResolvedValue({ acknowledged: true }),
         };
+      }
+      if (isExecutionOutboxCollection(name)) {
+        return createMockExecutionOutboxCollection();
       }
       throw new Error(`unexpected collection ${name}`);
     }),
