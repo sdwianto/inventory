@@ -24,7 +24,7 @@ describe('EE-12 Phase 4 — Inventory registry consumer gate', () => {
     const platform = JSON.parse(readFileSync(resolve(ROOT, 'node_modules/@sdwianto/platform/package.json'), 'utf8'));
     expect(platform.version).toBe('1.0.3');
     expect(platform.dependencies['@sdwianto/contracts']).toBe('1.0.0');
-    expect(platform.dependencies['@sdwianto/events']).toBe('1.0.0');
+    expect(platform.dependencies['@sdwianto/events']).toBe('1.0.1');
   });
 
   it('tsconfig resolves node_modules @sdwianto paths', () => {
