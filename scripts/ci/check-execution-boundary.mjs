@@ -23,6 +23,7 @@ const SKIP_DIRS = new Set([
   'build',
   '.turbo',
   'vendor',
+  '_vendor', // Sales checkout — own CI enforces Sales boundary; not Inventory app code
 ]);
 
 const COMMON_SKIP_PREFIXES = [
