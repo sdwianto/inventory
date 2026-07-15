@@ -22,7 +22,9 @@ test.describe('Inventory app — public pages', () => {
     const res = await request.get('/api/health');
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body.status).toBe('ok');
     expect(body.checks.database).toBe('ok');
+    // Fresh CI DB has no integration-reconcile run yet → production health is "degraded"
+    // (SLO neverRun). Database readiness is what this smoke asserts.
+    expect(['ok', 'degraded']).toContain(body.status);
   });
 });
