@@ -41,6 +41,7 @@
         "test:all": "npm run test:unit && npm run test:e2e",
         "typecheck:migrate-bulk": "node scripts/ts-fix-complete.mjs && node scripts/ts-migrate-usestate.mjs && node scripts/ts-migrate-json-state.mjs",
         "start": "next start --port 3001",
+        "start:standalone": "node scripts/start-standalone.mjs",
         "migrate:tenant": "node scripts/migrate-add-tenantId.js",
         "migrate:product-uom": "node scripts/migrate-product-uom.mjs",
         "test:phase5": "APP_URL=http://localhost:3001 APP_PORT=3001 python3 scripts/test_phase5_semiauto_v2.py",

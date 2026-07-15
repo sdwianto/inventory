@@ -6,6 +6,9 @@ const baseURL = process.env.APP_URL || `http://${host}:${port}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // Vitest gate suites live under tests/e2e/execution/*.test.ts — not Playwright.
+  testMatch: /.*\.spec\.ts/,
+  testIgnore: ['**/execution/**'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
@@ -20,7 +23,7 @@ export default defineConfig({
   ],
   webServer: {
     command: process.env.CI
-      ? 'npm run build && npm run start'
+      ? 'npm run build && npm run start:standalone'
       : 'npm run dev',
     url: baseURL,
     reuseExistingServer: !process.env.CI,
