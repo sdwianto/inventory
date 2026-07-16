@@ -67,6 +67,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: FP enterprise smoke gate
+        run: npm run test:fp:enterprise
+
       - name: Multi-UOM regression suite
         run: npm run test:multi-uom
 

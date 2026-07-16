@@ -20,6 +20,29 @@ type OpsDashboard = {
   deadLetterJobs?: Array<Record<string, unknown>>;
   recentAudit?: Array<Record<string, unknown>>;
   salesHealthUrl?: string | null;
+  fpObservability?: {
+    hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
+    latency?: Array<{
+      metric: string;
+      sampleCount: number;
+      p50Ms: number;
+      p95Ms: number;
+      thresholdMs: number;
+      ok: boolean;
+      slowCount: number;
+      count5xx: number;
+      count4xx: number;
+    }>;
+    recentFailures?: Array<{
+      at: string;
+      method: string;
+      route: string;
+      status: number;
+      durationMs?: number;
+      error?: string;
+      metric?: string;
+    }>;
+  };
 };
 
 function StatusBadge({ ok }: { ok: boolean }) {
@@ -113,6 +136,76 @@ export default function OpsDashboardPage() {
                 </li>
               ))}
             </ul>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-medium">Food Production observability</h2>
+              {data.fpObservability?.hotpath && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-mono text-xs">
+                    hotpath p95 {data.fpObservability.hotpath.p95Ms}ms
+                    {' / '}
+                    {data.fpObservability.hotpath.thresholdMs}ms
+                    {' · n='}
+                    {data.fpObservability.hotpath.sampleCount}
+                  </span>
+                  <StatusBadge ok={data.fpObservability.hotpath.ok !== false} />
+                </div>
+              )}
+            </div>
+            <div className="overflow-x-auto rounded border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="text-left p-2">Metric</th>
+                    <th className="text-right p-2">n</th>
+                    <th className="text-right p-2">p50</th>
+                    <th className="text-right p-2">p95</th>
+                    <th className="text-right p-2">slow</th>
+                    <th className="text-right p-2">5xx</th>
+                    <th className="text-left p-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.fpObservability?.latency || []).length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-3 text-muted-foreground">
+                        Belum ada sample FP — traffic akan mengisi bucket.
+                      </td>
+                    </tr>
+                  )}
+                  {(data.fpObservability?.latency || []).map((row) => (
+                    <tr key={row.metric} className="border-t">
+                      <td className="p-2 font-mono text-xs">{row.metric}</td>
+                      <td className="p-2 text-right">{row.sampleCount}</td>
+                      <td className="p-2 text-right">{row.p50Ms}</td>
+                      <td className="p-2 text-right">{row.p95Ms}</td>
+                      <td className="p-2 text-right">{row.slowCount}</td>
+                      <td className="p-2 text-right">{row.count5xx}</td>
+                      <td className="p-2"><StatusBadge ok={row.ok} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Recent FP failures</h3>
+              <ul className="divide-y max-h-48 overflow-auto text-sm">
+                {(data.fpObservability?.recentFailures || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada kegagalan FP di memori proses.</li>
+                )}
+                {(data.fpObservability?.recentFailures || []).map((f, i) => (
+                  <li key={`${f.at}-${i}`} className="p-2">
+                    <div className="font-mono text-xs">
+                      {f.method} {f.route} · {f.status}
+                      {f.durationMs != null ? ` · ${f.durationMs}ms` : ''}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">{f.error || f.metric || ''}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </section>
 
           <section className="grid gap-4 lg:grid-cols-2">

@@ -75,11 +75,25 @@ export function verifySessionToken(token: string | null | undefined): SessionPay
   return payload;
 }
 
+/** Secure cookies only on HTTPS. HTTP VPS must not set Secure or browser drops the session. */
+export function cookieSecureFlag(): boolean {
+  const explicit = String(process.env.COOKIE_SECURE || '').trim().toLowerCase();
+  if (explicit === '0' || explicit === 'false' || explicit === 'no') return false;
+  if (explicit === '1' || explicit === 'true' || explicit === 'yes') return true;
+  const publicUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.INVENTORY_PUBLIC_URL ||
+    process.env.SALES_PUBLIC_URL ||
+    '';
+  if (publicUrl.startsWith('http://')) return false;
+  if (publicUrl.startsWith('https://')) return true;
+  return process.env.NODE_ENV === 'production';
+}
+
 export function sessionCookieOptions(maxAgeSec = MAX_AGE_SEC) {
-  const secure = process.env.NODE_ENV === 'production';
   return {
     httpOnly: true,
-    secure,
+    secure: cookieSecureFlag(),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: maxAgeSec,

@@ -99,7 +99,7 @@ export default function PoListCard({
   };
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div id={`cpo-row-${poId}`} className="border rounded-lg overflow-hidden scroll-mt-24">
       <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50">
         <button
           type="button"

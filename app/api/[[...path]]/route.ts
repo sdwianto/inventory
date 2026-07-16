@@ -24,6 +24,12 @@ import {
   replayIdempotentResponse,
   storeIdempotentResponse,
 } from '@/lib/api/idempotency';
+import {
+  recordRequestDuration,
+  recordFpFailure,
+  isFpRoute,
+  FP_SLOW_REQUEST_MS,
+} from '@/lib/api/request-metrics';
 
 export async function OPTIONS() {
   return cors(new NextResponse(null, { status: 200 }));
@@ -40,6 +46,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
   const route = `/${path.join('/')}`;
   const method = request.method;
   const url = new URL(request.url);
+  const started = Date.now();
 
   try {
     if ((route === '/' || route === '/root') && method === 'GET') {
@@ -146,6 +153,39 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       return err(`Route ${route} not found`, 404);
     }
 
+    const durationMs = Date.now() - started;
+    const status = handlerResponse.status;
+    if (isFpRoute(route)) {
+      void recordRequestDuration(method, route, durationMs, status);
+      if (status >= 500) {
+        recordFpFailure({
+          method,
+          route,
+          status,
+          durationMs,
+          tenantId: auth?.tenantId,
+          error: `HTTP ${status}`,
+        });
+      }
+    }
+    if (durationMs > FP_SLOW_REQUEST_MS) {
+      logger.warn('api_slow_request', {
+        route,
+        method,
+        durationMs,
+        status,
+        tenantId: auth?.tenantId,
+      });
+    } else if (isFpRoute(route) && method !== 'GET') {
+      logger.info('api_request', {
+        route,
+        method,
+        durationMs,
+        status,
+        tenantId: auth?.tenantId,
+      });
+    }
+
     if (isIdempotentMutation(method, idemKey) && auth && !workerAuthed) {
       return storeIdempotentResponse(
         db,
@@ -160,11 +200,24 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
 
     return handlerResponse;
   } catch (e) {
+    const durationMs = Date.now() - started;
+    const errMsg = e instanceof Error ? e.message : String(e);
     logger.error('api_request_failed', {
       route,
       method,
-      error: e instanceof Error ? e.message : String(e),
+      durationMs,
+      error: errMsg,
     });
+    if (isFpRoute(route)) {
+      void recordRequestDuration(method, route, durationMs, 500);
+      recordFpFailure({
+        method,
+        route,
+        status: 500,
+        durationMs,
+        error: errMsg,
+      });
+    }
     void captureException(e, { route, method });
     const msg = publicApiErrorMessage(e, 'Terjadi kesalahan server');
     if (msg.includes('MONGO_URL') || msg.includes('Database tidak terjangkau')) {

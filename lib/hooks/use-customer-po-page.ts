@@ -44,7 +44,9 @@ import { PoMutationAmbiguousError } from '@/lib/pembelian-po/mutation-errors';
 export function useCustomerPoPage() {
   const queryClient = useQueryClient();
   const [user] = useState<JsonObject | null>(() => getUser() as JsonObject | null);
-  const { list, reload: reloadList, setList, hasMore, loadMore, loadingMore } = useCustomerPoList();
+  const {
+    list, reload: reloadList, setList, hasMore, loadMore, loadingMore, loading: listLoading,
+  } = useCustomerPoList();
   const poMutations = usePoMutations(setList, async () => { await reloadList(); });
   const syncPendingMutation = useApiMutation([queryKeys.customerPurchaseOrders.all]);
   const [productCache, setProductCache] = useState<Record<string, JsonObject>>({});
@@ -147,6 +149,65 @@ export function useCustomerPoPage() {
       })
       .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
   }, [searchParams]);
+
+  // Deep-link from Food Production Kebutuhan Beli (?highlight=<cpoId>)
+  const highlightDone = useRef<string | null>(null);
+  useEffect(() => {
+    const highlightId = searchParams.get('highlight') || searchParams.get('poId');
+    if (!highlightId) return;
+    if (highlightDone.current === highlightId) return;
+    setExpandedId(highlightId);
+    setShowAll(true);
+
+    let cancelled = false;
+    async function ensureHighlight() {
+      if (listLoading) return;
+
+      const inList = (Array.isArray(list) ? list : []).some((p) => str(p.id) === highlightId);
+      if (!inList) {
+        try {
+          const po = await fetchJson<JsonObject>(`/api/customer-purchase-orders/${highlightId}`);
+          if (cancelled || !po?.id) return;
+          setList((prev) => {
+            const rows = Array.isArray(prev) ? prev : [];
+            if (rows.some((p) => str(p.id) === highlightId)) return rows;
+            return [po, ...rows];
+          });
+        } catch {
+          toast.error('PO target highlight tidak ditemukan');
+          highlightDone.current = highlightId;
+          return;
+        }
+      }
+
+      // Wait a tick for DOM after list patch / showAll
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const flash = (node: HTMLElement) => {
+          node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          node.classList.add('ring-2', 'ring-primary');
+          setTimeout(() => node.classList.remove('ring-2', 'ring-primary'), 2500);
+        };
+        const el = document.getElementById(`cpo-row-${highlightId}`);
+        if (el) {
+          flash(el);
+          highlightDone.current = highlightId;
+          return;
+        }
+        // One short retry; always mark done so we don't soft-loop on list updates
+        setTimeout(() => {
+          if (cancelled) return;
+          const again = document.getElementById(`cpo-row-${highlightId}`);
+          if (again) flash(again);
+          else setExpandedId(highlightId);
+          highlightDone.current = highlightId;
+        }, 200);
+      });
+    }
+
+    void ensureHighlight();
+    return () => { cancelled = true; };
+  }, [searchParams, list, listLoading, setList]);
 
   const canCreate = (PO_CAN_CREATE as readonly string[]).includes(String(user?.role || ''));
   const canRequest = (PO_CAN_REQUEST as readonly string[]).includes(String(user?.role || ''));

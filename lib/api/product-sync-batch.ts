@@ -141,6 +141,7 @@ export async function bulkUpsertProductsFromVendor(
             tenantId: tid,
             ...syncSet,
             gudangKode,
+            itemRole: 'INGREDIENT',
             hargaBeli: 0,
             stok: 0,
             minStok: 0,

@@ -1,6 +1,11 @@
 // Index operasional — inventory customer collections only.
 
 import type { Db, IndexSpecification } from 'mongodb';
+import { FP_OPEN_DOC_STATUSES } from '@/lib/food-production/document';
+
+const FP_OPEN_STATUS_FILTER = {
+  status: { $in: [...FP_OPEN_DOC_STATUSES] },
+};
 
 let operationalIndexesEnsured = false;
 let operationalIndexesInFlight: Promise<void> | null = null;
@@ -69,6 +74,104 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
   { collection: 'products', index: { tenantId: 1, nama: 1, id: 1 }, name: 'idx_products_tenant_nama_id' },
+  { collection: 'products', index: { tenantId: 1, itemRole: 1 }, name: 'idx_products_tenant_item_role' },
+  { collection: 'kitchens', index: { tenantId: 1, nama: 1 }, name: 'idx_kitchens_tenant_nama' },
+  { collection: 'kitchens', index: { tenantId: 1, id: 1 }, name: 'idx_kitchens_tenant_id' },
+  { collection: 'recipes', index: { tenantId: 1, nama: 1 }, name: 'idx_recipes_tenant_nama' },
+  { collection: 'recipes', index: { tenantId: 1, id: 1 }, name: 'idx_recipes_tenant_id' },
+  { collection: 'recipes', index: { tenantId: 1, kode: 1, version: 1 }, name: 'uniq_recipes_tenant_kode_ver', unique: true },
+  { collection: 'menus', index: { tenantId: 1, nama: 1 }, name: 'idx_menus_tenant_nama' },
+  { collection: 'menus', index: { tenantId: 1, id: 1 }, name: 'idx_menus_tenant_id' },
+  { collection: 'menus', index: { tenantId: 1, kode: 1, version: 1 }, name: 'uniq_menus_tenant_kode_ver', unique: true },
+  { collection: 'production_plans', index: { tenantId: 1, id: 1 }, name: 'idx_fp_plans_tenant_id' },
+  { collection: 'production_plans', index: { tenantId: 1, tanggal: -1 }, name: 'idx_fp_plans_tenant_tanggal' },
+  { collection: 'production_plans', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_fp_plans_tenant_status_tanggal' },
+  { collection: 'production_plans', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_fp_plans_tenant_kitchen_tanggal' },
+  { collection: 'production_plans', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_fp_plans_tenant_no', unique: true },
+  { collection: 'material_requirements', index: { tenantId: 1, id: 1 }, name: 'idx_mrp_tenant_id' },
+  { collection: 'material_requirements', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_mrp_tenant_plan' },
+  { collection: 'material_requirements', index: { tenantId: 1, tanggal: -1 }, name: 'idx_mrp_tenant_tanggal' },
+  { collection: 'material_requirements', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_mrp_tenant_no', unique: true },
+  { collection: 'purchase_requirements', index: { tenantId: 1, id: 1 }, name: 'idx_pr_tenant_id' },
+  { collection: 'purchase_requirements', index: { tenantId: 1, materialRequirementId: 1, createdAt: -1 }, name: 'idx_pr_tenant_mrp' },
+  { collection: 'purchase_requirements', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_pr_tenant_plan' },
+  { collection: 'purchase_requirements', index: { tenantId: 1, tanggal: -1 }, name: 'idx_pr_tenant_tanggal' },
+  { collection: 'purchase_requirements', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_pr_tenant_no', unique: true },
+  {
+    collection: 'purchase_requirements',
+    index: { tenantId: 1, materialRequirementId: 1 },
+    name: 'uniq_pr_tenant_mrp_open',
+    unique: true,
+    partialFilterExpression: FP_OPEN_STATUS_FILTER,
+  },
+  { collection: 'material_issues', index: { tenantId: 1, id: 1 }, name: 'idx_issue_tenant_id' },
+  { collection: 'material_issues', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_issue_tenant_plan' },
+  { collection: 'material_issues', index: { tenantId: 1, tanggal: -1 }, name: 'idx_issue_tenant_tanggal' },
+  { collection: 'material_issues', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_issue_tenant_no', unique: true },
+  {
+    collection: 'material_issues',
+    index: { tenantId: 1, productionPlanId: 1 },
+    name: 'uniq_issue_tenant_plan_open',
+    unique: true,
+    partialFilterExpression: FP_OPEN_STATUS_FILTER,
+  },
+  { collection: 'production_results', index: { tenantId: 1, id: 1 }, name: 'idx_result_tenant_id' },
+  { collection: 'production_results', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_result_tenant_plan' },
+  { collection: 'production_results', index: { tenantId: 1, tanggal: -1 }, name: 'idx_result_tenant_tanggal' },
+  { collection: 'production_results', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_result_tenant_no', unique: true },
+  {
+    collection: 'production_results',
+    index: { tenantId: 1, productionPlanId: 1 },
+    name: 'uniq_result_tenant_plan_open',
+    unique: true,
+    partialFilterExpression: FP_OPEN_STATUS_FILTER,
+  },
+  { collection: 'kitchen_transfers', index: { tenantId: 1, id: 1 }, name: 'idx_xfer_tenant_id' },
+  { collection: 'kitchen_transfers', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_xfer_tenant_no', unique: true },
+  { collection: 'kitchen_transfers', index: { tenantId: 1, fromKitchenId: 1, createdAt: -1 }, name: 'idx_xfer_tenant_from' },
+  { collection: 'kitchen_transfers', index: { tenantId: 1, toKitchenId: 1, createdAt: -1 }, name: 'idx_xfer_tenant_to' },
+  { collection: 'production_batches', index: { tenantId: 1, id: 1 }, name: 'idx_batch_tenant_id' },
+  { collection: 'production_batches', index: { tenantId: 1, batchNo: 1 }, name: 'idx_batch_tenant_no' },
+  { collection: 'production_batches', index: { tenantId: 1, expiryDate: 1 }, name: 'idx_batch_tenant_expiry' },
+  { collection: 'production_batches', index: { tenantId: 1, kitchenId: 1, expiryDate: 1 }, name: 'idx_batch_tenant_kitchen_expiry' },
+  { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
+  { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },
+  { collection: 'service_points', index: { tenantId: 1, id: 1 }, name: 'idx_sp_tenant_id' },
+  { collection: 'service_points', index: { tenantId: 1, nama: 1 }, name: 'idx_sp_tenant_nama' },
+  { collection: 'service_points', index: { tenantId: 1, kode: 1 }, name: 'uniq_sp_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
+  { collection: 'service_points', index: { tenantId: 1, kitchenId: 1 }, name: 'idx_sp_tenant_kitchen' },
+  { collection: 'distribution_orders', index: { tenantId: 1, id: 1 }, name: 'idx_dist_tenant_id' },
+  { collection: 'distribution_orders', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_dist_tenant_no', unique: true },
+  { collection: 'distribution_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_dist_tenant_tanggal' },
+  { collection: 'distribution_orders', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_dist_tenant_kitchen_tanggal' },
+  { collection: 'distribution_orders', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_dist_tenant_plan' },
+  { collection: 'distribution_orders', index: { tenantId: 1, productionResultId: 1, createdAt: -1 }, name: 'idx_dist_tenant_result' },
+  { collection: 'distribution_orders', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_dist_tenant_status_tanggal' },
+  { collection: 'temperature_logs', index: { tenantId: 1, id: 1 }, name: 'idx_temp_log_tenant_id' },
+  { collection: 'temperature_logs', index: { tenantId: 1, recordedAt: -1 }, name: 'idx_temp_log_tenant_recorded' },
+  { collection: 'temperature_logs', index: { tenantId: 1, kitchenId: 1, recordedAt: -1 }, name: 'idx_temp_log_tenant_kitchen_recorded' },
+  { collection: 'temperature_logs', index: { tenantId: 1, alertStatus: 1, recordedAt: -1 }, name: 'idx_temp_log_tenant_alert_recorded' },
+  { collection: 'temperature_logs', index: { tenantId: 1, stage: 1, tanggal: -1 }, name: 'idx_temp_log_tenant_stage_tanggal' },
+  { collection: 'temperature_logs', index: { tenantId: 1, productionPlanId: 1, recordedAt: -1 }, name: 'idx_temp_log_tenant_plan' },
+  { collection: 'temperature_thresholds', index: { tenantId: 1, id: 1 }, name: 'idx_temp_thr_tenant_id' },
+  { collection: 'temperature_thresholds', index: { tenantId: 1, stage: 1 }, name: 'uniq_temp_thr_tenant_stage', unique: true },
+  { collection: 'haccp_templates', index: { tenantId: 1, id: 1 }, name: 'idx_haccp_tpl_tenant_id' },
+  { collection: 'haccp_templates', index: { tenantId: 1, kode: 1 }, name: 'uniq_haccp_tpl_tenant_kode', unique: true },
+  { collection: 'haccp_results', index: { tenantId: 1, id: 1 }, name: 'idx_haccp_res_tenant_id' },
+  { collection: 'haccp_results', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_haccp_res_tenant_no', unique: true },
+  { collection: 'haccp_results', index: { tenantId: 1, productionBatchId: 1, createdAt: -1 }, name: 'idx_haccp_res_tenant_batch' },
+  { collection: 'haccp_results', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_status_tanggal' },
+  { collection: 'haccp_results', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_kitchen_tanggal' },
+  { collection: 'supplier_price_book', index: { tenantId: 1, id: 1 }, name: 'idx_spb_tenant_id' },
+  { collection: 'supplier_price_book', index: { tenantId: 1, productId: 1, harga: 1 }, name: 'idx_spb_tenant_product_harga' },
+  { collection: 'supplier_price_book', index: { tenantId: 1, supplierId: 1, productId: 1 }, name: 'uniq_spb_tenant_supplier_product', unique: true, partialFilterExpression: { aktif: true } },
+  { collection: 'qc_templates', index: { tenantId: 1, id: 1 }, name: 'idx_qc_tpl_tenant_id' },
+  { collection: 'qc_templates', index: { tenantId: 1, kode: 1 }, name: 'uniq_qc_tpl_tenant_kode', unique: true },
+  { collection: 'qc_results', index: { tenantId: 1, id: 1 }, name: 'idx_qc_res_tenant_id' },
+  { collection: 'qc_results', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_qc_res_tenant_no', unique: true },
+  { collection: 'qc_results', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_qc_res_tenant_plan' },
+  { collection: 'qc_results', index: { tenantId: 1, tanggal: -1 }, name: 'idx_qc_res_tenant_tanggal' },
+  { collection: 'customer_purchase_orders', index: { tenantId: 1, purchaseRequirementId: 1 }, name: 'idx_cpo_tenant_pr' },
   { collection: 'integration_links', index: { customerTenantId: 1, vendorTenantId: 1 }, name: 'uniq_integration_link', unique: true },
   { collection: 'integration_links', index: { webhookSecret: 1, status: 1 }, name: 'idx_integration_link_secret' },
   { collection: 'integration_links', index: { customerTenantId: 1, status: 1 }, name: 'idx_integration_link_customer' },
@@ -133,27 +236,24 @@ async function prepareIndexData(db: Db): Promise<void> {
     },
     { $set: { syncSource: 'local' } },
   );
+  // ADR-001: legacy products without itemRole behave as bahan baku for Food Production.
+  await db.collection('products').updateMany(
+    {
+      $or: [
+        { itemRole: { $exists: false } },
+        { itemRole: null },
+        { itemRole: '' },
+      ],
+    },
+    { $set: { itemRole: 'INGREDIENT' } },
+  );
   const { backfillEmailNormalized } = await import('@/lib/api/backfill-email-normalized');
   await backfillEmailNormalized(db);
 }
 
-async function operationalIndexesPresent(db: Db): Promise<boolean> {
-  try {
-    const cols = await db.listCollections({ name: 'hutang' }, { nameOnly: true }).toArray();
-    if (!cols.length) return false;
-    const indexes = await db.collection('hutang').listIndexes().toArray();
-    return indexes.some((idx) => idx.name === 'idx_hutang_tenant_supplier');
-  } catch {
-    return false;
-  }
-}
-
 async function runEnsureOperationalIndexes(db: Db): Promise<void> {
-  if (await operationalIndexesPresent(db)) {
-    operationalIndexesEnsured = true;
-    return;
-  }
-
+  // Selalu reconcile sekali per proses — early-return berbasis 1 index lama
+  // membuat index FP baru (kitchen/recipe/menu/plan) bisa tidak pernah dibuat.
   await prepareIndexData(db);
   try {
     await db.collection('users').dropIndex('uniq_users_email');
@@ -167,6 +267,8 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   }
   await dropIndexIfExists(db, 'products', 'uniq_products_tenant_local_kode');
   await dropIndexIfExists(db, 'users', 'uniq_users_email_norm_tenant');
+  await dropIndexIfExists(db, 'recipes', 'idx_recipes_tenant_kode_ver');
+  await dropIndexIfExists(db, 'menus', 'idx_menus_tenant_kode_ver');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

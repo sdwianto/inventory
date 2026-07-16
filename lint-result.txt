@@ -1,0 +1,9 @@
+
+> inventory-app@0.1.0 lint
+> node scripts/ensure-node-version.mjs && npx eslint --config eslint.config.mjs lib app components
+
+
+Node.js 22+ required (current: v18.19.1).
+  nvm use          # jika pakai nvm (.nvmrc = 22)
+  fnm use          # jika pakai fnm
+

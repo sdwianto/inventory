@@ -54,6 +54,7 @@ import { formatStockDualLabel } from '@/lib/uom/display';
 import { assertMultiUomAllowed } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
+import { isItemRole, normalizeItemRole, type ItemRole } from '@/lib/food-production/item-role';
 
 const VENDOR_LOCKED_FIELDS = [
   'kode', 'nama', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId', 'baseUomId',
@@ -79,6 +80,7 @@ interface ProductBody extends Record<string, unknown> {
   aktif?: boolean;
   stokAlasan?: string;
   ids?: unknown[];
+  itemRole?: string;
 }
 
 interface ProductDoc extends Record<string, unknown> {
@@ -90,6 +92,7 @@ interface ProductDoc extends Record<string, unknown> {
   satuan?: string;
   gudangKode?: string;
   stok?: number;
+  itemRole?: ItemRole;
 }
 
 async function enrichProductList(
@@ -145,11 +148,18 @@ export async function handleProducts({
 
     const q = (url.searchParams.get('q') || '').trim();
     const grup = url.searchParams.get('grup') || '';
+    const itemRoleParam = (url.searchParams.get('itemRole') || '').trim();
     const syncSource = (url.searchParams.get('syncSource') || '').trim();
     const idsParam = (url.searchParams.get('ids') || '').trim();
     const skip = Math.max(parseInt(url.searchParams.get('skip') || '0', 10) || 0, 0);
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     if (grup) filter.grup = grup;
+    if (itemRoleParam) {
+      if (!isItemRole(itemRoleParam)) {
+        return err('itemRole filter tidak valid', 400);
+      }
+      filter.itemRole = itemRoleParam;
+    }
     if (syncSource) {
       filter.syncSource = syncSource;
       if (syncSource === 'sales.app') filter.aktif = { $ne: false };
@@ -239,6 +249,11 @@ export async function handleProducts({
     if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
     const denorm = productDenormFromBaseUom(baseUom);
 
+    if (productBody.itemRole !== undefined && !isItemRole(productBody.itemRole)) {
+      return err('itemRole tidak valid (INGREDIENT|SEMI_FINISHED|FINISHED_GOOD|PACKAGING|CONSUMABLE)', 400);
+    }
+    const itemRole = normalizeItemRole(productBody.itemRole, 'INGREDIENT');
+
     const doc: ProductDoc = {
       id: productId,
       tenantId,
@@ -246,6 +261,7 @@ export async function handleProducts({
       nama: productBody.nama,
       grup,
       gudangKode,
+      itemRole,
       ...denorm,
       uomCount: uomDocs.length,
       stokDisplay: formatStockDualLabel(parseFloat(String(productBody.stok || 0)), uomDocs),
@@ -491,6 +507,13 @@ export async function handleProducts({
           );
           update.grup = grup;
         }
+      }
+
+      if (update.itemRole !== undefined) {
+        if (!isItemRole(update.itemRole)) {
+          return err('itemRole tidak valid (INGREDIENT|SEMI_FINISHED|FINISHED_GOOD|PACKAGING|CONSUMABLE)', 400);
+        }
+        update.itemRole = update.itemRole;
       }
 
       if (update.gudangKode !== undefined) {

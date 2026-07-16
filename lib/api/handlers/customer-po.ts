@@ -439,6 +439,17 @@ export async function handleCustomerPo({
     return ok(clean(doc));
   }
 
+  // GET /customer-purchase-orders/:id — detail (deep-link highlight dari Food Production)
+  if (path[0] === 'customer-purchase-orders' && path.length === 2 && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const po = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    );
+    if (!po) return err('PO tidak ditemukan', 404);
+    return ok(clean(await enrichOnePo(db, po as JsonObject)));
+  }
+
   // PUT /customer-purchase-orders/:id — edit PO (DRAFT / PENDING_APPROVAL)
   if (path[0] === 'customer-purchase-orders' && path.length === 2 && method === 'PUT') {
     const deniedRole = requireRole(auth, PO_EDIT_ROLES);

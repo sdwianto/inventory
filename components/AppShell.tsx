@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import type { LucideIcon } from 'lucide-react';
-import { getUser, clearUser, syncSessionUser } from '@/lib/auth-client';
+import { clearUser, syncSessionUser } from '@/lib/auth-client';
 import type { SessionUser } from '@/types/auth';
 import {
   LayoutDashboard, ShoppingCart, Package, Receipt, LogOut, Menu, Store,
@@ -15,7 +15,8 @@ import {
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
-  Eraser, Activity, Shield,
+  Eraser, Activity, Shield, ChefHat, UtensilsCrossed, Apple, BadgeCheck, LineChart, LayoutGrid, ClipboardList,
+  PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck, Smartphone,
 } from 'lucide-react';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
@@ -83,6 +84,35 @@ const NAV: NavEntry[] = [
     ],
   },
   {
+    type: 'group', key: 'foodProduction', label: 'Food Production', icon: ChefHat,
+    items: [
+      { href: '/food-production/kitchen', label: 'Dapur', icon: ChefHat },
+      { href: '/food-production/recipe', label: 'Resep', icon: BookOpen },
+      { href: '/food-production/menu', label: 'Menu', icon: UtensilsCrossed },
+      { href: '/food-production/plan', label: 'Rencana Produksi', icon: CalendarClock },
+      { href: '/food-production/mrp', label: 'Kebutuhan Bahan', icon: Calculator },
+      { href: '/food-production/purchase-requirement', label: 'Kebutuhan Beli', icon: ShoppingCart },
+      { href: '/food-production/issue', label: 'Pengambilan Bahan', icon: ArrowUpFromLine },
+      { href: '/food-production/result', label: 'Hasil Produksi', icon: Factory },
+      { href: '/food-production/mobile', label: 'Mode Dapur', icon: Smartphone },
+      { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
+      { href: '/food-production/calendar', label: 'Kalender Produksi', icon: CalendarClock },
+      { href: '/food-production/transfer', label: 'Transfer Dapur', icon: ArrowLeftRight },
+      { href: '/food-production/service-point', label: 'Titik Layanan', icon: MapPinned },
+      { href: '/food-production/distribution', label: 'Distribusi', icon: Truck },
+      { href: '/food-production/cold-chain', label: 'Cold Chain', icon: Thermometer },
+      { href: '/food-production/haccp', label: 'HACCP', icon: ShieldCheck },
+      { href: '/food-production/batch', label: 'Batch & Expiry', icon: PackageOpen },
+      { href: '/food-production/nutrition', label: 'Gizi (MBG)', icon: Apple },
+      { href: '/food-production/cost', label: 'Biaya Pangan', icon: Calculator },
+      { href: '/food-production/price-book', label: 'Price Book', icon: BookOpen },
+      { href: '/food-production/qc', label: 'Quality Control', icon: BadgeCheck },
+      { href: '/food-production/forecast', label: 'Forecast Bahan', icon: LineChart },
+      { href: '/food-production/recommendations', label: 'Rekomendasi', icon: Lightbulb },
+      { href: '/food-production/dashboard', label: 'Dashboard FP', icon: LayoutGrid },
+    ],
+  },
+  {
     type: 'group', key: 'master', label: 'Master Data', icon: Database,
     items: [
       { href: '/produk', label: 'Produk', icon: Package },
@@ -106,6 +136,7 @@ const NAV: NavEntry[] = [
       { href: '/integrasi', label: 'Integrasi Sales.app', icon: Settings },
       { href: '/utiliti/user', label: 'User Management', icon: UserCog },
       { href: '/utiliti/tenants', label: 'Daftar Tenant (MASTER)', icon: Building2 },
+      { href: '/utiliti/api-keys', label: 'API Keys', icon: KeyRound },
       { href: '/utiliti/audit', label: 'Audit Log (MASTER)', icon: Shield },
       { href: '/utiliti/ops', label: 'Ops Dashboard (MASTER)', icon: Activity },
       ...(isSandboxResetMenuVisible()
@@ -119,21 +150,43 @@ const DEFAULT_EXPANDED: Record<string, boolean> = Object.fromEntries(
   NAV.filter((item): item is NavGroup => item.type === 'group').map((item) => [item.key, true]),
 );
 
+/** Master / Planning / Operation (+ QC dapur). */
+const FP_OPS_ROUTES = [
+  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
+  '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
+  '/food-production/mobile',
+  '/food-production/report', '/food-production/calendar', '/food-production/transfer',
+  '/food-production/service-point', '/food-production/distribution', '/food-production/cold-chain',
+  '/food-production/haccp', '/food-production/batch', '/food-production/qc',
+] as const;
+
+/** Cost / Nutrition / Forecast / AI / Dashboard — management (ADR coding #5). */
+const FP_MGMT_ROUTES = [
+  '/food-production/nutrition', '/food-production/cost', '/food-production/forecast',
+  '/food-production/recommendations', '/food-production/dashboard', '/food-production/price-book',
+] as const;
+
+const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
+
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    ...FP_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    ...FP_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+          ...FP_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
-          '/integrasi', '/utiliti/tenant', '/utiliti/user'],
+          '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+          ...FP_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
-          '/integrasi', '/utiliti/tenant', '/utiliti/user'],
+          '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   MASTER: '*',
 };
 
@@ -155,8 +208,10 @@ function filterByRole(items: NavEntry[], role: string): NavEntry[] {
 export default function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUserState] = useState<SessionUser | null>(() => getUser());
-  const [now, setNow] = useState(new Date());
+  // Start null so SSR + first client paint match (localStorage is client-only).
+  const [user, setUserState] = useState<SessionUser | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [now, setNow] = useState<Date | null>(null);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
   const [tenantLogo, setTenantLogo] = useState('');
@@ -199,10 +254,12 @@ export default function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     syncSessionUser().then((synced) => {
       if (!synced) {
+        setSessionReady(true);
         router.replace('/');
         return;
       }
       setUserState(synced);
+      setSessionReady(true);
       refreshOperationalScope();
       const logoTenant = synced.role === 'MASTER' ? getActingTenantId() : (synced.tenantId || 'default');
       if (synced.role !== 'MASTER' || logoTenant) {
@@ -323,6 +380,7 @@ export default function AppShell({ children }: AppShellProps) {
   }, [user, pathname, queryClient]);
 
   useEffect(() => {
+    setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -331,6 +389,7 @@ export default function AppShell({ children }: AppShellProps) {
     const next: Record<string, boolean> = {};
     if (pathname?.startsWith('/stok')) next.stok = true;
     if (pathname?.startsWith('/produk') || pathname?.startsWith('/pelanggan') || pathname?.startsWith('/member') || pathname?.startsWith('/supplier')) next.master = true;
+    if (pathname?.startsWith('/food-production')) next.foodProduction = true;
     if (pathname?.startsWith('/transaksi') || pathname?.startsWith('/piutang')) next.penjualan = true;
     if (pathname?.startsWith('/pembelian') || pathname?.startsWith('/hutang') || pathname?.startsWith('/pengeluaran-pengadaan')) next.pembelian = true;
     if (pathname?.startsWith('/penjualan')) next.penjualan = true;
@@ -352,7 +411,7 @@ export default function AppShell({ children }: AppShellProps) {
     router.replace('/');
   };
 
-  if (!user) {
+  if (!sessionReady || !user) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-50">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
@@ -554,7 +613,7 @@ export default function AppShell({ children }: AppShellProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="hidden sm:block text-sm text-slate-600 font-mono">{formatDateTime(now)}</div>
+            <div className="hidden sm:block text-sm text-slate-600 font-mono">{now ? formatDateTime(now) : '—'}</div>
             <Button
               variant="outline"
               size="sm"

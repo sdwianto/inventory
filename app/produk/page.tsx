@@ -27,6 +27,12 @@ import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/lib/vendor-price';
 import { productStockLabel, productStockTitle } from '@/lib/uom/display';
 import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib/produk/constants';
+import {
+  ITEM_ROLE_LABELS,
+  ITEM_ROLES_UI,
+  normalizeItemRole,
+  type ItemRole,
+} from '@/lib/food-production/item-role';
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
@@ -63,6 +69,7 @@ export default function ProdukPage() {
   const [metaTenantId, setMetaTenantId] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
+  const [itemRoleFilter, setItemRoleFilter] = useState('');
   const selection = useListSelection((item: { id: string }) => item.id);
 
   const isMaster = user?.role === 'MASTER';
@@ -261,6 +268,7 @@ export default function ProdukPage() {
           hargaBeli: num(form.hargaBeli),
           minStok: num(form.minStok),
           gudangKode: str(form.gudangKode, 'GKERING'),
+          itemRole: normalizeItemRole(form.itemRole),
         };
       } else {
         const fields = productToFormFields({ ...form, uoms } as ProductLike, str(form.tenantId));
@@ -429,7 +437,7 @@ export default function ProdukPage() {
     }
   };
 
-  const colSpan = (isMaster ? 11 : 10) - (canManageProducts ? 0 : 2);
+  const colSpan = (isMaster ? 12 : 11) - (canManageProducts ? 0 : 2);
 
   const toggleGudang = (kode: string, checked: boolean) => {
     setGudangFilter((prev) => {
@@ -441,8 +449,13 @@ export default function ProdukPage() {
 
   const filteredProducts = useMemo(() => products.filter((p) => {
     const g = str(p.gudangKode, 'GKERING');
-    return gudangFilter[g as keyof typeof gudangFilter];
-  }), [products, gudangFilter]);
+    if (!gudangFilter[g as keyof typeof gudangFilter]) return false;
+    if (itemRoleFilter) {
+      const role = normalizeItemRole(p.itemRole);
+      if (role !== itemRoleFilter) return false;
+    }
+    return true;
+  }), [products, gudangFilter, itemRoleFilter]);
 
   const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(str(p.id)));
@@ -542,6 +555,19 @@ export default function ProdukPage() {
               className="pl-9"
             />
           </div>
+          <div className="min-w-[10rem]">
+            <select
+              className={PRODUCT_SELECT_CLASS}
+              value={itemRoleFilter}
+              onChange={(e) => setItemRoleFilter(e.target.value)}
+              aria-label="Filter peran item"
+            >
+              <option value="">Semua peran item</option>
+              {ITEM_ROLES_UI.map((role) => (
+                <option key={role} value={role}>{ITEM_ROLE_LABELS[role]}</option>
+              ))}
+            </select>
+          </div>
           <div className="text-sm text-slate-500 self-center pb-2">
             Total: <span className="font-semibold text-slate-800">{filteredProducts.length}</span> produk
             {!showAllGudang && products.length !== filteredProducts.length && (
@@ -601,6 +627,7 @@ export default function ProdukPage() {
                   <th className="px-3 py-2 text-left">Barcode</th>
                   <th className="px-3 py-2 text-left">Nama</th>
                   <th className="px-3 py-2 text-left">Grup</th>
+                  <th className="px-3 py-2 text-left">Peran</th>
                   <th className="px-3 py-2 text-left">Gudang</th>
                   <th className="px-3 py-2 text-center">Sat</th>
                   <th className="px-3 py-2 text-right">Harga Beli</th>
@@ -645,6 +672,11 @@ export default function ProdukPage() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs"><span className="px-2 py-0.5 bg-slate-100 rounded">{str(p.grup)}</span></td>
+                    <td className="px-3 py-2 text-xs">
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded">
+                        {ITEM_ROLE_LABELS[normalizeItemRole(p.itemRole) as ItemRole]}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-xs">
                       <span className={`px-2 py-0.5 rounded font-medium ${
                         str(p.gudangKode, 'GKERING') === 'GBASAH'
@@ -789,6 +821,21 @@ export default function ProdukPage() {
                 ))}
                 {!!form.grup && !grupList.some((g) => g.nama === form.grup) && (
                   <option value={str(form.grup)}>{str(form.grup)} (legacy)</option>
+                )}
+              </select>
+            </div>
+            <div>
+              <Label>Peran Item (Food Production)</Label>
+              <select
+                className={PRODUCT_SELECT_CLASS}
+                value={normalizeItemRole(form.itemRole)}
+                onChange={(e) => setForm({ ...form, itemRole: e.target.value })}
+              >
+                {ITEM_ROLES_UI.map((role) => (
+                  <option key={role} value={role}>{ITEM_ROLE_LABELS[role]}</option>
+                ))}
+                {normalizeItemRole(form.itemRole) === 'SEMI_FINISHED' && (
+                  <option value="SEMI_FINISHED">{ITEM_ROLE_LABELS.SEMI_FINISHED}</option>
                 )}
               </select>
             </div>

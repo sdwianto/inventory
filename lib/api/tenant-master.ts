@@ -260,10 +260,28 @@ export function resolveMasterActingTenantId(
 /** Scope operasional per tenant — MASTER wajib pilih tenant (query/body/cookie). */
 export function resolveOperationalScope(
   auth: AuthContext | null | undefined,
-  { url, body, request }: { url?: URL; body?: Record<string, unknown>; request?: Request } = {},
+  {
+    url,
+    body,
+    request,
+    allowApiKey = false,
+  }: {
+    url?: URL;
+    body?: Record<string, unknown>;
+    request?: Request;
+    /** Only fp-public (and future keyed surfaces) should set true. */
+    allowApiKey?: boolean;
+  } = {},
 ): OperationalScopeResult {
   const denied = requireAuth(auth);
   if (denied) return { denied, scopeAuth: null, tenantId: null };
+  if (!allowApiKey && auth?.isApiKey) {
+    return {
+      denied: err('API key hanya untuk endpoint publik bertarget (fp-public)', 403),
+      scopeAuth: null,
+      tenantId: null,
+    };
+  }
 
   const userAuth = auth!;
 

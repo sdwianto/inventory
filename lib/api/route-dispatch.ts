@@ -18,6 +18,34 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   auth: async () => (await import('@/lib/api/handlers/auth')).handleAuth,
   dashboard: async () => (await import('@/lib/api/handlers/dashboard')).handleDashboard,
   products: async () => (await import('@/lib/api/handlers/products')).handleProducts,
+  kitchens: async () => (await import('@/lib/api/handlers/kitchens')).handleKitchens,
+  'service-points': async () => (await import('@/lib/api/handlers/service-points')).handleServicePoints,
+  'distribution-orders': async () => (await import('@/lib/api/handlers/distribution-orders')).handleDistributionOrders,
+  'temperature-logs': async () => (await import('@/lib/api/handlers/temperature-logs')).handleTemperatureLogs,
+  'temperature-thresholds': async () => (await import('@/lib/api/handlers/temperature-logs')).handleTemperatureLogs,
+  'haccp-templates': async () => (await import('@/lib/api/handlers/haccp')).handleHaccp,
+  'haccp-results': async () => (await import('@/lib/api/handlers/haccp')).handleHaccp,
+  'supplier-price-book': async () => (await import('@/lib/api/handlers/supplier-price-book')).handleSupplierPriceBook,
+  recipes: async () => (await import('@/lib/api/handlers/recipes')).handleRecipes,
+  menus: async () => (await import('@/lib/api/handlers/menus')).handleMenus,
+  'production-plans': async () => (await import('@/lib/api/handlers/production-plans')).handleProductionPlans,
+  'material-requirements': async () => (await import('@/lib/api/handlers/material-requirements')).handleMaterialRequirements,
+  'purchase-requirements': async () => (await import('@/lib/api/handlers/purchase-requirements')).handlePurchaseRequirements,
+  'material-issues': async () => (await import('@/lib/api/handlers/material-issues')).handleMaterialIssues,
+  'production-results': async () => (await import('@/lib/api/handlers/production-results')).handleProductionResults,
+  'production-reports': async () => (await import('@/lib/api/handlers/production-reports')).handleProductionReports,
+  'nutrition-profiles': async () => (await import('@/lib/api/handlers/nutrition-profiles')).handleNutritionProfiles,
+  'food-costs': async () => (await import('@/lib/api/handlers/food-costs')).handleFoodCosts,
+  'qc-templates': async () => (await import('@/lib/api/handlers/qc')).handleQc,
+  'qc-results': async () => (await import('@/lib/api/handlers/qc')).handleQc,
+  'food-forecasts': async () => (await import('@/lib/api/handlers/food-forecasts')).handleFoodForecasts,
+  'food-dashboard': async () => (await import('@/lib/api/handlers/food-dashboard')).handleFoodDashboard,
+  'food-recommendations': async () => (await import('@/lib/api/handlers/food-recommendations')).handleFoodRecommendations,
+  'kitchen-transfers': async () => (await import('@/lib/api/handlers/kitchen-transfers')).handleKitchenTransfers,
+  'production-calendar': async () => (await import('@/lib/api/handlers/production-calendar')).handleProductionCalendar,
+  'production-batches': async () => (await import('@/lib/api/handlers/production-batches')).handleProductionBatches,
+  'fp-public': async () => (await import('@/lib/api/handlers/fp-public')).handleFpPublic,
+  'api-keys': async () => (await import('@/lib/api/handlers/api-keys')).handleApiKeys,
   'produk-grup': async () => (await import('@/lib/api/handlers/product-meta')).handleProductMeta,
   'produk-satuan': async () => (await import('@/lib/api/handlers/product-meta')).handleProductMeta,
   stok: async () => (await import('@/lib/api/handlers/inventory')).handleInventory,
@@ -39,8 +67,28 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   pages: async () => (await import('@/lib/api/handlers/pages')).handlePages,
 };
 
+/** First path segment after /api (e.g. `/fp-public/plans` → `fp-public`). */
+export function routeRootSegment(route: string): string {
+  return route.split('/').filter(Boolean)[0] || '';
+}
+
+/**
+ * API keys may only hit fp-public. Session auth unrestricted here.
+ * Exported for unit tests / defense-in-depth checks.
+ */
+export function apiKeyRouteDenied(
+  isApiKey: boolean | undefined,
+  route: string,
+): boolean {
+  return Boolean(isApiKey) && routeRootSegment(route) !== 'fp-public';
+}
+
 export async function dispatchRoute(ctx: HandlerContext): Promise<NextResponse | null> {
-  const seg = ctx.route.split('/').filter(Boolean)[0] || '';
+  if (apiKeyRouteDenied(ctx.auth?.isApiKey, ctx.route)) {
+    const { err } = await import('@/lib/api/db');
+    return err('API key hanya diizinkan pada /api/fp-public/*', 403);
+  }
+  const seg = routeRootSegment(ctx.route);
   const loader = HANDLER_LOADERS[seg];
   if (!loader) return null;
   const handler = await loader();

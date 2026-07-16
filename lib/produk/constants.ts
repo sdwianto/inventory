@@ -6,6 +6,7 @@ export const EMPTY_PRODUCT: JsonObject = {
   nama: '',
   grup: 'Umum',
   satuan: 'PCS',
+  itemRole: 'INGREDIENT',
   gudangKode: 'GKERING',
   hargaBeli: 0,
   stok: 0,

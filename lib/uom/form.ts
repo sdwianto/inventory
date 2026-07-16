@@ -27,6 +27,7 @@ export type ProductLike = {
   satuan?: string;
   barcode?: string;
   tenantId?: string;
+  itemRole?: string;
   hargaBeli?: number;
   hargaEcer?: number;
   hargaGrosir?: number;
@@ -140,6 +141,7 @@ export type ProductFormUomFields = {
   minStok: number;
   aktif: boolean;
   tenantId: string;
+  itemRole?: string;
   uoms: ProductUomFormRow[];
 };
 
@@ -157,6 +159,7 @@ export function productToFormFields(
     minStok: product.minStok ?? 0,
     aktif: product.aktif !== false,
     tenantId: tenantId ?? String(product.tenantId || 'default'),
+    itemRole: String(product.itemRole || 'INGREDIENT'),
     uoms,
   };
 }
@@ -170,6 +173,7 @@ export function formFieldsToProductPayload(
     kode: fields.kode,
     nama: fields.nama,
     grup: fields.grup,
+    itemRole: fields.itemRole || 'INGREDIENT',
     hargaBeli: fields.hargaBeli,
     minStok: fields.minStok,
     aktif: fields.aktif,

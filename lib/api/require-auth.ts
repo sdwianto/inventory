@@ -12,6 +12,17 @@ export function requireAuth(auth: AuthContext | null | undefined): NextResponse 
   return null;
 }
 
+/**
+ * Integration API keys may only call scoped public routes (e.g. /api/fp-public/*).
+ * Session users are unaffected. Prevents privilege escalation via role:ADMIN on keys.
+ */
+export function rejectApiKey(auth: AuthContext | null | undefined): NextResponse | null {
+  if (auth?.isApiKey) {
+    return err('API key hanya untuk endpoint publik bertarget (fp-public)', 403);
+  }
+  return null;
+}
+
 export function requireMaster(auth: AuthContext | null | undefined): NextResponse | null {
   const denied = requireAuth(auth);
   if (denied) return denied;
@@ -36,6 +47,8 @@ export function requireTenantAccess(
 export function requireRole(auth: AuthContext | null | undefined, roles: string[]): NextResponse | null {
   const denied = requireAuth(auth);
   if (denied) return denied;
+  const keyDenied = rejectApiKey(auth);
+  if (keyDenied) return keyDenied;
   if (auth!.isMaster) return null;
   const role = auth!.role || '';
   if (roles.includes(role)) return null;

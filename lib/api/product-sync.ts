@@ -99,6 +99,7 @@ export async function upsertProductFromVendor(
     tenantId: tid,
     ...syncSet,
     gudangKode,
+    itemRole: 'INGREDIENT' as const,
     hargaBeli: 0,
     hargaSpesial: snap.hargaSpesial,
     hargaGrosir: snap.hargaGrosir,

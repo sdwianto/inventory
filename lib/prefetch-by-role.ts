@@ -1,11 +1,12 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { prefetchRouteData } from '@/lib/prefetch-route';
 
 const ROLE_HOME_ROUTES: Record<string, string[]> = {
-  GUDANG: ['/penerimaan', '/pembelian-po', '/dashboard'],
-  SUPERVISOR: ['/penerimaan', '/maintenance/permintaan', '/dashboard'],
-  ADMIN: ['/penerimaan', '/hutang', '/integrasi', '/dashboard'],
-  OWNER: ['/penerimaan', '/hutang', '/dashboard'],
+  GUDANG: ['/penerimaan', '/pembelian-po', '/dashboard', '/food-production/kitchen'],
+  SUPERVISOR: ['/penerimaan', '/maintenance/permintaan', '/dashboard', '/food-production/plan'],
+  ADMIN: ['/penerimaan', '/hutang', '/integrasi', '/dashboard', '/food-production/plan'],
+  OWNER: ['/penerimaan', '/hutang', '/dashboard', '/food-production/plan'],
   MASTER: ['/dashboard', '/integrasi', '/utiliti/tenants'],
 };
 
@@ -30,26 +31,49 @@ function canPrefetch(role: string, href: string, perms: string[] | '*'): boolean
   return perms.some((p) => href === p || href.startsWith(`${p}/`));
 }
 
+const FP_OPS_ROUTES = [
+  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
+  '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
+  '/food-production/mobile',
+  '/food-production/report', '/food-production/calendar', '/food-production/transfer',
+  '/food-production/service-point', '/food-production/distribution', '/food-production/cold-chain',
+  '/food-production/haccp', '/food-production/batch', '/food-production/qc',
+] as const;
+
+const FP_MGMT_ROUTES = [
+  '/food-production/nutrition', '/food-production/cost', '/food-production/forecast',
+  '/food-production/recommendations', '/food-production/dashboard', '/food-production/price-book',
+] as const;
+
+const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
+
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    ...FP_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+    ...FP_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+    ...FP_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
-    '/integrasi', '/utiliti/tenant', '/utiliti/user'],
+    '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+    ...FP_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
-    '/integrasi', '/utiliti/tenant', '/utiliti/user'],
+    '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   MASTER: '*',
 };
 
 /** Prefetch route prioritas setelah login — berdasarkan role + jam operasional. */
 export function prefetchByRole(queryClient: QueryClient, role: string) {
+  // MASTER tanpa tenant operasional pasti 400 di endpoint scoped — tunggu picker.
+  if (role === 'MASTER' && !getActingTenantId()) return;
+
   const perms = ROLE_PERMISSIONS[role] || ['*'];
   const routes = new Set<string>();
   for (const href of ROLE_HOME_ROUTES[role] || ['/dashboard']) {

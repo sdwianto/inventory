@@ -1,7 +1,7 @@
 'use client';
 
 // Client-side user cache for UI (otorisasi sebenarnya di cookie HttpOnly + server).
-import { setActingTenantIdLocal } from '@/lib/acting-tenant-client';
+import { isOperationalTenantId, setActingTenantIdLocal } from '@/lib/acting-tenant-client';
 import type { SessionUser } from '@/types/auth';
 
 const KEY = 'inventory_user';
@@ -46,7 +46,7 @@ export async function syncSessionUser(): Promise<SessionUser | null> {
     }
     const data = await res.json() as AuthMeResponse;
     if (data?.user) {
-      if (data.user.role === 'MASTER' && data.user.actingTenantId) {
+      if (data.user.role === 'MASTER' && isOperationalTenantId(data.user.actingTenantId)) {
         setActingTenantIdLocal(data.user.actingTenantId);
       }
       setUser(data.user);

@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { Building2, ChevronDown } from 'lucide-react';
-import { getUser } from '@/lib/auth-client';
 import { useSessionUser } from '@/lib/hooks/use-session-user';
-import type { SessionUser } from '@/types/auth';
 import {
   getActingTenantId,
+  isOperationalTenantId,
   setActingTenantId,
   setActingTenantIdLocal,
   syncActingTenantToServer,
@@ -37,12 +36,14 @@ export default function TenantScopeSelector({ className = '' }: TenantScopeSelec
       try {
         const res = await fetch('/api/tenants', { credentials: 'include' });
         const data = await res.json() as TenantListItem[] | unknown;
-        const list = Array.isArray(data) ? data : [];
+        const list = (Array.isArray(data) ? data : []).filter((t) =>
+          isOperationalTenantId(t.tenantId),
+        );
         setTenants(list);
 
-        let acting = getActingTenantId() || user.actingTenantId || '';
-        if (!acting && user.actingTenantId) {
-          acting = user.actingTenantId;
+        let acting = getActingTenantId() || '';
+        if (!acting && isOperationalTenantId(user.actingTenantId)) {
+          acting = String(user.actingTenantId);
           setActingTenantIdLocal(acting);
         }
         if (!acting && list.length > 0) {

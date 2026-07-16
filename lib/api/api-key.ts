@@ -36,7 +36,8 @@ export async function resolveApiKeyAuth(db: Db, request: Request): Promise<AuthC
     userId: `apikey:${doc.id}`,
     email: 'integration@api',
     name: doc.label || 'API Integration',
-    role: doc.role || 'ADMIN',
+    // Never elevate integration keys to manage roles — scopes gate fp-public only.
+    role: 'INTEGRATION',
     tenantId: doc.tenantId,
     tenantName: doc.tenantName || doc.tenantId,
     isMaster: false,

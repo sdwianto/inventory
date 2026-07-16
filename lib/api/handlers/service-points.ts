@@ -1,0 +1,226 @@
+import type { NextResponse } from 'next/server';
+import { v4 as uuidv4 } from 'uuid';
+import { ok, err, clean } from '@/lib/api/db';
+import {
+  tenantIdForWrite,
+  withTenantFilter,
+  resolveOperationalScope,
+} from '@/lib/api/tenant-master';
+import { requireRole } from '@/lib/api/require-auth';
+import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import {
+  SERVICE_POINTS_COLLECTION,
+  normalizeServicePointJenis,
+  normalizeServicePointKode,
+  normalizeKapasitasPorsi,
+  type ServicePointDoc,
+} from '@/lib/food-production/service-point';
+import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
+import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import type { HandlerContext } from '@/types/api/handler';
+
+interface SpBody extends Record<string, unknown> {
+  nama?: string;
+  kode?: string;
+  jenis?: string;
+  kitchenId?: string;
+  alamat?: string;
+  kapasitasPorsi?: number;
+  pic?: string;
+  aktif?: boolean;
+}
+
+export async function handleServicePoints(ctx: HandlerContext): Promise<NextResponse | null> {
+  const { db, auth, method, route, path, url, request, body } = ctx;
+  const spBody = (body || {}) as SpBody;
+
+  if (route === '/service-points' && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const filter: Record<string, unknown> = {};
+    if (url.searchParams.get('aktif') === '1') filter.aktif = true;
+    const jenis = String(url.searchParams.get('jenis') || '').toUpperCase();
+    if (jenis === 'SEKOLAH' || jenis === 'TRAY' || jenis === 'TITIK_MAKAN' || jenis === 'LAINNYA') {
+      filter.jenis = jenis;
+    }
+    const kitchenId = resolveKitchenIdFilter(url, request);
+    if (kitchenId) filter.kitchenId = kitchenId;
+
+    const list = await db.collection(SERVICE_POINTS_COLLECTION)
+      .find(withTenantFilter(scopeAuth, filter))
+      .sort({ nama: 1 })
+      .limit(300)
+      .toArray();
+    return ok(list.map((d) => clean(d as Record<string, unknown>)));
+  }
+
+  if (route === '/service-points' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: spBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const nama = String(spBody.nama || '').trim();
+    if (!nama) return err('Nama titik layanan wajib', 400);
+    const kode = normalizeServicePointKode(spBody.kode);
+    const jenis = normalizeServicePointJenis(spBody.jenis);
+    const kitchenId = String(spBody.kitchenId || '').trim() || undefined;
+    let kitchenNama: string | undefined;
+    if (kitchenId) {
+      const k = await db.collection(KITCHENS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: kitchenId, aktif: true }),
+      );
+      if (!k) return err('Dapur penyalur tidak ditemukan / nonaktif', 400);
+      kitchenNama = String(k.nama || '');
+    }
+    if (kode) {
+      const dup = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { kode }),
+      );
+      if (dup) return err(`Kode titik ${kode} sudah dipakai`, 400);
+    }
+
+    const now = new Date();
+    const doc: ServicePointDoc = {
+      id: uuidv4(),
+      tenantId: tenantIdForWrite(scopeAuth, spBody),
+      kode,
+      nama,
+      jenis,
+      kitchenId,
+      kitchenNama,
+      alamat: String(spBody.alamat || '').trim() || undefined,
+      kapasitasPorsi: normalizeKapasitasPorsi(spBody.kapasitasPorsi),
+      pic: String(spBody.pic || '').trim() || undefined,
+      aktif: spBody.aktif !== false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await db.collection(SERVICE_POINTS_COLLECTION).insertOne(doc);
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
+        return err(`Kode titik ${kode || ''} sudah dipakai`, 400);
+      }
+      throw e;
+    }
+    await writeAuditLog(db, {
+      tenantId: doc.tenantId,
+      action: 'SERVICE_POINT_CREATE',
+      entityType: 'service_point',
+      entityId: doc.id,
+      summary: `Titik layanan ${doc.nama} dibuat`,
+      ...auditActor(auth),
+    });
+    return ok(clean(doc as unknown as Record<string, unknown>));
+  }
+
+  if (path[0] === 'service-points' && path[1] && !path[2] && method === 'PUT') {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: spBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const existing = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ServicePointDoc | null;
+    if (!existing) return err('Titik layanan tidak ditemukan', 404);
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (spBody.nama !== undefined) {
+      const nama = String(spBody.nama || '').trim();
+      if (!nama) return err('Nama wajib', 400);
+      update.nama = nama;
+    }
+    if (spBody.kode !== undefined) {
+      const kode = normalizeServicePointKode(spBody.kode);
+      if (kode) {
+        const dup = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { kode, id: { $ne: id } }),
+        );
+        if (dup) return err(`Kode titik ${kode} sudah dipakai`, 400);
+      }
+      update.kode = kode || null;
+    }
+    if (spBody.jenis !== undefined) update.jenis = normalizeServicePointJenis(spBody.jenis);
+    if (spBody.alamat !== undefined) update.alamat = String(spBody.alamat || '').trim() || null;
+    if (spBody.pic !== undefined) update.pic = String(spBody.pic || '').trim() || null;
+    if (spBody.kapasitasPorsi !== undefined) {
+      update.kapasitasPorsi = normalizeKapasitasPorsi(spBody.kapasitasPorsi) ?? null;
+    }
+    if (spBody.aktif !== undefined) update.aktif = spBody.aktif !== false;
+    if (spBody.kitchenId !== undefined) {
+      const kitchenId = String(spBody.kitchenId || '').trim() || undefined;
+      if (kitchenId) {
+        const k = await db.collection(KITCHENS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: kitchenId, aktif: true }),
+        );
+        if (!k) return err('Dapur penyalur tidak ditemukan / nonaktif', 400);
+        update.kitchenId = kitchenId;
+        update.kitchenNama = String(k.nama || '');
+      } else {
+        update.kitchenId = null;
+        update.kitchenNama = null;
+      }
+    }
+
+    try {
+      await db.collection(SERVICE_POINTS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id }),
+        { $set: update },
+      );
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
+        return err('Kode titik sudah dipakai', 400);
+      }
+      throw e;
+    }
+    const saved = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'SERVICE_POINT_UPDATE',
+      entityType: 'service_point',
+      entityId: id,
+      summary: `Titik layanan ${existing.nama} diperbarui`,
+      ...auditActor(auth),
+    });
+    return ok(clean(saved as Record<string, unknown>));
+  }
+
+  if (path[0] === 'service-points' && path[1] && !path[2] && method === 'DELETE') {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const existing = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ServicePointDoc | null;
+    if (!existing) return err('Titik layanan tidak ditemukan', 404);
+    await db.collection(SERVICE_POINTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id }),
+      { $set: { aktif: false, updatedAt: new Date() } },
+    );
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'SERVICE_POINT_DEACTIVATE',
+      entityType: 'service_point',
+      entityId: id,
+      summary: `Titik layanan ${existing.nama} dinonaktifkan`,
+      ...auditActor(auth),
+    });
+    return ok({ id, aktif: false });
+  }
+
+  return null;
+}

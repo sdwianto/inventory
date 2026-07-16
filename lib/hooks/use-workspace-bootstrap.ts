@@ -33,7 +33,8 @@ function workspaceUrl(): string | null {
   const params = new URLSearchParams();
   if (user.role === 'MASTER') {
     const acting = getActingTenantId();
-    if (acting) params.set('tenantId', acting);
+    if (!acting) return null;
+    params.set('tenantId', acting);
   }
   const qs = params.toString();
   return `/api/workspace/bootstrap${qs ? `?${qs}` : ''}`;

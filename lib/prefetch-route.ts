@@ -58,6 +58,105 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
         PRODUCT_LIST_LIMIT,
       );
       break;
+    case '/food-production/kitchen':
+      prefetch(['food-production', 'kitchens'], '/api/kitchens');
+      break;
+    case '/food-production/recipe':
+      prefetch(['food-production', 'recipes'], '/api/recipes');
+      break;
+    case '/food-production/menu':
+      prefetch(['food-production', 'menus'], '/api/menus');
+      break;
+    case '/food-production/plan':
+      prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      prefetch(['food-production', 'menus'], '/api/menus?aktif=1');
+      break;
+    case '/food-production/mrp':
+      prefetch(['food-production', 'material-requirements'], '/api/material-requirements');
+      prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      break;
+    case '/food-production/purchase-requirement':
+      prefetch(['food-production', 'purchase-requirements'], '/api/purchase-requirements');
+      prefetch(['food-production', 'material-requirements'], '/api/material-requirements?status=APPROVED');
+      break;
+    case '/food-production/issue':
+      prefetch(['food-production', 'material-issues'], '/api/material-issues');
+      prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      break;
+    case '/food-production/result':
+      prefetch(['food-production', 'production-results'], '/api/production-results');
+      prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      break;
+    case '/food-production/report':
+      prefetch(['food-production', 'production-reports'], '/api/production-reports');
+      break;
+    case '/food-production/nutrition':
+      prefetch(['food-production', 'nutrition-profiles'], '/api/nutrition-profiles');
+      prefetch(['food-production', 'recipes'], '/api/recipes?aktif=1');
+      break;
+    case '/food-production/cost':
+      prefetch(['food-production', 'food-costs'], '/api/food-costs');
+      break;
+    case '/food-production/qc':
+      prefetch(['food-production', 'qc-results'], '/api/qc-results');
+      prefetch(['food-production', 'qc-templates'], '/api/qc-templates?aktif=1');
+      break;
+    case '/food-production/forecast':
+      prefetch(['food-production', 'food-forecasts'], '/api/food-forecasts?horizon=7');
+      break;
+    case '/food-production/dashboard':
+      prefetch(['food-production', 'food-dashboard'], '/api/food-dashboard');
+      break;
+    case '/food-production/recommendations':
+      prefetch(['food-production', 'food-recommendations'], '/api/food-recommendations?horizon=7');
+      break;
+    case '/food-production/calendar': {
+      const now = new Date();
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+      const last = new Date(Date.UTC(y, now.getUTCMonth() + 1, 0)).getUTCDate();
+      const from = `${y}-${m}-01`;
+      const to = `${y}-${m}-${String(last).padStart(2, '0')}`;
+      prefetch(
+        ['food-production', 'production-calendar', from, to],
+        `/api/production-calendar?from=${from}&to=${to}`,
+      );
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
+    }
+    case '/food-production/transfer':
+      prefetch(['food-production', 'kitchen-transfers'], '/api/kitchen-transfers');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
+    case '/food-production/batch':
+      prefetch(['food-production', 'production-batches'], '/api/production-batches');
+      break;
+    case '/food-production/service-point':
+      prefetch(['food-production', 'service-points'], '/api/service-points');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
+    case '/food-production/distribution':
+      prefetch(['food-production', 'distribution-orders'], '/api/distribution-orders');
+      prefetch(['food-production', 'service-points'], '/api/service-points?aktif=1');
+      break;
+    case '/food-production/cold-chain':
+      prefetch(['food-production', 'temperature-logs'], '/api/temperature-logs');
+      prefetch(['food-production', 'temperature-alerts'], '/api/temperature-logs/alerts');
+      prefetch(['food-production', 'temperature-thresholds'], '/api/temperature-thresholds');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
+    case '/food-production/haccp':
+      prefetch(['food-production', 'haccp-results'], '/api/haccp-results');
+      prefetch(['food-production', 'haccp-templates'], '/api/haccp-templates?aktif=1');
+      prefetch(['food-production', 'production-batches'], '/api/production-batches');
+      break;
+    case '/food-production/price-book':
+      prefetch(['food-production', 'supplier-price-book'], '/api/supplier-price-book?aktif=1');
+      break;
+    case '/utiliti/api-keys':
+      prefetch(['utiliti', 'api-keys'], '/api/api-keys');
+      break;
     case '/stok/saldo':
       prefetch(['stok', 'saldo'], '/api/stok/saldo');
       break;
