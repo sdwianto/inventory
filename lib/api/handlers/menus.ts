@@ -109,6 +109,7 @@ export async function handleMenus({
   if (route === '/menus' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
+    if (!auth) return err('Unauthorized', 401);
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: menuBody, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
@@ -163,7 +164,7 @@ export async function handleMenus({
       summary: `Menu ${doc.kode} v${doc.version} dibuat`,
       ...auditActor(auth),
     });
-    return ok(clean(doc));
+    return ok(clean(doc as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'menus' && path[1] && method === 'PUT') {

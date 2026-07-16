@@ -89,7 +89,7 @@ export async function handleTemperatureLogs(ctx: HandlerContext): Promise<NextRe
 
     const overrides = await db.collection(TEMPERATURE_THRESHOLDS_COLLECTION)
       .find(withTenantFilter(scopeAuth, {}))
-      .toArray() as TemperatureThresholdDoc[];
+      .toArray() as unknown as TemperatureThresholdDoc[];
     const byStage = new Map(overrides.map((o) => [o.stage, o]));
     const stages = Object.keys(TEMP_STAGE_LABELS) as TempStage[];
     const list = stages.map((stage) => {
@@ -124,7 +124,8 @@ export async function handleTemperatureLogs(ctx: HandlerContext): Promise<NextRe
     const clearKeys = ['minC', 'maxC', 'warnBandC', 'criticalMarginC'] as const;
     const unset: Record<string, ''> = {};
     for (const key of clearKeys) {
-      if (thrBody[key] === null || thrBody[key] === '') unset[key] = '';
+      const val = thrBody[key] as unknown;
+      if (val === null || val === '') unset[key] = '';
     }
     const nums = normalizeThresholdNumbers(thrBody);
     if ('error' in nums) return err(nums.error, 400);

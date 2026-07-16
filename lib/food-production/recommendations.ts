@@ -25,7 +25,7 @@ export interface FoodRecommendation {
   detail: string;
   audience: RecAudience;
   href?: string;
-  evidence?: Record<string, string | number>;
+  evidence?: Record<string, string | number | undefined>;
   actions?: { label: string; href: string }[];
 }
 

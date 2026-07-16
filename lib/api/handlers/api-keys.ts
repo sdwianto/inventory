@@ -41,6 +41,7 @@ export async function handleApiKeys(ctx: HandlerContext): Promise<NextResponse |
   if (route === '/api-keys' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
+    if (!auth) return err('Unauthorized', 401);
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: keyBody, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);

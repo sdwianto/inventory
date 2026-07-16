@@ -85,7 +85,7 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
         })
         .sort({ tanggal: -1 })
         .limit(20)
-        .toArray() as Promise<ProductionPlanDoc[]>,
+        .toArray() as unknown as Promise<ProductionPlanDoc[]>,
       db.collection(MENUS_COLLECTION)
         .find({ ...tfBase, aktif: { $ne: false } })
         .project({ id: 1, kode: 1, nama: 1, targetCostPerPorsi: 1, aktif: 1, items: 1 })

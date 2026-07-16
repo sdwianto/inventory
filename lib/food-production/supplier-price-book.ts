@@ -31,7 +31,7 @@ export function normalizeHargaBeliBook(raw: unknown): number | { error: string }
 }
 
 export function isPriceBookEffective(
-  row: Pick<SupplierPriceBookDoc, 'effectiveFrom' | 'effectiveTo' | 'aktif'>,
+  row: Pick<SupplierPriceBookDoc, 'effectiveFrom' | 'effectiveTo'> & { aktif?: boolean },
   asOfIso = new Date().toISOString().slice(0, 10),
 ): boolean {
   if (row.aktif === false) return false;

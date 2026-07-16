@@ -68,7 +68,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     }));
     if (q) {
       rows = rows.filter((r) => {
-        const hay = `${r.kode || ''} ${r.nama || ''}`.toLowerCase();
+        const hay = `${r?.kode || ''} ${r?.nama || ''}`.toLowerCase();
         return hay.includes(q);
       });
     }
@@ -77,8 +77,8 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       items: rows,
       summary: {
         total: rows.length,
-        withNutrition: rows.filter((r) => r.hasNutrition).length,
-        missing: rows.filter((r) => !r.hasNutrition).length,
+        withNutrition: rows.filter((r) => r?.hasNutrition).length,
+        missing: rows.filter((r) => !r?.hasNutrition).length,
       },
     });
   }
@@ -171,7 +171,8 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
   if (path[0] === 'nutrition-profiles' && path[1] && path[1] !== 'analyze' && method === 'PUT') {
     const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
-    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: body || {}, request });
+    const bodyRecord = (body || {}) as Record<string, unknown>;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: bodyRecord, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
 
@@ -191,7 +192,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       { $set: { nutrition, updatedAt: now } },
     );
     await writeAuditLog(db, {
-      tenantId: tenantIdForWrite(scopeAuth, body || {}),
+      tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
       action: 'NUTRITION_UPSERT',
       entityType: 'product_nutrition',
       entityId: productId,

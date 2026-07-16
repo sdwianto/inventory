@@ -121,6 +121,7 @@ export async function handleRecipes({
   if (route === '/recipes' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
+    if (!auth) return err('Unauthorized', 401);
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: recipeBody, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
@@ -186,7 +187,7 @@ export async function handleRecipes({
       summary: `Resep ${doc.kode} v${doc.version} dibuat`,
       ...auditActor(auth),
     });
-    return ok(clean(doc));
+    return ok(clean(doc as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'recipes' && path[1] && method === 'PUT') {
