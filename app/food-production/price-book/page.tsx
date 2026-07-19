@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { BookOpen, Pencil, Plus, Power, RefreshCw } from 'lucide-react';
+import { BookOpen, Download, Pencil, Plus, Power, RefreshCw } from 'lucide-react';
 
 const MANAGE = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
@@ -57,6 +57,7 @@ export default function PriceBookPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [q, setQ] = useState('');
 
   const load = useCallback(async () => {
@@ -152,6 +153,28 @@ export default function PriceBookPage() {
     }
   }
 
+  async function syncFromInvoices() {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/supplier-price-book/sync-from-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal sinkron');
+      toast.success(
+        `Sinkron ${data.invoices || 0} invoice → ${data.upserted || 0} harga`
+        + (data.skipped ? ` (${data.skipped} dilewati)` : ''),
+      );
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal sinkron');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function deactivate(row: BookRow) {
     const okConfirm = await confirm({
       title: 'Nonaktifkan harga?',
@@ -198,10 +221,10 @@ export default function PriceBookPage() {
             Supplier Price Book
           </h1>
           <p className="text-sm text-muted-foreground">
-            Katalog harga multi-supplier — feed rekomendasi CHEAPER_SUPPLY
+            Harga beli dari invoice vendor (GRN diterima) — feed CHEAPER_SUPPLY
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Input
             placeholder="Cari produk / supplier…"
             className="h-9 w-48 md:w-64"
@@ -212,6 +235,17 @@ export default function PriceBookPage() {
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className="h-4 w-4 mr-1" /> Muat
           </Button>
+          {canManage && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void syncFromInvoices()}
+              disabled={syncing || loading}
+            >
+              <Download className="h-4 w-4 mr-1" />
+              {syncing ? 'Sinkron…' : 'Dari invoice'}
+            </Button>
+          )}
           {canManage && (
             <Button size="sm" onClick={openCreate}>
               <Plus className="h-4 w-4 mr-1" /> Tambah
@@ -235,7 +269,11 @@ export default function PriceBookPage() {
           <tbody>
             {loading && <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">Belum ada entri price book</td></tr>
+              <tr>
+                <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                  Belum ada entri — klik <span className="font-medium">Dari invoice</span> untuk ambil harga beli dari tagihan vendor
+                </td>
+              </tr>
             )}
             {rows.map((row) => (
               <tr key={row.id} className="border-t">

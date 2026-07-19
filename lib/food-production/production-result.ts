@@ -23,7 +23,9 @@ export interface ProductionResultLine {
   menuNama?: string;
   recipeId: string;
   recipeKode?: string;
-  finishedGoodProductId: string;
+  recipeNama?: string;
+  /** Optional — MBG biasanya kosong (langsung distribusi, tidak masuk stok FG). */
+  finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
   satuan?: string;
@@ -66,7 +68,10 @@ export interface ProductionResultDoc {
   createdByName?: string;
 }
 
-export const RESULT_ELIGIBLE_PLAN_STATUSES = new Set(['APPROVED', 'PROCESSING']);
+export const RESULT_ELIGIBLE_PLAN_STATUSES = new Set(['APPROVED', 'PROCESSING', 'COMPLETED']);
+
+/** Status rencana ideal untuk catat HSL (catch-up COMPLETED tetap diizinkan API). */
+export const RESULT_PRIMARY_PLAN_STATUSES = new Set(['APPROVED', 'PROCESSING']);
 
 export const RESULT_OPEN_STATUSES = FP_OPEN_DOC_STATUSES;
 
@@ -84,7 +89,7 @@ export type BuildResultLinesResult =
   | { ok: true; lines: ProductionResultLine[]; warnings: string[] }
   | { ok: false; error: string };
 
-/** Pure: plan → menu items → FG lines with target porsi. */
+/** Pure: plan → menu items → baris hasil (porsi). Finished good opsional (MBG = tanpa stok FG). */
 export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildResultLinesResult {
   const { planLines, menusById, recipesById } = input;
   if (!planLines?.length) return { ok: false, error: 'Rencana tidak punya baris menu' };
@@ -105,13 +110,11 @@ export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildRes
       if (recipe.aktif === false) {
         return { ok: false, error: `Resep ${recipe.kode || recipe.id} nonaktif` };
       }
-      const fgId = String(recipe.finishedGoodProductId || '').trim();
-      if (!fgId) {
-        return { ok: false, error: `Resep ${recipe.kode || recipe.id} belum punya finished good` };
-      }
+      const fgId = String(recipe.finishedGoodProductId || '').trim() || undefined;
       const target = roundQty(Number(pl.targetPorsi) * Number(item.porsi || 1));
       if (!(target > 0)) continue;
-      const key = `${pl.menuId}::${recipe.id}::${fgId}`;
+      // MBG: identitas baris = menu + resep (+ FG bila ada)
+      const key = `${pl.menuId}::${recipe.id}::${fgId || '_'}`;
       const prev = acc.get(key);
       if (prev) {
         prev.targetPorsi = roundQty(prev.targetPorsi + target);
@@ -123,9 +126,12 @@ export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildRes
           menuNama: menu.nama || pl.menuNama,
           recipeId: recipe.id,
           recipeKode: recipe.kode,
+          recipeNama: recipe.nama,
           finishedGoodProductId: fgId,
-          finishedGoodKode: recipe.finishedGoodKode,
-          finishedGoodNama: recipe.finishedGoodNama,
+          finishedGoodKode: fgId ? recipe.finishedGoodKode : undefined,
+          finishedGoodNama: fgId
+            ? recipe.finishedGoodNama
+            : (recipe.nama || recipe.kode || menu.nama),
           satuan: 'PORSI',
           targetPorsi: target,
           actualPorsi: target,
@@ -136,12 +142,18 @@ export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildRes
   }
 
   const lines = [...acc.values()].sort((a, b) =>
-    String(a.finishedGoodNama || a.finishedGoodKode || a.finishedGoodProductId).localeCompare(
-      String(b.finishedGoodNama || b.finishedGoodKode || b.finishedGoodProductId),
+    String(a.finishedGoodNama || a.recipeNama || a.menuNama || a.recipeKode || '').localeCompare(
+      String(b.finishedGoodNama || b.recipeNama || b.menuNama || b.recipeKode || ''),
       'id',
     ),
   );
   if (!lines.length) return { ok: false, error: 'Tidak ada hasil yang terhitung dari rencana' };
+  const withoutFg = lines.filter((l) => !l.finishedGoodProductId).length;
+  if (withoutFg > 0) {
+    warnings.push(
+      `${withoutFg} baris tanpa finished good — mode MBG: porsi dicatat, stok FG tidak diposting (langsung distribusi).`,
+    );
+  }
   return { ok: true, lines, warnings };
 }
 
@@ -161,13 +173,12 @@ export function normalizeResultLines(raw: unknown): ProductionResultLine[] | { e
   const out: ProductionResultLine[] = [];
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
-    const finishedGoodProductId = String(row.finishedGoodProductId || '').trim();
+    const finishedGoodProductId = String(row.finishedGoodProductId || '').trim() || undefined;
     const menuId = String(row.menuId || '').trim();
     const recipeId = String(row.recipeId || '').trim();
     const targetPorsi = Number(row.targetPorsi);
     const actualPorsi = Number(row.actualPorsi);
     const wastePorsi = row.wastePorsi != null ? Number(row.wastePorsi) : 0;
-    if (!finishedGoodProductId) return { error: `Baris ${i + 1}: finishedGoodProductId wajib` };
     if (!menuId) return { error: `Baris ${i + 1}: menuId wajib` };
     if (!recipeId) return { error: `Baris ${i + 1}: recipeId wajib` };
     if (!Number.isFinite(targetPorsi) || targetPorsi < 0) {
@@ -188,6 +199,7 @@ export function normalizeResultLines(raw: unknown): ProductionResultLine[] | { e
       menuNama: row.menuNama != null ? String(row.menuNama) : undefined,
       recipeId,
       recipeKode: row.recipeKode != null ? String(row.recipeKode) : undefined,
+      recipeNama: row.recipeNama != null ? String(row.recipeNama) : undefined,
       finishedGoodProductId,
       finishedGoodKode: row.finishedGoodKode != null ? String(row.finishedGoodKode) : undefined,
       finishedGoodNama: row.finishedGoodNama != null ? String(row.finishedGoodNama) : undefined,
@@ -228,9 +240,16 @@ export const RESULT_UI_STATUS_NEXT: Partial<Record<ProductionResultStatus, Produ
 export const RESULT_UI_STATUS_NEXT_LABEL: Partial<Record<ProductionResultStatus, string>> = {
   DRAFT: 'Ajukan',
   SUBMITTED: 'Setujui',
-  APPROVED: 'Selesai + Post Stok',
-  PROCESSING: 'Selesai + Post Stok',
+  APPROVED: 'Selesai',
+  PROCESSING: 'Selesai',
 };
+
+/** True if any line would post FG stock (manufaktur). MBG biasanya false. */
+export function resultHasStockableLines(lines: ProductionResultLine[]): boolean {
+  return lines.some(
+    (l) => Boolean(String(l.finishedGoodProductId || '').trim()) && Number(l.actualPorsi) > 0,
+  );
+}
 
 /** Kitchen integrity before posting Result stock / closing plan. */
 export function assertResultStockGate(input: {
@@ -250,8 +269,14 @@ export function assertPlanCanComplete(input: {
   hasCompletedIssue: boolean;
   hasOpenIssue: boolean;
   hasOpenResult: boolean;
+  hasCompletedResult: boolean;
 }): boolean {
-  return input.hasCompletedIssue && !input.hasOpenIssue && !input.hasOpenResult;
+  return (
+    input.hasCompletedIssue
+    && !input.hasOpenIssue
+    && !input.hasOpenResult
+    && input.hasCompletedResult
+  );
 }
 
 /** Human-readable gate for Plan → COMPLETED (manual or auto). */
@@ -259,6 +284,7 @@ export function planCompleteGateMessage(input: {
   hasCompletedIssue: boolean;
   hasOpenIssue: boolean;
   hasOpenResult: boolean;
+  hasCompletedResult: boolean;
 }): string | null {
   if (assertPlanCanComplete(input)) return null;
   if (!input.hasCompletedIssue) {
@@ -269,6 +295,9 @@ export function planCompleteGateMessage(input: {
   }
   if (input.hasOpenResult) {
     return 'Rencana belum bisa selesai: masih ada hasil produksi (HSL) terbuka';
+  }
+  if (!input.hasCompletedResult) {
+    return 'Rencana belum bisa selesai: wajib catat & selesaikan hasil produksi (HSL) dulu';
   }
   return 'Rencana belum bisa selesai';
 }

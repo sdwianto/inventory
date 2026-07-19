@@ -78,7 +78,7 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect('error' in (bad as object)).toBe(true);
   });
 
-  it('builds result lines from plan × menu × recipe FG', () => {
+  it('builds result lines from plan × menu × recipe (FG optional for MBG)', () => {
     const recipe: RecipeDoc = {
       id: 'r1',
       tenantId: 't1',
@@ -119,6 +119,19 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(built.lines[0].targetPorsi).toBe(200);
     expect(built.lines[0].actualPorsi).toBe(200);
     expect(summarizeResultLines(built.lines).actualPorsiTotal).toBe(200);
+
+    const mbgRecipe: RecipeDoc = { ...recipe, id: 'r2', kode: 'RSP-2', finishedGoodProductId: undefined, finishedGoodKode: undefined, finishedGoodNama: undefined };
+    const mbgMenu: MenuDoc = { ...menu, id: 'm2', items: [{ recipeId: 'r2', porsi: 1 }] };
+    const mbg = buildResultLinesFromPlan({
+      planLines: [{ menuId: 'm2', targetPorsi: 100 }],
+      menusById: new Map([['m2', mbgMenu]]),
+      recipesById: new Map([['r2', mbgRecipe]]),
+    });
+    expect(mbg.ok).toBe(true);
+    if (!mbg.ok) return;
+    expect(mbg.lines[0].finishedGoodProductId).toBeUndefined();
+    expect(mbg.lines[0].finishedGoodNama).toBe('Nasi');
+    expect(mbg.warnings.some((w) => /MBG/.test(w))).toBe(true);
   });
 
   it('rejects inactive menu/recipe in result build', () => {
@@ -156,11 +169,10 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(built.ok).toBe(false);
   });
 
-  it('normalizes result lines requiring actual or waste', () => {
+  it('normalizes result lines requiring actual or waste (FG optional)', () => {
     const bad = normalizeResultLines([{
       menuId: 'm',
       recipeId: 'r',
-      finishedGoodProductId: 'fg',
       targetPorsi: 10,
       actualPorsi: 0,
       wastePorsi: 0,
@@ -169,7 +181,6 @@ describe('food-production phase 2 — Issue + Result', () => {
     const ok = normalizeResultLines([{
       menuId: 'm',
       recipeId: 'r',
-      finishedGoodProductId: 'fg',
       targetPorsi: 10,
       actualPorsi: 9,
       wastePorsi: 1,
@@ -183,7 +194,7 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(assertStatusTransition('APPROVED', 'COMPLETED', RESULT_STATUS_TRANSITIONS)).toBeNull();
   });
 
-  it('gates Result COMPLETE and plan COMPLETED on completed PBL', () => {
+  it('gates Result COMPLETE and plan COMPLETED on completed PBL + HSL', () => {
     expect(assertResultStockGate({ hasCompletedIssue: false, hasOpenIssue: false })).toMatch(/PBL/);
     expect(assertResultStockGate({ hasCompletedIssue: true, hasOpenIssue: true })).toMatch(/terbuka/);
     expect(assertResultStockGate({ hasCompletedIssue: true, hasOpenIssue: false })).toBeNull();
@@ -191,16 +202,25 @@ describe('food-production phase 2 — Issue + Result', () => {
       hasCompletedIssue: false,
       hasOpenIssue: false,
       hasOpenResult: false,
+      hasCompletedResult: false,
     })).toBe(false);
     expect(assertPlanCanComplete({
       hasCompletedIssue: true,
       hasOpenIssue: false,
       hasOpenResult: false,
+      hasCompletedResult: false,
+    })).toBe(false);
+    expect(assertPlanCanComplete({
+      hasCompletedIssue: true,
+      hasOpenIssue: false,
+      hasOpenResult: false,
+      hasCompletedResult: true,
     })).toBe(true);
     expect(assertPlanCanComplete({
       hasCompletedIssue: true,
       hasOpenIssue: false,
       hasOpenResult: true,
+      hasCompletedResult: true,
     })).toBe(false);
   });
 
@@ -209,26 +229,36 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(d.toISOString()).toBe('2026-07-15T12:00:00.000Z');
   });
 
-  it('blocks plan COMPLETED without completed PBL (manual + auto gate)', () => {
+  it('blocks plan COMPLETED without completed PBL / HSL (manual + auto gate)', () => {
     expect(planCompleteGateMessage({
       hasCompletedIssue: false,
       hasOpenIssue: false,
       hasOpenResult: false,
+      hasCompletedResult: false,
     })).toMatch(/PBL/);
     expect(planCompleteGateMessage({
       hasCompletedIssue: true,
       hasOpenIssue: true,
       hasOpenResult: false,
+      hasCompletedResult: false,
     })).toMatch(/terbuka/);
     expect(planCompleteGateMessage({
       hasCompletedIssue: true,
       hasOpenIssue: false,
       hasOpenResult: true,
+      hasCompletedResult: false,
     })).toMatch(/HSL/);
     expect(planCompleteGateMessage({
       hasCompletedIssue: true,
       hasOpenIssue: false,
       hasOpenResult: false,
+      hasCompletedResult: false,
+    })).toMatch(/hasil produksi/);
+    expect(planCompleteGateMessage({
+      hasCompletedIssue: true,
+      hasOpenIssue: false,
+      hasOpenResult: false,
+      hasCompletedResult: true,
     })).toBeNull();
   });
 
@@ -245,6 +275,16 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(cookingPhaseOf({ hasCompletedIssue: false, hasCompletedResult: false }).phase).toBe('NOT_STARTED');
     expect(cookingPhaseOf({ hasCompletedIssue: true, hasCompletedResult: false }).phase).toBe('IN_PROGRESS');
     expect(cookingPhaseOf({ hasCompletedIssue: true, hasCompletedResult: true }).phase).toBe('DONE');
+    expect(cookingPhaseOf({
+      hasCompletedIssue: true,
+      hasCompletedResult: false,
+      planStatus: 'COMPLETED',
+    }).phase).toBe('DONE');
+    expect(cookingPhaseOf({
+      hasCompletedIssue: false,
+      hasCompletedResult: false,
+      planStatus: 'PROCESSING',
+    }).phase).toBe('IN_PROGRESS');
 
     const report = buildProductionReport({
       plan: {
@@ -276,5 +316,29 @@ describe('food-production phase 2 — Issue + Result', () => {
     expect(report.cooking.phase).toBe('DONE');
     expect(report.integrity.canCompletePlan).toBe(true);
     expect(report.summary.yieldPct).toBe(95);
+
+    const closedWithoutHsl = buildProductionReport({
+      plan: {
+        id: 'p2',
+        noDokumen: 'RPN-2',
+        tanggal: '2026-07-17',
+        status: 'COMPLETED',
+        totalTargetPorsi: 200,
+      },
+      issue: {
+        id: 'i2',
+        noDokumen: 'PBL-2',
+        status: 'COMPLETED',
+        qtyIssuedTotal: 10,
+      },
+      result: null,
+      hasCompletedIssue: true,
+      hasOpenIssue: false,
+      hasCompletedResult: false,
+      hasOpenResult: false,
+    });
+    expect(closedWithoutHsl.cooking.phase).toBe('DONE');
+    expect(closedWithoutHsl.cooking.label).toBe('Selesai dimasak');
+    expect(closedWithoutHsl.integrity.canCompletePlan).toBe(false);
   });
 });

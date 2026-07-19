@@ -13,9 +13,11 @@ import {
   normalizeServicePointJenis,
   normalizeServicePointKode,
   normalizeKapasitasPorsi,
+  normalizePicNoTelp,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
+import { DISTRIBUTION_ORDERS_COLLECTION } from '@/lib/food-production/distribution';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import type { HandlerContext } from '@/types/api/handler';
@@ -28,7 +30,18 @@ interface SpBody extends Record<string, unknown> {
   alamat?: string;
   kapasitasPorsi?: number;
   pic?: string;
+  picNoTelp?: string;
   aktif?: boolean;
+}
+
+function nextServicePointKode(rows: Array<{ kode?: unknown }>): string {
+  let max = 0;
+  for (const row of rows) {
+    const match = /^Ti-(\d+)$/i.exec(String(row.kode || '').trim());
+    if (!match) continue;
+    max = Math.max(max, Number(match[1]) || 0);
+  }
+  return `Ti-${String(max + 1).padStart(2, '0')}`;
 }
 
 export async function handleServicePoints(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -43,7 +56,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     const filter: Record<string, unknown> = {};
     if (url.searchParams.get('aktif') === '1') filter.aktif = true;
     const jenis = String(url.searchParams.get('jenis') || '').toUpperCase();
-    if (jenis === 'SEKOLAH' || jenis === 'TRAY' || jenis === 'TITIK_MAKAN' || jenis === 'LAINNYA') {
+    if (jenis === 'SEKOLAH' || jenis === 'POSYANDU' || jenis === 'LAINNYA') {
       filter.jenis = jenis;
     }
     const kitchenId = resolveKitchenIdFilter(url, request);
@@ -66,7 +79,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
 
     const nama = String(spBody.nama || '').trim();
     if (!nama) return err('Nama titik layanan wajib', 400);
-    const kode = normalizeServicePointKode(spBody.kode);
+    const requestedKode = normalizeServicePointKode(spBody.kode);
     const jenis = normalizeServicePointJenis(spBody.jenis);
     const kitchenId = String(spBody.kitchenId || '').trim() || undefined;
     let kitchenNama: string | undefined;
@@ -77,12 +90,15 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       if (!k) return err('Dapur penyalur tidak ditemukan / nonaktif', 400);
       kitchenNama = String(k.nama || '');
     }
-    if (kode) {
-      const dup = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
-        withTenantFilter(scopeAuth, { kode }),
-      );
-      if (dup) return err(`Kode titik ${kode} sudah dipakai`, 400);
-    }
+    const existingCodes = await db.collection(SERVICE_POINTS_COLLECTION)
+      .find(withTenantFilter(scopeAuth, {}))
+      .project({ kode: 1 })
+      .toArray();
+    const kode = requestedKode || nextServicePointKode(existingCodes);
+    const dup = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { kode }),
+    );
+    if (dup) return err(`Kode titik ${kode} sudah dipakai`, 400);
 
     const now = new Date();
     const doc: ServicePointDoc = {
@@ -96,6 +112,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       alamat: String(spBody.alamat || '').trim() || undefined,
       kapasitasPorsi: normalizeKapasitasPorsi(spBody.kapasitasPorsi),
       pic: String(spBody.pic || '').trim() || undefined,
+      picNoTelp: normalizePicNoTelp(spBody.picNoTelp),
       aktif: spBody.aktif !== false,
       createdAt: now,
       updatedAt: now,
@@ -151,6 +168,9 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     if (spBody.jenis !== undefined) update.jenis = normalizeServicePointJenis(spBody.jenis);
     if (spBody.alamat !== undefined) update.alamat = String(spBody.alamat || '').trim() || null;
     if (spBody.pic !== undefined) update.pic = String(spBody.pic || '').trim() || null;
+    if (spBody.picNoTelp !== undefined) {
+      update.picNoTelp = normalizePicNoTelp(spBody.picNoTelp) || null;
+    }
     if (spBody.kapasitasPorsi !== undefined) {
       update.kapasitasPorsi = normalizeKapasitasPorsi(spBody.kapasitasPorsi) ?? null;
     }
@@ -203,10 +223,33 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     if (!scopeAuth) return err('Scope tidak valid', 400);
 
     const id = path[1];
+    const permanent = url.searchParams.get('permanent') === '1';
     const existing = await db.collection(SERVICE_POINTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     ) as ServicePointDoc | null;
     if (!existing) return err('Titik layanan tidak ditemukan', 404);
+
+    if (permanent) {
+      const usedInDist = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { 'lines.servicePointId': id }),
+      );
+      if (usedInDist) {
+        return err('Titik sudah dipakai di distribusi — tidak bisa dihapus permanen', 400);
+      }
+      await db.collection(SERVICE_POINTS_COLLECTION).deleteOne(
+        withTenantFilter(scopeAuth, { id }),
+      );
+      await writeAuditLog(db, {
+        tenantId: existing.tenantId,
+        action: 'SERVICE_POINT_DELETE',
+        entityType: 'service_point',
+        entityId: id,
+        summary: `Titik layanan ${existing.nama} dihapus`,
+        ...auditActor(auth),
+      });
+      return ok({ id, deleted: true });
+    }
+
     await db.collection(SERVICE_POINTS_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id }),
       { $set: { aktif: false, updatedAt: new Date() } },

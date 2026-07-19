@@ -5,7 +5,7 @@
 
 export const SERVICE_POINTS_COLLECTION = 'service_points';
 
-export type ServicePointJenis = 'SEKOLAH' | 'TRAY' | 'TITIK_MAKAN' | 'LAINNYA';
+export type ServicePointJenis = 'SEKOLAH' | 'POSYANDU' | 'LAINNYA';
 
 export interface ServicePointDoc {
   id: string;
@@ -18,6 +18,7 @@ export interface ServicePointDoc {
   alamat?: string;
   kapasitasPorsi?: number;
   pic?: string;
+  picNoTelp?: string;
   aktif: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -25,19 +26,18 @@ export interface ServicePointDoc {
 
 export const SERVICE_POINT_JENIS_LABELS: Record<ServicePointJenis, string> = {
   SEKOLAH: 'Sekolah',
-  TRAY: 'Tray / gerai',
-  TITIK_MAKAN: 'Titik makan',
-  LAINNYA: 'Lainnya',
+  POSYANDU: 'Posyandu',
+  LAINNYA: 'Lainya',
 };
 
 export function normalizeServicePointJenis(raw: unknown): ServicePointJenis {
   const v = String(raw || '').toUpperCase();
-  if (v === 'SEKOLAH' || v === 'TRAY' || v === 'TITIK_MAKAN') return v;
+  if (v === 'SEKOLAH' || v === 'POSYANDU') return v;
   return 'LAINNYA';
 }
 
 export function normalizeServicePointKode(raw: unknown): string | undefined {
-  const k = String(raw || '').trim().toUpperCase().replace(/\s+/g, '-');
+  const k = String(raw || '').trim().replace(/\s+/g, '-');
   return k || undefined;
 }
 
@@ -46,4 +46,9 @@ export function normalizeKapasitasPorsi(raw: unknown): number | undefined {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return undefined;
   return Math.round(n);
+}
+
+export function normalizePicNoTelp(raw: unknown): string | undefined {
+  const digits = String(raw || '').replace(/\D/g, '');
+  return digits || undefined;
 }

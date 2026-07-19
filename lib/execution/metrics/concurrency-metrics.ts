@@ -1,2 +1,2 @@
-/** @deprecated import from `@sdwianto/platform/metrics/concurrency-metrics` — EE-12 Phase 3 shim */
-export * from '@sdwianto/platform/metrics/concurrency-metrics';
+/** @deprecated import from `@sdwianto/metrics` — EE-15 shim */
+export * from '@sdwianto/metrics/concurrency-metrics';

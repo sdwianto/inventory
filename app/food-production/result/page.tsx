@@ -16,7 +16,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { Factory, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History, Truck } from 'lucide-react';
+import { Factory, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
   RESULT_STATUS_LABELS,
   RESULT_ELIGIBLE_PLAN_STATUSES,
@@ -25,8 +25,16 @@ import {
   isResultEditable,
   type ProductionResultStatus,
 } from '@/lib/food-production/production-result';
+import { PLAN_STATUS_LABELS, type ProductionPlanStatus } from '@/lib/food-production/production-plan';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
+
+/** Current local date-time as `YYYY-MM-DDTHH:mm` for <input type="datetime-local">. */
+function nowLocalDatetime(): string {
+  const d = new Date();
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
 
 interface PlanOpt {
   id: string;
@@ -39,7 +47,11 @@ interface PlanOpt {
 interface ResultLine {
   menuId: string;
   menuKode?: string;
-  finishedGoodProductId: string;
+  menuNama?: string;
+  recipeId?: string;
+  recipeKode?: string;
+  recipeNama?: string;
+  finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
   satuan?: string;
@@ -100,6 +112,7 @@ function FoodProductionResultPageContent() {
   const [completeTarget, setCompleteTarget] = useState<ResultRow | null>(null);
   const [completeBatchNo, setCompleteBatchNo] = useState('');
   const [completeExpiry, setCompleteExpiry] = useState('');
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,19 +121,31 @@ function FoodProductionResultPageContent() {
       if (filterStatus) qs.set('status', filterStatus);
       if (filterTanggal) qs.set('tanggal', filterTanggal);
       const resultUrl = qs.toString() ? `/api/production-results?${qs}` : '/api/production-results';
-      const [rRes, pRes] = await Promise.all([
+      const [rRes, pRes, allRes] = await Promise.all([
         fetch(resultUrl, { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } }),
         fetch('/api/production-plans', { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } }),
+        fetch('/api/production-results', { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } }),
       ]);
       const rData = await rRes.json();
       const pData = await pRes.json();
+      const allData = await allRes.json();
       if (!rRes.ok) throw new Error(rData?.error || 'Gagal memuat');
-      setRows(Array.isArray(rData) ? rData : []);
-      setPlans((Array.isArray(pData) ? pData : []).filter((p: PlanOpt) =>
+      const list = Array.isArray(rData) ? rData as ResultRow[] : [];
+      setRows(list);
+      const planList = (Array.isArray(pData) ? pData : []).filter((p: PlanOpt) =>
         RESULT_ELIGIBLE_PLAN_STATUSES.has(p.status),
-      ));
+      ) as PlanOpt[];
+      const allResults = Array.isArray(allData) ? allData as ResultRow[] : [];
+      const usedPlanIds = new Set(
+        allResults
+          .filter((r) => r.status !== 'CANCELLED')
+          .map((r) => r.productionPlanId),
+      );
+      setPlans(planList.filter((p) => !usedPlanIds.has(p.id)));
+      return { list, planList: planList.filter((p) => !usedPlanIds.has(p.id)) };
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat');
+      return { list: [] as ResultRow[], planList: [] as PlanOpt[] };
     } finally {
       setLoading(false);
     }
@@ -134,19 +159,78 @@ function FoodProductionResultPageContent() {
   }, [load]);
 
   useEffect(() => {
+    if (deepLinkHandled || loading) return;
     const fromPlan = searchParams.get('productionPlanId');
-    if (fromPlan) {
-      setPlanId(fromPlan);
-      setOpenCreate(true);
-    }
-  }, [searchParams]);
+    const highlight = searchParams.get('highlight');
+    if (!fromPlan && !highlight) return;
+
+    void (async () => {
+      setDeepLinkHandled(true);
+      const { list, planList } = await load();
+
+      if (highlight) {
+        const hit = list.find((r) => r.id === highlight)
+          || (await (async () => {
+            const res = await fetch(`/api/production-results/${highlight}`, {
+              headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+            });
+            if (!res.ok) return null;
+            return res.json() as Promise<ResultRow>;
+          })());
+        if (hit) {
+          setDetail(hit);
+          setEditLines(Array.isArray(hit.lines) ? hit.lines : []);
+          return;
+        }
+        toast.error('Dokumen hasil tidak ditemukan');
+        return;
+      }
+
+      if (fromPlan) {
+        const byPlanRes = await fetch(
+          `/api/production-results?productionPlanId=${encodeURIComponent(fromPlan)}`,
+          { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } },
+        );
+        const byPlanData = await byPlanRes.json();
+        const existing = Array.isArray(byPlanData)
+          ? (byPlanData as ResultRow[]).find((r) => r.status !== 'CANCELLED')
+          : undefined;
+        if (existing) {
+          const res = await fetch(`/api/production-results/${existing.id}`, {
+            headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setDetail(data as ResultRow);
+            setEditLines(Array.isArray(data.lines) ? data.lines : []);
+          } else {
+            setDetail(existing);
+            setEditLines(existing.lines || []);
+          }
+          toast.message(`Membuka ${existing.noDokumen}`);
+          return;
+        }
+        if (!planList.some((p) => p.id === fromPlan)) {
+          toast.error(
+            'Rencana tidak tersedia untuk buat HSL. Pastikan status Disetujui/Diproses (atau Selesai catch-up) dan belum punya HSL.',
+          );
+          return;
+        }
+        setPlanId(fromPlan);
+        setOpenCreate(true);
+      }
+    })();
+  }, [searchParams, deepLinkHandled, loading, load]);
 
   async function openDetail(row: ResultRow) {
-    const res = await fetch(`/api/production-results/${row.id}`, { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } });
+    const res = await fetch(`/api/production-results/${row.id}`, {
+      headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+    });
     const data = await res.json();
     if (!res.ok) {
       toast.error(data?.error || 'Gagal detail');
       setDetail(row);
+      setEditLines(row.lines || []);
       return;
     }
     setDetail(data as ResultRow);
@@ -167,10 +251,11 @@ function FoodProductionResultPageContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat');
-      toast.success(`Hasil ${data.noDokumen} siap`);
+      toast.success(`Hasil ${data.noDokumen} siap — isi actual porsi lalu ajukan`);
       if (data.summary?.warnings?.[0]) toast.message(data.summary.warnings[0]);
       setOpenCreate(false);
       setPlanId('');
+      router.replace('/food-production/result');
       await load();
       setDetail(data as ResultRow);
       setEditLines(data.lines || []);
@@ -194,6 +279,7 @@ function FoodProductionResultPageContent() {
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
       toast.success('Porsi tersimpan');
       setDetail(data as ResultRow);
+      setEditLines(data.lines || []);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal simpan');
@@ -203,11 +289,9 @@ function FoodProductionResultPageContent() {
   }
 
   function openComplete(row: ResultRow) {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() + 3);
     setCompleteTarget(row);
     setCompleteBatchNo('');
-    setCompleteExpiry(d.toISOString().slice(0, 10));
+    setCompleteExpiry(nowLocalDatetime());
     setCompleteOpen(true);
   }
 
@@ -232,7 +316,11 @@ function FoodProductionResultPageContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal ubah status');
-      toast.success(`Status → ${RESULT_STATUS_LABELS[status]}`);
+      toast.success(
+        status === 'COMPLETED'
+          ? 'Hasil selesai — siap distribusi (tanpa post stok FG)'
+          : `Status → ${RESULT_STATUS_LABELS[status]}`,
+      );
       setCompleteOpen(false);
       setCompleteTarget(null);
       await load();
@@ -247,16 +335,22 @@ function FoodProductionResultPageContent() {
 
   async function confirmComplete() {
     if (!completeTarget) return;
-    if (completeExpiry && !/^\d{4}-\d{2}-\d{2}$/.test(completeExpiry)) {
-      toast.error('Expiry harus YYYY-MM-DD');
+    if (completeExpiry && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(completeExpiry)) {
+      toast.error('Format expiry tidak valid');
       return;
     }
     const okConfirm = await confirm({
-      title: 'Selesai & post stok masuk FG?',
-      description: `${completeTarget.noDokumen} akan menambah stok finished good. Wajib ada PBL selesai. Tidak bisa dibatalkan.`,
-      confirmText: 'Post Stok',
+      title: 'Selesaikan hasil produksi?',
+      description: completeTarget.materialIssueNo
+        ? `${completeTarget.noDokumen} — catat selesai. Mode MBG: stok barang jadi tidak ditambah; lanjut distribusi dari porsi.`
+        : `${completeTarget.noDokumen} — belum ada PBL selesai. Selesaikan Pengeluaran Stok dulu.`,
+      confirmText: 'Selesai',
     });
     if (!okConfirm) return;
+    if (!completeTarget.materialIssueNo) {
+      toast.error('Belum ada PBL selesai — selesaikan Pengeluaran Stok dulu');
+      return;
+    }
     await changeStatus(completeTarget, 'COMPLETED', {
       batchNo: completeBatchNo.trim() || undefined,
       expiryDate: completeExpiry.trim() || undefined,
@@ -296,7 +390,7 @@ function FoodProductionResultPageContent() {
             Hasil Produksi
           </h1>
           <p className="text-sm text-muted-foreground">
-            Catat actual porsi — stok finished good masuk saat Selesai (setelah PBL selesai)
+            Catat actual porsi masak — MBG: langsung distribusi, tanpa masuk stok barang jadi
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-end">
@@ -338,7 +432,13 @@ function FoodProductionResultPageContent() {
             <RefreshCw className="h-4 w-4 mr-1" /> Muat ulang
           </Button>
           {canManage && (
-            <Button size="sm" onClick={() => setOpenCreate(true)}>
+            <Button
+              size="sm"
+              onClick={() => {
+                setPlanId('');
+                setOpenCreate(true);
+              }}
+            >
               <Plus className="h-4 w-4 mr-1" /> Dari Rencana
             </Button>
           )}
@@ -364,8 +464,27 @@ function FoodProductionResultPageContent() {
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-muted-foreground">
-                  Belum ada. Setelah ambil bahan, catat hasil masak di sini.
+                <td colSpan={7} className="p-6 text-center space-y-3">
+                  <p className="text-muted-foreground">
+                    Belum ada dokumen HSL. Setelah bahan dikeluarkan, buat hasil dari rencana yang
+                    Disetujui / Diproses.
+                  </p>
+                  {canManage && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setPlanId('');
+                        setOpenCreate(true);
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Buat dari Rencana
+                    </Button>
+                  )}
+                  <div>
+                    <Link href="/food-production/plan" className="text-sm text-primary hover:underline">
+                      Ke Rencana Produksi →
+                    </Link>
+                  </div>
                 </td>
               </tr>
             )}
@@ -376,7 +495,7 @@ function FoodProductionResultPageContent() {
                   <td className="p-3 font-mono text-xs">{row.noDokumen}</td>
                   <td className="p-3">
                     <div className="font-mono text-xs">{row.productionPlanNo}</div>
-                    <div className="text-[11px] text-muted-foreground">{row.materialIssueNo || '—'}</div>
+                    <div className="text-[11px] text-muted-foreground">{row.materialIssueNo || '— PBL'}</div>
                   </td>
                   <td className="p-3">{row.tanggal}</td>
                   <td className="p-3">{row.kitchenNama || '—'}</td>
@@ -384,10 +503,17 @@ function FoodProductionResultPageContent() {
                   <td className="p-3">{RESULT_STATUS_LABELS[row.status]}</td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-1 justify-end">
-                      <Button variant="ghost" size="sm" onClick={() => void openDetail(row)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        title="Detail"
+                        onClick={() => void openDetail(row)}
+                      >
                         <Eye className="h-4 w-4" />
                       </Button>
                       <Button
+                        type="button"
                         variant="ghost"
                         size="sm"
                         title="Riwayat"
@@ -399,22 +525,22 @@ function FoodProductionResultPageContent() {
                         <History className="h-4 w-4" />
                       </Button>
                       {canManage && next && (
-                        <Button variant="outline" size="sm" onClick={() => void changeStatus(row, next)}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void changeStatus(row, next)}
+                        >
                           {RESULT_UI_STATUS_NEXT_LABEL[row.status]}
                         </Button>
                       )}
-                      {row.status === 'COMPLETED' && (
+                      {canManage && row.status !== 'CANCELLED' && row.status !== 'COMPLETED' && (
                         <Button
+                          type="button"
                           variant="ghost"
                           size="sm"
-                          title="Distribusi dari HSL"
-                          onClick={() => router.push(`/food-production/distribution?productionResultId=${row.id}`)}
+                          onClick={() => void cancelResult(row)}
                         >
-                          <Truck className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {canManage && row.status !== 'CANCELLED' && row.status !== 'COMPLETED' && (
-                        <Button variant="ghost" size="sm" onClick={() => void cancelResult(row)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       )}
@@ -427,27 +553,57 @@ function FoodProductionResultPageContent() {
         </table>
       </div>
 
-      <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+      <Dialog
+        open={openCreate}
+        onOpenChange={(o) => {
+          setOpenCreate(o);
+          if (!o) setPlanId('');
+        }}
+      >
         <DialogContent>
-          <DialogHeader><DialogTitle>Buat Hasil Produksi</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Buat Hasil Produksi</DialogTitle>
+          </DialogHeader>
           <div className="space-y-2 py-2">
             <Label>Rencana produksi</Label>
-            <select
-              className="w-full h-10 border rounded-md px-2 text-sm bg-white"
-              value={planId}
-              onChange={(e) => setPlanId(e.target.value)}
-            >
-              <option value="">— Pilih —</option>
-              {plans.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.noDokumen} · {p.tanggal} · {p.kitchenNama || 'Dapur'}
-                </option>
-              ))}
-            </select>
+            {plans.length === 0 ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 space-y-2">
+                <p>
+                  Tidak ada rencana siap buat HSL. Pilih rencana status Disetujui/Diproses
+                  (setelah PBL) — atau rencana Selesai tanpa HSL (catch-up).
+                </p>
+                <Link href="/food-production/plan" className="text-primary hover:underline text-xs">
+                  Buka Rencana Produksi →
+                </Link>
+              </div>
+            ) : (
+              <select
+                className="w-full h-10 border rounded-md px-2 text-sm bg-white"
+                value={planId}
+                onChange={(e) => setPlanId(e.target.value)}
+              >
+                <option value="">— Pilih —</option>
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.noDokumen} · {p.tanggal} · {p.kitchenNama || 'Dapur'} ·{' '}
+                    {PLAN_STATUS_LABELS[p.status as ProductionPlanStatus] || p.status}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Setelah dibuat: isi actual/waste → Ajukan → Setujui → Selesai (tanpa post stok FG).
+            </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenCreate(false)}>Batal</Button>
-            <Button onClick={() => void createResult()} disabled={saving || !planId}>
+            <Button type="button" variant="outline" onClick={() => setOpenCreate(false)}>
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void createResult()}
+              disabled={saving || !planId || plans.length === 0}
+            >
               {saving ? 'Memproses…' : 'Buat'}
             </Button>
           </DialogFooter>
@@ -468,7 +624,7 @@ function FoodProductionResultPageContent() {
                 <Link href="/food-production/plan" className="text-primary font-mono hover:underline">
                   {detail.productionPlanNo}
                 </Link>
-                {detail.materialIssueNo ? ` · Issue ${detail.materialIssueNo}` : ''}
+                {detail.materialIssueNo ? ` · Issue ${detail.materialIssueNo}` : ' · PBL belum terhubung'}
                 {' · '}{detail.tanggal} · {detail.kitchenNama}
               </div>
               {!!detail.summary?.warnings?.length && (
@@ -476,11 +632,22 @@ function FoodProductionResultPageContent() {
                   {detail.summary.warnings.map((w) => <li key={w}>{w}</li>)}
                 </ul>
               )}
+              {!detail.materialIssueNo && detail.status !== 'COMPLETED' && detail.status !== 'CANCELLED' && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2">
+                  Post stok FG membutuhkan PBL selesai.{' '}
+                  <Link
+                    href={`/stok/pengeluaran?mode=produksi&productionPlanId=${detail.productionPlanId}`}
+                    className="text-primary hover:underline"
+                  >
+                    Ke Pengeluaran Stok →
+                  </Link>
+                </p>
+              )}
               <div className="rounded-md border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/40">
                     <tr>
-                      <th className="text-left p-2">Finished Good</th>
+                      <th className="text-left p-2">Menu / Resep</th>
                       <th className="text-right p-2">Target</th>
                       <th className="text-right p-2">Actual</th>
                       <th className="text-right p-2">Waste</th>
@@ -490,8 +657,10 @@ function FoodProductionResultPageContent() {
                     {(isResultEditable(detail.status) ? editLines : detail.lines || []).map((l, idx) => (
                       <tr key={`${l.menuId}-${l.finishedGoodProductId}-${idx}`} className="border-t">
                         <td className="p-2">
-                          <div>{l.finishedGoodNama || l.finishedGoodKode}</div>
-                          <div className="text-[11px] text-muted-foreground">{l.menuKode}</div>
+                          <div>{l.finishedGoodNama || l.recipeNama || l.menuNama || l.finishedGoodKode || l.recipeKode}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {[l.menuKode, l.recipeKode].filter(Boolean).join(' · ') || '—'}
+                          </div>
                         </td>
                         <td className="p-2 text-right">{l.targetPorsi}</td>
                         <td className="p-2 text-right">
@@ -529,25 +698,35 @@ function FoodProductionResultPageContent() {
                   </tbody>
                 </table>
               </div>
-              {canManage && isResultEditable(detail.status) && (
-                <Button size="sm" onClick={() => void saveLines()} disabled={saving}>
-                  Simpan porsi
-                </Button>
-              )}
-              {(detail.status === 'APPROVED' || detail.status === 'PROCESSING') && canManage && (
-                <Button size="sm" onClick={() => void changeStatus(detail, 'COMPLETED')}>
-                  <CheckCircle2 className="h-4 w-4 mr-1" /> Selesai + Post Stok
-                </Button>
-              )}
-              {canManage && RESULT_UI_STATUS_NEXT[detail.status] && detail.status !== 'APPROVED' && detail.status !== 'PROCESSING' && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void changeStatus(detail, RESULT_UI_STATUS_NEXT[detail.status]!)}
-                >
-                  {RESULT_UI_STATUS_NEXT_LABEL[detail.status]}
-                </Button>
-              )}
+              <div className="flex flex-wrap gap-2 pt-1">
+                {canManage && isResultEditable(detail.status) && (
+                  <Button type="button" size="sm" onClick={() => void saveLines()} disabled={saving}>
+                    Simpan porsi
+                  </Button>
+                )}
+                {canManage && RESULT_UI_STATUS_NEXT[detail.status] && detail.status !== 'APPROVED' && detail.status !== 'PROCESSING' && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void changeStatus(detail, RESULT_UI_STATUS_NEXT[detail.status]!)}
+                  >
+                    {RESULT_UI_STATUS_NEXT_LABEL[detail.status]}
+                  </Button>
+                )}
+                {(detail.status === 'APPROVED' || detail.status === 'PROCESSING') && canManage && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                    disabled={!detail.materialIssueNo}
+                    title={!detail.materialIssueNo ? 'Butuh PBL selesai' : undefined}
+                    onClick={() => void changeStatus(detail, 'COMPLETED')}
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-1" /> Selesai
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </DialogContent>
@@ -556,11 +735,11 @@ function FoodProductionResultPageContent() {
       <Dialog open={completeOpen} onOpenChange={setCompleteOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Selesai — batch & expiry</DialogTitle>
+            <DialogTitle>Selesai — batch & expiry (opsional)</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              {completeTarget?.noDokumen} — opsional override batch / tanggal kedaluwarsa FG.
+              {completeTarget?.noDokumen} — MBG tidak menambah stok barang jadi. Batch opsional untuk jejak produksi.
             </p>
             <div className="space-y-1">
               <Label>Batch no (opsional)</Label>
@@ -571,18 +750,20 @@ function FoodProductionResultPageContent() {
               />
             </div>
             <div className="space-y-1">
-              <Label>Expiry (YYYY-MM-DD)</Label>
+              <Label>Expiry (tanggal &amp; jam)</Label>
               <Input
-                type="date"
+                type="datetime-local"
                 value={completeExpiry}
                 onChange={(e) => setCompleteExpiry(e.target.value)}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCompleteOpen(false)}>Batal</Button>
-            <Button onClick={() => void confirmComplete()}>
-              <CheckCircle2 className="h-4 w-4 mr-1" /> Post Stok
+            <Button type="button" variant="outline" onClick={() => setCompleteOpen(false)}>
+              Batal
+            </Button>
+            <Button type="button" onClick={() => void confirmComplete()}>
+              <CheckCircle2 className="h-4 w-4 mr-1" /> Selesai
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -611,7 +792,9 @@ function FoodProductionResultPageContent() {
             ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setHistoryOpen(false)}>Tutup</Button>
+            <Button type="button" variant="outline" onClick={() => setHistoryOpen(false)}>
+              Tutup
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

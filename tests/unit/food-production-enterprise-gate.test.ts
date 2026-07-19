@@ -61,10 +61,6 @@ const REQUIRED_MODULES = [
   'app/food-production/cold-chain/page.tsx',
   'app/food-production/haccp/page.tsx',
   'app/food-production/price-book/page.tsx',
-  'app/food-production/mobile/page.tsx',
-  'app/food-production/mobile/issue/page.tsx',
-  'app/food-production/mobile/result/page.tsx',
-  'app/food-production/mobile/qc/page.tsx',
   'docs/adr/001-food-production-domain.md',
 ];
 
@@ -103,6 +99,7 @@ describe('food-production enterprise gate', () => {
     const src = readFileSync(resolve(ROOT, 'components/AppShell.tsx'), 'utf8');
     expect(src).toContain("/food-production/recommendations");
     expect(src).toContain("/food-production/transfer");
+    expect(src).toContain("/food-production/plan");
     expect(src).toContain("/food-production/calendar");
     expect(src).toContain("/food-production/batch");
     expect(src).toContain("/food-production/service-point");
@@ -110,7 +107,7 @@ describe('food-production enterprise gate', () => {
     expect(src).toContain("/food-production/cold-chain");
     expect(src).toContain("/food-production/haccp");
     expect(src).toContain("/food-production/price-book");
-    expect(src).toContain("/food-production/mobile");
+    expect(src).not.toContain("/food-production/mobile");
     expect(src).toContain("/utiliti/api-keys");
     expect(src).toContain('FP_OPS_ROUTES');
     expect(src).toContain('FP_MGMT_ROUTES');
@@ -140,7 +137,7 @@ describe('food-production enterprise gate', () => {
     const src = readFileSync(resolve(ROOT, 'lib/api/handlers/qc.ts'), 'utf8');
     expect(src).toContain('FP_OPS_WRITE_ROLES');
     expect(src).toContain('FP_MANAGE_ROLES');
-    expect(src).toMatch(/QC_OPS_STATUS/);
+    expect(src).toMatch(/QC_RESULT_RECORD|persistItemEvidence/);
   });
 
   it('doc prefixes cover kitchen loop + XFR + DST + HCP', () => {

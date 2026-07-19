@@ -51,14 +51,14 @@ export function defaultExpiryDate(producedAt: string, shelfDays = DEFAULT_FG_SHE
 }
 
 export function isExpired(expiryDate: string, asOf = new Date()): boolean {
-  const exp = String(expiryDate || '').trim();
+  const exp = String(expiryDate || '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) return false;
   const asOfIso = asOf.toISOString().slice(0, 10);
   return exp < asOfIso;
 }
 
 export function daysUntilExpiry(expiryDate: string, asOf = new Date()): number | null {
-  const exp = String(expiryDate || '').trim();
+  const exp = String(expiryDate || '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) return null;
   const a = new Date(`${asOf.toISOString().slice(0, 10)}T12:00:00.000Z`);
   const b = new Date(`${exp}T12:00:00.000Z`);

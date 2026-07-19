@@ -108,7 +108,7 @@ describe('food-production phase 3', () => {
     expect(actual.variance?.amount).toBe(12000);
   });
 
-  it('gates QC complete on required FAIL/NA', () => {
+  it('QC findings save allows FAIL (no PASS-all gate)', () => {
     const items = normalizeQcTemplateItems([
       { key: 'a', label: 'Suhu', required: true },
       { key: 'b', label: 'Opsional', required: false },
@@ -116,13 +116,13 @@ describe('food-production phase 3', () => {
     expect(Array.isArray(items)).toBe(true);
     if (!Array.isArray(items)) return;
     expect(assertQcCanComplete(
-      [{ key: 'a', label: 'Suhu', result: 'FAIL' }, { key: 'b', label: 'Opsional', result: 'NA' }],
-      items,
-    )).toMatch(/gagal/i);
-    expect(assertQcCanComplete(
-      [{ key: 'a', label: 'Suhu', result: 'PASS' }, { key: 'b', label: 'Opsional', result: 'NA' }],
+      [{ key: 'a', label: 'Suhu', result: 'FAIL', note: 'suhu rendah' }, { key: 'b', label: 'Opsional', result: 'NA' }],
       items,
     )).toBeNull();
+    expect(assertQcCanComplete(
+      [{ key: 'a', label: 'Suhu', result: 'NA' }, { key: 'b', label: 'Opsional', result: 'NA' }],
+      items,
+    )).toMatch(/minimal satu/i);
     expect(summarizeQcItems([
       { key: 'a', label: 'Suhu', result: 'PASS' },
       { key: 'b', label: 'Opsional', result: 'FAIL' },

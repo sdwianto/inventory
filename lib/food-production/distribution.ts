@@ -1,8 +1,9 @@
 /**
  * Distribution Order / Packing list — ADR-001 Phase 5 / Sprint 19.
- * Packing dari Plan (target) atau HSL (actual) ke titik layanan.
- * PROCESSING = dikemas/dikirim; COMPLETED = diterima di titik.
- * Tanpa mutasi stok (stok FG sudah masuk saat HSL COMPLETE).
+ * Packing dari HSL (actual) ke titik layanan.
+ * DRAFT = disiapkan; PROCESSING = dikirim; COMPLETED = selesai (semua titik settled).
+ * Retur dicatat per titik (qtyDikembalikan), bukan status dokumen global.
+ * Tanpa mutasi stok (MBG: porsi langsung distribusi).
  */
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
@@ -18,13 +19,22 @@ export interface DistributionLine {
   servicePointId: string;
   servicePointKode?: string;
   servicePointNama?: string;
+  /** Kapasitas titik layanan saat packing dibuat. */
+  kapasitasPorsi?: number;
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
   finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
+  /** Alokasi rencana (saat disiapkan). */
   qtyPorsi: number;
+  /** Actual dikirim ke titik. */
+  qtyDikirim?: number;
+  /** Actual diterima di titik. */
+  qtyDiterima?: number;
+  /** Actual dikembalikan dari titik (bukan status dokumen). */
+  qtyDikembalikan?: number;
   notes?: string;
 }
 
@@ -46,56 +56,92 @@ export interface DistributionOrderDoc {
   summary: {
     lineCount: number;
     qtyPorsiTotal: number;
+    qtyDikirimTotal?: number;
+    qtyDiterimaTotal?: number;
+    qtyDikembalikanTotal?: number;
     servicePointCount: number;
+    settledCount?: number;
   };
   catatan?: string;
+  lastStatusPhotoUrls?: string[];
   createdAt: Date;
   updatedAt: Date;
   createdBy?: string;
   createdByName?: string;
 }
 
-/** APPROVED → PROCESSING (kirim) wajib; tidak loncat ke COMPLETED. */
+/**
+ * Disiapkan → Dikirim → Selesai.
+ * CANCELLED hanya untuk batalkan packing (belum/selama disiapkan), bukan retur per titik.
+ */
 export const DIST_STATUS_TRANSITIONS: Record<string, string[]> = {
   ...FP_DEFAULT_TRANSITIONS,
+  DRAFT: ['PROCESSING', 'CANCELLED'],
+  SUBMITTED: ['PROCESSING', 'CANCELLED'],
   APPROVED: ['PROCESSING', 'CANCELLED'],
-  PROCESSING: ['COMPLETED', 'CANCELLED'],
+  PROCESSING: ['COMPLETED'],
+  COMPLETED: [],
 };
 
 export const DIST_STATUS_LABELS: Record<DistributionStatus, string> = {
-  DRAFT: 'Draft',
-  SUBMITTED: 'Diajukan',
-  APPROVED: 'Disetujui',
+  DRAFT: 'Disiapkan',
+  SUBMITTED: 'Disiapkan',
+  APPROVED: 'Disiapkan',
   PROCESSING: 'Dikirim',
-  COMPLETED: 'Diterima',
+  COMPLETED: 'Selesai',
   CANCELLED: 'Dibatalkan',
 };
 
 export const DIST_UI_STATUS_NEXT: Partial<Record<DistributionStatus, DistributionStatus>> = {
-  DRAFT: 'SUBMITTED',
-  SUBMITTED: 'APPROVED',
+  DRAFT: 'PROCESSING',
+  SUBMITTED: 'PROCESSING',
   APPROVED: 'PROCESSING',
   PROCESSING: 'COMPLETED',
 };
 
 export const DIST_UI_STATUS_NEXT_LABEL: Partial<Record<DistributionStatus, string>> = {
-  DRAFT: 'Ajukan',
-  SUBMITTED: 'Setujui',
-  APPROVED: 'Kirim',
-  PROCESSING: 'Terima',
+  DRAFT: 'Dikirim',
+  SUBMITTED: 'Dikirim',
+  APPROVED: 'Dikirim',
+  PROCESSING: 'Selesaikan titik',
 };
 
 export function isDistEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
 }
 
+/** Titik sudah diselesaikan bila diterima+kembali menutup qty dikirim. */
+export function isDistLineSettled(line: DistributionLine): boolean {
+  if (line.qtyDiterima == null && line.qtyDikembalikan == null) return false;
+  const sent = roundQty(Number(line.qtyDikirim ?? line.qtyPorsi) || 0);
+  const recv = roundQty(Number(line.qtyDiterima) || 0);
+  const ret = roundQty(Number(line.qtyDikembalikan) || 0);
+  return Math.abs(roundQty(recv + ret) - sent) < 0.0001;
+}
+
+export function allDistLinesSettled(lines: DistributionLine[]): boolean {
+  return (lines || []).length > 0 && (lines || []).every(isDistLineSettled);
+}
+
 export function summarizeDistLines(lines: DistributionLine[]) {
-  const points = new Set(lines.map((l) => l.servicePointId).filter(Boolean));
+  const list = lines || [];
+  const points = new Set(list.map((l) => l.servicePointId).filter(Boolean));
   return {
-    lineCount: lines.length,
-    qtyPorsiTotal: roundQty(lines.reduce((s, l) => s + (Number(l.qtyPorsi) || 0), 0)),
+    lineCount: list.length,
+    qtyPorsiTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyPorsi) || 0), 0)),
+    qtyDikirimTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyDikirim) || 0), 0)),
+    qtyDiterimaTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyDiterima) || 0), 0)),
+    qtyDikembalikanTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyDikembalikan) || 0), 0)),
     servicePointCount: points.size,
+    settledCount: list.filter(isDistLineSettled).length,
   };
+}
+
+function optionalNonNegQty(raw: unknown): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return roundQty(n);
 }
 
 export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: string } {
@@ -117,10 +163,15 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
     const key = `${servicePointId}|${menuId || ''}|${fgId || ''}`;
     if (seen.has(key)) return { error: `Baris ${i + 1}: duplikat titik × menu/FG` };
     seen.add(key);
+    const kapasitas = optionalNonNegQty(row.kapasitasPorsi);
+    const qtyDikirim = optionalNonNegQty(row.qtyDikirim);
+    const qtyDiterima = optionalNonNegQty(row.qtyDiterima);
+    const qtyDikembalikan = optionalNonNegQty(row.qtyDikembalikan);
     out.push({
       servicePointId,
       servicePointKode: row.servicePointKode != null ? String(row.servicePointKode) : undefined,
       servicePointNama: row.servicePointNama != null ? String(row.servicePointNama) : undefined,
+      kapasitasPorsi: kapasitas,
       menuId,
       menuKode: row.menuKode != null ? String(row.menuKode) : undefined,
       menuNama: row.menuNama != null ? String(row.menuNama) : undefined,
@@ -128,10 +179,136 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
       finishedGoodKode: row.finishedGoodKode != null ? String(row.finishedGoodKode) : undefined,
       finishedGoodNama: row.finishedGoodNama != null ? String(row.finishedGoodNama) : undefined,
       qtyPorsi: roundQty(qtyPorsi),
+      ...(qtyDikirim != null ? { qtyDikirim } : {}),
+      ...(qtyDiterima != null ? { qtyDiterima } : {}),
+      ...(qtyDikembalikan != null ? { qtyDikembalikan } : {}),
       notes: row.notes != null ? String(row.notes) : undefined,
     });
   }
   return out;
+}
+
+/** Apply qty dikirim per line (status → Dikirim). */
+export function applyDistLineActuals(
+  lines: DistributionLine[],
+  toStatus: string,
+  actuals?: Array<{
+    servicePointId: string;
+    menuId?: string;
+    finishedGoodProductId?: string;
+    qty: number;
+    notes?: string;
+  }>,
+): DistributionLine[] | { error: string } {
+  if (toStatus === 'COMPLETED') {
+    return { error: 'Gunakan settle per titik (diterima + dikembalikan) untuk menyelesaikan distribusi' };
+  }
+  const byKey = new Map<string, { qty: number; notes?: string }>();
+  for (const a of actuals || []) {
+    const sp = String(a.servicePointId || '').trim();
+    if (!sp) continue;
+    const qty = Number(a.qty);
+    if (!Number.isFinite(qty) || qty < 0) {
+      return { error: 'Qty actual per titik harus ≥ 0' };
+    }
+    const notes = a.notes != null ? String(a.notes).trim() : undefined;
+    byKey.set(`${sp}|${a.menuId || ''}|${a.finishedGoodProductId || ''}`, {
+      qty: roundQty(qty),
+      notes: a.notes != null ? (notes || '') : undefined,
+    });
+  }
+
+  return lines.map((line) => {
+    const key = `${line.servicePointId}|${line.menuId || ''}|${line.finishedGoodProductId || ''}`;
+    const actual = byKey.get(key);
+    const next = { ...line };
+    if (toStatus === 'PROCESSING') {
+      next.qtyDikirim = actual ? actual.qty : (line.qtyDikirim ?? line.qtyPorsi);
+      if (actual?.notes !== undefined) next.notes = actual.notes.trim() || undefined;
+    }
+    return next;
+  });
+}
+
+/**
+ * Selesaikan per titik: isi qtyDiterima + qtyDikembalikan (jumlah harus = qtyDikirim).
+ */
+export function applyDistSettleLines(
+  lines: DistributionLine[],
+  settles?: Array<{
+    servicePointId: string;
+    menuId?: string;
+    finishedGoodProductId?: string;
+    qtyDiterima: number;
+    qtyDikembalikan: number;
+    notes?: string;
+  }>,
+): DistributionLine[] | { error: string } {
+  const byKey = new Map<string, {
+    qtyDiterima: number;
+    qtyDikembalikan: number;
+    notes?: string;
+  }>();
+  for (const a of settles || []) {
+    const sp = String(a.servicePointId || '').trim();
+    if (!sp) continue;
+    const qtyDiterima = Number(a.qtyDiterima);
+    const qtyDikembalikan = Number(a.qtyDikembalikan);
+    if (!Number.isFinite(qtyDiterima) || qtyDiterima < 0) {
+      return { error: 'Qty diterima per titik harus ≥ 0' };
+    }
+    if (!Number.isFinite(qtyDikembalikan) || qtyDikembalikan < 0) {
+      return { error: 'Qty dikembalikan per titik harus ≥ 0' };
+    }
+    const notes = a.notes != null ? String(a.notes).trim() : undefined;
+    byKey.set(`${sp}|${a.menuId || ''}|${a.finishedGoodProductId || ''}`, {
+      qtyDiterima: roundQty(qtyDiterima),
+      qtyDikembalikan: roundQty(qtyDikembalikan),
+      notes: a.notes != null ? (notes || '') : undefined,
+    });
+  }
+
+  const out: DistributionLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const key = `${line.servicePointId}|${line.menuId || ''}|${line.finishedGoodProductId || ''}`;
+    const settle = byKey.get(key);
+    const next = { ...line };
+    if (next.qtyDikirim == null) next.qtyDikirim = line.qtyPorsi;
+    const sent = roundQty(Number(next.qtyDikirim) || 0);
+
+    if (settle) {
+      next.qtyDiterima = settle.qtyDiterima;
+      next.qtyDikembalikan = settle.qtyDikembalikan;
+      if (settle.notes !== undefined) next.notes = settle.notes.trim() || undefined;
+    } else if (next.qtyDiterima == null && next.qtyDikembalikan == null) {
+      // default: semua diterima, tidak ada retur
+      next.qtyDiterima = sent;
+      next.qtyDikembalikan = 0;
+    }
+
+    const recv = roundQty(Number(next.qtyDiterima) || 0);
+    const ret = roundQty(Number(next.qtyDikembalikan) || 0);
+    if (Math.abs(roundQty(recv + ret) - sent) > 0.0001) {
+      const nama = line.servicePointNama || line.servicePointKode || line.servicePointId;
+      return {
+        error: `Titik "${nama}": diterima (${recv}) + dikembalikan (${ret}) harus = dikirim (${sent})`,
+      };
+    }
+    out.push(next);
+  }
+  return out;
+}
+
+/** Movement qty for a status step (sum of relevant actual field). */
+export function movementQtyForStatus(lines: DistributionLine[], toStatus: string): number {
+  if (toStatus === 'PROCESSING') {
+    return roundQty(lines.reduce((s, l) => s + (Number(l.qtyDikirim ?? l.qtyPorsi) || 0), 0));
+  }
+  if (toStatus === 'COMPLETED') {
+    return roundQty(lines.reduce((s, l) => s + (Number(l.qtyDiterima) || 0) + (Number(l.qtyDikembalikan) || 0), 0));
+  }
+  return roundQty(lines.reduce((s, l) => s + (Number(l.qtyPorsi) || 0), 0));
 }
 
 /** Build draft packing lines: each plan/result line × each service point (equal split). */
@@ -199,6 +376,9 @@ export function allocatePorsiAcrossPoints(input: {
         servicePointId: sp.id,
         servicePointKode: sp.kode,
         servicePointNama: sp.nama,
+        kapasitasPorsi: Number.isFinite(Number(sp.kapasitasPorsi)) && Number(sp.kapasitasPorsi) > 0
+          ? Number(sp.kapasitasPorsi)
+          : undefined,
         menuId: item.menuId,
         menuKode: item.menuKode,
         menuNama: item.menuNama,

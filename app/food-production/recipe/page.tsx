@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,11 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
-import { BookOpen, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { isIngredientRole } from '@/lib/food-production/item-role';
+import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
+import ProductSearchSelect from '@/components/ProductSearchSelect';
+import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { str } from '@/types/json';
 
 interface ProductOpt {
   id: string;
@@ -32,14 +36,12 @@ interface RecipeRow {
   id: string;
   kode: string;
   nama: string;
-  finishedGoodProductId: string;
-  finishedGoodKode?: string;
-  finishedGoodNama?: string;
-  version: number;
+  finishedGoodProductId?: string;
   effectiveDate: string;
   yieldQty: number;
   wastePct?: number;
   catatan?: string;
+  gambarUrl?: string;
   lines: Array<{ productId: string; qty: number; satuan?: string; notes?: string; productNama?: string }>;
   aktif: boolean;
 }
@@ -50,6 +52,40 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function normalizeNama(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+/** Same productId → one row; qty summed. Keeps at most one empty row at end. */
+function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
+  const byId = new Map<string, RecipeLineForm>();
+  let hasEmpty = false;
+  for (const line of rows) {
+    const id = String(line.productId || '').trim();
+    if (!id) {
+      hasEmpty = true;
+      continue;
+    }
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, { ...line, productId: id });
+      continue;
+    }
+    const q1 = Number(existing.qty) || 0;
+    const q2 = Number(line.qty) || 0;
+    existing.qty = String(q1 + q2);
+    if (!existing.satuan && line.satuan) existing.satuan = line.satuan;
+    if (line.notes?.trim()) {
+      const a = existing.notes.trim();
+      const b = line.notes.trim();
+      if (a !== b) existing.notes = a ? `${a}; ${b}` : b;
+    }
+  }
+  const merged = [...byId.values()];
+  if (hasEmpty || merged.length === 0) merged.push(emptyLine());
+  return merged;
+}
+
 export default function FoodProductionRecipePage() {
   const [rows, setRows] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<ProductOpt[]>([]);
@@ -57,11 +93,13 @@ export default function FoodProductionRecipePage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<RecipeRow | null>(null);
   const [saving, setSaving] = useState(false);
+  const [nextKode, setNextKode] = useState('RSP-0001');
+  const [namaSuggestOpen, setNamaSuggestOpen] = useState(false);
+  const [loadedFrom, setLoadedFrom] = useState<{ kode: string; nama: string } | null>(null);
+  const namaWrapRef = useRef<HTMLDivElement>(null);
   const [form, setForm] = useState({
     kode: '',
     nama: '',
-    finishedGoodProductId: '',
-    version: '1',
     effectiveDate: today(),
     yieldQty: '100',
     wastePct: '',
@@ -69,18 +107,45 @@ export default function FoodProductionRecipePage() {
     aktif: true,
   });
   const [lines, setLines] = useState<RecipeLineForm[]>([emptyLine()]);
+  const [gambarPhotos, setGambarPhotos] = useState<string[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<{
+    summary?: { recipes: number; ready: number; blocked: number; productsAvailable?: number };
+    parseErrors?: string[];
+    recipes?: Array<{
+      nama: string;
+      ok: boolean;
+      yieldQty: number;
+      errors: string[];
+      lines: Array<{
+        bahanKode: string;
+        bahanNama: string;
+        qty: number;
+        match: string;
+        productKode?: string;
+        productNama?: string;
+      }>;
+    }>;
+    source: 'excel' | 'seed';
+    excelBase64?: string;
+  } | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rRes, pRes] = await Promise.all([
+      const [rRes, pRes, kRes] = await Promise.all([
         fetch('/api/recipes', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/products?limit=200&enrichUom=0', { headers: { ...actingTenantHeaders() } }),
+        fetch('/api/recipes?nextKode=1', { headers: { ...actingTenantHeaders() } }),
       ]);
       const rData = await rRes.json();
       const pData = await pRes.json();
+      const kData = await kRes.json();
       if (!rRes.ok) throw new Error(rData?.error || 'Gagal memuat resep');
       setRows(Array.isArray(rData) ? rData : []);
+      if (kRes.ok && kData?.kode) setNextKode(String(kData.kode));
       const list = Array.isArray(pData)
         ? pData
         : (Array.isArray(pData?.items) ? pData.items : (Array.isArray(pData?.data) ? pData.data : []));
@@ -103,23 +168,51 @@ export default function FoodProductionRecipePage() {
     void load();
   }, [load]);
 
-  const activeProducts = useMemo(() => products.filter((p) => p.aktif !== false), [products]);
-  const fgOptions = useMemo(
-    () => activeProducts.filter((p) => !p.itemRole || p.itemRole === 'FINISHED_GOOD' || p.itemRole === 'SEMI_FINISHED'),
-    [activeProducts],
-  );
-  const ingredientOptions = useMemo(
-    () => activeProducts.filter((p) => !p.itemRole || p.itemRole === 'INGREDIENT' || p.itemRole === 'PACKAGING' || p.itemRole === 'CONSUMABLE' || p.itemRole === 'SEMI_FINISHED'),
-    [activeProducts],
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!namaWrapRef.current?.contains(e.target as Node)) {
+        setNamaSuggestOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const filterIngredientProduct = useCallback(
+    (p: { itemRole?: unknown }) => isIngredientRole(p.itemRole),
+    [],
   );
 
-  function openCreate() {
+  const namaSuggestions = useMemo(() => {
+    if (editing) return [];
+    const q = normalizeNama(form.nama).toLowerCase();
+    if (q.length < 1) return [];
+    return rows
+      .filter((r) => r.aktif !== false)
+      .filter((r) => {
+        const n = normalizeNama(r.nama).toLowerCase();
+        const k = String(r.kode || '').toLowerCase();
+        return n.includes(q) || k.includes(q);
+      })
+      .slice(0, 8);
+  }, [editing, form.nama, rows]);
+
+  const exactNamaMatch = useMemo(() => {
+    const n = normalizeNama(form.nama).toLowerCase();
+    if (!n) return null;
+    return rows.find((r) => {
+      if (editing && r.id === editing.id) return false;
+      return r.aktif !== false && normalizeNama(r.nama).toLowerCase() === n;
+    }) || null;
+  }, [editing, form.nama, rows]);
+
+  async function openCreate() {
     setEditing(null);
+    setLoadedFrom(null);
+    setNamaSuggestOpen(false);
     setForm({
-      kode: '',
+      kode: nextKode,
       nama: '',
-      finishedGoodProductId: '',
-      version: '1',
       effectiveDate: today(),
       yieldQty: '100',
       wastePct: '',
@@ -127,16 +220,28 @@ export default function FoodProductionRecipePage() {
       aktif: true,
     });
     setLines([emptyLine()]);
+    setGambarPhotos([]);
     setOpen(true);
+    try {
+      const kRes = await fetch('/api/recipes?nextKode=1', { headers: { ...actingTenantHeaders() } });
+      const kData = await kRes.json();
+      if (kRes.ok && kData?.kode) {
+        const kode = String(kData.kode);
+        setNextKode(kode);
+        setForm((f) => ({ ...f, kode }));
+      }
+    } catch {
+      // keep cached nextKode
+    }
   }
 
   function openEdit(row: RecipeRow) {
     setEditing(row);
+    setLoadedFrom(null);
+    setNamaSuggestOpen(false);
     setForm({
       kode: row.kode,
       nama: row.nama,
-      finishedGoodProductId: row.finishedGoodProductId,
-      version: String(row.version || 1),
       effectiveDate: row.effectiveDate || today(),
       yieldQty: String(row.yieldQty || 1),
       wastePct: row.wastePct != null ? String(row.wastePct) : '',
@@ -153,23 +258,55 @@ export default function FoodProductionRecipePage() {
         }))
         : [emptyLine()],
     );
+    setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
     setOpen(true);
+  }
+
+  function applyFromExisting(row: RecipeRow) {
+    setForm((f) => ({
+      ...f,
+      nama: row.nama,
+      effectiveDate: row.effectiveDate || today(),
+      yieldQty: String(row.yieldQty || 1),
+      wastePct: row.wastePct != null ? String(row.wastePct) : '',
+      catatan: row.catatan || '',
+      aktif: true,
+    }));
+    setLines(
+      (row.lines || []).length
+        ? row.lines.map((l) => ({
+          productId: l.productId,
+          qty: String(l.qty),
+          satuan: l.satuan || '',
+          notes: l.notes || '',
+        }))
+        : [emptyLine()],
+    );
+    setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
+    setLoadedFrom({ kode: row.kode, nama: row.nama });
+    setNamaSuggestOpen(false);
+    toast.message(`Detail dimuat dari ${row.kode} — ubah nama untuk simpan sebagai resep baru`);
   }
 
   async function save() {
     setSaving(true);
     try {
+      const nama = normalizeNama(form.nama);
+      if (!nama) throw new Error('Nama resep wajib diisi');
+      if (!editing && exactNamaMatch) {
+        throw new Error(
+          `Resep "${exactNamaMatch.nama}" sudah ada (${exactNamaMatch.kode}). Ubah nama, atau batalkan jika sama.`,
+        );
+      }
       const payload = {
-        kode: form.kode.trim() || undefined,
-        nama: form.nama.trim(),
-        finishedGoodProductId: form.finishedGoodProductId,
-        version: Number(form.version) || 1,
+        nama,
         effectiveDate: form.effectiveDate,
         yieldQty: Number(form.yieldQty),
         wastePct: form.wastePct === '' ? null : Number(form.wastePct),
         catatan: form.catatan.trim() || undefined,
         aktif: form.aktif,
-        lines: lines
+        gambarBase64: gambarPhotos[0] || null,
+        lines: consolidateFormLines(lines)
           .filter((l) => l.productId)
           .map((l) => ({
             productId: l.productId,
@@ -197,18 +334,128 @@ export default function FoodProductionRecipePage() {
     }
   }
 
-  async function deactivate(row: RecipeRow) {
+  async function downloadTemplate() {
     try {
-      const res = await fetch(`/api/recipes/${row.id}`, {
+      const res = await fetch('/api/recipes/import-template', { headers: { ...actingTenantHeaders() } });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || 'Gagal unduh template');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'template-import-resep-sppg.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal unduh');
+    }
+  }
+
+  async function previewImport(payload: { excelBase64?: string; source?: 'excel' | 'seed' }) {
+    setImporting(true);
+    try {
+      const source = payload.source || 'excel';
+      const res = await fetch('/api/recipes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({
+          dryRun: true,
+          source,
+          ...(source === 'excel' ? { excelBase64: payload.excelBase64 || '' } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal preview');
+      setImportPreview({
+        ...data,
+        source,
+        excelBase64: payload.excelBase64,
+      });
+      if (data.summary?.ready === 0) {
+        toast.message('Belum ada resep siap — samakan nama/kode bahan dengan master Produk');
+      } else {
+        toast.success(`${data.summary.ready} resep siap import (${data.summary.blocked} perlu diperbaiki)`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal preview');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function onPickExcel(file: File | null) {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.xlsx') && !name.endsWith('.xls')) {
+      toast.error('Gunakan file Excel (.xlsx)');
+      return;
+    }
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const excelBase64 = btoa(binary);
+    await previewImport({ excelBase64, source: 'excel' });
+  }
+
+  async function commitImport() {
+    if (!importPreview?.recipes?.length) {
+      toast.error('Preview dulu (Excel atau paket contoh)');
+      return;
+    }
+    if (!(importPreview.summary?.ready)) {
+      toast.error('Tidak ada resep siap import');
+      return;
+    }
+    setImporting(true);
+    try {
+      const res = await fetch('/api/recipes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify(
+          importPreview.source === 'seed'
+            ? { source: 'seed', dryRun: false }
+            : { source: 'excel', excelBase64: importPreview.excelBase64 || '', dryRun: false },
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal import');
+      toast.success(
+        `Import ${data.summary?.created || 0} resep`
+        + (data.summary?.skipped ? ` · ${data.summary.skipped} dilewati` : ''),
+      );
+      setImportOpen(false);
+      setImportPreview(null);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal import');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function removeRecipe(row: RecipeRow) {
+    const hard = !row.aktif;
+    const okConfirm = window.confirm(
+      hard
+        ? `Hapus permanen resep ${row.kode} — ${row.nama}?`
+        : `Nonaktifkan resep ${row.kode} — ${row.nama}?`,
+    );
+    if (!okConfirm) return;
+    try {
+      const qs = hard ? '?hard=1' : '';
+      const res = await fetch(`/api/recipes/${row.id}${qs}`, {
         method: 'DELETE',
         headers: { ...actingTenantHeaders() },
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Gagal menonaktifkan');
-      toast.success('Resep dinonaktifkan');
+      if (!res.ok) throw new Error(data?.error || 'Gagal menghapus');
+      toast.success(hard ? 'Resep dihapus' : 'Resep dinonaktifkan');
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Gagal menonaktifkan');
+      toast.error(e instanceof Error ? e.message : 'Gagal menghapus');
     }
   }
 
@@ -222,13 +469,24 @@ export default function FoodProductionRecipePage() {
             Resep
           </h1>
           <p className="text-sm text-muted-foreground">
-            Food BOM — barang jadi, yield porsi, bahan, versi &amp; tanggal efektif
+            Master resep (BOM) + bank data via import Excel / paket contoh SPPG
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className="h-4 w-4 mr-1" />
             Muat ulang
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setImportPreview(null);
+              setImportOpen(true);
+            }}
+          >
+            <FileUp className="h-4 w-4 mr-1" />
+            Import bank
           </Button>
           <Button size="sm" onClick={openCreate}>
             <Plus className="h-4 w-4 mr-1" />
@@ -241,12 +499,11 @@ export default function FoodProductionRecipePage() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
+              <th className="text-left p-3 font-medium w-14">Gambar</th>
               <th className="text-left p-3 font-medium">Kode</th>
-              <th className="text-left p-3 font-medium">Nama</th>
-              <th className="text-left p-3 font-medium">Barang jadi</th>
-              <th className="text-left p-3 font-medium">Yield</th>
+              <th className="text-left p-3 font-medium">Nama Resep</th>
+              <th className="text-left p-3 font-medium">Hasil</th>
               <th className="text-left p-3 font-medium">Efektif</th>
-              <th className="text-left p-3 font-medium">Ver</th>
               <th className="text-left p-3 font-medium">Status</th>
               <th className="p-3" />
             </tr>
@@ -254,36 +511,47 @@ export default function FoodProductionRecipePage() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-muted-foreground">Memuat…</td>
+                <td colSpan={7} className="p-6 text-center text-muted-foreground">Memuat…</td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                <td colSpan={7} className="p-6 text-center text-muted-foreground">
                   Belum ada resep. Buat resep sebelum Menu / Rencana Produksi.
                 </td>
               </tr>
             )}
             {rows.map((row) => (
               <tr key={row.id} className="border-t">
+                <td className="p-2">
+                  {row.gambarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={row.gambarUrl}
+                      alt={row.nama}
+                      className="h-10 w-10 rounded object-cover border bg-muted"
+                    />
+                  ) : (
+                    <div className="h-10 w-10 rounded border bg-muted/40" />
+                  )}
+                </td>
                 <td className="p-3 font-mono text-xs">{row.kode}</td>
                 <td className="p-3 font-medium">{row.nama}</td>
-                <td className="p-3">
-                  {row.finishedGoodNama || row.finishedGoodKode || row.finishedGoodProductId}
-                </td>
                 <td className="p-3">{row.yieldQty} porsi</td>
                 <td className="p-3 whitespace-nowrap">{row.effectiveDate || '—'}</td>
-                <td className="p-3">v{row.version}</td>
                 <td className="p-3">{row.aktif ? 'Aktif' : 'Nonaktif'}</td>
                 <td className="p-3 text-right whitespace-nowrap">
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="Ubah">
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  {row.aktif && (
-                    <Button variant="ghost" size="sm" onClick={() => void deactivate(row)}>
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void removeRecipe(row)}
+                    title={row.aktif ? 'Nonaktifkan' : 'Hapus permanen'}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -298,43 +566,75 @@ export default function FoodProductionRecipePage() {
           </DialogHeader>
           <div className="grid gap-3 py-2 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>Nama *</Label>
-              <Input
-                value={form.nama}
-                onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))}
-                placeholder="Nasi Ayam 100 porsi"
-              />
-            </div>
-            <div className="space-y-1">
               <Label>Kode</Label>
               <Input
                 value={form.kode}
-                onChange={(e) => setForm((f) => ({ ...f, kode: e.target.value }))}
-                placeholder="Otomatis jika kosong"
-                className="font-mono"
+                readOnly
+                disabled
+                className="font-mono bg-muted"
               />
-            </div>
-            <div className="space-y-1 sm:col-span-2">
-              <Label>Barang jadi *</Label>
-              <select
-                className="w-full border rounded-md px-3 py-2 text-sm bg-white"
-                value={form.finishedGoodProductId}
-                onChange={(e) => setForm((f) => ({ ...f, finishedGoodProductId: e.target.value }))}
-              >
-                <option value="">— Pilih produk —</option>
-                {(fgOptions.length ? fgOptions : activeProducts).map((p) => (
-                  <option key={p.id} value={p.id}>{p.kode} — {p.nama}</option>
-                ))}
-              </select>
+              <p className="text-xs text-muted-foreground">
+                {editing ? 'Kode tidak dapat diubah' : 'Nomor item otomatis (RSP-0001, …)'}
+              </p>
             </div>
             <div className="space-y-1">
-              <Label>Yield (porsi) *</Label>
+              <Label>Hasil (porsi) *</Label>
               <Input
                 type="number"
                 min={1}
                 value={form.yieldQty}
                 onChange={(e) => setForm((f) => ({ ...f, yieldQty: e.target.value }))}
               />
+            </div>
+            <div className="space-y-1 sm:col-span-2" ref={namaWrapRef}>
+              <Label>Nama Resep *</Label>
+              <Input
+                value={form.nama}
+                autoComplete="off"
+                placeholder="Ketik nama resep…"
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, nama: e.target.value }));
+                  setNamaSuggestOpen(true);
+                  if (loadedFrom) setLoadedFrom(null);
+                }}
+                onFocus={() => {
+                  if (!editing) setNamaSuggestOpen(true);
+                }}
+              />
+              {!editing && namaSuggestOpen && namaSuggestions.length > 0 && (
+                <ul className="mt-1 max-h-44 overflow-y-auto rounded-md border bg-white shadow-sm text-sm z-10 relative">
+                  {namaSuggestions.map((r) => (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-muted/80"
+                        onClick={() => applyFromExisting(r)}
+                      >
+                        <span className="font-medium">{r.nama}</span>
+                        <span className="ml-2 font-mono text-xs text-muted-foreground">{r.kode}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {r.yieldQty} porsi · {(r.lines || []).length} bahan — klik untuk muat detail
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Identitas resep (bukan master Produk). Ketik untuk cari &amp; muat bahan dari resep lama;
+                simpan wajib nama berbeda.
+              </p>
+              {loadedFrom && (
+                <p className="text-xs text-amber-700">
+                  Detail dimuat dari {loadedFrom.kode} ({loadedFrom.nama}). Ubah nama sebelum simpan
+                  sebagai resep baru; jika sama persis, batalkan saja.
+                </p>
+              )}
+              {!editing && exactNamaMatch && (
+                <p className="text-xs text-destructive">
+                  Nama sudah dipakai {exactNamaMatch.kode}. Ubah nama atau batalkan.
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Waste % (opsional)</Label>
@@ -344,15 +644,6 @@ export default function FoodProductionRecipePage() {
                 max={100}
                 value={form.wastePct}
                 onChange={(e) => setForm((f) => ({ ...f, wastePct: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>Versi</Label>
-              <Input
-                type="number"
-                min={1}
-                value={form.version}
-                onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))}
               />
             </div>
             <div className="space-y-1">
@@ -369,6 +660,15 @@ export default function FoodProductionRecipePage() {
                 value={form.catatan}
                 onChange={(e) => setForm((f) => ({ ...f, catatan: e.target.value }))}
                 placeholder="Opsional"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <PhotoUploadField
+                label="Gambar"
+                hint="Opsional. Maks. 1 foto, otomatis dikompres sebelum disimpan."
+                photos={gambarPhotos}
+                onChange={setGambarPhotos}
+                maxPhotos={1}
               />
             </div>
             {editing && (
@@ -396,72 +696,217 @@ export default function FoodProductionRecipePage() {
                 Baris
               </Button>
             </div>
-            {lines.map((line, idx) => (
-              <div key={idx} className="grid gap-2 sm:grid-cols-12 items-end border rounded-md p-2">
-                <div className="sm:col-span-6 space-y-1">
-                  <Label className="text-xs">Produk</Label>
-                  <select
-                    className="w-full border rounded-md px-2 py-1.5 text-sm bg-white"
-                    value={line.productId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      const p = products.find((x) => x.id === id);
-                      setLines((prev) => prev.map((l, i) => (
-                        i === idx
-                          ? { ...l, productId: id, satuan: p?.satuan || l.satuan }
-                          : l
-                      )));
-                    }}
-                  >
-                    <option value="">— Bahan —</option>
-                    {(ingredientOptions.length ? ingredientOptions : activeProducts).map((p) => (
-                      <option key={p.id} value={p.id}>{p.kode} — {p.nama}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Qty</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="any"
-                    value={line.qty}
-                    onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                      i === idx ? { ...l, qty: e.target.value } : l
-                    )))}
-                  />
-                </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Satuan</Label>
-                  <Input
-                    value={line.satuan}
-                    onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                      i === idx ? { ...l, satuan: e.target.value } : l
-                    )))}
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={lines.length <= 1}
-                    onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+            <div className="rounded-md border overflow-hidden">
+              <div className="hidden sm:grid sm:grid-cols-12 gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
+                <div className="sm:col-span-6">Produk</div>
+                <div className="sm:col-span-2">Qty</div>
+                <div className="sm:col-span-2">Satuan</div>
+                <div className="sm:col-span-2" />
               </div>
-            ))}
+              <div className="divide-y">
+                {lines.map((line, idx) => (
+                  <div key={idx} className="grid gap-2 sm:grid-cols-12 items-center px-2 py-1.5">
+                    <div className="sm:col-span-6">
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Produk</span>
+                      <ProductSearchSelect
+                        value={line.productId}
+                        withWarehouseStock={false}
+                        placeholder="Ketik kode / nama bahan…"
+                        selectedProduct={
+                          line.productId
+                            ? (products.find((p) => p.id === line.productId) as unknown as Record<string, unknown> | undefined)
+                              || null
+                            : null
+                        }
+                        filterProduct={filterIngredientProduct}
+                        onChange={(id) => {
+                          // Clear only — selection + consolidate handled in onProductPick.
+                          if (id) return;
+                          setLines((prev) => prev.map((l, i) => (
+                            i === idx ? { ...l, productId: '' } : l
+                          )));
+                        }}
+                        onProductPick={(p) => {
+                          const productId = str(p.id);
+                          const satuan = str(p.satuan);
+                          setLines((prev) => {
+                            const existingIdx = prev.findIndex(
+                              (l, i) => i !== idx && l.productId === productId,
+                            );
+                            if (existingIdx >= 0) {
+                              const addQty = Number(prev[idx]?.qty) || 0;
+                              const next = prev
+                                .map((l, i) => {
+                                  if (i !== existingIdx) return l;
+                                  return {
+                                    ...l,
+                                    qty: String((Number(l.qty) || 0) + addQty),
+                                    satuan: satuan || l.satuan,
+                                  };
+                                })
+                                .filter((_, i) => i !== idx);
+                              toast.message('Bahan sama digabung — qty dijumlahkan');
+                              return next.length ? next : [emptyLine()];
+                            }
+                            return consolidateFormLines(
+                              prev.map((l, i) => (
+                                i === idx
+                                  ? { ...l, productId, satuan: satuan || l.satuan }
+                                  : l
+                              )),
+                            );
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Qty</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={line.qty}
+                        aria-label={`Qty baris ${idx + 1}`}
+                        onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                          i === idx ? { ...l, qty: e.target.value } : l
+                        )))}
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Satuan</span>
+                      <Input
+                        value={line.satuan}
+                        aria-label={`Satuan baris ${idx + 1}`}
+                        onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                          i === idx ? { ...l, satuan: e.target.value } : l
+                        )))}
+                      />
+                    </div>
+                    <div className="sm:col-span-2 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={lines.length <= 1}
+                        aria-label={`Hapus baris ${idx + 1}`}
+                        onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
             <Button
               onClick={() => void save()}
-              disabled={saving || !form.nama.trim() || !form.finishedGoodProductId}
+              disabled={saving || !normalizeNama(form.nama) || (!editing && !!exactNamaMatch)}
             >
               {saving ? 'Menyimpan…' : 'Simpan'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={importOpen}
+        onOpenChange={(o) => {
+          setImportOpen(o);
+          if (!o) setImportPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Import bank resep SPPG</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm py-1">
+            <p className="text-muted-foreground">
+              Isi Excel (.xlsx) resep operasional → sistem memetakan bahan ke master Produk (kode/nama).
+              Hanya resep yang semua bahannya ketemu yang diimpor.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => void downloadTemplate()}>
+                <Download className="h-4 w-4 mr-1" /> Unduh template Excel
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={importing}
+                onClick={() => fileRef.current?.click()}
+              >
+                <FileUp className="h-4 w-4 mr-1" /> Pilih file Excel
+              </Button>
+              <Button
+                size="sm"
+                disabled={importing}
+                onClick={() => void previewImport({ source: 'seed' })}
+              >
+                Paket contoh SPPG
+              </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                className="hidden"
+                onChange={(e) => {
+                  void onPickExcel(e.target.files?.[0] || null);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+
+            {importPreview && (
+              <div className="space-y-2 rounded-md border p-3 bg-muted/20">
+                <div className="font-medium">
+                  Preview: {importPreview.summary?.ready ?? 0} siap
+                  {' · '}
+                  {importPreview.summary?.blocked ?? 0} perlu perbaikan
+                  {' · '}
+                  produk bahan tersedia: {importPreview.summary?.productsAvailable ?? 0}
+                </div>
+                {(importPreview.parseErrors || []).length > 0 && (
+                  <ul className="text-xs text-destructive list-disc pl-4">
+                    {importPreview.parseErrors!.map((e) => <li key={e}>{e}</li>)}
+                  </ul>
+                )}
+                <div className="max-h-64 overflow-y-auto space-y-2">
+                  {(importPreview.recipes || []).map((r) => (
+                    <div
+                      key={r.nama}
+                      className={`rounded border px-2 py-1.5 text-xs ${r.ok ? 'border-emerald-300 bg-emerald-50/50' : 'border-amber-300 bg-amber-50/50'}`}
+                    >
+                      <div className="font-medium">
+                        {r.ok ? '✓' : '!'} {r.nama} · {r.yieldQty} porsi · {r.lines.length} bahan
+                      </div>
+                      {!r.ok && r.errors[0] && (
+                        <div className="text-amber-900">{r.errors[0]}</div>
+                      )}
+                      <div className="text-muted-foreground mt-0.5">
+                        {r.lines.map((l) => (
+                          <span key={`${r.nama}-${l.bahanKode}-${l.bahanNama}-${l.qty}`} className="mr-2">
+                            {l.match === 'none'
+                              ? `✗ ${l.bahanKode || l.bahanNama}`
+                              : `→ ${l.productKode || l.productNama}`}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportOpen(false)}>Batal</Button>
+            <Button
+              onClick={() => void commitImport()}
+              disabled={importing || !(importPreview?.summary?.ready)}
+            >
+              {importing ? 'Memproses…' : `Import ${importPreview?.summary?.ready || 0} resep siap`}
             </Button>
           </DialogFooter>
         </DialogContent>

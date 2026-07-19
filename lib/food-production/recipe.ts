@@ -12,13 +12,21 @@ export interface RecipeLine {
   notes?: string;
 }
 
+export function normalizeRecipeNama(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
 export interface RecipeDoc {
   id: string;
   tenantId: string;
   kode: string;
+  /** Recipe identity (independent from product master). */
   nama: string;
-  /** Finished good / output product (itemRole FINISHED_GOOD recommended). */
-  finishedGoodProductId: string;
+  /**
+   * Optional stock output product for hasil produksi.
+   * Not required on recipe master — link later / at production if needed.
+   */
+  finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
   version: number;
@@ -29,9 +37,37 @@ export interface RecipeDoc {
   wastePct?: number;
   lines: RecipeLine[];
   catatan?: string;
+  /** Optional recipe photo (stored via media API). */
+  gambarUrl?: string;
+  gambarMediaFile?: string;
   aktif: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Merge lines with the same productId — sum qty, keep first satuan/notes. */
+export function consolidateRecipeLines(lines: RecipeLine[]): RecipeLine[] {
+  const byId = new Map<string, RecipeLine>();
+  for (const line of lines) {
+    const productId = String(line.productId || '').trim();
+    if (!productId) continue;
+    const existing = byId.get(productId);
+    if (!existing) {
+      byId.set(productId, { ...line, productId, qty: Number(line.qty) || 0 });
+      continue;
+    }
+    existing.qty = (Number(existing.qty) || 0) + (Number(line.qty) || 0);
+    if (!existing.satuan && line.satuan) existing.satuan = line.satuan;
+    if (!existing.uomId && line.uomId) existing.uomId = line.uomId;
+    if (!existing.productKode && line.productKode) existing.productKode = line.productKode;
+    if (!existing.productNama && line.productNama) existing.productNama = line.productNama;
+    if (line.notes) {
+      const a = String(existing.notes || '').trim();
+      const b = String(line.notes).trim();
+      if (b && a !== b) existing.notes = a ? `${a}; ${b}` : b;
+    }
+  }
+  return [...byId.values()];
 }
 
 export function normalizeRecipeLines(
@@ -42,7 +78,6 @@ export function normalizeRecipeLines(
     return { error: 'Resep wajib punya minimal 1 baris bahan' };
   }
   const lines: RecipeLine[] = [];
-  const seen = new Set<string>();
   const fgId = options?.finishedGoodProductId?.trim() || '';
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
@@ -53,10 +88,6 @@ export function normalizeRecipeLines(
     if (fgId && productId === fgId) {
       return { error: `Baris ${i + 1}: barang jadi tidak boleh jadi bahan di resep yang sama` };
     }
-    if (seen.has(productId)) {
-      return { error: `Bahan duplikat pada baris ${i + 1}` };
-    }
-    seen.add(productId);
     lines.push({
       productId,
       productKode: row.productKode != null ? String(row.productKode) : undefined,
@@ -67,7 +98,12 @@ export function normalizeRecipeLines(
       notes: row.notes != null ? String(row.notes).trim() || undefined : undefined,
     });
   }
-  return lines;
+  const merged = consolidateRecipeLines(lines);
+  if (!merged.length) return { error: 'Resep wajib punya minimal 1 baris bahan' };
+  for (const line of merged) {
+    if (!(line.qty > 0)) return { error: `Qty bahan ${line.productNama || line.productId} harus > 0` };
+  }
+  return merged;
 }
 
 export function todayIsoDate(): string {

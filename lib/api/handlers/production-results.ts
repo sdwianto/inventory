@@ -24,6 +24,7 @@ import {
   assertResultStockGate,
   assertPlanCanComplete,
   postingDateFromIso,
+  resultHasStockableLines,
   type ProductionResultDoc,
   type ProductionResultStatus,
 } from '@/lib/food-production/production-result';
@@ -149,12 +150,15 @@ async function seedResultLines(
   });
   if (!built.ok) return { error: built.error };
 
+  // Only validate product master for lines that actually have FG (manufaktur).
   for (const line of built.lines) {
-    const p = prodById.get(line.finishedGoodProductId);
-    if (!p) return { error: `Finished good ${line.finishedGoodProductId} tidak ditemukan` };
+    const fgId = String(line.finishedGoodProductId || '').trim();
+    if (!fgId) continue;
+    const p = prodById.get(fgId);
+    if (!p) return { error: `Finished good ${fgId} tidak ditemukan` };
     if (p.aktif === false) {
       return {
-        error: `Finished good "${String(p.nama || p.kode || line.finishedGoodProductId)}" tidak aktif`,
+        error: `Finished good "${String(p.nama || p.kode || fgId)}" tidak aktif`,
       };
     }
     if (p.satuan) line.satuan = String(p.satuan);
@@ -168,8 +172,10 @@ async function assertResultProductsActive(
   tenantId: string,
   lines: ProductionResultDoc['lines'],
 ): Promise<string | null> {
-  const ids = [...new Set(lines.map((l) => l.finishedGoodProductId).filter(Boolean))];
-  if (!ids.length) return 'Tidak ada baris hasil';
+  const ids = [...new Set(
+    lines.map((l) => String(l.finishedGoodProductId || '').trim()).filter(Boolean),
+  )];
+  if (!ids.length) return null; // MBG: no FG stock products
   const products = await db.collection('products')
     .find({ tenantId, id: { $in: ids } })
     .project({ id: 1, nama: 1, kode: 1, aktif: 1 })
@@ -214,32 +220,35 @@ async function postResultStock(
   db: HandlerContext['db'],
   doc: ProductionResultDoc,
   session?: ClientSession,
-): Promise<{ error: string } | { ok: true }> {
-  if (!session) {
-    return {
-      error: 'Posting stok Result membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
-    };
-  }
+): Promise<{ error: string } | { ok: true; postedLines: number }> {
+  let postedLines = 0;
   for (const line of doc.lines) {
+    const fgId = String(line.finishedGoodProductId || '').trim();
     const qty = Number(line.actualPorsi);
-    if (!(qty > 0)) continue;
+    if (!fgId || !(qty > 0)) continue; // MBG / empty FG — skip stock
+    if (!session) {
+      return {
+        error: 'Posting stok Result membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
+      };
+    }
     const posted = await postStockMutation(db, {
       tenantId: doc.tenantId,
-      productId: line.finishedGoodProductId,
+      productId: fgId,
       warehouseKode: doc.warehouseKode,
       deltaQtyBase: qty,
       sourceType: 'FP_RESULT',
       noTransaksi: doc.noDokumen,
-      keterangan: `Hasil produksi ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || line.finishedGoodProductId}`,
+      keterangan: `Hasil produksi ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || fgId}`,
       satuan: line.satuan,
       qtyEntered: qty,
       session,
     });
     if (!posted.ok) {
-      return { error: posted.error || `Gagal post stok ${line.finishedGoodProductId}` };
+      return { error: posted.error || `Gagal post stok ${fgId}` };
     }
+    postedLines += 1;
   }
-  return { ok: true };
+  return { ok: true, postedLines };
 }
 
 async function maybeCompletePlan(
@@ -256,10 +265,15 @@ async function maybeCompletePlan(
     }),
     txOpts(session),
   );
+  const completedResult = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { productionPlanId: planId, status: 'COMPLETED' }),
+    txOpts(session),
+  );
   if (!assertPlanCanComplete({
     hasCompletedIssue: issueGate.hasCompletedIssue,
     hasOpenIssue: issueGate.hasOpenIssue,
     hasOpenResult: Boolean(openResult),
+    hasCompletedResult: Boolean(completedResult),
   })) {
     return;
   }
@@ -313,7 +327,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     ) as ProductionPlanDoc | null;
     if (!plan) return err('Rencana produksi tidak ditemukan', 404);
     if (!RESULT_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
-      return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses)`, 400);
+      return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses, atau Selesai untuk catch-up)`, 400);
     }
 
     const open = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
@@ -325,6 +339,17 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     if (open) {
       return err(
         `Sudah ada hasil terbuka ${String((open as { noDokumen?: string }).noDokumen || open.id)}`,
+        400,
+      );
+    }
+
+    const existingCompleted = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, status: 'COMPLETED' }),
+      { projection: { id: 1, noDokumen: 1 } },
+    );
+    if (existingCompleted) {
+      return err(
+        `Hasil ${String(existingCompleted.noDokumen || existingCompleted.id)} sudah selesai untuk rencana ini`,
         400,
       );
     }
@@ -512,23 +537,26 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     const now = new Date();
 
     if (toStatus === 'COMPLETED') {
-      if (existing.stockPostedAt) return err('Stok sudah diposting', 400);
+      if (existing.stockPostedAt) return err('Dokumen sudah diselesaikan', 400);
+      const needsStock = resultHasStockableLines(existing.lines);
       const productErr = await assertResultProductsActive(db, existing.tenantId, existing.lines);
       if (productErr) return err(productErr, 400);
       const issueGate = await loadIssueGate(db, scopeAuth, existing.productionPlanId);
       const gateErr = assertResultStockGate(issueGate);
       if (gateErr) return err(gateErr, 400);
-      const locked = await guardPosting(
-        db,
-        scopeAuth,
-        resultBody,
-        postingDateFromIso(existing.tanggal),
-      );
-      if (locked) return locked;
+      if (needsStock) {
+        const locked = await guardPosting(
+          db,
+          scopeAuth,
+          resultBody,
+          postingDateFromIso(existing.tanggal),
+        );
+        if (locked) return locked;
+      }
 
       try {
         await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-          if (!session) {
+          if (needsStock && !session) {
             throw Object.assign(
               new Error('Posting stok Result membutuhkan transaksi MongoDB (replica set)'),
               { httpStatus: 503 },
@@ -561,7 +589,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             txOpts(session),
           ) as KitchenDoc | null;
           const expiryRaw = String(resultBody.expiryDate || '').trim();
-          const expiryDate = /^\d{4}-\d{2}-\d{2}$/.test(expiryRaw)
+          const expiryDate = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$/.test(expiryRaw)
             ? expiryRaw
             : defaultExpiryDate(fresh.tanggal);
           const batchNo = String(resultBody.batchNo || '').trim() || buildBatchNo({
@@ -570,13 +598,16 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             kitchenKode: kitchen?.kode,
           });
 
+          const defaultNote = posted.postedLines > 0
+            ? `Stok masuk FG · batch ${batchNo}`
+            : `Selesai MBG (porsi dicatat, tanpa post stok FG) · batch ${batchNo}`;
           const history = appendDocHistory(fresh.history, {
             at: now,
             fromStatus: fresh.status,
             toStatus: 'COMPLETED',
             userId: actor.userId,
             userName: actor.userName,
-            note: String(resultBody.note || '').trim() || `Stok masuk FG · batch ${batchNo}`,
+            note: String(resultBody.note || '').trim() || defaultNote,
           });
           await txDb.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
             withTenantFilter(scopeAuth, { id }),
@@ -597,10 +628,18 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
           for (const line of fresh.lines) {
             const qty = Number(line.actualPorsi);
             if (!(qty > 0)) continue;
+            const suffix = String(
+              line.finishedGoodKode
+              || line.recipeKode
+              || line.menuKode
+              || line.finishedGoodProductId
+              || line.recipeId
+              || 'LINE',
+            ).slice(0, 12);
             batchDocs.push({
               id: uuidv4(),
               tenantId: fresh.tenantId,
-              batchNo: `${batchNo}-${String(line.finishedGoodKode || line.finishedGoodProductId).slice(0, 12)}`,
+              batchNo: `${batchNo}-${suffix}`,
               productionResultId: fresh.id,
               productionResultNo: fresh.noDokumen,
               productionPlanId: fresh.productionPlanId,
@@ -611,7 +650,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
               producedAt: fresh.tanggal,
               expiryDate,
               finishedGoodProductId: line.finishedGoodProductId,
-              finishedGoodNama: line.finishedGoodNama || line.finishedGoodKode,
+              finishedGoodNama: line.finishedGoodNama || line.recipeNama || line.menuNama || line.finishedGoodKode,
               qty,
               satuan: line.satuan,
               status: 'ACTIVE',
@@ -646,7 +685,9 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
         action: 'RESULT_COMPLETE',
         entityType: 'production_result',
         entityId: id,
-        summary: `Result ${existing.noDokumen} selesai — stok FG masuk`,
+        summary: needsStock
+          ? `Result ${existing.noDokumen} selesai — stok FG masuk`
+          : `Result ${existing.noDokumen} selesai — MBG tanpa post stok FG`,
         ...auditActor(auth),
       });
       return ok(project(saved as Record<string, unknown>));
@@ -691,7 +732,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     if (!existing) return err('Hasil produksi tidak ditemukan', 404);
     if (existing.status === 'CANCELLED') return ok({ id: path[1], status: 'CANCELLED' });
     if (existing.status === 'COMPLETED') {
-      return err('Dokumen selesai tidak dapat dibatalkan (stok sudah masuk)', 400);
+      return err('Dokumen selesai tidak dapat dibatalkan', 400);
     }
     const transitionErr = assertStatusTransition(existing.status, 'CANCELLED', RESULT_STATUS_TRANSITIONS);
     if (transitionErr) return err(transitionErr, 400);

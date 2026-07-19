@@ -14,7 +14,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { MapPinned, Plus, Pencil, RefreshCw, Power } from 'lucide-react';
+import { MapPinned, Plus, Pencil, RefreshCw, Power, Trash2 } from 'lucide-react';
 import {
   SERVICE_POINT_JENIS_LABELS,
   type ServicePointJenis,
@@ -33,6 +33,7 @@ interface SpRow {
   alamat?: string;
   kapasitasPorsi?: number;
   pic?: string;
+  picNoTelp?: string;
   aktif: boolean;
 }
 
@@ -44,7 +45,24 @@ const emptyForm = {
   alamat: '',
   kapasitasPorsi: '',
   pic: '',
+  picNoTelp: '',
 };
+
+const SERVICE_POINT_JENIS_OPTIONS: Array<{ value: ServicePointJenis; label: string }> = [
+  { value: 'SEKOLAH', label: 'Sekolah' },
+  { value: 'POSYANDU', label: 'Posyandu' },
+  { value: 'LAINNYA', label: 'Lainya' },
+];
+
+function nextServicePointKode(rows: SpRow[]): string {
+  let max = 0;
+  for (const row of rows) {
+    const match = /^Ti-(\d+)$/i.exec(String(row.kode || '').trim());
+    if (!match) continue;
+    max = Math.max(max, Number(match[1]) || 0);
+  }
+  return `Ti-${String(max + 1).padStart(2, '0')}`;
+}
 
 export default function ServicePointPage() {
   const confirm = useConfirm();
@@ -89,7 +107,7 @@ export default function ServicePointPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, kode: nextServicePointKode(rows) });
     setOpen(true);
   }
 
@@ -103,6 +121,7 @@ export default function ServicePointPage() {
       alamat: row.alamat || '',
       kapasitasPorsi: row.kapasitasPorsi != null ? String(row.kapasitasPorsi) : '',
       pic: row.pic || '',
+      picNoTelp: row.picNoTelp || '',
     });
     setOpen(true);
   }
@@ -123,6 +142,7 @@ export default function ServicePointPage() {
           alamat: form.alamat || undefined,
           kapasitasPorsi: form.kapasitasPorsi ? Number(form.kapasitasPorsi) : undefined,
           pic: form.pic || undefined,
+          picNoTelp: form.picNoTelp || undefined,
         }),
       });
       const data = await res.json();
@@ -172,6 +192,27 @@ export default function ServicePointPage() {
     await load();
   }
 
+  async function deleteRow(row: SpRow) {
+    const okConfirm = await confirm({
+      title: 'Hapus titik layanan?',
+      description: `${row.kode || ''} ${row.nama} — data akan dihapus permanen.`,
+      confirmText: 'Hapus',
+      variant: 'destructive',
+    });
+    if (!okConfirm) return;
+    const res = await fetch(`/api/service-points/${row.id}?permanent=1`, {
+      method: 'DELETE',
+      headers: { ...actingTenantHeaders() },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast.error(data?.error || 'Gagal menghapus');
+      return;
+    }
+    toast.success('Titik dihapus');
+    await load();
+  }
+
   return (
     <div className="space-y-4 p-4 md:p-6">
       <OperationalScopeBar />
@@ -207,33 +248,40 @@ export default function ServicePointPage() {
               <th className="text-left p-3">Jenis</th>
               <th className="text-left p-3">Dapur</th>
               <th className="text-right p-3">Kapasitas</th>
+              <th className="text-left p-3">PIC</th>
+              <th className="text-left p-3">No Telp</th>
               <th className="text-left p-3">Status</th>
               <th className="p-3" />
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Belum ada titik layanan</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Belum ada titik layanan</td></tr>
             )}
             {rows.map((row) => (
               <tr key={row.id} className="border-t">
                 <td className="p-3 font-mono text-xs">{row.kode || '—'}</td>
                 <td className="p-3 font-medium">{row.nama}</td>
-                <td className="p-3">{SERVICE_POINT_JENIS_LABELS[row.jenis || 'LAINNYA']}</td>
+                <td className="p-3">{SERVICE_POINT_JENIS_LABELS[row.jenis || 'LAINNYA'] || 'Lainya'}</td>
                 <td className="p-3">{row.kitchenNama || '—'}</td>
                 <td className="p-3 text-right">{row.kapasitasPorsi ?? '—'}</td>
+                <td className="p-3">{row.pic || '—'}</td>
+                <td className="p-3 font-mono text-xs">{row.picNoTelp || '—'}</td>
                 <td className="p-3">{row.aktif ? 'Aktif' : 'Nonaktif'}</td>
                 <td className="p-3 text-right space-x-1">
                   {canManage && (
                     <>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                      <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="Ubah">
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => void toggleAktif(row)} title={row.aktif ? 'Nonaktifkan' : 'Aktifkan'}>
                         <Power className={`h-4 w-4 ${row.aktif ? 'text-destructive' : 'text-emerald-600'}`} />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => void deleteRow(row)} title="Hapus">
+                        <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </>
                   )}
@@ -245,53 +293,77 @@ export default function ServicePointPage() {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? 'Ubah Titik' : 'Tambah Titik'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <div className="space-y-1">
-              <Label>Kode</Label>
-              <Input value={form.kode} onChange={(e) => setForm((f) => ({ ...f, kode: e.target.value }))} placeholder="SD-01" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Kode</Label>
+                <Input
+                  value={form.kode}
+                  readOnly
+                  placeholder="Ti-01"
+                  className="bg-muted/40"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Jenis</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm"
+                  value={form.jenis}
+                  onChange={(e) => setForm((f) => ({ ...f, jenis: e.target.value as ServicePointJenis }))}
+                >
+                  {SERVICE_POINT_JENIS_OPTIONS.map((j) => (
+                    <option key={j.value} value={j.value}>{j.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Nama</Label>
               <Input value={form.nama} onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))} placeholder="SDN 01" />
             </div>
-            <div className="space-y-1">
-              <Label>Jenis</Label>
-              <select
-                className="w-full h-10 border rounded-md px-2 text-sm"
-                value={form.jenis}
-                onChange={(e) => setForm((f) => ({ ...f, jenis: e.target.value as ServicePointJenis }))}
-              >
-                {(Object.keys(SERVICE_POINT_JENIS_LABELS) as ServicePointJenis[]).map((j) => (
-                  <option key={j} value={j}>{SERVICE_POINT_JENIS_LABELS[j]}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label>Dapur penyalur</Label>
-              <select
-                className="w-full h-10 border rounded-md px-2 text-sm"
-                value={form.kitchenId}
-                onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
-              >
-                <option value="">—</option>
-                {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label>Kapasitas porsi</Label>
-              <Input type="number" value={form.kapasitasPorsi} onChange={(e) => setForm((f) => ({ ...f, kapasitasPorsi: e.target.value }))} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Dapur penyalur</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm"
+                  value={form.kitchenId}
+                  onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
+                >
+                  <option value="">—</option>
+                  {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Kapasitas produksi</Label>
+                <Input
+                  type="number"
+                  value={form.kapasitasPorsi}
+                  onChange={(e) => setForm((f) => ({ ...f, kapasitasPorsi: e.target.value }))}
+                />
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Alamat</Label>
               <Input value={form.alamat} onChange={(e) => setForm((f) => ({ ...f, alamat: e.target.value }))} />
             </div>
-            <div className="space-y-1">
-              <Label>PIC</Label>
-              <Input value={form.pic} onChange={(e) => setForm((f) => ({ ...f, pic: e.target.value }))} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>PIC</Label>
+                <Input value={form.pic} onChange={(e) => setForm((f) => ({ ...f, pic: e.target.value }))} placeholder="Nama penanggung jawab" />
+              </div>
+              <div className="space-y-1">
+                <Label>No Telp</Label>
+                <Input
+                  value={form.picNoTelp}
+                  onChange={(e) => setForm((f) => ({ ...f, picNoTelp: e.target.value }))}
+                  placeholder="08xxxxxxxxxx"
+                  inputMode="tel"
+                />
+              </div>
             </div>
           </div>
           <DialogFooter>

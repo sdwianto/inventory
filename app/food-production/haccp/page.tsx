@@ -171,6 +171,8 @@ export default function HaccpPage() {
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
       toast.success('Checklist disimpan');
       setDetail(data as HaccpRow);
+      setEditItems((data as HaccpRow).items || editItems);
+      setDetailPhotos((data as HaccpRow).evidenceUrls || detailPhotos);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
@@ -185,6 +187,22 @@ export default function HaccpPage() {
     if (!next) return;
     setSaving(true);
     try {
+      // Persist checklist before status gate (COMPLETED validates DB items, not local UI).
+      if (canLog && isHaccpEditable(detail.status)) {
+        const saveRes = await fetch(`/api/haccp-results/${detail.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+          body: JSON.stringify({
+            items: editItems,
+            evidenceUrls: detailPhotos,
+          }),
+        });
+        const saveData = await saveRes.json();
+        if (!saveRes.ok) throw new Error(saveData?.error || 'Gagal simpan checklist');
+        setDetail(saveData as HaccpRow);
+        setEditItems((saveData as HaccpRow).items || editItems);
+        setDetailPhotos((saveData as HaccpRow).evidenceUrls || detailPhotos);
+      }
       const res = await fetch(`/api/haccp-results/${detail.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
@@ -193,7 +211,13 @@ export default function HaccpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal status');
       toast.success(`Status → ${HACCP_STATUS_LABELS[next]}`);
-      setDetail(data as HaccpRow);
+      if (next === 'COMPLETED' || next === 'CANCELLED') {
+        setDetail(null);
+      } else {
+        setDetail(data as HaccpRow);
+        setEditItems((data as HaccpRow).items || editItems);
+        setDetailPhotos((data as HaccpRow).evidenceUrls || detailPhotos);
+      }
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');

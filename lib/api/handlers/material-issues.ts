@@ -34,10 +34,12 @@ import {
   PRODUCTION_PLANS_COLLECTION,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
+import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -91,6 +93,29 @@ async function resolveWarehouse(
   return warehouseKode;
 }
 
+async function enrichIssueLineWarehouses(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  lines: MaterialIssueDoc['lines'],
+  fallbackWarehouse?: string,
+): Promise<MaterialIssueDoc['lines']> {
+  const ids = [...new Set(lines.map((l) => l.productId).filter(Boolean))];
+  if (!ids.length) return lines;
+  const products = await db.collection('products')
+    .find(withTenantFilter(scopeAuth, { id: { $in: ids } }))
+    .project({ id: 1, gudangKode: 1 })
+    .toArray();
+  const byId = new Map(products.map((p) => [String(p.id), p]));
+  return lines.map((l) => {
+    if (l.warehouseKode) return l;
+    const prod = byId.get(l.productId) as { gudangKode?: string } | undefined;
+    return {
+      ...l,
+      warehouseKode: resolveProductGudangKode(prod) || fallbackWarehouse,
+    };
+  });
+}
+
 async function seedLinesFromPlan(
   db: HandlerContext['db'],
   scopeAuth: HandlerContext['auth'],
@@ -116,7 +141,12 @@ async function seedLinesFromPlan(
     if (mrp.productionPlanId !== plan.id) {
       return { error: 'MRP tidak cocok dengan rencana produksi' };
     }
-    const lines = buildIssueLinesFromMrp(mrp.lines || []);
+    const lines = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      buildIssueLinesFromMrp(mrp.lines || []),
+      warehouseKode,
+    );
     if (!lines.length) return { error: 'MRP tidak punya qty bahan (qtyGross)' };
     return {
       lines,
@@ -135,7 +165,12 @@ async function seedLinesFromPlan(
     { sort: { createdAt: -1 } },
   ) as MaterialRequirementDoc | null;
   if (mrp?.lines?.length) {
-    const lines = buildIssueLinesFromMrp(mrp.lines);
+    const lines = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      buildIssueLinesFromMrp(mrp.lines),
+      warehouseKode,
+    );
     if (lines.length) {
       return {
         lines,
@@ -158,10 +193,16 @@ async function seedLinesFromPlan(
     .toArray() as unknown as RecipeDoc[];
   const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
   const tid = tenantIdForWrite(scopeAuth, {});
+  const products = await db.collection('products')
+    .find({ ...tenantFilter, id: { $in: productIds } })
+    .project({ id: 1, gudangKode: 1 })
+    .toArray();
+  const productById = new Map(products.map((p) => [String(p.id), p]));
   const stockMap = await getStokByWarehouseBatch(db, tid, productIds);
   const onHandByProduct = new Map<string, number>();
   for (const pid of productIds) {
-    onHandByProduct.set(pid, Number((stockMap.get(pid) || {})[warehouseKode] || 0));
+    const stockWh = resolveProductGudangKode(productById.get(pid) as { gudangKode?: string } | undefined);
+    onHandByProduct.set(pid, Number((stockMap.get(pid) || {})[stockWh] || 0));
   }
   const exploded = explodeMaterialRequirements({
     plan,
@@ -171,7 +212,12 @@ async function seedLinesFromPlan(
     warehouseKode,
   });
   if (!exploded.ok) return { error: exploded.error };
-  const lines = buildIssueLinesFromMrp(exploded.lines);
+  const lines = await enrichIssueLineWarehouses(
+    db,
+    scopeAuth,
+    buildIssueLinesFromMrp(exploded.lines),
+    warehouseKode,
+  );
   if (!lines.length) return { error: 'Tidak ada bahan dari rencana' };
   return { lines, warehouseKode };
 }
@@ -208,12 +254,27 @@ async function postIssueStock(
       error: 'Posting stok Issue membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
     };
   }
+  const productIds = [...new Set(doc.lines.map((l) => l.productId).filter(Boolean))];
+  const products = productIds.length
+    ? await db.collection('products')
+      .find({ tenantId: doc.tenantId, id: { $in: productIds } })
+      .project({ id: 1, gudangKode: 1 })
+      .toArray()
+    : [];
+  const gudangById = new Map(
+    products.map((p) => [String(p.id), resolveProductGudangKode(p as { gudangKode?: string })]),
+  );
+
   for (const line of doc.lines) {
     if (!(Number(line.qtyIssued) > 0)) continue;
+    // Deduct from line warehouse (product gudang) when set; else resolve from product master.
+    const warehouseKode = line.warehouseKode
+      || gudangById.get(line.productId)
+      || doc.warehouseKode;
     const posted = await postStockMutation(db, {
       tenantId: doc.tenantId,
       productId: line.productId,
-      warehouseKode: doc.warehouseKode,
+      warehouseKode,
       deltaQtyBase: -Number(line.qtyIssued),
       sourceType: 'FP_ISSUE',
       noTransaksi: doc.noDokumen,
@@ -227,34 +288,6 @@ async function postIssueStock(
     }
   }
   return { ok: true };
-}
-
-async function bumpPlanProcessing(
-  db: HandlerContext['db'],
-  scopeAuth: HandlerContext['auth'],
-  planId: string,
-  session?: ClientSession,
-  issueNo?: string,
-) {
-  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
-    withTenantFilter(scopeAuth, { id: planId, status: 'APPROVED' }),
-    txOpts(session),
-  ) as { history?: DocHistoryEntry[] } | null;
-  if (!plan) return;
-  const now = new Date();
-  const history = appendDocHistory(plan.history, {
-    at: now,
-    fromStatus: 'APPROVED',
-    toStatus: 'PROCESSING',
-    note: issueNo
-      ? `Otomatis dari pengambilan bahan ${issueNo} selesai`
-      : 'Otomatis dari pengambilan bahan selesai',
-  });
-  await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-    withTenantFilter(scopeAuth, { id: planId, status: 'APPROVED' }),
-    { $set: { status: 'PROCESSING', history, updatedAt: now } },
-    txOpts(session),
-  );
 }
 
 export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -301,6 +334,16 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if (!plan) return err('Rencana produksi tidak ditemukan', 404);
     if (!ISSUE_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
       return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses)`, 400);
+    }
+
+    // Gate bisnis: ambil bahan hanya jika stok gudang sudah lengkap (tanpa kekurangan).
+    const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan);
+    if ('error' in readiness && readiness.error) return err(readiness.error, 400);
+    if (Number(readiness.summary?.shortageCount || 0) > 0) {
+      return err(
+        `Bahan belum lengkap (${readiness.summary?.shortageCount} item kurang). Buat/ajukan PO ke Vendor dulu dari Rencana Produksi.`,
+        400,
+      );
     }
 
     const open = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
@@ -395,9 +438,15 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if (!scopeAuth) return err('Scope tidak valid', 400);
     const existing = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
-    );
+    ) as MaterialIssueDoc | null;
     if (!existing) return err('Pengambilan bahan tidak ditemukan', 404);
-    return ok(project(existing as Record<string, unknown>));
+    const lines = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      existing.lines || [],
+      existing.warehouseKode,
+    );
+    return ok(project({ ...existing, lines } as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'material-issues' && path[1] && !path[2] && method === 'PUT') {
@@ -416,15 +465,21 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     }
     const normalized = normalizeIssueLines(issueBody.lines != null ? issueBody.lines : existing.lines);
     if ('error' in normalized) return err(normalized.error, 400);
-    const productErr = await assertIssueProductsActive(db, existing.tenantId, normalized);
+    const lines = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      normalized,
+      existing.warehouseKode,
+    );
+    const productErr = await assertIssueProductsActive(db, existing.tenantId, lines);
     if (productErr) return err(productErr, 400);
     const now = new Date();
     await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
       {
         $set: {
-          lines: normalized,
-          summary: summarizeIssueLines(normalized),
+          lines,
+          summary: summarizeIssueLines(lines),
           catatan: issueBody.catatan != null
             ? String(issueBody.catatan).trim() || undefined
             : existing.catatan,
@@ -519,13 +574,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             },
             txOpts(session),
           );
-          await bumpPlanProcessing(
-            txDb,
-            scopeAuth,
-            fresh.productionPlanId,
-            session,
-            fresh.noDokumen,
-          );
+          // Plan stays APPROVED — user clicks Diproses on Rencana Produksi after stock out.
         });
       } catch (e) {
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 400) {

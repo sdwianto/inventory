@@ -6,12 +6,62 @@ export const PRODUCTION_PLANS_COLLECTION = 'production_plans';
 
 export type ProductionPlanStatus = FpDocStatus;
 
+/** Penerima porsi MBG / SPPG. */
+export const KATEGORI_PORSI_OPTIONS = [
+  { value: 'PORSI_BESAR', label: 'Porsi besar', hint: 'Kelas 3 SD – SMA' },
+  { value: 'PORSI_KECIL', label: 'Porsi kecil', hint: 'PAUD – SD kelas 3' },
+  { value: 'POSYANDU_BUMIL_BUSUI', label: 'Posyandu Bumil Busui', hint: '' },
+  { value: 'POSYANDU_BALITA', label: 'Posyandu Balita', hint: '' },
+] as const;
+
+export type KategoriPorsi = (typeof KATEGORI_PORSI_OPTIONS)[number]['value'];
+
+const KATEGORI_PORSI_SET = new Set<string>(KATEGORI_PORSI_OPTIONS.map((o) => o.value));
+
+export function isKategoriPorsi(v: unknown): v is KategoriPorsi {
+  return typeof v === 'string' && KATEGORI_PORSI_SET.has(v);
+}
+
+export function kategoriPorsiLabel(v: string | undefined | null): string {
+  if (!v) return '—';
+  const opt = KATEGORI_PORSI_OPTIONS.find((o) => o.value === v);
+  if (!opt) return v;
+  return opt.hint ? `${opt.label} (${opt.hint})` : opt.label;
+}
+
+/** Normalize one or many kategori porsi (checkbox multi-select). Preserves option order. */
+export function normalizeKategoriPorsiList(raw: unknown): KategoriPorsi[] | { error: string } {
+  let list: unknown[] = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim()) list = [raw];
+  else return { error: 'Minimal satu kategori porsi wajib dipilih' };
+
+  const seen = new Set<KategoriPorsi>();
+  for (const item of list) {
+    const v = String(item || '').trim();
+    if (!v) continue;
+    if (!isKategoriPorsi(v)) return { error: `Kategori porsi tidak valid: ${v}` };
+    seen.add(v);
+  }
+  if (!seen.size) return { error: 'Minimal satu kategori porsi wajib dipilih' };
+  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((v) => seen.has(v));
+}
+
+export function kategoriPorsiListLabel(list: KategoriPorsi[] | undefined | null): string {
+  if (!list?.length) return '—';
+  return list
+    .map((v) => KATEGORI_PORSI_OPTIONS.find((o) => o.value === v)?.label || v)
+    .join(', ');
+}
+
 export interface ProductionPlanLine {
   menuId: string;
   menuKode?: string;
   menuNama?: string;
   /** Menu version snapshotted when plan line was saved. */
   menuVersion?: number;
+  /** Kategori penerima porsi untuk baris ini (multi-select). */
+  kategoriPorsiList?: KategoriPorsi[];
   /** Target portions for this menu on the plan date. */
   targetPorsi: number;
   notes?: string;
@@ -27,6 +77,10 @@ export interface ProductionPlanDoc {
   kitchenNama?: string;
   /** Denorm from kitchen.defaultWarehouseKode — for MRP / Issue later. */
   kitchenWarehouseKode?: string;
+  /** @deprecated gunakan kategoriPorsiList — disimpan sebagai kategori pertama untuk kompatibilitas. */
+  kategoriPorsi?: KategoriPorsi;
+  /** Kategori penerima porsi (MBG) — multi-select. */
+  kategoriPorsiList?: KategoriPorsi[];
   lines: ProductionPlanLine[];
   status: ProductionPlanStatus;
   history: DocHistoryEntry[];
@@ -72,10 +126,17 @@ export function normalizePlanLines(raw: unknown): ProductionPlanLine[] | { error
     }
     if (seen.has(menuId)) return { error: `Menu duplikat pada baris ${i + 1}` };
     seen.add(menuId);
+    let kategoriPorsiList: KategoriPorsi[] | undefined;
+    if (row.kategoriPorsiList !== undefined || row.kategoriPorsi !== undefined) {
+      const kp = normalizeKategoriPorsiList(row.kategoriPorsiList ?? row.kategoriPorsi);
+      if ('error' in kp) return { error: `Baris ${i + 1}: ${kp.error}` };
+      kategoriPorsiList = kp;
+    }
     lines.push({
       menuId,
       menuKode: row.menuKode != null ? String(row.menuKode) : undefined,
       menuNama: row.menuNama != null ? String(row.menuNama) : undefined,
+      kategoriPorsiList,
       targetPorsi,
       notes: row.notes != null ? String(row.notes).trim() || undefined : undefined,
     });

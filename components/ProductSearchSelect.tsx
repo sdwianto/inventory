@@ -40,6 +40,8 @@ export default function ProductSearchSelect({
   selectedProduct,
   syncSource,
   withWarehouseStock = true,
+  itemRole,
+  filterProduct,
   placeholder = 'Cari / pilih produk…',
   className,
 }: {
@@ -49,6 +51,10 @@ export default function ProductSearchSelect({
   selectedProduct?: JsonObject | null;
   syncSource?: string;
   withWarehouseStock?: boolean;
+  /** Optional single-role API filter (e.g. INGREDIENT). */
+  itemRole?: string;
+  /** Client-side filter after fetch (e.g. isIngredientRole). */
+  filterProduct?: (product: JsonObject) => boolean;
   placeholder?: string;
   className?: string;
 }) {
@@ -87,19 +93,21 @@ export default function ProductSearchSelect({
       let url = `/api/products?q=${encodeURIComponent(q)}&limit=50&includeUom=1`;
       if (withWarehouseStock) url += '&withWarehouseStock=1';
       if (syncSource) url += `&syncSource=${encodeURIComponent(syncSource)}`;
+      if (itemRole) url += `&itemRole=${encodeURIComponent(itemRole)}`;
       fetchJson<JsonObject[] | { items?: JsonObject[] }>(url)
         .then((data) => {
           const rows = Array.isArray(data) ? data : (data?.items || []);
-          setItems(rows);
-          if (rows.length) {
-            primeProductUomsCacheFromProducts(rows as Array<{ id?: string; uoms?: ProductUom[] }>);
+          const filtered = filterProduct ? rows.filter((p) => filterProduct(p)) : rows;
+          setItems(filtered);
+          if (filtered.length) {
+            primeProductUomsCacheFromProducts(filtered as Array<{ id?: string; uoms?: ProductUom[] }>);
           }
         })
         .catch(() => setItems([]))
         .finally(() => setLoading(false));
     }, q ? 300 : 0);
     return () => clearTimeout(t);
-  }, [open, q, syncSource, withWarehouseStock]);
+  }, [open, q, syncSource, withWarehouseStock, itemRole, filterProduct]);
 
   const selected = useMemo(() => {
     if (resolved && str(resolved.id) === value) return resolved;

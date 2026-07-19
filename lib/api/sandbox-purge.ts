@@ -6,7 +6,11 @@ import {
   salesRemotePurgeConfigured,
 } from '@/lib/api/sandbox-purge-sales-remote';
 
-/** Koleksi transaksi — urutan: anak dulu, induk belakangan (sama dengan scripts/purge-transactions.mjs). */
+/**
+ * Koleksi yang dihapus saat reset sandbox.
+ * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
+ * Setup dapur (kitchens, service_points, temperature_thresholds) tetap.
+ */
 export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'hutang_pembayaran',
   'piutang_pembayaran',
@@ -45,17 +49,25 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'document_sequences',
   'bg_jobs',
   'idempotency_keys',
-  'production_plans',
-  'material_requirements',
-  'purchase_requirements',
-  'material_issues',
-  'production_results',
-  'qc_results',
-  'kitchen_transfers',
-  'production_batches',
+  // Food Production — dokumen operasional
   'distribution_orders',
   'temperature_logs',
   'haccp_results',
+  'qc_results',
+  'kitchen_transfers',
+  'production_batches',
+  'production_results',
+  'material_issues',
+  'purchase_requirements',
+  'material_requirements',
+  'production_plans',
+  'portion_targets',
+  // Food Production — master/simulasi (ikut di-reset)
+  'menus',
+  'recipes',
+  'supplier_price_book',
+  'qc_templates',
+  'haccp_templates',
 ] as const;
 
 export const SANDBOX_KEEP_HINT = [
@@ -73,11 +85,6 @@ export const SANDBOX_KEEP_HINT = [
   'kitchens',
   'service_points',
   'temperature_thresholds',
-  'haccp_templates',
-  'supplier_price_book',
-  'recipes',
-  'menus',
-  'qc_templates',
   'assets',
   'users',
   'tenants',

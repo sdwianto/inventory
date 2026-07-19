@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
-function resolvePackageRoot(scope: 'contracts' | 'events' | 'platform') {
+function resolvePackageRoot(scope: 'contracts' | 'events' | 'metrics' | 'platform') {
   const nm = resolve(rootDir, `node_modules/@sdwianto/${scope}/src`);
   const vendor = resolve(rootDir, `_vendor/sales/packages/${scope}/src`);
   return existsSync(nm) ? nm : vendor;
@@ -13,6 +13,7 @@ function resolvePackageRoot(scope: 'contracts' | 'events' | 'platform') {
 
 const contractsRoot = resolvePackageRoot('contracts');
 const eventsRoot = resolvePackageRoot('events');
+const metricsRoot = resolvePackageRoot('metrics');
 const platformRoot = resolvePackageRoot('platform');
 
 export default defineConfig({
@@ -33,6 +34,10 @@ export default defineConfig({
         replacement: `${platformRoot}/$1.ts`,
       },
       {
+        find: /^@sdwianto\/metrics\/(.+)$/,
+        replacement: `${metricsRoot}/$1.ts`,
+      },
+      {
         find: /^@sdwianto\/events\/(.+)$/,
         replacement: `${eventsRoot}/$1.ts`,
       },
@@ -42,6 +47,7 @@ export default defineConfig({
       },
       { find: '@sdwianto/contracts', replacement: `${contractsRoot}/index.ts` },
       { find: '@sdwianto/events', replacement: `${eventsRoot}/index.ts` },
+      { find: '@sdwianto/metrics', replacement: `${metricsRoot}/index.ts` },
       { find: '@sdwianto/platform', replacement: `${platformRoot}/index.ts` },
     ],
   },

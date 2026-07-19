@@ -13,6 +13,7 @@ import {
   normalizeHargaBeliBook,
   type SupplierPriceBookDoc,
 } from '@/lib/food-production/supplier-price-book';
+import { syncSupplierPriceBookFromInvoices } from '@/lib/api/supplier-price-book-from-invoice';
 import { FP_MANAGE_ROLES, FP_MGMT_READ_ROLES } from '@/lib/food-production/roles';
 import { isIsoDate } from '@/lib/food-production/production-plan';
 import type { HandlerContext } from '@/types/api/handler';
@@ -65,6 +66,26 @@ export async function handleSupplierPriceBook(ctx: HandlerContext): Promise<Next
       suppliers: suppliers.map((d) => clean(d as Record<string, unknown>)),
       products: products.map((d) => clean(d as Record<string, unknown>)),
     });
+  }
+
+  if (route === '/supplier-price-book/sync-from-invoices' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: bookBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const tid = tenantIdForWrite(scopeAuth, bookBody);
+    const stats = await syncSupplierPriceBookFromInvoices(db, tid);
+    await writeAuditLog(db, {
+      tenantId: tid,
+      action: 'SUPPLIER_PRICE_BOOK_SYNC_INVOICE',
+      entityType: 'supplier_price_book',
+      entityId: tid,
+      summary: `Sync price book dari ${stats.invoices} invoice → ${stats.upserted} upsert`,
+      ...auditActor(auth),
+    });
+    return ok(stats);
   }
 
   if (route === '/supplier-price-book' && method === 'GET') {

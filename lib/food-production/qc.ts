@@ -1,6 +1,6 @@
 /**
  * Quality Control — ADR-001 Phase 3.
- * Checklist sederhana (bukan ISO) untuk dapur / distribusi.
+ * QCR = media pencatatan finding di lapangan (bukan approval PASS-all).
  */
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
@@ -10,6 +10,7 @@ export const QC_TEMPLATES_COLLECTION = 'qc_templates';
 export const QC_RESULTS_COLLECTION = 'qc_results';
 
 export type QcCategory = 'PRODUKSI' | 'KEBERSIHAN' | 'DISTRIBUSI';
+/** OK = aman, FAIL = ada temuan, NA = tidak dicek. */
 export type QcItemResult = 'PASS' | 'FAIL' | 'NA';
 
 export interface QcTemplateItem {
@@ -34,7 +35,9 @@ export interface QcResultItem {
   key: string;
   label: string;
   result: QcItemResult;
+  /** Catatan / deskripsi finding per item. */
   note?: string;
+  evidenceUrls?: string[];
 }
 
 export type QcResultStatus = Extract<FpDocStatus, 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'COMPLETED' | 'CANCELLED'>;
@@ -60,8 +63,13 @@ export interface QcResultDoc {
     failCount: number;
     naCount: number;
     requiredFailCount: number;
+    photoCount?: number;
   };
+  /** Remark umum sebelum simpan. */
   catatan?: string;
+  recordedAt?: Date;
+  recordedBy?: string;
+  recordedByName?: string;
   createdAt: Date;
   updatedAt: Date;
   createdBy?: string;
@@ -70,30 +78,31 @@ export interface QcResultDoc {
 
 export const QC_STATUS_TRANSITIONS: Record<string, string[]> = {
   ...FP_DEFAULT_TRANSITIONS,
+  DRAFT: ['COMPLETED', 'CANCELLED'],
+  SUBMITTED: ['COMPLETED', 'DRAFT', 'CANCELLED'],
   APPROVED: ['COMPLETED', 'CANCELLED'],
   PROCESSING: ['COMPLETED', 'CANCELLED'],
+  COMPLETED: ['DRAFT', 'CANCELLED'],
 };
 
 export const QC_STATUS_LABELS: Record<QcResultStatus, string> = {
   DRAFT: 'Draft',
-  SUBMITTED: 'Diajukan',
-  APPROVED: 'Disetujui',
-  COMPLETED: 'Selesai',
+  SUBMITTED: 'Draft',
+  APPROVED: 'Draft',
+  COMPLETED: 'Tercatat',
   CANCELLED: 'Dibatalkan',
 };
 
-/** Primary UI path for QC results. */
-export const QC_UI_STATUS_NEXT: Partial<Record<QcResultStatus, QcResultStatus>> = {
-  DRAFT: 'SUBMITTED',
-  SUBMITTED: 'APPROVED',
-  APPROVED: 'COMPLETED',
+export const QC_ITEM_RESULT_LABELS: Record<QcItemResult, string> = {
+  PASS: 'OK',
+  FAIL: 'Ada temuan',
+  NA: 'Tidak dicek',
 };
 
-export const QC_UI_STATUS_NEXT_LABEL: Partial<Record<QcResultStatus, string>> = {
-  DRAFT: 'Ajukan',
-  SUBMITTED: 'Setujui',
-  APPROVED: 'Selesai',
-};
+/** @deprecated approval flow removed — kept for tests that still import. */
+export const QC_UI_STATUS_NEXT: Partial<Record<QcResultStatus, QcResultStatus>> = {};
+export const QC_UI_STATUS_NEXT_LABEL: Partial<Record<QcResultStatus, string>> = {};
+export const QC_UI_STATUS_PREV: Partial<Record<QcResultStatus, QcResultStatus>> = {};
 
 export const QC_CATEGORY_LABELS: Record<QcCategory, string> = {
   PRODUKSI: 'Produksi',
@@ -101,8 +110,9 @@ export const QC_CATEGORY_LABELS: Record<QcCategory, string> = {
   DISTRIBUSI: 'Distribusi',
 };
 
+/** Editable until cancelled. */
 export function isQcEditable(status: string): boolean {
-  return status === 'DRAFT' || status === 'SUBMITTED';
+  return status !== 'CANCELLED';
 }
 
 export function normalizeQcTemplateItems(raw: unknown): QcTemplateItem[] | { error: string } {
@@ -145,14 +155,15 @@ export function normalizeQcResultItems(
     const resultRaw = String(row?.result || 'NA').toUpperCase();
     const result: QcItemResult =
       resultRaw === 'PASS' || resultRaw === 'FAIL' || resultRaw === 'NA' ? resultRaw : 'NA';
-    if (t.required && result === 'NA' && row?.result != null) {
-      // allow NA only if explicitly set; on complete we gate fail/required separately
-    }
+    const evidenceUrls = Array.isArray(row?.evidenceUrls)
+      ? (row!.evidenceUrls as unknown[]).map((u) => String(u || '').trim()).filter(Boolean)
+      : undefined;
     out.push({
       key: t.key,
       label: t.label,
       result,
       note: row?.note != null ? String(row.note).trim() || undefined : undefined,
+      evidenceUrls: evidenceUrls?.length ? evidenceUrls.slice(0, 3) : undefined,
     });
   }
   return out;
@@ -167,28 +178,32 @@ export function summarizeQcItems(
   let failCount = 0;
   let naCount = 0;
   let requiredFailCount = 0;
+  let photoCount = 0;
   for (const item of items) {
     if (item.result === 'PASS') passCount += 1;
     else if (item.result === 'FAIL') {
       failCount += 1;
       if (requiredKeys.has(item.key) || !templateItems?.length) requiredFailCount += 1;
     } else naCount += 1;
+    photoCount += (item.evidenceUrls || []).length;
   }
-  return { passCount, failCount, naCount, requiredFailCount };
+  return { passCount, failCount, naCount, requiredFailCount, photoCount };
 }
 
-/** Soft gate before COMPLETED — required items must not be FAIL (NA ok with warning in UI). */
+/**
+ * Findings record — no PASS-all gate.
+ * Soft check: at least one item reviewed (PASS/FAIL) or has note/photo.
+ */
 export function assertQcCanComplete(
   items: QcResultItem[],
-  templateItems: QcTemplateItem[],
+  _templateItems: QcTemplateItem[],
 ): string | null {
-  for (const t of templateItems) {
-    if (t.required === false) continue;
-    const item = items.find((i) => i.key === t.key);
-    if (!item) return `Item wajib "${t.label}" belum diisi`;
-    if (item.result === 'FAIL') return `Item wajib gagal: ${t.label}`;
-    if (item.result === 'NA') return `Item wajib "${t.label}" harus PASS/FAIL`;
-  }
+  const hasSignal = items.some(
+    (i) => i.result === 'PASS' || i.result === 'FAIL'
+      || Boolean(i.note?.trim())
+      || Boolean(i.evidenceUrls?.length),
+  );
+  if (!hasSignal) return 'Isi minimal satu finding / status item sebelum simpan';
   return null;
 }
 

@@ -1,6 +1,6 @@
 const nextConfig = {
   output: 'standalone',
-  transpilePackages: ['@sdwianto/contracts', '@sdwianto/events', '@sdwianto/platform'],
+  transpilePackages: ['@sdwianto/contracts', '@sdwianto/events', '@sdwianto/metrics', '@sdwianto/platform'],
   images: {
     unoptimized: true,
     remotePatterns: [

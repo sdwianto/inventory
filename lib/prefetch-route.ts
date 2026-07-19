@@ -67,11 +67,6 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/food-production/menu':
       prefetch(['food-production', 'menus'], '/api/menus');
       break;
-    case '/food-production/plan':
-      prefetch(['food-production', 'production-plans'], '/api/production-plans');
-      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
-      prefetch(['food-production', 'menus'], '/api/menus?aktif=1');
-      break;
     case '/food-production/mrp':
       prefetch(['food-production', 'material-requirements'], '/api/material-requirements');
       prefetch(['food-production', 'production-plans'], '/api/production-plans');
@@ -83,6 +78,14 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/food-production/issue':
       prefetch(['food-production', 'material-issues'], '/api/material-issues');
       prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      break;
+    case '/stok/pengeluaran':
+      prefetch(['food-production', 'material-issues'], '/api/material-issues');
+      prefetch(['food-production', 'production-plans'], '/api/production-plans');
+      prefetch(queryKeys.inventoryReleases.list, '/api/inventory-releases');
+      break;
+    case '/stok/release':
+      prefetch(queryKeys.inventoryReleases.list, '/api/inventory-releases');
       break;
     case '/food-production/result':
       prefetch(['food-production', 'production-results'], '/api/production-results');
@@ -111,18 +114,20 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/food-production/recommendations':
       prefetch(['food-production', 'food-recommendations'], '/api/food-recommendations?horizon=7');
       break;
-    case '/food-production/calendar': {
+    case '/food-production/calendar':
+    case '/food-production/plan': {
       const now = new Date();
-      const y = now.getUTCFullYear();
-      const m = String(now.getUTCMonth() + 1).padStart(2, '0');
-      const last = new Date(Date.UTC(y, now.getUTCMonth() + 1, 0)).getUTCDate();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const last = new Date(y, now.getMonth() + 1, 0).getDate();
       const from = `${y}-${m}-01`;
       const to = `${y}-${m}-${String(last).padStart(2, '0')}`;
       prefetch(
-        ['food-production', 'production-calendar', from, to],
-        `/api/production-calendar?from=${from}&to=${to}`,
+        ['food-production', 'production-plans', from, to],
+        `/api/production-plans?from=${from}&to=${to}`,
       );
       prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      prefetch(['food-production', 'menus'], '/api/menus');
       break;
     }
     case '/food-production/transfer':

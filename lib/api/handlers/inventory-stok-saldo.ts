@@ -268,6 +268,31 @@ export async function handleStokSaldo({
   auth,
   request,
 }: HandlerContext): Promise<NextResponse | null> {
+  // GET /stok/by-products?ids=a,b,c — qty on-hand per gudang (GKERING / GBASAH)
+  if (route === '/stok/by-products' && method === 'GET') {
+    const { denied, tenantId: tid } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!tid) return err('Scope tidak valid', 400);
+
+    const ids = (url.searchParams.get('ids') || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 200);
+    if (!ids.length) return ok({ byProductId: {} });
+
+    const stockMap = await getStokByWarehouseBatch(db, tid, ids);
+    const byProductId: Record<string, { GKERING: number; GBASAH: number }> = {};
+    for (const id of ids) {
+      const wh = stockMap.get(id) || {};
+      byProductId[id] = {
+        GKERING: Number(wh.GKERING) || 0,
+        GBASAH: Number(wh.GBASAH) || 0,
+      };
+    }
+    return ok({ byProductId });
+  }
+
   if (route !== '/stok/saldo' || method !== 'GET') return null;
 
   const { denied, scopeAuth, tenantId: tid } = resolveOperationalScope(auth, { url, request });

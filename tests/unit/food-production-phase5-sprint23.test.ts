@@ -4,6 +4,7 @@ import {
   isPriceBookEffective,
   pickBestBookPrices,
 } from '@/lib/food-production/supplier-price-book';
+import { pickLocalProductId } from '@/lib/api/supplier-price-book-from-invoice';
 import { recommendCheaperSupply } from '@/lib/food-production/recommendations';
 
 describe('food-production phase 5 sprint 23', () => {
@@ -44,6 +45,12 @@ describe('food-production phase 5 sprint 23', () => {
     expect(recs[0].evidence?.source).toBe('book');
     expect(recs[0].href).toBe('/food-production/price-book');
     expect(String(recs[0].detail)).toMatch(/price book/);
+  });
+
+  it('invoice sync resolves local product id (not vendor stokId alone)', () => {
+    expect(pickLocalProductId({ stokId: 'vendor-sku' }, { localStokId: 'local-p1' })).toBe('local-p1');
+    expect(pickLocalProductId({ localStokId: 'local-p2', stokId: 'v' })).toBe('local-p2');
+    expect(pickLocalProductId({ stokId: 'vendor-only' })).toBe('');
   });
 
   it('CHEAPER_SUPPLY still works with GRN-only signal', () => {

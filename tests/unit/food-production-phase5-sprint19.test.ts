@@ -11,6 +11,8 @@ import {
   remainingSourceItems,
   normalizeDistLines,
   summarizeDistLines,
+  applyDistLineActuals,
+  applyDistSettleLines,
   DIST_UI_STATUS_NEXT,
   DIST_STATUS_TRANSITIONS,
 } from '@/lib/food-production/distribution';
@@ -23,7 +25,7 @@ describe('food-production phase 5 sprint 19', () => {
   it('normalizes service point fields', () => {
     expect(normalizeServicePointJenis('sekolah')).toBe('SEKOLAH');
     expect(normalizeServicePointJenis('x')).toBe('LAINNYA');
-    expect(normalizeServicePointKode(' sd 01 ')).toBe('SD-01');
+    expect(normalizeServicePointKode(' Ti 01 ')).toBe('Ti-01');
     expect(normalizeKapasitasPorsi('120')).toBe(120);
     expect(normalizeKapasitasPorsi(-1)).toBeUndefined();
   });
@@ -115,15 +117,57 @@ describe('food-production phase 5 sprint 19', () => {
     })).toBeNull();
   });
 
-  it('normalizes dist lines; UI requires kirim before terima', () => {
+  it('normalizes dist lines; UI moves disiapkan -> dikirim -> selesai', () => {
     const lines = normalizeDistLines([
       { servicePointId: 'sp1', menuId: 'm1', qtyPorsi: 10 },
       { servicePointId: 'sp2', finishedGoodProductId: 'fg', qtyPorsi: 5 },
     ]);
     expect('error' in (lines as object)).toBe(false);
-    expect(DIST_UI_STATUS_NEXT.APPROVED).toBe('PROCESSING');
+    expect(DIST_UI_STATUS_NEXT.DRAFT).toBe('PROCESSING');
     expect(DIST_UI_STATUS_NEXT.PROCESSING).toBe('COMPLETED');
-    expect(DIST_STATUS_TRANSITIONS.APPROVED).toEqual(['PROCESSING', 'CANCELLED']);
-    expect(DIST_STATUS_TRANSITIONS.APPROVED).not.toContain('COMPLETED');
+    expect(DIST_STATUS_TRANSITIONS.DRAFT).toEqual(['PROCESSING', 'CANCELLED']);
+    expect(DIST_STATUS_TRANSITIONS.DRAFT).not.toContain('COMPLETED');
+    expect(DIST_STATUS_TRANSITIONS.PROCESSING).toEqual(['COMPLETED']);
+    expect(DIST_STATUS_TRANSITIONS.COMPLETED).toEqual([]);
+  });
+
+  it('stores kapasitas on allocate and settles per titik diterima/kembali', () => {
+    const allocated = allocatePorsiAcrossPoints({
+      items: [{ menuId: 'm1', menuNama: 'Nasi', qtyPorsi: 100 }],
+      servicePoints: [
+        { id: 'a', nama: 'A', kapasitasPorsi: 40 },
+        { id: 'b', nama: 'B', kapasitasPorsi: 60 },
+      ],
+    });
+    expect('error' in (allocated as object)).toBe(false);
+    if ('error' in (allocated as object)) return;
+    expect(allocated[0].kapasitasPorsi).toBe(40);
+    expect(allocated[1].kapasitasPorsi).toBe(60);
+
+    const sent = applyDistLineActuals(allocated, 'PROCESSING', [
+      { servicePointId: 'a', menuId: 'm1', qty: 38 },
+      { servicePointId: 'b', menuId: 'm1', qty: 55 },
+    ]);
+    expect('error' in (sent as object)).toBe(false);
+    if ('error' in (sent as object)) return;
+    expect(sent[0].qtyDikirim).toBe(38);
+    expect(sent[1].qtyDikirim).toBe(55);
+
+    const settled = applyDistSettleLines(sent, [
+      { servicePointId: 'a', menuId: 'm1', qtyDiterima: 30, qtyDikembalikan: 8 },
+      { servicePointId: 'b', menuId: 'm1', qtyDiterima: 55, qtyDikembalikan: 0 },
+    ]);
+    expect('error' in (settled as object)).toBe(false);
+    if ('error' in (settled as object)) return;
+    expect(settled[0].qtyDiterima).toBe(30);
+    expect(settled[0].qtyDikembalikan).toBe(8);
+    expect(settled[1].qtyDiterima).toBe(55);
+    expect(summarizeDistLines(settled).qtyDiterimaTotal).toBe(85);
+    expect(summarizeDistLines(settled).qtyDikembalikanTotal).toBe(8);
+
+    const bad = applyDistSettleLines(sent, [
+      { servicePointId: 'a', menuId: 'm1', qtyDiterima: 20, qtyDikembalikan: 5 },
+    ]);
+    expect('error' in (bad as object)).toBe(true);
   });
 });

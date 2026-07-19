@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 
 const ROOT = resolve(process.cwd());
 const TSC = join(ROOT, 'node_modules/typescript/bin/tsc');
-const PACKAGES = ['contracts', 'events', 'platform'];
+const PACKAGES = ['contracts', 'events', 'metrics', 'platform'];
 
 function resolvePackageDir(name) {
   const nm = join(ROOT, 'node_modules/@sdwianto', name);

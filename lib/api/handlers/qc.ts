@@ -8,6 +8,7 @@ import {
 } from '@/lib/api/tenant-master';
 import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { storeBase64Image } from '@/lib/api/media-storage';
 import {
   QC_TEMPLATES_COLLECTION,
   QC_RESULTS_COLLECTION,
@@ -21,6 +22,7 @@ import {
   isQcEditable,
   type QcTemplateDoc,
   type QcResultDoc,
+  type QcResultItem,
   type QcResultStatus,
 } from '@/lib/food-production/qc';
 import {
@@ -40,8 +42,6 @@ import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles
 import type { HandlerContext } from '@/types/api/handler';
 
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
-/** Kitchen may submit (Ajukan); approve/complete/cancel need manage. */
-const QC_OPS_STATUS = new Set<QcResultStatus>(['SUBMITTED']);
 
 async function ensureDefaultTemplates(
   db: HandlerContext['db'],
@@ -62,6 +62,38 @@ async function ensureDefaultTemplates(
     updatedAt: now,
   }));
   await db.collection(QC_TEMPLATES_COLLECTION).insertMany(docs);
+}
+
+/** Persist data-URL photos on each item; keep existing /api/media URLs. */
+async function persistItemEvidence(
+  tenantId: string,
+  items: QcResultItem[],
+): Promise<QcResultItem[] | { error: string }> {
+  const out: QcResultItem[] = [];
+  for (const item of items) {
+    const urls: string[] = [];
+    for (const raw of item.evidenceUrls || []) {
+      const s = String(raw || '').trim();
+      if (!s) continue;
+      if (s.startsWith('/api/media/') || s.startsWith('http://') || s.startsWith('https://')) {
+        urls.push(s);
+        continue;
+      }
+      if (s.startsWith('data:') || /^[A-Za-z0-9+/=]+$/.test(s.slice(0, 80))) {
+        const stored = await storeBase64Image(tenantId, s, { prefix: 'qc', maxBytes: 768_000 });
+        if ('error' in stored) return { error: `${item.label}: ${stored.error}` };
+        urls.push(stored.url);
+        continue;
+      }
+      urls.push(s);
+    }
+    if (urls.length > 3) return { error: `Maksimal 3 foto untuk "${item.label}"` };
+    out.push({
+      ...item,
+      evidenceUrls: urls.length ? urls : undefined,
+    });
+  }
+  return out;
 }
 
 export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -185,19 +217,29 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       tanggal = plan.tanggal;
     }
 
-    const items = normalizeQcResultItems(qcBody.items ?? [], template.items);
+    let items = normalizeQcResultItems(qcBody.items ?? [], template.items);
     if ('error' in items) return err(items.error, 400);
+    const persisted = await persistItemEvidence(tenantId, items);
+    if ('error' in persisted) return err(persisted.error, 400);
+    items = persisted;
+
+    const saveNow = qcBody.save === true || qcBody.record === true;
+    if (saveNow) {
+      const gate = assertQcCanComplete(items, template.items);
+      if (gate) return err(gate, 400);
+    }
 
     const actor = auditActor(auth);
     const now = new Date();
     const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.QC_RESULT);
+    const status: QcResultStatus = saveNow ? 'COMPLETED' : 'DRAFT';
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
-      toStatus: 'DRAFT',
+      toStatus: status,
       userId: actor.userId,
       userName: actor.userName,
-      note: `Template ${template.kode}`,
+      note: saveNow ? 'Checklist finding dicatat' : `Template ${template.kode}`,
     });
 
     const doc: QcResultDoc = {
@@ -214,10 +256,15 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       kitchenNama,
       tanggal,
       items,
-      status: 'DRAFT',
+      status,
       history,
       summary: summarizeQcItems(items, template.items),
       catatan: String(qcBody.catatan || '').trim() || undefined,
+      ...(saveNow ? {
+        recordedAt: now,
+        recordedBy: actor.userId,
+        recordedByName: actor.userName,
+      } : {}),
       createdAt: now,
       updatedAt: now,
       createdBy: actor.userId,
@@ -226,7 +273,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     await db.collection(QC_RESULTS_COLLECTION).insertOne(doc);
     await writeAuditLog(db, {
       tenantId,
-      action: 'QC_RESULT_CREATE',
+      action: saveNow ? 'QC_RESULT_RECORD' : 'QC_RESULT_CREATE',
       entityType: 'qc_result',
       entityId: doc.id,
       summary: `QC ${doc.noDokumen} (${template.kode})`,
@@ -264,12 +311,29 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     ) as QcTemplateDoc | null;
     if (!template) return err('Template hilang', 400);
 
-    const items = normalizeQcResultItems(
+    let items = normalizeQcResultItems(
       qcBody.items != null ? qcBody.items : existing.items,
       template.items,
     );
     if ('error' in items) return err(items.error, 400);
+    const persisted = await persistItemEvidence(existing.tenantId, items);
+    if ('error' in persisted) return err(persisted.error, 400);
+    items = persisted;
+
+    const gate = assertQcCanComplete(items, template.items);
+    if (gate) return err(gate, 400);
+
+    const actor = auditActor(auth);
     const now = new Date();
+    const history = appendDocHistory(existing.history, {
+      at: now,
+      fromStatus: existing.status,
+      toStatus: 'COMPLETED',
+      userId: actor.userId,
+      userName: actor.userName,
+      note: 'Checklist finding disimpan',
+    });
+
     await db.collection(QC_RESULTS_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
       {
@@ -279,6 +343,11 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
           catatan: qcBody.catatan != null
             ? String(qcBody.catatan).trim() || undefined
             : existing.catatan,
+          status: 'COMPLETED',
+          history,
+          recordedAt: now,
+          recordedBy: actor.userId,
+          recordedByName: actor.userName,
           updatedAt: now,
         },
       },
@@ -286,15 +355,19 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     const saved = await db.collection(QC_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'QC_RESULT_RECORD',
+      entityType: 'qc_result',
+      entityId: path[1],
+      summary: `QC ${existing.noDokumen} dicatat oleh ${actor.userName}`,
+      ...auditActor(auth),
+    });
     return ok(clean(saved as Record<string, unknown>));
   }
 
   if (path[0] === 'qc-results' && path[1] && path[2] === 'status' && method === 'POST') {
-    const toStatusPeek = String(qcBody.status || '').trim() as QcResultStatus;
-    const statusRoles = QC_OPS_STATUS.has(toStatusPeek)
-      ? FP_OPS_WRITE_ROLES
-      : FP_MANAGE_ROLES;
-    const deniedRole = requireRole(auth, [...statusRoles]);
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: qcBody, request });
     if (denied) return denied;
@@ -311,15 +384,6 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     }
     const transitionErr = assertStatusTransition(existing.status, toStatus, QC_STATUS_TRANSITIONS);
     if (transitionErr) return err(transitionErr, 400);
-
-    if (toStatus === 'COMPLETED') {
-      const template = await db.collection(QC_TEMPLATES_COLLECTION).findOne(
-        withTenantFilter(scopeAuth, { id: existing.templateId }),
-      ) as QcTemplateDoc | null;
-      if (!template) return err('Template hilang', 400);
-      const gate = assertQcCanComplete(existing.items, template.items);
-      if (gate) return err(gate, 400);
-    }
 
     const actor = auditActor(auth);
     const now = new Date();
@@ -361,7 +425,6 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     ) as QcResultDoc | null;
     if (!existing) return err('Hasil QC tidak ditemukan', 404);
     if (existing.status === 'CANCELLED') return ok({ id: path[1], status: 'CANCELLED' });
-    if (existing.status === 'COMPLETED') return err('QC selesai tidak dapat dibatalkan', 400);
     const transitionErr = assertStatusTransition(existing.status, 'CANCELLED', QC_STATUS_TRANSITIONS);
     if (transitionErr) return err(transitionErr, 400);
 

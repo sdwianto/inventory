@@ -29,6 +29,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   recipes: async () => (await import('@/lib/api/handlers/recipes')).handleRecipes,
   menus: async () => (await import('@/lib/api/handlers/menus')).handleMenus,
   'production-plans': async () => (await import('@/lib/api/handlers/production-plans')).handleProductionPlans,
+  'portion-targets': async () => (await import('@/lib/api/handlers/portion-targets')).handlePortionTargets,
   'material-requirements': async () => (await import('@/lib/api/handlers/material-requirements')).handleMaterialRequirements,
   'purchase-requirements': async () => (await import('@/lib/api/handlers/purchase-requirements')).handlePurchaseRequirements,
   'material-issues': async () => (await import('@/lib/api/handlers/material-issues')).handleMaterialIssues,

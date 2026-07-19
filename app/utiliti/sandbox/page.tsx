@@ -287,7 +287,8 @@ export default function SandboxResetPage() {
           <div>
             <h1 className="text-xl font-bold">Reset Sandbox</h1>
             <p className="text-sm text-slate-600 mt-1">
-              Hapus semua data transaksi di inventory + sales, tanpa menghapus user, tenant, produk, integrasi, atau setup.
+              Hapus data transaksi inventory + sales, termasuk Food Production (rencana → PBL/HSL → QC/HACCP → distribusi,
+              plus resep, menu, template QC/HACCP, dan price book). Setup dapur, produk, user, tenant, dan integrasi tetap.
               Gunakan setelah simulasi di Vercel sandbox — sembunyikan fitur ini setelah go-live.
             </p>
           </div>
@@ -297,7 +298,11 @@ export default function SandboxResetPage() {
           <CardContent className="p-4 flex gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
             <div className="text-sm text-amber-900 space-y-1">
-              <div className="font-semibold">Operasi tidak bisa dibatalkan</div>
+              <div className="font-semibold">Peringatan: operasi tidak bisa dibatalkan</div>
+              <div className="text-xs text-amber-800">
+                Banner ini menandai risiko tinggi — data yang dihapus tidak bisa dikembalikan.
+                Stok akan di-nol-kan; aset IN_REPAIR dikembalikan ke ACTIVE.
+              </div>
               <div>
                 Inventory DB: <b>{status?.inventoryDbName || '…'}</b>
                 {includeSales && (
@@ -316,7 +321,12 @@ export default function SandboxResetPage() {
                 </div>
               )}
               <div className="text-xs text-amber-800">
+                Food Production ikut dihapus: rencana, MRP/PBL/HSL, batch, transfer dapur, QC/HACCP result,
+                distribusi, suhu, resep, menu, template QC/HACCP, supplier price book.
+              </div>
+              <div className="text-xs text-amber-800">
                 Tetap dipertahankan: {status?.keepHint?.slice(0, 8).join(', ')}…
+                (termasuk kitchens, service_points, temperature_thresholds)
               </div>
             </div>
           </CardContent>

@@ -1,18 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { ClipboardList, RefreshCw } from 'lucide-react';
 import type { ProductionReport } from '@/lib/food-production/production-report';
 import { PLAN_STATUS_LABELS, type ProductionPlanStatus } from '@/lib/food-production/production-plan';
 
-export default function ProductionReportPage() {
+function ProductionReportPageContent() {
+  const searchParams = useSearchParams();
+  const highlightPlanId = searchParams.get('productionPlanId') || '';
   const [rows, setRows] = useState<ProductionReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterTanggal, setFilterTanggal] = useState('');
@@ -27,13 +33,18 @@ export default function ProductionReportPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal memuat laporan');
-      setRows(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data as ProductionReport[] : [];
+      setRows(list);
+      if (highlightPlanId) {
+        const hit = list.find((r) => r.plan.id === highlightPlanId);
+        if (hit) setDetail(hit);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat');
     } finally {
       setLoading(false);
     }
-  }, [filterTanggal]);
+  }, [filterTanggal, highlightPlanId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -91,7 +102,14 @@ export default function ProductionReportPage() {
               </tr>
             )}
             {rows.map((row) => (
-              <tr key={row.plan.id} className="border-t">
+              <tr
+                key={row.plan.id}
+                className={
+                  row.plan.id === highlightPlanId
+                    ? 'border-t bg-emerald-50/80'
+                    : 'border-t'
+                }
+              >
                 <td className="p-3">
                   <div className="font-mono text-xs">{row.plan.noDokumen}</div>
                   <div className="text-[11px] text-muted-foreground">
@@ -122,7 +140,14 @@ export default function ProductionReportPage() {
                     : <span className="text-amber-800">{row.integrity.message || 'Belum siap'}</span>}
                 </td>
                 <td className="p-3 text-right">
-                  <Button size="sm" variant="outline" onClick={() => setDetail(row)}>Detail</Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setDetail(row)}
+                  >
+                    Detail
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -130,44 +155,73 @@ export default function ProductionReportPage() {
         </table>
       </div>
 
-      {detail && (
-        <div className="rounded-md border p-4 space-y-3 text-sm">
-          <div className="flex justify-between gap-2">
-            <h2 className="font-medium">{detail.plan.noDokumen} — {detail.cooking.label}</h2>
-            <Button size="sm" variant="ghost" onClick={() => setDetail(null)}>Tutup</Button>
-          </div>
-          <p className="text-xs text-muted-foreground">{detail.cooking.note}</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <div className="border rounded p-2">
-              <div className="text-[11px] text-muted-foreground">Qty keluar (PBL)</div>
-              <div className="font-medium">{detail.summary.qtyIssuedTotal}</div>
+      <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {detail?.plan.noDokumen || 'Detail'} — {detail?.cooking.label || ''}
+            </DialogTitle>
+          </DialogHeader>
+          {detail && (
+            <div className="space-y-3 text-sm py-1">
+              <p className="text-xs text-muted-foreground">{detail.cooking.note}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="border rounded p-2">
+                  <div className="text-[11px] text-muted-foreground">Qty keluar (PBL)</div>
+                  <div className="font-medium">{detail.summary.qtyIssuedTotal}</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-[11px] text-muted-foreground">Actual porsi</div>
+                  <div className="font-medium">{detail.summary.actualPorsi}</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-[11px] text-muted-foreground">Waste</div>
+                  <div className="font-medium">{detail.summary.wastePorsi}</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-[11px] text-muted-foreground">Yield</div>
+                  <div className="font-medium">
+                    {detail.summary.yieldPct != null ? `${detail.summary.yieldPct}%` : '—'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <Link
+                  href={`/stok/pengeluaran?mode=produksi&productionPlanId=${detail.plan.id}`}
+                  className="text-primary hover:underline"
+                >
+                  Pengambilan bahan →
+                </Link>
+                <Link
+                  href={`/food-production/result?productionPlanId=${detail.plan.id}`}
+                  className="text-primary hover:underline"
+                >
+                  Hasil produksi →
+                </Link>
+                <Link
+                  href={`/food-production/plan?productionPlanId=${detail.plan.id}`}
+                  className="text-primary hover:underline"
+                >
+                  Rencana →
+                </Link>
+              </div>
             </div>
-            <div className="border rounded p-2">
-              <div className="text-[11px] text-muted-foreground">Actual porsi</div>
-              <div className="font-medium">{detail.summary.actualPorsi}</div>
-            </div>
-            <div className="border rounded p-2">
-              <div className="text-[11px] text-muted-foreground">Waste</div>
-              <div className="font-medium">{detail.summary.wastePorsi}</div>
-            </div>
-            <div className="border rounded p-2">
-              <div className="text-[11px] text-muted-foreground">Yield</div>
-              <div className="font-medium">{detail.summary.yieldPct != null ? `${detail.summary.yieldPct}%` : '—'}</div>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3 text-xs">
-            <Link href={`/food-production/issue?productionPlanId=${detail.plan.id}`} className="text-primary hover:underline">
-              Pengambilan bahan →
-            </Link>
-            <Link href={`/food-production/result?productionPlanId=${detail.plan.id}`} className="text-primary hover:underline">
-              Hasil produksi →
-            </Link>
-            <Link href="/food-production/plan" className="text-primary hover:underline">
-              Rencana →
-            </Link>
-          </div>
-        </div>
-      )}
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDetail(null)}>
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+export default function ProductionReportPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Memuat laporan…</div>}>
+      <ProductionReportPageContent />
+    </Suspense>
   );
 }

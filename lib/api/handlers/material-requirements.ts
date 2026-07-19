@@ -24,6 +24,7 @@ import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -52,6 +53,15 @@ function actorFields(auth: HandlerContext['auth']) {
 function projectMrp(doc: Record<string, unknown> | null) {
   if (!doc) return null;
   return clean(doc);
+}
+
+/** Exported for plan material-readiness / procure orchestration. */
+export async function buildPlanMaterialExplosion(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  plan: ProductionPlanDoc,
+) {
+  return buildExplosion(db, scopeAuth, plan);
 }
 
 async function buildExplosion(
@@ -100,17 +110,11 @@ async function buildExplosion(
     recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)),
   )];
   const tid = tenantIdForWrite(scopeAuth, {});
-  const stockMap = await getStokByWarehouseBatch(db, tid, productIds);
-  const onHandByProduct = new Map<string, number>();
-  for (const pid of productIds) {
-    const byWh = stockMap.get(pid) || {};
-    onHandByProduct.set(pid, Number(byWh[warehouseKode] || 0));
-  }
 
-  // Enrich names from products if recipe lines incomplete
+  // Enrich names + resolve each SKU's warehouse (buah/basah → GBASAH, not kitchen GKERING)
   const products = await db.collection('products')
     .find({ ...tenantFilter, id: { $in: productIds } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1 })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, grup: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
   for (const recipe of recipes) {
@@ -123,6 +127,18 @@ async function buildExplosion(
     }
   }
 
+  const stockMap = await getStokByWarehouseBatch(db, tid, productIds);
+  const onHandByProduct = new Map<string, number>();
+  const stockWarehouseByProduct = new Map<string, string>();
+  for (const pid of productIds) {
+    const prod = productById.get(pid) as { gudangKode?: string } | undefined;
+    // On-hand must match where GRN posts (product gudang), not kitchen default alone.
+    const stockWh = resolveProductGudangKode(prod);
+    const byWh = stockMap.get(pid) || {};
+    onHandByProduct.set(pid, Number(byWh[stockWh] || 0));
+    stockWarehouseByProduct.set(pid, stockWh);
+  }
+
   const exploded = explodeMaterialRequirements({
     plan,
     menusById,
@@ -131,7 +147,11 @@ async function buildExplosion(
     warehouseKode,
   });
   if (!exploded.ok) return { error: exploded.error };
-  return { warehouseKode, lines: exploded.lines, summary: exploded.summary };
+  const lines = exploded.lines.map((l) => ({
+    ...l,
+    stockWarehouseKode: stockWarehouseByProduct.get(l.productId) || warehouseKode,
+  }));
+  return { warehouseKode, lines, summary: exploded.summary };
 }
 
 export async function handleMaterialRequirements({

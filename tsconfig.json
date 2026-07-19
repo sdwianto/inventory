@@ -60,6 +60,14 @@
       "@sdwianto/events/*": [
         "./node_modules/@sdwianto/events/src/*",
         "./_vendor/sales/packages/events/src/*"
+      ],
+      "@sdwianto/metrics": [
+        "./node_modules/@sdwianto/metrics/src/index.ts",
+        "./_vendor/sales/packages/metrics/src/index.ts"
+      ],
+      "@sdwianto/metrics/*": [
+        "./node_modules/@sdwianto/metrics/src/*",
+        "./_vendor/sales/packages/metrics/src/*"
       ]
     }
   },

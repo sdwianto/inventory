@@ -18,7 +18,7 @@ import {
   isExecutionOutboxCollection,
 } from '../../helpers/mock-execution-outbox-collection';
 import { priorityOrder, classificationOrder } from '@/lib/execution/queue/sort-keys';
-import { setExecutionEventBus } from '@/lib/execution/events/publisher';
+import { setExecutionEventBus } from '@sdwianto/events';
 import { setJobBusAdapter } from '@/lib/execution/dispatcher/bus-adapter';
 import { resetExecutionPlatformWiringForTests } from '@/lib/execution/runtime/platform-bootstrap';
 import {

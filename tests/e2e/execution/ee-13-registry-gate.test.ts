@@ -48,15 +48,19 @@ describe('EE-13 — Inventory registry prod gate', () => {
     expect(existsSync(resolve(ROOT, 'scripts/typecheck-sdwianto-packages.mjs'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-contracts.json'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-events.json'))).toBe(true);
+    expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-metrics.json'))).toBe(true);
     expect(existsSync(resolve(ROOT, 'scripts/ci/tsconfig.sdwianto-platform.json'))).toBe(true);
   });
 
-  it('ee12-install vendors contracts, events, and platform', () => {
+  it('ee12-install vendors contracts, events, metrics, and platform', () => {
     const script = readFileSync(resolve(ROOT, 'scripts/ee12-install-platform.mjs'), 'utf8');
     expect(script).toContain('packages/events');
+    expect(script).toContain('packages/metrics');
     expect(script).toContain('@sdwianto/events@');
+    expect(script).toContain('@sdwianto/metrics@');
     expect(script).toContain("const EVENTS_VERSION = '1.0.1'");
-    expect(script).toContain("const PLATFORM_VERSION = '1.0.3'");
+    expect(script).toContain("const METRICS_VERSION = '1.0.0'");
+    expect(script).toContain("const PLATFORM_VERSION = '1.0.4'");
     expect(script).toContain('@sdwianto/platform@${PLATFORM_VERSION}');
   });
 
@@ -69,6 +73,7 @@ describe('EE-13 — Inventory registry prod gate', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(root.dependencies['@sdwianto/contracts']).toBe('file:./_vendor/sales/packages/contracts');
     expect(root.dependencies['@sdwianto/events']).toBe('file:./_vendor/sales/packages/events');
+    expect(root.dependencies['@sdwianto/metrics']).toBe('file:./_vendor/sales/packages/metrics');
     expect(root.dependencies['@sdwianto/platform']).toBe('file:./_vendor/sales/packages/platform');
   });
 });

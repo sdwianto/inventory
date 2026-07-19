@@ -40,7 +40,8 @@ function listExecutionTsFiles(dir: string, base = ''): string[] {
 function isShimContent(content: string): boolean {
   return content.includes('@sdwianto/platform')
     || content.includes('@sdwianto/contracts')
-    || content.includes('@sdwianto/events');
+    || content.includes('@sdwianto/events')
+    || content.includes('@sdwianto/metrics');
 }
 
 describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
@@ -50,9 +51,11 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     const vendorContracts = resolve(ROOT, '_vendor/sales/packages/contracts/package.json');
     const vendorPlatform = resolve(ROOT, '_vendor/sales/packages/platform/package.json');
     const vendorEvents = resolve(ROOT, '_vendor/sales/packages/events/package.json');
+    const vendorMetrics = resolve(ROOT, '_vendor/sales/packages/metrics/package.json');
     expect(existsSync(contractsPath) || existsSync(vendorContracts)).toBe(true);
     expect(existsSync(platformPath) || existsSync(vendorPlatform)).toBe(true);
     expect(existsSync(resolve(ROOT, 'node_modules/@sdwianto/events/package.json')) || existsSync(vendorEvents)).toBe(true);
+    expect(existsSync(resolve(ROOT, 'node_modules/@sdwianto/metrics/package.json')) || existsSync(vendorMetrics)).toBe(true);
     const contracts = JSON.parse(readFileSync(
       existsSync(contractsPath) ? contractsPath : vendorContracts,
       'utf8',
@@ -65,13 +68,15 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(platform.name).toBe('@sdwianto/platform');
     expect(platform.dependencies['@sdwianto/contracts']).toBe('1.0.0');
     expect(platform.dependencies['@sdwianto/events']).toBe('1.0.1');
-    expect(platform.version).toBe('1.0.3');
+    expect(platform.dependencies['@sdwianto/metrics']).toBe('1.0.0');
+    expect(platform.version).toBe('1.0.4');
   });
 
   it('package.json depends on _vendor/sales @sdwianto/*', () => {
     const root = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(root.dependencies['@sdwianto/contracts']).toBe('file:./_vendor/sales/packages/contracts');
     expect(root.dependencies['@sdwianto/events']).toBe('file:./_vendor/sales/packages/events');
+    expect(root.dependencies['@sdwianto/metrics']).toBe('file:./_vendor/sales/packages/metrics');
     expect(root.dependencies['@sdwianto/platform']).toBe('file:./_vendor/sales/packages/platform');
     expect(root.scripts['test:execution:ee12']).toBeTruthy();
     expect(root.scripts['typecheck:packages']).toBeTruthy();
@@ -150,10 +155,12 @@ describe('EE-12 Phase 3 — Inventory platform consumer gate', () => {
     expect(ts.compilerOptions.paths['@sdwianto/contracts'][0]).toContain('node_modules/@sdwianto/contracts');
     expect(ts.compilerOptions.paths['@sdwianto/platform'][0]).toContain('node_modules/@sdwianto/platform');
     expect(ts.compilerOptions.paths['@sdwianto/events'][0]).toContain('node_modules/@sdwianto/events');
+    expect(ts.compilerOptions.paths['@sdwianto/metrics'][0]).toContain('node_modules/@sdwianto/metrics');
     expect(ts.compilerOptions.paths['@sdwianto/contracts'][1]).toContain('_vendor/sales/packages/contracts');
     expect(ts.compilerOptions.paths['@sdwianto/events'][1]).toContain('_vendor/sales/packages/events');
+    expect(ts.compilerOptions.paths['@sdwianto/metrics'][1]).toContain('_vendor/sales/packages/metrics');
     expect(ts.compilerOptions.paths['@sdwianto/platform'][1]).toContain('_vendor/sales/packages/platform');
     const next = readFileSync(resolve(ROOT, 'next.config.js'), 'utf8');
-    expect(next).toContain("transpilePackages: ['@sdwianto/contracts', '@sdwianto/events', '@sdwianto/platform']");
+    expect(next).toContain("transpilePackages: ['@sdwianto/contracts', '@sdwianto/events', '@sdwianto/metrics', '@sdwianto/platform']");
   });
 });

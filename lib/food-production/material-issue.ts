@@ -17,6 +17,8 @@ export interface MaterialIssueLine {
   productKode?: string;
   productNama?: string;
   satuan?: string;
+  /** Product warehouse (GKERING / GBASAH) — where stock is deducted on post. */
+  warehouseKode?: string;
   qtyPlanned: number;
   qtyIssued: number;
 }
@@ -58,20 +60,22 @@ export function isIssueEditable(status: string): boolean {
 }
 
 export function buildIssueLinesFromMrp(
-  mrpLines: Pick<
-    MaterialRequirementLine,
-    'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyGross'
-  >[],
+  mrpLines: Array<
+    Pick<MaterialRequirementLine, 'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyGross'>
+    & { stockWarehouseKode?: string; warehouseKode?: string }
+  >,
 ): MaterialIssueLine[] {
   return (mrpLines || [])
     .filter((l) => String(l.productId || '').trim() && Number.isFinite(Number(l.qtyGross)) && Number(l.qtyGross) > 0)
     .map((l) => {
       const qty = roundQty(Number(l.qtyGross));
+      const warehouseKode = String(l.stockWarehouseKode || l.warehouseKode || '').trim() || undefined;
       return {
         productId: String(l.productId).trim(),
         productKode: l.productKode,
         productNama: l.productNama,
         satuan: l.satuan,
+        warehouseKode,
         qtyPlanned: qty,
         qtyIssued: qty,
       };
@@ -117,6 +121,7 @@ export function normalizeIssueLines(raw: unknown): MaterialIssueLine[] | { error
       productKode: row.productKode != null ? String(row.productKode) : undefined,
       productNama: row.productNama != null ? String(row.productNama) : undefined,
       satuan: row.satuan != null ? String(row.satuan) : undefined,
+      warehouseKode: row.warehouseKode != null ? String(row.warehouseKode).trim() || undefined : undefined,
       qtyPlanned: roundQty(qtyPlanned),
       qtyIssued: roundQty(qtyIssued),
     });
@@ -151,8 +156,8 @@ export const ISSUE_UI_STATUS_NEXT: Partial<Record<MaterialIssueStatus, MaterialI
 export const ISSUE_UI_STATUS_NEXT_LABEL: Partial<Record<MaterialIssueStatus, string>> = {
   DRAFT: 'Ajukan',
   SUBMITTED: 'Setujui',
-  APPROVED: 'Selesai + Post Stok',
-  PROCESSING: 'Selesai + Post Stok',
+  APPROVED: 'Keluarkan Stok',
+  PROCESSING: 'Keluarkan Stok',
 };
 
 /** Parse plan tanggal for period lock (noon UTC avoids date-only timezone skew). */

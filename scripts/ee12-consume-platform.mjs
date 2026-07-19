@@ -22,6 +22,7 @@ function findSourcePackages() {
     if (
       existsSync(join(base, 'contracts/package.json'))
       && existsSync(join(base, 'events/package.json'))
+      && existsSync(join(base, 'metrics/package.json'))
       && existsSync(join(base, 'platform/package.json'))
     ) {
       return base;
@@ -71,6 +72,21 @@ function writeEventsPublisherShim(file) {
   writeFileSync(file, content, 'utf8');
 }
 
+function writeMetricsFacadeShim(file, metricsModule) {
+  const content = `/** @deprecated import from \`@sdwianto/metrics\` — EE-15 shim */\nexport * from '@sdwianto/metrics/${metricsModule}';\n`;
+  writeFileSync(file, content, 'utf8');
+}
+
+function writePrometheusShim(file) {
+  const content = `/**
+ * EE-15 — prefer \`@sdwianto/metrics\` for facades.
+ * \`getExecutionMetricsSnapshot(db?)\` stays Db-aware via platform wrapper.
+ */
+export * from '@sdwianto/platform/metrics/prometheus';
+`;
+  writeFileSync(file, content, 'utf8');
+}
+
 function writeContractShims() {
   const contractsDir = join(LIB, 'contracts');
   const shims = {
@@ -100,6 +116,18 @@ function generateRuntimeShims() {
       const rel = relative(LIB, file).replace(/\\/g, '/').replace(/\.ts$/, '');
       if (rel === 'events/publisher') {
         writeEventsPublisherShim(file);
+        continue;
+      }
+      if (rel === 'metrics/prometheus') {
+        writePrometheusShim(file);
+        continue;
+      }
+      if (
+        rel.startsWith('metrics/')
+        && rel !== 'metrics/observability-collector'
+        && rel !== 'metrics/metrics-http-server'
+      ) {
+        writeMetricsFacadeShim(file, base.replace(/\.ts$/, ''));
         continue;
       }
       writeShim(file, rel);

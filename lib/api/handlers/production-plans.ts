@@ -13,6 +13,7 @@ import {
   normalizePlanLines,
   isPlanEditable,
   isIsoDate,
+  normalizeKategoriPorsiList,
   totalTargetPorsi,
   type ProductionPlanDoc,
   type ProductionPlanLine,
@@ -40,6 +41,7 @@ import {
   planCompleteGateMessage,
 } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
@@ -48,6 +50,8 @@ const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
 interface PlanBody extends Record<string, unknown> {
   tanggal?: string;
   kitchenId?: string;
+  kategoriPorsi?: string;
+  kategoriPorsiList?: unknown;
   lines?: unknown;
   catatan?: string;
   status?: string;
@@ -179,6 +183,10 @@ export async function handleProductionPlans({
     if (!isIsoDate(tanggal)) return err('Tanggal tidak valid (YYYY-MM-DD)', 400);
     const kitchenId = String(planBody.kitchenId || '').trim();
     if (!kitchenId) return err('Dapur wajib dipilih');
+    const kategoriList = normalizeKategoriPorsiList(
+      planBody.kategoriPorsiList ?? planBody.kategoriPorsi,
+    );
+    if ('error' in kategoriList) return err(kategoriList.error, 400);
     const linesRaw = normalizePlanLines(planBody.lines);
     if ('error' in linesRaw) return err(linesRaw.error, 400);
 
@@ -212,6 +220,8 @@ export async function handleProductionPlans({
       kitchenId,
       kitchenNama: kitchen.nama,
       kitchenWarehouseKode: kitchen.warehouseKode,
+      kategoriPorsi: kategoriList[0],
+      kategoriPorsiList: kategoriList,
       lines,
       status: 'DRAFT',
       history,
@@ -280,6 +290,14 @@ export async function handleProductionPlans({
       update.kitchenNama = kitchen.nama;
       update.kitchenWarehouseKode = kitchen.warehouseKode || null;
     }
+    if (planBody.kategoriPorsiList !== undefined || planBody.kategoriPorsi !== undefined) {
+      const kategoriList = normalizeKategoriPorsiList(
+        planBody.kategoriPorsiList ?? planBody.kategoriPorsi,
+      );
+      if ('error' in kategoriList) return err(kategoriList.error, 400);
+      update.kategoriPorsi = kategoriList[0];
+      update.kategoriPorsiList = kategoriList;
+    }
     if (planBody.lines !== undefined) {
       const linesRaw = normalizePlanLines(planBody.lines);
       if ('error' in linesRaw) return err(linesRaw.error, 400);
@@ -345,9 +363,32 @@ export async function handleProductionPlans({
       if ('error' in linesCheck) return err(linesCheck.error, 400);
     }
 
-    // Phase 2 kontrak: COMPLETED hanya jika PBL selesai + tidak ada Issue/Result terbuka.
+    // Mulai proses (Diproses): wajib sudah ada pengeluaran stok COMPLETED.
+    // Shortage stok diabaikan setelah issue — bahan sudah diambil ke dapur.
+    if (toStatus === 'PROCESSING') {
+      const completedIssue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
+      );
+      if (!completedIssue) {
+        const readiness = await buildPlanMaterialExplosion(db, scopeAuth, existing);
+        if ('error' in readiness && readiness.error) return err(readiness.error, 400);
+        const shortageCount = Number(readiness.summary?.shortageCount || 0);
+        if (shortageCount > 0) {
+          return err(
+            `Tidak bisa mulai proses — masih kurang ${shortageCount} item bahan. Buat PO ke Vendor atau lengkapi stok dulu.`,
+            400,
+          );
+        }
+        return err(
+          'Tidak bisa mulai proses — barang belum dikeluarkan. Selesaikan Pengeluaran Stok (Keluarkan Stok) dulu.',
+          400,
+        );
+      }
+    }
+
+    // COMPLETED: PBL selesai + HSL selesai + tidak ada Issue/Result terbuka.
     if (toStatus === 'COMPLETED') {
-      const [completedIssue, openIssue, openResult] = await Promise.all([
+      const [completedIssue, openIssue, openResult, completedResult] = await Promise.all([
         db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
           withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
         ),
@@ -363,11 +404,15 @@ export async function handleProductionPlans({
             status: { $in: [...RESULT_OPEN_STATUSES] },
           }),
         ),
+        db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
+        ),
       ]);
       const gateMsg = planCompleteGateMessage({
         hasCompletedIssue: Boolean(completedIssue),
         hasOpenIssue: Boolean(openIssue),
         hasOpenResult: Boolean(openResult),
+        hasCompletedResult: Boolean(completedResult),
       });
       if (gateMsg) return err(gateMsg, 400);
     }
@@ -399,6 +444,109 @@ export async function handleProductionPlans({
       ...auditActor(auth),
     });
     return ok(projectPlan(saved as Record<string, unknown>));
+  }
+
+  // GET /production-plans/:id/material-readiness — stok lengkap vs kekurangan (live explode)
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'material-readiness' && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return err('Rencana tidak ditemukan', 404);
+
+    const built = await buildPlanMaterialExplosion(db, scopeAuth, plan);
+    if ('error' in built && built.error) return err(built.error, 400);
+
+    const shortageCount = Number(built.summary?.shortageCount || 0);
+    const stockReady = shortageCount === 0;
+    // After stock is issued, on-hand drops — still treat as ready once PBL COMPLETED.
+    const [linkedPo, completedIssue, openIssue, completedResult, openResult] = await Promise.all([
+      db.collection('customer_purchase_orders').findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: id,
+          status: { $nin: ['CANCELLED'] },
+        }),
+        { sort: { createdAt: -1 }, projection: { id: 1, noPO: 1, status: 1 } },
+      ),
+      db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
+        { projection: { id: 1, noDokumen: 1 } },
+      ),
+      db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: id,
+          status: { $in: [...ISSUE_OPEN_STATUSES] },
+        }),
+        { sort: { createdAt: -1 }, projection: { id: 1, noDokumen: 1, status: 1 } },
+      ),
+      db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
+        { projection: { id: 1, noDokumen: 1 } },
+      ),
+      db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: id,
+          status: { $in: [...RESULT_OPEN_STATUSES] },
+        }),
+        { sort: { createdAt: -1 }, projection: { id: 1, noDokumen: 1, status: 1 } },
+      ),
+    ]);
+
+    const issueCompleted = Boolean(completedIssue);
+    const materialsReady = stockReady || issueCompleted;
+    const resultCompleted = Boolean(completedResult);
+    const shortageLines = (built.lines || [])
+      .filter((l) => l.shortage)
+      .slice(0, 20)
+      .map((l) => ({
+        productId: l.productId,
+        productKode: l.productKode,
+        productNama: l.productNama,
+        qtyGross: l.qtyGross,
+        qtyOnHand: l.qtyOnHand,
+        qtyNet: l.qtyNet,
+        satuan: l.satuan,
+        stockWarehouseKode: (l as { stockWarehouseKode?: string }).stockWarehouseKode,
+      }));
+
+    return ok({
+      productionPlanId: id,
+      productionPlanNo: plan.noDokumen,
+      materialsReady,
+      shortageCount: issueCompleted ? 0 : shortageCount,
+      lineCount: Number(built.summary?.lineCount || 0),
+      warehouseKode: built.warehouseKode,
+      shortageLines: issueCompleted ? [] : shortageLines,
+      issueCompleted,
+      completedIssueNo: completedIssue ? String(completedIssue.noDokumen || '') : null,
+      resultCompleted,
+      completedResultNo: completedResult ? String(completedResult.noDokumen || '') : null,
+      openResult: openResult
+        ? {
+          id: String(openResult.id),
+          noDokumen: String(openResult.noDokumen || ''),
+          status: String(openResult.status || ''),
+        }
+        : null,
+      openIssue: openIssue
+        ? {
+          id: String(openIssue.id),
+          noDokumen: String(openIssue.noDokumen || ''),
+          status: String(openIssue.status || ''),
+        }
+        : null,
+      linkedPo: linkedPo
+        ? {
+          id: String(linkedPo.id),
+          noPO: String(linkedPo.noPO || ''),
+          status: String(linkedPo.status || ''),
+        }
+        : null,
+    });
   }
 
   // DELETE = cancel (soft)

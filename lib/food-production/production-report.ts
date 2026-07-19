@@ -71,19 +71,28 @@ export interface ProductionReport {
 export function cookingPhaseOf(input: {
   hasCompletedIssue: boolean;
   hasCompletedResult: boolean;
+  /** Status rencana — COMPLETED menutup cooking meski HSL belum ada. */
+  planStatus?: string;
 }): { phase: CookingPhase; label: string; note: string } {
-  if (input.hasCompletedResult) {
+  const planDone = String(input.planStatus || '').toUpperCase() === 'COMPLETED';
+  const planProcessing = String(input.planStatus || '').toUpperCase() === 'PROCESSING';
+
+  if (input.hasCompletedResult || planDone) {
     return {
       phase: 'DONE',
       label: 'Selesai dimasak',
-      note: 'Hasil produksi (HSL) sudah diposting — siklus dapur tertutup untuk dokumen ini.',
+      note: input.hasCompletedResult
+        ? 'Hasil produksi (HSL) sudah diposting — siklus dapur tertutup untuk dokumen ini.'
+        : 'Rencana produksi sudah selesai — cooking ditutup mengikuti status rencana.',
     };
   }
-  if (input.hasCompletedIssue) {
+  if (input.hasCompletedIssue || planProcessing) {
     return {
       phase: 'IN_PROGRESS',
       label: 'Sedang dimasak',
-      note: 'Bahan sudah diambil (PBL selesai). Cooking dicatat via status rencana PROCESSING hingga HSL selesai — tanpa dokumen Cooking terpisah.',
+      note: planProcessing
+        ? 'Rencana sedang diproses. Cooking berjalan hingga rencana selesai atau HSL diposting.'
+        : 'Bahan sudah diambil (PBL selesai). Cooking dicatat via status rencana PROCESSING hingga selesai — tanpa dokumen Cooking terpisah.',
     };
   }
   return {
@@ -98,10 +107,12 @@ export function buildProductionReport(input: ProductionReportInput): ProductionR
     hasCompletedIssue: input.hasCompletedIssue,
     hasOpenIssue: input.hasOpenIssue,
     hasOpenResult: input.hasOpenResult,
+    hasCompletedResult: input.hasCompletedResult,
   });
   const cooking = cookingPhaseOf({
     hasCompletedIssue: input.hasCompletedIssue,
     hasCompletedResult: input.hasCompletedResult,
+    planStatus: input.plan.status,
   });
   const targetPorsi = roundQty(
     Number(input.result?.targetPorsiTotal ?? input.plan.totalTargetPorsi ?? 0),

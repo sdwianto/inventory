@@ -13,7 +13,9 @@
       "@sdwianto/contracts": ["../../node_modules/@sdwianto/contracts/src/index.ts"],
       "@sdwianto/contracts/*": ["../../node_modules/@sdwianto/contracts/src/*"],
       "@sdwianto/events": ["../../node_modules/@sdwianto/events/src/index.ts"],
-      "@sdwianto/events/*": ["../../node_modules/@sdwianto/events/src/*"]
+      "@sdwianto/events/*": ["../../node_modules/@sdwianto/events/src/*"],
+      "@sdwianto/metrics": ["../../node_modules/@sdwianto/metrics/src/index.ts"],
+      "@sdwianto/metrics/*": ["../../node_modules/@sdwianto/metrics/src/*"]
     }
   },
   "include": ["../../node_modules/@sdwianto/platform/src/**/*.ts"]

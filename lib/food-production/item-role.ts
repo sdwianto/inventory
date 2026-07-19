@@ -30,3 +30,20 @@ export function normalizeItemRole(value: unknown, fallback: ItemRole = 'INGREDIE
   if (isItemRole(value)) return value;
   return fallback;
 }
+
+/** Output SKU for recipe / hasil produksi. Unset role → INGREDIENT, not FG. */
+export function isFinishedGoodRole(value: unknown): boolean {
+  const role = normalizeItemRole(value);
+  return role === 'FINISHED_GOOD' || role === 'SEMI_FINISHED';
+}
+
+/** Input materials for recipe lines. FINISHED_GOOD excluded. */
+export function isIngredientRole(value: unknown): boolean {
+  const role = normalizeItemRole(value);
+  return (
+    role === 'INGREDIENT'
+    || role === 'PACKAGING'
+    || role === 'CONSUMABLE'
+    || role === 'SEMI_FINISHED'
+  );
+}

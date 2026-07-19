@@ -9,6 +9,7 @@ COPY package.json package-lock.json ./
 COPY scripts/ee12-install-platform.mjs ./scripts/
 COPY --from=sales_pkgs contracts ./_vendor/sales/packages/contracts
 COPY --from=sales_pkgs events ./_vendor/sales/packages/events
+COPY --from=sales_pkgs metrics ./_vendor/sales/packages/metrics
 COPY --from=sales_pkgs platform ./_vendor/sales/packages/platform
 RUN npm ci
 
@@ -19,11 +20,13 @@ COPY . .
 COPY --from=deps /app/_vendor ./_vendor
 # file: deps are often symlinks — materialize real copies for Next/webpack
 RUN mkdir -p node_modules/@sdwianto \
-  && rm -rf node_modules/@sdwianto/contracts node_modules/@sdwianto/events node_modules/@sdwianto/platform \
+  && rm -rf node_modules/@sdwianto/contracts node_modules/@sdwianto/events node_modules/@sdwianto/metrics node_modules/@sdwianto/platform \
   && cp -a _vendor/sales/packages/contracts node_modules/@sdwianto/contracts \
   && cp -a _vendor/sales/packages/events node_modules/@sdwianto/events \
+  && cp -a _vendor/sales/packages/metrics node_modules/@sdwianto/metrics \
   && cp -a _vendor/sales/packages/platform node_modules/@sdwianto/platform \
   && test -f node_modules/@sdwianto/platform/src/queue/enqueue.ts \
+  && test -f node_modules/@sdwianto/metrics/src/prometheus.ts \
   && test -f node_modules/@sdwianto/platform/src/metrics/observability-collector.ts
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build

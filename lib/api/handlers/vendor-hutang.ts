@@ -28,6 +28,7 @@ import { buildHutangPaymentJournalLines, buildPaidExternalJournalLines } from '@
 import { resolveKasRekening } from '@/lib/api/cash-bank-accounts';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { upsertSupplierPriceBookFromHutang } from '@/lib/api/supplier-price-book-from-invoice';
 import type { HandlerContext } from '@/types/api/handler';
 
 const HUTANG_ADMIN_ROLES = ['ADMIN', 'MASTER'];
@@ -302,6 +303,12 @@ export async function handleVendorHutang({
     }
 
     await db.collection('hutang').updateOne({ id: hutang.id }, { $set: patch });
+    const approved = { ...hutang, ...patch };
+    try {
+      await upsertSupplierPriceBookFromHutang(db, approved);
+    } catch {
+      /* price book sync must not block invoice approve */
+    }
     await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));

@@ -118,8 +118,9 @@ export const HACCP_UI_STATUS_NEXT: Partial<Record<HaccpResultStatus, HaccpResult
   APPROVED: 'COMPLETED',
 };
 
+/** Checklist editable until Selesai (gate runs on COMPLETED). */
 export function isHaccpEditable(status: string): boolean {
-  return status === 'DRAFT' || status === 'SUBMITTED';
+  return status === 'DRAFT' || status === 'SUBMITTED' || status === 'APPROVED';
 }
 
 export function normalizeHaccpCategory(raw: unknown): HaccpCategory | { error: string } {
