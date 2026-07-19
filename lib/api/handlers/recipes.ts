@@ -255,6 +255,8 @@ async function commitRecipeImports(
       draft.lines.map((l) => ({
         productId: l.productId,
         qty: l.qty,
+        qtyBesar: l.qty,
+        pctKecil: l.pctKecil,
         satuan: l.satuan,
         notes: l.notes,
         productKode: l.productKode,

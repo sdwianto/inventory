@@ -209,7 +209,8 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
     const recipeIdsNeeded = new Set<string>();
     for (const plan of openPlans) {
       for (const line of plan.lines || []) {
-        const menu = menusById.get(line.menuId);
+        if (line.recipeId) recipeIdsNeeded.add(line.recipeId);
+        const menu = menusById.get(String(line.menuId || ''));
         if (menu) for (const it of menu.items || []) recipeIdsNeeded.add(it.recipeId);
       }
     }
@@ -241,9 +242,18 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
       });
       if ('error' in standard) {
         for (const line of plan.lines || []) {
-          const menu = menusById.get(line.menuId);
+          if (line.recipeId) {
+            const recipe = recipesById.get(line.recipeId);
+            plannedMenus.push({
+              menuId: line.recipeId,
+              menuNama: line.recipeNama || recipe?.nama,
+              estimatedCostPerPorsi: undefined,
+            });
+            continue;
+          }
+          const menu = menusById.get(String(line.menuId || ''));
           plannedMenus.push({
-            menuId: line.menuId,
+            menuId: String(line.menuId || ''),
             menuNama: menu?.nama || line.menuNama,
             estimatedCostPerPorsi: menu?.targetCostPerPorsi,
           });
@@ -251,10 +261,19 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
         continue;
       }
       for (const line of plan.lines || []) {
-        const menu = menusById.get(line.menuId);
+        if (line.recipeId) {
+          const recipe = recipesById.get(line.recipeId);
+          plannedMenus.push({
+            menuId: line.recipeId,
+            menuNama: line.recipeNama || recipe?.nama,
+            estimatedCostPerPorsi: Number(standard.standard.perPorsi) || 0,
+          });
+          continue;
+        }
+        const menu = menusById.get(String(line.menuId || ''));
         const perPorsi = Number(standard.standard.perPorsi) || Number(menu?.targetCostPerPorsi) || 0;
         plannedMenus.push({
-          menuId: line.menuId,
+          menuId: String(line.menuId || ''),
           menuNama: menu?.nama || line.menuNama,
           estimatedCostPerPorsi: perPorsi,
         });

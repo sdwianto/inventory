@@ -49,7 +49,22 @@ export async function postGoodsReceipt(
   // Vercel: jalankan GRN_INVOICE_SYNC dalam request POST (await) — void processJobById mati saat lambda freeze.
   const syncInvoiceInline = asyncInvoice === false && !process.env.VERCEL;
 
-  const txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+  const priorStatus = String(grn.status || 'DRAFT');
+  let txResult: { lokasiSet: Set<string>; invoicePatch: Record<string, unknown> } | { error: string };
+  try {
+    txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+    const now = new Date();
+    // Klaim atomik dulu — dua post bersamaan tidak boleh keduanya apply stok.
+    const claim = await txDb.collection('goods_receipts').updateOne(
+      { id: grn.id, status: { $nin: ['POSTED', 'POSTING'] } },
+      { $set: { status: 'POSTING', postingStartedAt: now } },
+      txOpts(session),
+    );
+    if (claim.modifiedCount === 0) {
+      throw new Error('GRN sudah diposting');
+    }
+
+    try {
     const stock = await applyGrnStockPosting(
       txDb,
       tenantId,
@@ -57,9 +72,9 @@ export async function postGoodsReceipt(
       (body?.items ?? undefined) as JsonObject[] | undefined,
       session,
     );
-    if (stock.error) return { error: stock.error };
+    // Throw agar klaim POSTING ikut rollback (jangan return error yang tetap commit).
+    if (stock.error) throw new Error(stock.error);
 
-    const now = new Date();
     const lokasiSet = stock.lokasiSet as Set<string>;
     const lokasiSummary = [...lokasiSet].map((k) => `${k} - ${warehouseLabel(k)}`).join(', ');
 
@@ -77,7 +92,7 @@ export async function postGoodsReceipt(
     }
 
     await txDb.collection('goods_receipts').updateOne(
-      { id: grn.id },
+      { id: grn.id, status: 'POSTING' },
       {
         $set: {
           status: 'POSTED',
@@ -131,21 +146,30 @@ export async function postGoodsReceipt(
     }
 
     return { lokasiSet, invoicePatch };
-  });
+    } catch (inner) {
+      // Fallback non-TX: revert klaim POSTING agar GRN tidak macet.
+      if (!session) {
+        await txDb.collection('goods_receipts').updateOne(
+          { id: grn.id, status: 'POSTING' },
+          { $set: { status: priorStatus, postingStartedAt: null } },
+        );
+      }
+      throw inner;
+    }
+    });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 
-  if ('error' in txResult && txResult.error) return { error: txResult.error };
+  if ('error' in txResult) {
+    return { error: String(txResult.error || 'Gagal posting GRN') };
+  }
 
   const posted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
   if (!posted) return { error: 'GRN tidak ditemukan setelah posting' };
 
-  const sideFx = await enqueueJob(db, {
-    type: JOB_TYPES.GRN_POST_SIDE_EFFECTS,
-    tenantId,
-    grnId: grn.id,
-    payload: { grnId: grn.id },
-  });
-  scheduleJobProcessing(db);
-
+  // Inline = jalankan sekali sekarang; async = enqueue job. Jangan keduanya (double qtyReceived).
+  let sideEffectsJobId: string | null = null;
   if (syncInvoiceInline) {
     try {
       await runGrnPostSideEffects(db, tenantId, grn.id);
@@ -153,6 +177,15 @@ export async function postGoodsReceipt(
       const msg = e instanceof Error ? e.message : String(e);
       logger.error('grn_post_side_effects_inline_exception', { tenantId, grnId: grn.id, error: msg });
     }
+  } else {
+    const sideFx = await enqueueJob(db, {
+      type: JOB_TYPES.GRN_POST_SIDE_EFFECTS,
+      tenantId,
+      grnId: grn.id,
+      payload: { grnId: grn.id },
+    });
+    sideEffectsJobId = sideFx.jobId;
+    scheduleJobProcessing(db);
   }
 
   let invoiceSync: Record<string, unknown> | null = null;
@@ -259,7 +292,7 @@ export async function postGoodsReceipt(
   const enriched = await enrichGrnDoc(db, posted);
   return {
     ...enriched,
-    sideEffectsJobId: sideFx.jobId,
+    sideEffectsJobId,
     invoiceSync,
     invoiceSyncStatus: posted.invoiceSyncStatus || enriched?.invoiceSyncStatus,
   };

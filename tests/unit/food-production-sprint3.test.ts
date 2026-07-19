@@ -23,23 +23,35 @@ describe('food-production sprint 3 — production plan', () => {
 
   it('validates plan lines', () => {
     expect(normalizePlanLines([])).toEqual({ error: expect.stringMatching(/minimal 1/i) });
-    expect(normalizePlanLines([{ menuId: '', targetPorsi: 10 }])).toEqual({
-      error: expect.stringMatching(/menuId/i),
+    expect(normalizePlanLines([{ recipeId: '', targetPorsi: 10 }])).toEqual({
+      error: expect.stringMatching(/resep/i),
     });
-    expect(normalizePlanLines([{ menuId: 'm1', targetPorsi: 0 }])).toEqual({
+    expect(normalizePlanLines([{ recipeId: 'r1', targetPorsi: 0 }])).toEqual({
       error: expect.stringMatching(/porsi/i),
     });
     expect(normalizePlanLines([
-      { menuId: 'm1', targetPorsi: 100 },
-      { menuId: 'm1', targetPorsi: 50 },
+      { recipeId: 'r1', targetPorsi: 100 },
+      { recipeId: 'r1', targetPorsi: 50 },
     ])).toEqual({ error: expect.stringMatching(/duplikat/i) });
 
-    const ok = normalizePlanLines([{ menuId: 'm1', targetPorsi: 120, notes: 'siang' }]);
-    expect(ok).toEqual([
+    const okRecipe = normalizePlanLines([{ recipeId: 'r1', targetPorsi: 120, notes: 'siang' }]);
+    expect(okRecipe).toEqual([
       {
-        menuId: 'm1',
+        recipeId: 'r1',
         targetPorsi: 120,
         notes: 'siang',
+        recipeKode: undefined,
+        recipeNama: undefined,
+      },
+    ]);
+
+    // Legacy menu lines still accepted
+    const okMenu = normalizePlanLines([{ menuId: 'm1', targetPorsi: 80 }]);
+    expect(okMenu).toEqual([
+      {
+        menuId: 'm1',
+        targetPorsi: 80,
+        notes: undefined,
         menuKode: undefined,
         menuNama: undefined,
       },
@@ -48,8 +60,8 @@ describe('food-production sprint 3 — production plan', () => {
 
   it('sums / summarizes lines and gates edit by status', () => {
     const lines = [
-      { menuId: 'a', targetPorsi: 100, menuNama: 'Nasi' },
-      { menuId: 'b', targetPorsi: 50, menuNama: 'Soto' },
+      { recipeId: 'a', targetPorsi: 100, recipeNama: 'Nasi' },
+      { recipeId: 'b', targetPorsi: 50, recipeNama: 'Soto' },
     ];
     expect(totalTargetPorsi(lines)).toBe(150);
     expect(summarizePlanLines(lines)).toContain('Nasi (100)');

@@ -12,6 +12,7 @@ import {
   MATERIAL_REQUIREMENTS_COLLECTION,
   explodeMaterialRequirements,
   isMrpEditable,
+  decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
   type MaterialRequirementDoc,
   type MaterialRequirementStatus,
@@ -23,6 +24,18 @@ import {
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
+import {
+  PORTION_TARGETS_COLLECTION,
+  emptyPortionTargets,
+  type PortionTargetDoc,
+} from '@/lib/food-production/portion-target';
+import {
+  MATERIAL_ISSUES_COLLECTION,
+} from '@/lib/food-production/material-issue';
+import {
+  PURCHASE_REQUIREMENTS_COLLECTION,
+  PR_ACTIVE_STATUSES,
+} from '@/lib/food-production/purchase-requirement';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import {
@@ -38,6 +51,8 @@ import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
+/** PR DRAFT juga memblokir regenerate — qtyNet sudah dipakai draft pengadaan. */
+const PR_BLOCKING_STATUSES = ['DRAFT', ...PR_ACTIVE_STATUSES] as const;
 
 interface MrpBody extends Record<string, unknown> {
   productionPlanId?: string;
@@ -82,10 +97,14 @@ async function buildExplosion(
     return { error: 'Dapur belum punya gudang default' as const };
   }
 
-  const menuIds = [...new Set((plan.lines || []).map((l) => l.menuId))];
-  const menus = await db.collection(MENUS_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: menuIds } })
-    .toArray() as unknown as MenuDoc[];
+  const menuIds = [...new Set(
+    (plan.lines || []).map((l) => String(l.menuId || '').trim()).filter(Boolean),
+  )];
+  const menus = menuIds.length
+    ? await db.collection(MENUS_COLLECTION)
+      .find({ ...tenantFilter, id: { $in: menuIds } })
+      .toArray() as unknown as MenuDoc[]
+    : [];
   if (menus.length !== menuIds.length) {
     const found = new Set(menus.map((m) => m.id));
     const missing = menuIds.find((id) => !found.has(id));
@@ -93,12 +112,16 @@ async function buildExplosion(
   }
   const menusById = new Map(menus.map((m) => [m.id, m]));
 
-  const recipeIds = [...new Set(
-    menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
-  )];
-  const recipes = await db.collection(RECIPES_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: recipeIds } })
-    .toArray() as unknown as RecipeDoc[];
+  const recipeIdsFromLines = (plan.lines || [])
+    .map((l) => String(l.recipeId || '').trim())
+    .filter(Boolean);
+  const recipeIdsFromMenus = menus.flatMap((m) => (m.items || []).map((i) => i.recipeId));
+  const recipeIds = [...new Set([...recipeIdsFromLines, ...recipeIdsFromMenus])];
+  const recipes = recipeIds.length
+    ? await db.collection(RECIPES_COLLECTION)
+      .find({ ...tenantFilter, id: { $in: recipeIds } })
+      .toArray() as unknown as RecipeDoc[]
+    : [];
   if (recipeIds.length && recipes.length !== recipeIds.length) {
     const found = new Set(recipes.map((r) => r.id));
     const missing = recipeIds.find((id) => !found.has(id));
@@ -139,19 +162,74 @@ async function buildExplosion(
     stockWarehouseByProduct.set(pid, stockWh);
   }
 
+  // Acuan porsi tanggal/dapur — pecah kebutuhan besar vs kecil secara akurat
+  const portionDoc = await db.collection(PORTION_TARGETS_COLLECTION).findOne(
+    { ...tenantFilter, tanggal: plan.tanggal, kitchenId: plan.kitchenId },
+  ) as PortionTargetDoc | null;
+  const acuanByKategori = portionDoc?.targets
+    ? { ...emptyPortionTargets(), ...portionDoc.targets }
+    : undefined;
+
   const exploded = explodeMaterialRequirements({
     plan,
     menusById,
     recipesById,
     onHandByProduct,
     warehouseKode,
+    acuanByKategori,
   });
   if (!exploded.ok) return { error: exploded.error };
   const lines = exploded.lines.map((l) => ({
     ...l,
     stockWarehouseKode: stockWarehouseByProduct.get(l.productId) || warehouseKode,
   }));
-  return { warehouseKode, lines, summary: exploded.summary };
+  return {
+    warehouseKode,
+    lines,
+    summary: exploded.summary,
+    acuanByKategori: acuanByKategori || null,
+  };
+}
+
+async function loadLatestOpenMrp(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  productionPlanId: string,
+): Promise<MaterialRequirementDoc | null> {
+  return db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, {
+      productionPlanId,
+      status: { $nin: ['CANCELLED'] },
+    }),
+    { sort: { createdAt: -1 } },
+  ) as Promise<MaterialRequirementDoc | null>;
+}
+
+async function mrpRegenerateBlockers(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  productionPlanId: string,
+  mrpIds: string[],
+): Promise<{ hasBlockingIssue: boolean; hasBlockingPr: boolean }> {
+  const issue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, {
+      productionPlanId,
+      status: { $nin: ['CANCELLED'] },
+    }),
+    { projection: { id: 1 } },
+  );
+  let hasBlockingPr = false;
+  if (mrpIds.length) {
+    const pr = await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, {
+        materialRequirementId: { $in: mrpIds },
+        status: { $in: [...PR_BLOCKING_STATUSES] },
+      }),
+      { projection: { id: 1 } },
+    );
+    hasBlockingPr = Boolean(pr);
+  }
+  return { hasBlockingIssue: Boolean(issue), hasBlockingPr };
 }
 
 export async function handleMaterialRequirements({
@@ -249,6 +327,7 @@ export async function handleMaterialRequirements({
       status: 'DRAFT',
       history,
       summary: built.summary!,
+      acuanByKategori: built.acuanByKategori ?? null,
       catatan: String(mrpBody.catatan || '').trim() || undefined,
       createdAt: now,
       updatedAt: now,
@@ -265,6 +344,183 @@ export async function handleMaterialRequirements({
       ...auditActor(auth),
     });
     return ok(projectMrp(doc as unknown as Record<string, unknown>));
+  }
+
+  // POST /material-requirements/regenerate-for-plan — hitung ulang dengan acuan porsi terkini
+  if (route === '/material-requirements/regenerate-for-plan' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: mrpBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const productionPlanId = String(mrpBody.productionPlanId || '').trim();
+    if (!productionPlanId) return err('productionPlanId wajib');
+
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: productionPlanId }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+    if (!MRP_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
+      return err(`Rencana status ${plan.status} belum siap untuk MRP (minimal Diajukan)`, 400);
+    }
+
+    const existing = await loadLatestOpenMrp(db, scopeAuth, productionPlanId);
+    const relatedMrpIds = existing ? [existing.id] : [];
+    // Juga cek PR pada MRP lain plan yang sama (SUBMITTED/APPROVED lama)
+    const siblingMrps = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION)
+      .find(
+        withTenantFilter(scopeAuth, {
+          productionPlanId,
+          status: { $nin: ['CANCELLED'] },
+        }),
+        { projection: { id: 1 } },
+      )
+      .toArray();
+    const allMrpIds = [...new Set([
+      ...relatedMrpIds,
+      ...siblingMrps.map((d) => String(d.id)),
+    ])];
+
+    const blockers = await mrpRegenerateBlockers(db, scopeAuth, productionPlanId, allMrpIds);
+    const decision = decideMrpRegenerateMode({
+      existingStatus: existing?.status,
+      hasBlockingIssue: blockers.hasBlockingIssue,
+      hasBlockingPr: blockers.hasBlockingPr,
+    });
+    if (decision.mode === 'blocked') {
+      return err(decision.error || 'MRP tidak dapat dihitung ulang', 400);
+    }
+
+    const built = await buildExplosion(db, scopeAuth, plan);
+    if ('error' in built && built.error) return err(built.error, 400);
+
+    const actor = actorFields(auth);
+    const now = new Date();
+    const tenantId = tenantIdForWrite(scopeAuth, mrpBody);
+    const acuanNote = built.acuanByKategori
+      ? 'dengan acuan porsi tanggal/dapur'
+      : 'tanpa acuan porsi (pecah proporsional)';
+
+    if (decision.mode === 'recalculate' && existing) {
+      const history = appendDocHistory(existing.history, {
+        at: now,
+        fromStatus: existing.status,
+        toStatus: existing.status,
+        userId: actor.userId,
+        userName: actor.userName,
+        note: `Dihitung ulang ${acuanNote}`,
+      });
+      await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id: existing.id }),
+        {
+          $set: {
+            lines: built.lines,
+            summary: built.summary,
+            warehouseKode: built.warehouseKode,
+            tanggal: plan.tanggal,
+            kitchenId: plan.kitchenId,
+            kitchenNama: plan.kitchenNama,
+            productionPlanNo: plan.noDokumen,
+            acuanByKategori: built.acuanByKategori ?? null,
+            history,
+            updatedAt: now,
+          },
+        },
+      );
+      const saved = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: existing.id }),
+      );
+      await writeAuditLog(db, {
+        tenantId: existing.tenantId,
+        action: 'MRP_REGENERATE',
+        entityType: 'material_requirement',
+        entityId: existing.id,
+        summary: `MRP ${existing.noDokumen} dihitung ulang ${acuanNote}`,
+        ...auditActor(auth),
+      });
+      return ok({
+        mode: 'recalculate',
+        mrp: projectMrp(saved as Record<string, unknown>),
+        acuanApplied: Boolean(built.acuanByKategori),
+      });
+    }
+
+    // create | supersede → dokumen baru DRAFT; supersede batalkan yang lama
+    if (decision.mode === 'supersede' && existing) {
+      const cancelHistory = appendDocHistory(existing.history, {
+        at: now,
+        fromStatus: existing.status,
+        toStatus: 'CANCELLED',
+        userId: actor.userId,
+        userName: actor.userName,
+        note: 'Diganti MRP baru (hitung ulang acuan porsi)',
+      });
+      await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id: existing.id }),
+        { $set: { status: 'CANCELLED', history: cancelHistory, updatedAt: now } },
+      );
+    }
+
+    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
+      withTenantFilter(scopeAuth, {
+        productionPlanId,
+        status: 'DRAFT',
+        ...(existing ? { id: { $ne: existing.id } } : {}),
+      }),
+      { $set: { status: 'CANCELLED', updatedAt: now } },
+    );
+
+    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT);
+    const history: DocHistoryEntry[] = appendDocHistory([], {
+      at: now,
+      fromStatus: null,
+      toStatus: 'DRAFT',
+      userId: actor.userId,
+      userName: actor.userName,
+      note: existing
+        ? `Menggantikan ${existing.noDokumen} — dihitung ulang ${acuanNote}`
+        : `Dihitung dari rencana ${plan.noDokumen} ${acuanNote}`,
+    });
+    const doc: MaterialRequirementDoc = {
+      id: uuidv4(),
+      tenantId,
+      noDokumen,
+      productionPlanId: plan.id,
+      productionPlanNo: plan.noDokumen,
+      tanggal: plan.tanggal,
+      kitchenId: plan.kitchenId,
+      kitchenNama: plan.kitchenNama,
+      warehouseKode: built.warehouseKode!,
+      lines: built.lines!,
+      status: 'DRAFT',
+      history,
+      summary: built.summary!,
+      acuanByKategori: built.acuanByKategori ?? null,
+      catatan: String(mrpBody.catatan || '').trim() || undefined,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor.userId,
+      createdByName: actor.userName,
+    };
+    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).insertOne(doc);
+    await writeAuditLog(db, {
+      tenantId,
+      action: 'MRP_REGENERATE',
+      entityType: 'material_requirement',
+      entityId: doc.id,
+      summary: existing
+        ? `MRP ${doc.noDokumen} menggantikan ${existing.noDokumen} (${doc.summary.shortageCount} kekurangan)`
+        : `MRP ${doc.noDokumen} dibuat ulang dari ${plan.noDokumen}`,
+      ...auditActor(auth),
+    });
+    return ok({
+      mode: decision.mode,
+      mrp: projectMrp(doc as unknown as Record<string, unknown>),
+      supersededId: decision.mode === 'supersede' ? existing?.id : undefined,
+      supersededNo: decision.mode === 'supersede' ? existing?.noDokumen : undefined,
+      acuanApplied: Boolean(built.acuanByKategori),
+    });
   }
 
   if (path[0] === 'material-requirements' && path[1] && !path[2] && method === 'GET') {
@@ -305,13 +561,16 @@ export async function handleMaterialRequirements({
 
     const actor = actorFields(auth);
     const now = new Date();
+    const acuanNote = built.acuanByKategori
+      ? 'dengan acuan porsi tanggal/dapur'
+      : 'tanpa acuan porsi (pecah proporsional)';
     const history = appendDocHistory(existing.history, {
       at: now,
       fromStatus: existing.status,
       toStatus: existing.status,
       userId: actor.userId,
       userName: actor.userName,
-      note: 'Dihitung ulang',
+      note: `Dihitung ulang ${acuanNote}`,
     });
 
     await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
@@ -325,6 +584,7 @@ export async function handleMaterialRequirements({
           kitchenId: plan.kitchenId,
           kitchenNama: plan.kitchenNama,
           productionPlanNo: plan.noDokumen,
+          acuanByKategori: built.acuanByKategori ?? null,
           history,
           updatedAt: now,
         },

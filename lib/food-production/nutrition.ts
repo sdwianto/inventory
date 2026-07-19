@@ -345,7 +345,7 @@ export function analyzePlanNutrition(input: {
   akgProfile?: string;
 }): NutritionAnalysis | { error: string } {
   const { planLines, menusById, recipesById, productsById } = input;
-  if (!planLines?.length) return { error: 'Rencana tidak punya baris menu' };
+  if (!planLines?.length) return { error: 'Rencana tidak punya baris resep' };
 
   let batch = { ...EMPTY_NUTRITION };
   const lines: NutritionLineBreakdown[] = [];
@@ -354,8 +354,31 @@ export function analyzePlanNutrition(input: {
   let totalPorsi = 0;
 
   for (const pl of planLines) {
-    const menu = menusById.get(pl.menuId);
-    if (!menu) return { error: `Menu ${pl.menuId} tidak ditemukan` };
+    const target = Number(pl.targetPorsi) || 0;
+    totalPorsi = roundQty(totalPorsi + target);
+
+    if (pl.recipeId) {
+      const recipe = recipesById.get(pl.recipeId);
+      if (!recipe) return { error: `Resep ${pl.recipeId} tidak ditemukan` };
+      const recipeAnalysis = analyzeRecipeNutrition({
+        recipe,
+        productsById,
+        akgProfile: input.akgProfile,
+      });
+      batch = addNutrition(batch, scaleNutrition(recipeAnalysis.perPorsi, target));
+      missingProductIds.push(...recipeAnalysis.missingProductIds);
+      for (const l of recipeAnalysis.lines) {
+        lines.push({
+          ...l,
+          contribution: scaleNutrition(l.contribution, target / (recipeAnalysis.yieldPorsi || 1)),
+        });
+      }
+      continue;
+    }
+
+    const menuId = String(pl.menuId || '').trim();
+    const menu = menusById.get(menuId);
+    if (!menu) return { error: `Menu ${menuId || '?'} tidak ditemukan` };
     const menuAnalysis = analyzeMenuNutrition({
       menu,
       recipesById,
@@ -363,8 +386,6 @@ export function analyzePlanNutrition(input: {
       akgProfile: input.akgProfile,
     });
     if ('error' in menuAnalysis) return menuAnalysis;
-    const target = Number(pl.targetPorsi) || 0;
-    totalPorsi = roundQty(totalPorsi + target);
     batch = addNutrition(batch, scaleNutrition(menuAnalysis.perPorsi, target));
     missingProductIds.push(...menuAnalysis.missingProductIds);
     for (const l of menuAnalysis.lines) {

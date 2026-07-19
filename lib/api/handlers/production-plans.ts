@@ -11,6 +11,8 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import {
   PRODUCTION_PLANS_COLLECTION,
   normalizePlanLines,
+  normalizeMaterialOverrides,
+  upsertMaterialOverride,
   isPlanEditable,
   isIsoDate,
   normalizeKategoriPorsiList,
@@ -21,6 +23,7 @@ import {
 } from '@/lib/food-production/production-plan';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
+import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -53,9 +56,19 @@ interface PlanBody extends Record<string, unknown> {
   kategoriPorsi?: string;
   kategoriPorsiList?: unknown;
   lines?: unknown;
+  materialOverrides?: unknown;
   catatan?: string;
   status?: string;
   note?: string;
+  recipeId?: string;
+  productId?: string;
+  qty?: number | null;
+  excluded?: boolean;
+  fallbackQty?: number;
+  productKode?: string;
+  productNama?: string;
+  satuan?: string;
+  clear?: boolean;
 }
 
 async function enrichKitchen(
@@ -82,28 +95,68 @@ async function enrichLines(
   lines: ProductionPlanLine[],
   options?: { requireActive?: boolean; requireMenuItems?: boolean },
 ): Promise<ProductionPlanLine[] | { error: string }> {
-  const ids = lines.map((l) => l.menuId);
-  const menus = await db.collection(MENUS_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: ids } })
-    .project({ id: 1, kode: 1, nama: 1, aktif: 1, version: 1, items: 1 })
-    .toArray();
-  const byId = new Map(menus.map((m) => [String(m.id), m]));
+  const menuIds = [...new Set(lines.map((l) => String(l.menuId || '').trim()).filter(Boolean))];
+  const recipeIds = [...new Set(lines.map((l) => String(l.recipeId || '').trim()).filter(Boolean))];
+
+  const [menus, recipes] = await Promise.all([
+    menuIds.length
+      ? db.collection(MENUS_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: menuIds } })
+        .project({ id: 1, kode: 1, nama: 1, aktif: 1, version: 1, items: 1 })
+        .toArray()
+      : Promise.resolve([]),
+    recipeIds.length
+      ? db.collection(RECIPES_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: recipeIds } })
+        .project({ id: 1, kode: 1, nama: 1, aktif: 1, lines: 1 })
+        .toArray()
+      : Promise.resolve([]),
+  ]);
+  const menuById = new Map(menus.map((m) => [String(m.id), m]));
+  const recipeById = new Map(recipes.map((r) => [String(r.id), r]));
   const out: ProductionPlanLine[] = [];
+
   for (const line of lines) {
-    const m = byId.get(line.menuId);
-    if (!m) return { error: `Menu ${line.menuId} tidak ditemukan` };
+    const recipeId = String(line.recipeId || '').trim();
+    if (recipeId) {
+      const r = recipeById.get(recipeId);
+      if (!r) return { error: `Resep ${recipeId} tidak ditemukan` };
+      if (options?.requireActive !== false && r.aktif === false) {
+        return { error: `Resep ${String(r.kode || recipeId)} nonaktif` };
+      }
+      const rLines = Array.isArray(r.lines) ? r.lines : [];
+      if (options?.requireMenuItems !== false && rLines.length === 0) {
+        return { error: `Resep ${String(r.kode || recipeId)} belum punya bahan` };
+      }
+      out.push({
+        recipeId,
+        recipeKode: line.recipeKode || (r.kode != null ? String(r.kode) : undefined),
+        recipeNama: line.recipeNama || (r.nama != null ? String(r.nama) : undefined),
+        kategoriPorsiList: line.kategoriPorsiList,
+        targetPorsi: line.targetPorsi,
+        notes: line.notes,
+      });
+      continue;
+    }
+
+    const menuId = String(line.menuId || '').trim();
+    const m = menuById.get(menuId);
+    if (!m) return { error: `Menu ${menuId} tidak ditemukan` };
     if (options?.requireActive !== false && m.aktif === false) {
-      return { error: `Menu ${String(m.kode || line.menuId)} nonaktif` };
+      return { error: `Menu ${String(m.kode || menuId)} nonaktif` };
     }
     const items = Array.isArray(m.items) ? m.items : [];
     if (options?.requireMenuItems !== false && items.length === 0) {
-      return { error: `Menu ${String(m.kode || line.menuId)} belum punya resep` };
+      return { error: `Menu ${String(m.kode || menuId)} belum punya resep` };
     }
     out.push({
-      ...line,
+      menuId,
       menuKode: line.menuKode || (m.kode != null ? String(m.kode) : undefined),
       menuNama: line.menuNama || (m.nama != null ? String(m.nama) : undefined),
       menuVersion: Number(m.version) || line.menuVersion || 1,
+      kategoriPorsiList: line.kategoriPorsiList,
+      targetPorsi: line.targetPorsi,
+      notes: line.notes,
     });
   }
   return out;
@@ -311,6 +364,11 @@ export async function handleProductionPlans({
     if (planBody.catatan !== undefined) {
       update.catatan = String(planBody.catatan || '').trim() || null;
     }
+    if (planBody.materialOverrides !== undefined) {
+      const overrides = normalizeMaterialOverrides(planBody.materialOverrides);
+      if ('error' in overrides) return err(overrides.error, 400);
+      update.materialOverrides = overrides;
+    }
 
     await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id }),
@@ -325,6 +383,63 @@ export async function handleProductionPlans({
       entityType: 'production_plan',
       entityId: id,
       summary: `Rencana ${existing.noDokumen} diubah`,
+      ...auditActor(auth),
+    });
+    return ok(projectPlan(saved as Record<string, unknown>));
+  }
+
+  // POST /production-plans/:id/material-override — upsert/hapus 1 qty kebutuhan
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'material-override' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const existing = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!existing) return err('Rencana tidak ditemukan', 404);
+    if (!isPlanEditable(existing.status)) {
+      return err(`Qty kebutuhan hanya dapat diubah saat Draft/Diajukan (status: ${existing.status})`, 400);
+    }
+
+    const clear = planBody.clear === true;
+    const next = upsertMaterialOverride(existing.materialOverrides, {
+      recipeId: String(planBody.recipeId || ''),
+      productId: String(planBody.productId || ''),
+      clear,
+      qty: planBody.qty !== undefined ? (planBody.qty as number | null) : undefined,
+      excluded: planBody.excluded !== undefined ? planBody.excluded === true : undefined,
+      fallbackQty: planBody.fallbackQty != null ? Number(planBody.fallbackQty) : undefined,
+      productKode: planBody.productKode != null ? String(planBody.productKode) : undefined,
+      productNama: planBody.productNama != null ? String(planBody.productNama) : undefined,
+      satuan: planBody.satuan != null ? String(planBody.satuan) : undefined,
+    });
+    if ('error' in next) return err(next.error, 400);
+
+    const now = new Date();
+    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id }),
+      { $set: { materialOverrides: next, updatedAt: now } },
+    );
+    const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
+    const auditBit = clear
+      ? `override dihapus (${planBody.productId})`
+      : planBody.excluded === true
+        ? `bahan dicoret (${planBody.productId})`
+        : planBody.excluded === false
+          ? `coret dibatalkan (${planBody.productId})`
+          : `qty ${planBody.productId}=${planBody.qty}`;
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'PRODUCTION_PLAN_MATERIAL_OVERRIDE',
+      entityType: 'production_plan',
+      entityId: id,
+      summary: `${auditBit} pada ${existing.noDokumen}`,
       ...auditActor(auth),
     });
     return ok(projectPlan(saved as Record<string, unknown>));

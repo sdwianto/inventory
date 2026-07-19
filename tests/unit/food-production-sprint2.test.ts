@@ -45,7 +45,30 @@ describe('food-production sprint 2', () => {
       { productId: 'p1', qty: 2.5, satuan: 'KG', notes: 'beri' },
     ]);
     expect(ok).toEqual([
-      { productId: 'p1', qty: 2.5, satuan: 'KG', notes: 'beri', productKode: undefined, productNama: undefined, uomId: undefined },
+      {
+        productId: 'p1',
+        qty: 2.5,
+        qtyBesar: 2.5,
+        pctKecil: 70,
+        qtyKecil: 1.75,
+        satuan: 'KG',
+        notes: 'beri',
+        productKode: undefined,
+        productNama: undefined,
+        uomId: undefined,
+      },
+    ]);
+    const withPct = normalizeRecipeLines([
+      { productId: 'p1', qtyBesar: 10, pctKecil: 50 },
+    ]);
+    expect(withPct).toEqual([
+      expect.objectContaining({
+        productId: 'p1',
+        qty: 10,
+        qtyBesar: 10,
+        pctKecil: 50,
+        qtyKecil: 5,
+      }),
     ]);
   });
 
@@ -55,7 +78,7 @@ describe('food-production sprint 2', () => {
       { productId: 'p1', qty: 2 },
     ]);
     expect(merged).toEqual([
-      expect.objectContaining({ productId: 'p1', qty: 3 }),
+      expect.objectContaining({ productId: 'p1', qty: 3, qtyBesar: 3, pctKecil: 70, qtyKecil: 2.1 }),
     ]);
 
     expect(normalizeRecipeLines(

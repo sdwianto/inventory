@@ -14,6 +14,7 @@ export const RECIPE_IMPORT_HEADERS = [
   'bahan_kode',
   'bahan_nama',
   'qty',
+  'pct_kecil',
   'satuan',
   'notes',
 ] as const;
@@ -31,6 +32,8 @@ export type RecipeImportLineDraft = {
   bahanKode: string;
   bahanNama: string;
   qty: number;
+  /** % qty kecil terhadap qty besar; default 70 jika kosong. */
+  pctKecil?: number;
   satuan: string;
   notes?: string;
   productId?: string;
@@ -59,37 +62,37 @@ type Cell = string | number | boolean | null | undefined;
 
 /** Baris data paket contoh (tanpa header). */
 export const MBG_RECIPE_SEED_ROWS: Cell[][] = [
-  ['Nasi Putih', 100, '2026-07-17', 2, 'Menu pokok harian', '', 'Beras', 12, 'KG', ''],
-  ['Nasi Putih', 100, '2026-07-17', 2, '', '', 'Air Minum', 18, 'L', ''],
-  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, 'Lauk hewani', '', 'Ayam', 20, 'KG', ''],
-  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Tepung Terigu', 3, 'KG', ''],
-  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Minyak Goreng', 4, 'L', ''],
-  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Bawang Putih', 0.5, 'KG', ''],
-  ['Tempe Orek', 100, '2026-07-17', 3, 'Lauk nabati', '', 'Tempe', 10, 'KG', ''],
-  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Cabai Merah', 1, 'KG', ''],
-  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Bawang Merah', 1, 'KG', ''],
-  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Minyak Goreng', 1.5, 'L', ''],
-  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Tahu', 12, 'KG', ''],
-  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Gula Merah', 1, 'KG', ''],
-  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Bawang Putih', 0.3, 'KG', ''],
-  ['Sayur Sop', 100, '2026-07-17', 4, 'Sayur', '', 'Wortel', 4, 'KG', ''],
-  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Kentang', 4, 'KG', ''],
-  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Kol', 5, 'KG', ''],
-  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Bawang Putih', 0.4, 'KG', ''],
-  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Kangkung', 8, 'KG', ''],
-  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Cabai Merah', 0.5, 'KG', ''],
-  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Bawang Putih', 0.3, 'KG', ''],
-  ['Telur Dadar', 100, '2026-07-17', 3, '', '', 'Telur Ayam', 12, 'KG', ''],
-  ['Telur Dadar', 100, '2026-07-17', 3, '', '', 'Minyak Goreng', 1, 'L', ''],
-  ['Buah Pisang', 100, '2026-07-17', 1, 'Snack buah', '', 'Pisang', 15, 'KG', ''],
-  ['Susu Cair', 100, '2026-07-17', 1, 'Minuman', '', 'Susu', 20, 'L', ''],
+  ['Nasi Putih', 100, '2026-07-17', 2, 'Menu pokok harian', '', 'Beras', 12, 70, 'KG', ''],
+  ['Nasi Putih', 100, '2026-07-17', 2, '', '', 'Air Minum', 18, 70, 'L', ''],
+  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, 'Lauk hewani', '', 'Ayam', 20, 70, 'KG', ''],
+  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Tepung Terigu', 3, 70, 'KG', ''],
+  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Minyak Goreng', 4, 70, 'L', ''],
+  ['Ayam Goreng Crispy', 100, '2026-07-17', 5, '', '', 'Bawang Putih', 0.5, 70, 'KG', ''],
+  ['Tempe Orek', 100, '2026-07-17', 3, 'Lauk nabati', '', 'Tempe', 10, 70, 'KG', ''],
+  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Cabai Merah', 1, 70, 'KG', ''],
+  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Bawang Merah', 1, 70, 'KG', ''],
+  ['Tempe Orek', 100, '2026-07-17', 3, '', '', 'Minyak Goreng', 1.5, 70, 'L', ''],
+  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Tahu', 12, 70, 'KG', ''],
+  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Gula Merah', 1, 70, 'KG', ''],
+  ['Tahu Bacem', 100, '2026-07-17', 3, '', '', 'Bawang Putih', 0.3, 70, 'KG', ''],
+  ['Sayur Sop', 100, '2026-07-17', 4, 'Sayur', '', 'Wortel', 4, 70, 'KG', ''],
+  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Kentang', 4, 70, 'KG', ''],
+  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Kol', 5, 70, 'KG', ''],
+  ['Sayur Sop', 100, '2026-07-17', 4, '', '', 'Bawang Putih', 0.4, 70, 'KG', ''],
+  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Kangkung', 8, 70, 'KG', ''],
+  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Cabai Merah', 0.5, 70, 'KG', ''],
+  ['Tumis Kangkung', 100, '2026-07-17', 3, '', '', 'Bawang Putih', 0.3, 70, 'KG', ''],
+  ['Telur Dadar', 100, '2026-07-17', 3, '', '', 'Telur Ayam', 12, 70, 'KG', ''],
+  ['Telur Dadar', 100, '2026-07-17', 3, '', '', 'Minyak Goreng', 1, 70, 'L', ''],
+  ['Buah Pisang', 100, '2026-07-17', 1, 'Snack buah', '', 'Pisang', 15, 70, 'KG', ''],
+  ['Susu Cair', 100, '2026-07-17', 1, 'Minuman', '', 'Susu', 20, 70, 'L', ''],
 ];
 
 export const RECIPE_IMPORT_TEMPLATE_ROWS: Cell[][] = [
-  ['Contoh Ayam Goreng', 100, '2026-07-17', 5, 'Ganti bahan_kode dengan kode produk Anda', 'AYAM', 'Ayam Fillet', 20, 'KG', 'opsional'],
-  ['Contoh Ayam Goreng', 100, '2026-07-17', 5, '', 'TEPUNG', 'Tepung Terigu', 3, 'KG', ''],
-  ['Contoh Sayur Sop', 100, '2026-07-17', 3, '', 'WORTEL', 'Wortel', 4, 'KG', ''],
-  ['Contoh Sayur Sop', 100, '2026-07-17', 3, '', '', 'Kentang', 4, 'KG', 'match by nama jika kode kosong'],
+  ['Contoh Ayam Goreng', 100, '2026-07-17', 5, 'Ganti bahan_kode dengan kode produk Anda', 'AYAM', 'Ayam Fillet', 20, 70, 'KG', 'opsional'],
+  ['Contoh Ayam Goreng', 100, '2026-07-17', 5, '', 'TEPUNG', 'Tepung Terigu', 3, 70, 'KG', ''],
+  ['Contoh Sayur Sop', 100, '2026-07-17', 3, '', 'WORTEL', 'Wortel', 4, 70, 'KG', ''],
+  ['Contoh Sayur Sop', 100, '2026-07-17', 3, '', '', 'Kentang', 4, 70, 'KG', 'match by nama jika kode kosong'],
 ];
 
 function cellStr(v: Cell): string {
@@ -220,10 +223,17 @@ export function parseRecipeImportAoa(
     }
 
     const matched = matchImportProduct(products, bahanKode, bahanNama);
+    const pctRaw = getS('pct_kecil');
+    const pctKecil = pctRaw !== '' ? Number(pctRaw) : undefined;
+    if (pctKecil != null && (!Number.isFinite(pctKecil) || pctKecil < 1 || pctKecil > 100)) {
+      errors.push(`Baris ${r + 1}: pct_kecil harus 1–100`);
+      continue;
+    }
     const line: RecipeImportLineDraft = {
       bahanKode,
       bahanNama,
       qty,
+      pctKecil: pctKecil != null && Number.isFinite(pctKecil) ? pctKecil : undefined,
       satuan: getS('satuan') || matched?.product.satuan || '',
       notes: getS('notes') || undefined,
       match: matched?.match || 'none',

@@ -1,12 +1,14 @@
 // Nomor dokumen berurutan per tenant (SO, DO, INV, dll.).
 
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
+import { txOpts } from '@/lib/api/transaction';
 
 export async function nextDocNumber(
   db: Db,
   tenantId: string | null | undefined,
   docType: string,
   prefix: string,
+  session?: ClientSession,
 ): Promise<string> {
   const tid = tenantId || 'default';
   const result = await db.collection('document_sequences').findOneAndUpdate(
@@ -16,7 +18,7 @@ export async function nextDocNumber(
       $setOnInsert: { prefix, createdAt: new Date() },
       $set: { updatedAt: new Date() },
     },
-    { upsert: true, returnDocument: 'after' },
+    { upsert: true, returnDocument: 'after', ...txOpts(session) },
   );
   const n = Number(result?.lastNumber || 1);
   const p = String(result?.prefix || prefix);

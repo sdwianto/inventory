@@ -5,15 +5,25 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
-import type { RecipeDoc } from '@/lib/food-production/recipe';
-import type { ProductionPlanDoc } from '@/lib/food-production/production-plan';
+import {
+  recipeQtyForFamily,
+  splitPorsiByKategoriFamily,
+  type RecipeDoc,
+} from '@/lib/food-production/recipe';
+import {
+  materialExcludedSet,
+  materialOverrideKey,
+  materialOverridesMap,
+  resolvePlanLineRecipeSlots,
+  type ProductionPlanDoc,
+} from '@/lib/food-production/production-plan';
 
 export const MATERIAL_REQUIREMENTS_COLLECTION = 'material_requirements';
 
 export type MaterialRequirementStatus = FpDocStatus;
 
 export interface MrpSourceRef {
-  menuId: string;
+  menuId?: string;
   menuKode?: string;
   recipeId: string;
   recipeKode?: string;
@@ -55,11 +65,43 @@ export interface MaterialRequirementDoc {
     /** Soft warnings (e.g. menu version drift vs plan snapshot). */
     warnings?: string[];
   };
+  /** Snapshot acuan porsi saat explode (audit / rehitungkan). */
+  acuanByKategori?: Partial<Record<string, number>> | null;
   catatan?: string;
   createdAt: Date;
   updatedAt: Date;
   createdBy?: string;
   createdByName?: string;
+}
+
+/** Strategi regenerasi MRP setelah acuan/resep berubah. */
+export type MrpRegenerateMode = 'recalculate' | 'supersede' | 'create' | 'blocked';
+
+export function decideMrpRegenerateMode(input: {
+  existingStatus?: string | null;
+  hasBlockingIssue: boolean;
+  hasBlockingPr: boolean;
+}): { mode: MrpRegenerateMode; error?: string } {
+  if (input.hasBlockingIssue) {
+    return {
+      mode: 'blocked',
+      error: 'Ada pengeluaran bahan terkait rencana ini. Batalkan pengeluaran dulu atau koreksi manual.',
+    };
+  }
+  if (input.hasBlockingPr) {
+    return {
+      mode: 'blocked',
+      error: 'Ada permintaan pembelian (PR) aktif terkait MRP ini. Batalkan PR dulu.',
+    };
+  }
+  const s = String(input.existingStatus || '').trim();
+  if (!s || s === 'CANCELLED') return { mode: 'create' };
+  if (s === 'DRAFT' || s === 'SUBMITTED') return { mode: 'recalculate' };
+  if (s === 'APPROVED') return { mode: 'supersede' };
+  return {
+    mode: 'blocked',
+    error: `Status MRP ${s} tidak dapat dihitung ulang`,
+  };
 }
 
 /** Plan statuses eligible for MRP calculation. */
@@ -95,12 +137,26 @@ export function scaleRecipeIngredientQty(
 }
 
 export type ExplodeMrpInput = {
-  plan: Pick<ProductionPlanDoc, 'id' | 'noDokumen' | 'tanggal' | 'kitchenId' | 'kitchenNama' | 'kitchenWarehouseKode' | 'lines' | 'status'>;
+  plan: Pick<
+    ProductionPlanDoc,
+    | 'id'
+    | 'noDokumen'
+    | 'tanggal'
+    | 'kitchenId'
+    | 'kitchenNama'
+    | 'kitchenWarehouseKode'
+    | 'lines'
+    | 'status'
+    | 'kategoriPorsiList'
+    | 'materialOverrides'
+  >;
   menusById: Map<string, MenuDoc>;
   recipesById: Map<string, RecipeDoc>;
   /** productId → on-hand qty at kitchen warehouse */
   onHandByProduct: Map<string, number>;
   warehouseKode: string;
+  /** Optional acuan porsi per kategori (tanggal/dapur) untuk pecah besar vs kecil. */
+  acuanByKategori?: Partial<Record<string, number>> | null;
 };
 
 export type ExplodeMrpResult =
@@ -109,8 +165,8 @@ export type ExplodeMrpResult =
 
 /** Pure explosion — unit-tested without Mongo. */
 export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpResult {
-  const { plan, menusById, recipesById, onHandByProduct, warehouseKode } = input;
-  if (!plan.lines?.length) return { ok: false, error: 'Rencana tidak punya baris menu' };
+  const { plan, menusById, recipesById, onHandByProduct, warehouseKode, acuanByKategori } = input;
+  if (!plan.lines?.length) return { ok: false, error: 'Rencana tidak punya baris resep' };
   if (!warehouseKode) return { ok: false, error: 'Gudang dapur wajib untuk MRP' };
 
   type Acc = {
@@ -122,53 +178,72 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
   };
   const acc = new Map<string, Acc>();
   const warnings: string[] = [];
+  const overrideQtyByKey = materialOverridesMap(plan.materialOverrides);
+  const excludedKeys = materialExcludedSet(plan.materialOverrides);
+  if (overrideQtyByKey.size) {
+    warnings.push(`${overrideQtyByKey.size} qty kebutuhan diubah manual di rencana`);
+  }
+  if (excludedKeys.size) {
+    warnings.push(`${excludedKeys.size} bahan dicoret (tidak masuk kebutuhan)`);
+  }
 
   for (const planLine of plan.lines) {
-    const menu = menusById.get(planLine.menuId);
-    if (!menu) return { ok: false, error: `Menu ${planLine.menuId} tidak ditemukan` };
-    if (menu.aktif === false) {
-      return { ok: false, error: `Menu ${menu.kode || planLine.menuId} nonaktif` };
-    }
-    if (!menu.items?.length) {
-      return { ok: false, error: `Menu ${menu.kode || planLine.menuId} belum punya resep` };
-    }
-    if (
-      planLine.menuVersion != null
-      && menu.version != null
-      && Number(planLine.menuVersion) !== Number(menu.version)
-    ) {
-      warnings.push(
-        `Menu ${menu.kode}: rencana memakai v${planLine.menuVersion}, master sekarang v${menu.version}`,
-      );
-    }
     const targetPorsi = Number(planLine.targetPorsi) || 0;
     if (targetPorsi <= 0) {
-      return { ok: false, error: `Target porsi menu ${menu.kode || planLine.menuId} tidak valid` };
+      return { ok: false, error: 'Target porsi baris rencana tidak valid' };
     }
 
-    for (const item of menu.items) {
-      const recipe = recipesById.get(item.recipeId);
+    if (planLine.menuId && !planLine.recipeId) {
+      const menu = menusById.get(planLine.menuId);
+      if (
+        menu
+        && planLine.menuVersion != null
+        && menu.version != null
+        && Number(planLine.menuVersion) !== Number(menu.version)
+      ) {
+        warnings.push(
+          `Menu ${menu.kode}: rencana memakai v${planLine.menuVersion}, master sekarang v${menu.version}`,
+        );
+      }
+    }
+
+    const resolved = resolvePlanLineRecipeSlots(planLine, menusById);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+
+    const kpList = planLine.kategoriPorsiList?.length
+      ? planLine.kategoriPorsiList
+      : (plan.kategoriPorsiList || []);
+    const split = splitPorsiByKategoriFamily(kpList, targetPorsi, acuanByKategori);
+
+    for (const slot of resolved.slots) {
+      const recipe = recipesById.get(slot.recipeId);
       if (!recipe) {
-        return { ok: false, error: `Resep ${item.recipeId} tidak ditemukan (menu ${menu.kode})` };
+        return { ok: false, error: `Resep ${slot.recipeId} tidak ditemukan` };
       }
       if (recipe.aktif === false) {
-        return { ok: false, error: `Resep ${recipe.kode} nonaktif (menu ${menu.kode})` };
+        return { ok: false, error: `Resep ${recipe.kode || slot.recipeId} nonaktif` };
       }
       if (!recipe.lines?.length) {
-        return { ok: false, error: `Resep ${recipe.kode} belum punya bahan` };
+        return { ok: false, error: `Resep ${recipe.kode || slot.recipeId} belum punya bahan` };
       }
-      const recipePorsiNeeded = targetPorsi * (Number(item.porsi) || 1);
+      const factor = Number(slot.recipeFactor) || 1;
+      const porsiBesarNeeded = split.porsiBesar * factor;
+      const porsiKecilNeeded = split.porsiKecil * factor;
       const yieldQty = Number(recipe.yieldQty) > 0 ? Number(recipe.yieldQty) : 1;
       const wastePct = Number(recipe.wastePct) || 0;
 
       for (const rLine of recipe.lines) {
-        const add = scaleRecipeIngredientQty(
-          Number(rLine.qty) || 0,
-          recipePorsiNeeded,
-          yieldQty,
-          wastePct,
-        );
-        if (add <= 0) continue;
+        const qtyBesar = recipeQtyForFamily(rLine, 'BESAR');
+        const qtyKecil = recipeQtyForFamily(rLine, 'KECIL');
+        const addBesar = scaleRecipeIngredientQty(qtyBesar, porsiBesarNeeded, yieldQty, wastePct);
+        const addKecil = scaleRecipeIngredientQty(qtyKecil, porsiKecilNeeded, yieldQty, wastePct);
+        const computed = addBesar + addKecil;
+        const ovKey = materialOverrideKey(recipe.id, rLine.productId);
+        if (excludedKeys.has(ovKey)) continue;
+        const add = overrideQtyByKey.has(ovKey)
+          ? Number(overrideQtyByKey.get(ovKey)) || 0
+          : computed;
+        if (!(add > 0)) continue;
         const prev = acc.get(rLine.productId) || {
           productKode: rLine.productKode,
           productNama: rLine.productNama,
@@ -181,8 +256,8 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         prev.productNama = prev.productNama || rLine.productNama;
         prev.satuan = prev.satuan || rLine.satuan;
         prev.sources.push({
-          menuId: menu.id,
-          menuKode: menu.kode,
+          menuId: slot.menuId,
+          menuKode: slot.menuKode,
           recipeId: recipe.id,
           recipeKode: recipe.kode,
           qty: roundQty(add),

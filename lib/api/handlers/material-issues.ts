@@ -27,7 +27,6 @@ import {
 } from '@/lib/food-production/material-issue';
 import {
   MATERIAL_REQUIREMENTS_COLLECTION,
-  explodeMaterialRequirements,
   type MaterialRequirementDoc,
 } from '@/lib/food-production/material-requirement';
 import {
@@ -35,10 +34,7 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
-import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
-import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
-import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import {
   FP_DOC_TYPES,
@@ -181,37 +177,9 @@ async function seedLinesFromPlan(
     }
   }
 
-  const tenantFilter = withTenantFilter(scopeAuth, {});
-  const menuIds = [...new Set((plan.lines || []).map((l) => l.menuId))];
-  const menus = await db.collection(MENUS_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: menuIds } })
-    .toArray() as unknown as MenuDoc[];
-  if (menus.length !== menuIds.length) return { error: 'Menu rencana tidak lengkap' };
-  const recipesIds = [...new Set(menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)))];
-  const recipes = await db.collection(RECIPES_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: recipesIds } })
-    .toArray() as unknown as RecipeDoc[];
-  const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
-  const tid = tenantIdForWrite(scopeAuth, {});
-  const products = await db.collection('products')
-    .find({ ...tenantFilter, id: { $in: productIds } })
-    .project({ id: 1, gudangKode: 1 })
-    .toArray();
-  const productById = new Map(products.map((p) => [String(p.id), p]));
-  const stockMap = await getStokByWarehouseBatch(db, tid, productIds);
-  const onHandByProduct = new Map<string, number>();
-  for (const pid of productIds) {
-    const stockWh = resolveProductGudangKode(productById.get(pid) as { gudangKode?: string } | undefined);
-    onHandByProduct.set(pid, Number((stockMap.get(pid) || {})[stockWh] || 0));
-  }
-  const exploded = explodeMaterialRequirements({
-    plan,
-    menusById: new Map(menus.map((m) => [m.id, m])),
-    recipesById: new Map(recipes.map((r) => [r.id, r])),
-    onHandByProduct,
-    warehouseKode,
-  });
-  if (!exploded.ok) return { error: exploded.error };
+  // Fallback: explode langsung dari rencana + acuan porsi tanggal/dapur
+  const exploded = await buildPlanMaterialExplosion(db, scopeAuth, plan);
+  if ('error' in exploded) return { error: String(exploded.error || 'Gagal hitung bahan') };
   const lines = await enrichIssueLineWarehouses(
     db,
     scopeAuth,
@@ -219,7 +187,7 @@ async function seedLinesFromPlan(
     warehouseKode,
   );
   if (!lines.length) return { error: 'Tidak ada bahan dari rencana' };
-  return { lines, warehouseKode };
+  return { lines, warehouseKode: String(exploded.warehouseKode || warehouseKode) };
 }
 
 async function assertIssueProductsActive(

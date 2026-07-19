@@ -1,7 +1,13 @@
 /** Tarik status SO terbaru dari sales.app untuk sinkron cancel baris PO. */
 
 import type { Db } from 'mongodb';
-import { syncCpoFromSoPayload, rollupPartialCancelStatus } from '@/lib/api/cpo-line-cancel-sync';
+import {
+  syncCpoFromSoPayload,
+  rollupPartialCancelStatus,
+  diffPoItemsAgainstActiveSo,
+  applyCancelledLinesToPoItems,
+  type CpoLineCancelRecord,
+} from '@/lib/api/cpo-line-cancel-sync';
 import { fetchSoStatusForCustomerPo } from '@/lib/api/cpo-so-fetch';
 import {
   enrichSubmissionsWithSoFromSales,
@@ -15,6 +21,8 @@ import type { JsonObject } from '@/types/json';
 /** Status PO yang tidak boleh diturunkan saat sync cancel baris dari SO. */
 const PRESERVE_PO_STATUS = new Set([
   'PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED', 'CANCELLED',
+  // PO yang sudah dikirim vendor: jangan turunkan status hanya karena mismatch sync
+  'SHIPPED', 'PARTIAL_SHIPPED',
 ]);
 
 /** Status PO yang perlu pull status SO dari sales.app. */
@@ -38,6 +46,11 @@ function vendorIdsFromPo(po: JsonObject): string[] {
     .map((it) => String(it.vendorTenantId || ''))
     .filter(Boolean);
   return [...new Set(fromItems)];
+}
+
+function isMultiVendorPo(po: JsonObject): boolean {
+  if (String(po.vendorTenantId || '') === 'multi') return true;
+  return vendorIdsFromPo(po).length > 1;
 }
 
 /** Backfill nomor SO yang hilang setelah submit (lookup sales.app). */
@@ -124,66 +137,128 @@ function poNeedsSoPull(po: JsonObject): boolean {
   if (!SO_PULL_STATUSES.has(st)) return false;
   if (!String(po.noPO || '')) return false;
   if (!poHasVendorSoNumbers(po)) return false;
-  return !(po.items as JsonObject[] | undefined)?.some((it) => it.cancelled);
+  // Tetap pull meskipun ada baris cancelled — agar mismatch sync bisa dipulihkan
+  return true;
 }
 
-/** Pull SO state dari sales.app dan patch PO jika ada perubahan baris. */
+type CpoLine = JsonObject & {
+  cancelled?: boolean;
+  vendorTenantId?: string;
+  kode?: string;
+  nama?: string;
+  qty?: number | string;
+};
+
+/** Pull SO state dari sales.app — per vendor agar item vendor lain tidak ikut tercoret. */
 export async function pullSoCancelStateForPo(
   db: Db,
   po: JsonObject,
 ): Promise<{ updated: boolean; error?: string }> {
   const tenantId = String(po.tenantId || 'default');
   const subs = Array.isArray(po.vendorSubmissions) ? po.vendorSubmissions as JsonObject[] : [];
-  const vendorTenantId = String(
-    po.vendorTenantId === 'multi'
-      ? subs[0]?.vendorTenantId || ''
-      : po.vendorTenantId || subs[0]?.vendorTenantId || '',
-  );
+  const multi = isMultiVendorPo(po);
 
-  const fetched = await fetchSoStatusForCustomerPo(db, tenantId, {
-    customerPoId: String(po.id || ''),
-    noPO: String(po.noPO || ''),
-    noSO: String(po.vendorNoSO || ''),
-    vendorTenantId: vendorTenantId || undefined,
-  });
-  if (fetched.error || !fetched.payload) return { updated: false, error: fetched.error };
+  const targets: Array<{ vendorTenantId: string; noSO?: string }> = [];
+  if (subs.length) {
+    for (const s of subs) {
+      const vid = String(s.vendorTenantId || '').trim();
+      if (!vid) continue;
+      targets.push({
+        vendorTenantId: vid,
+        noSO: String(s.vendorNoSO || '').trim() || undefined,
+      });
+    }
+  }
+  if (!targets.length) {
+    const vid = String(po.vendorTenantId === 'multi' ? '' : po.vendorTenantId || '').trim();
+    targets.push({
+      vendorTenantId: vid,
+      noSO: String(po.vendorNoSO || '').trim() || undefined,
+    });
+  }
 
-  const payload = fetched.payload;
-  const synced = syncCpoFromSoPayload(po, {
-    salesOrderId: payload.salesOrderId,
-    noSO: payload.noSO,
-    noPO: payload.noPO || po.noPO,
-    customerPoId: po.id,
-    items: payload.items,
-    cancelledLines: payload.cancelledItems || payload.cancelledLines,
-    subTotal: payload.subTotal,
-    ppn: payload.ppn,
-    total: payload.total,
-    updatedAt: payload.updatedAt,
-  });
+  let items = (Array.isArray(po.items) ? [...po.items] : []) as CpoLine[];
+  let cancelledSoLines = Array.isArray(po.cancelledSoLines)
+    ? [...(po.cancelledSoLines as JsonObject[])]
+    : undefined;
+  let primarySnap: ReturnType<typeof buildVendorSoSnapshot> | undefined;
+  let lastError: string | undefined;
+  let anyFetchOk = false;
+  const now = new Date();
 
-  const itemsChanged = JSON.stringify(synced.items) !== JSON.stringify(po.items);
-  const reconciledStatus = synced.status || rollupPartialCancelStatus(
-    synced.items as Parameters<typeof rollupPartialCancelStatus>[0],
+  for (const target of targets) {
+    const fetched = await fetchSoStatusForCustomerPo(db, tenantId, {
+      customerPoId: String(po.id || ''),
+      noPO: String(po.noPO || ''),
+      noSO: target.noSO,
+      vendorTenantId: target.vendorTenantId || undefined,
+    });
+    if (fetched.error || !fetched.payload) {
+      lastError = fetched.error;
+      continue;
+    }
+    anyFetchOk = true;
+    const payload = fetched.payload;
+    const vendorId = String(target.vendorTenantId || payload.vendorTenantId || '').trim();
+    const meta = {
+      salesOrderId: String(payload.salesOrderId || ''),
+      noSO: String(payload.noSO || target.noSO || ''),
+      vendorTenantId: vendorId || undefined,
+    };
+
+    const cancelledRaw = [
+      ...(Array.isArray(payload.cancelledItems) ? payload.cancelledItems : []),
+      ...(Array.isArray(payload.cancelledLines) ? payload.cancelledLines : []),
+    ] as CpoLineCancelRecord[];
+
+    if (cancelledRaw.length) {
+      items = applyCancelledLinesToPoItems(items, cancelledRaw, meta, now) as CpoLine[];
+    }
+
+    const activeItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
+    if (activeItems.length) {
+      items = diffPoItemsAgainstActiveSo(
+        items,
+        activeItems,
+        meta,
+        now,
+        vendorId
+          ? { vendorTenantId: vendorId, onlyVendorLines: multi }
+          : undefined,
+      ) as CpoLine[];
+    }
+
+    const snap = buildVendorSoSnapshot({
+      ...payload,
+      salesOrderId: payload.salesOrderId,
+      noSO: payload.noSO,
+    });
+    if (snap && !primarySnap) primarySnap = snap;
+  }
+
+  if (!anyFetchOk) return { updated: false, error: lastError };
+
+  const reconciledStatus = rollupPartialCancelStatus(
+    items as Parameters<typeof rollupPartialCancelStatus>[0],
     String(po.status || ''),
   );
-  const preserveHard = ['PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED'].includes(String(po.status || ''));
+  const preserveHard = PRESERVE_PO_STATUS.has(String(po.status || ''));
   const nextStatus = preserveHard ? String(po.status) : reconciledStatus;
   const statusChanged = !preserveHard && nextStatus !== po.status;
-  const auditChanged = JSON.stringify(synced.cancelledSoLines || []) !== JSON.stringify(po.cancelledSoLines || []);
-  if (!itemsChanged && !statusChanged && !auditChanged) return { updated: false };
+  const itemsChanged = JSON.stringify(items) !== JSON.stringify(po.items);
+  if (!itemsChanged && !statusChanged) return { updated: false };
 
   await db.collection('customer_purchase_orders').updateOne(
     { id: po.id },
     {
       $set: {
-        items: synced.items,
-        ...(synced.vendorSoSnapshot ? { vendorSoSnapshot: synced.vendorSoSnapshot } : {}),
-        ...(synced.cancelledSoLines ? { cancelledSoLines: synced.cancelledSoLines } : {}),
+        items,
+        ...(primarySnap ? { vendorSoSnapshot: primarySnap } : {}),
+        ...(cancelledSoLines?.length ? { cancelledSoLines } : {}),
         ...(statusChanged ? { status: nextStatus } : {}),
         lastVendorEvent: 'sales_order.updated',
-        lastVendorEventAt: new Date(),
-        updatedAt: new Date(),
+        lastVendorEventAt: now,
+        updatedAt: now,
       },
     },
   );
@@ -214,7 +289,8 @@ export async function enrichPoListWithSoCancelState(
       const fresh = await db.collection('customer_purchase_orders').findOne({ id: po.id }) as JsonObject | null;
       if (fresh) pulled.set(String(po.id), fresh);
     } else if (result.error) {
-      // Tetap coba diff dari snapshot lokal jika pull gagal
+      // Snapshot lokal hanya aman untuk PO single-vendor
+      if (isMultiVendorPo(po)) return;
       const snapItems = (po.vendorSoSnapshot as JsonObject | undefined)?.items;
       if (Array.isArray(snapItems) && snapItems.length && snapItems.length < (po.items as JsonObject[]).length) {
         const items = syncCpoFromSoPayload(po, {
@@ -234,7 +310,10 @@ export async function enrichPoListWithSoCancelState(
     const row = fresh || po;
     const items = (row.items || []) as JsonObject[];
     const repairedStatus = rollupPartialCancelStatus(items as Parameters<typeof rollupPartialCancelStatus>[0], String(row.status || ''));
-    if (repairedStatus !== row.status) {
+    if (
+      repairedStatus !== row.status
+      && !PRESERVE_PO_STATUS.has(String(row.status || ''))
+    ) {
       void db.collection('customer_purchase_orders').updateOne(
         { id: row.id },
         { $set: { status: repairedStatus, updatedAt: new Date() }, ...(repairedStatus !== 'CANCELLED' ? { $unset: { cancelledAt: '', cancelReason: '' } } : {}) },
@@ -244,6 +323,8 @@ export async function enrichPoListWithSoCancelState(
     if (fresh) return fresh;
     const hasCancel = items.some((it) => it.cancelled);
     if (hasCancel) return row;
+    // Jangan coret dari snapshot tunggal pada PO multi-vendor
+    if (isMultiVendorPo(po)) return po;
     const snapItems = (po.vendorSoSnapshot as JsonObject | undefined)?.items;
     if (!Array.isArray(snapItems) || !snapItems.length) return po;
     if (snapItems.length >= (po.items as JsonObject[]).length) return po;

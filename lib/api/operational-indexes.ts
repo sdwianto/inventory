@@ -21,11 +21,14 @@ interface IndexSpec {
 
 const INDEX_SPECS: IndexSpec[] = [
   { collection: 'jurnal', index: { tenantId: 1, tanggal: -1 }, name: 'idx_jurnal_tenant_tanggal' },
+  { collection: 'jurnal', index: { tenantId: 1, noJurnal: 1 }, name: 'uniq_jurnal_tenant_no', unique: true },
   { collection: 'stok_kartu', index: { tenantId: 1, stokId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_stok_tgl' },
   { collection: 'stok_kartu', index: { tenantId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_tanggal' },
   { collection: 'stok_lokasi', index: { tenantId: 1, stokId: 1, lokasiKode: 1 }, name: 'idx_stok_lokasi_tenant_stok_gudang' },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_penyesuaian_tenant_tanggal' },
+  { collection: 'penyesuaian_stok', index: { tenantId: 1, noPenyesuaian: 1 }, name: 'uniq_penyesuaian_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, supplierId: 1, status: 1 }, name: 'idx_hutang_tenant_supplier' },
+  { collection: 'hutang', index: { tenantId: 1, noHutang: 1 }, name: 'uniq_hutang_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, vendorInvoiceId: 1 }, name: 'idx_hutang_vendor_invoice' },
   { collection: 'hutang', index: { tenantId: 1, approvalStatus: 1, approvedAt: -1 }, name: 'idx_hutang_tenant_approval_at' },
   { collection: 'hutang', index: { tenantId: 1, noPO: 1 }, name: 'idx_hutang_tenant_nopo' },
@@ -54,14 +57,22 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'maintenance_requests', index: { tenantId: 1, scheduleId: 1 }, name: 'idx_mwr_tenant_schedule' },
   { collection: 'procurement_expenses', index: { tenantId: 1, tanggal: -1 }, name: 'idx_proc_exp_tenant_tanggal' },
   { collection: 'inventory_releases', index: { tenantId: 1, tanggal: -1 }, name: 'idx_inv_release_tenant_tanggal' },
+  { collection: 'inventory_releases', index: { tenantId: 1, noRelease: 1 }, name: 'uniq_inv_release_tenant_no', unique: true },
   { collection: 'api_keys', index: { keyHash: 1 }, name: 'uniq_api_key_hash', unique: true },
   { collection: 'webhook_subscriptions', index: { tenantId: 1, event: 1 }, name: 'idx_webhook_tenant_event' },
   { collection: 'document_sequences', index: { tenantId: 1, docType: 1 }, name: 'uniq_doc_sequence', unique: true },
   { collection: 'goods_receipts', index: { tenantId: 1, tanggal: -1 }, name: 'idx_grn_tenant_tanggal' },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1 }, name: 'idx_grn_tenant_status' },
   { collection: 'goods_receipts', index: { tenantId: 1, noDO: 1 }, name: 'idx_grn_tenant_nodo' },
+  { collection: 'goods_receipts', index: { tenantId: 1, noGRN: 1 }, name: 'uniq_grn_tenant_no', unique: true },
   { collection: 'goods_receipts', index: { tenantId: 1, noPO: 1, postedAt: -1 }, name: 'idx_grn_tenant_nopo_posted' },
-  { collection: 'goods_receipts', index: { tenantId: 1, vendorDeliveryId: 1 }, name: 'idx_grn_tenant_delivery' },
+  {
+    collection: 'goods_receipts',
+    index: { tenantId: 1, vendorDeliveryId: 1 },
+    name: 'uniq_grn_tenant_vendor_delivery',
+    unique: true,
+    partialFilterExpression: { vendorDeliveryId: { $type: 'string', $gt: '' } },
+  },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1, 'items.vendorKode': 1 }, name: 'idx_grn_tenant_status_kode' },
   { collection: 'bg_jobs', index: { status: 1, createdAt: 1 }, name: 'idx_bg_jobs_status_created' },
   { collection: 'bg_jobs', index: { grnId: 1, type: 1 }, name: 'idx_bg_jobs_grn_type' },
@@ -198,6 +209,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'products', index: { tenantId: 1, nama: 'text', kode: 'text', barcode: 'text' }, name: 'idx_products_text_search' },
   { collection: 'users', index: { emailNormalized: 1, tenantId: 1 }, name: 'uniq_users_email_norm_tenant', unique: true, partialFilterExpression: { emailNormalized: { $exists: true, $type: 'string' } } },
   { collection: 'transfer_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_transfer_stok_tenant_tanggal' },
+  { collection: 'transfer_stok', index: { tenantId: 1, noTransfer: 1 }, name: 'uniq_transfer_tenant_no', unique: true },
   { collection: 'inventory_releases', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_inv_release_tenant_wr' },
   { collection: 'dashboard_snapshots', index: { expiresAt: 1 }, name: 'idx_dashboard_snapshot_expires', expireAfterSeconds: 0 },
 ];
@@ -269,6 +281,8 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   await dropIndexIfExists(db, 'users', 'uniq_users_email_norm_tenant');
   await dropIndexIfExists(db, 'recipes', 'idx_recipes_tenant_kode_ver');
   await dropIndexIfExists(db, 'menus', 'idx_menus_tenant_kode_ver');
+  // Ganti index non-unique lama → unique partial (cegah GRN dobel dari DO yang sama).
+  await dropIndexIfExists(db, 'goods_receipts', 'idx_grn_tenant_delivery');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

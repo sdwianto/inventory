@@ -10,7 +10,11 @@ import { buildFoodDashboardSnapshot, type FoodDashboardKpis } from '@/lib/food-p
 import { FP_MGMT_READ_ROLES } from '@/lib/food-production/roles';
 import { parseHorizon, buildMaterialForecast, type DailyConsumptionPoint } from '@/lib/food-production/forecast';
 import { analyzeActualCost, analyzePlanStandardCost, type ProductCostRef } from '@/lib/food-production/cost';
-import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
+import {
+  PRODUCTION_PLANS_COLLECTION,
+  collectPlanLineRefs,
+  type ProductionPlanDoc,
+} from '@/lib/food-production/production-plan';
 import { MATERIAL_ISSUES_COLLECTION, type MaterialIssueDoc } from '@/lib/food-production/material-issue';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
@@ -124,13 +128,21 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
       .toArray() as unknown as ProductionPlanDoc[];
     let costVarianceAlerts = 0;
     for (const plan of completedPlans) {
-      const menus = await db.collection(MENUS_COLLECTION)
-        .find({ ...tf, id: { $in: (plan.lines || []).map((l) => l.menuId) } })
-        .toArray() as unknown as MenuDoc[];
-      const recipeIds = menus.flatMap((m) => (m.items || []).map((i) => i.recipeId));
-      const recipeDocs = await db.collection(RECIPES_COLLECTION)
-        .find({ ...tf, id: { $in: recipeIds } })
-        .toArray() as unknown as RecipeDoc[];
+      const { menuIds, recipeIds: directRecipeIds } = collectPlanLineRefs(plan.lines);
+      const menus = menuIds.length
+        ? await db.collection(MENUS_COLLECTION)
+          .find({ ...tf, id: { $in: menuIds } })
+          .toArray() as unknown as MenuDoc[]
+        : [];
+      const recipeIds = [...new Set([
+        ...directRecipeIds,
+        ...menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
+      ])];
+      const recipeDocs = recipeIds.length
+        ? await db.collection(RECIPES_COLLECTION)
+          .find({ ...tf, id: { $in: recipeIds } })
+          .toArray() as unknown as RecipeDoc[]
+        : [];
       const productIds = recipeDocs.flatMap((r) => (r.lines || []).map((l) => l.productId));
       const products = productIds.length
         ? await db.collection('products')

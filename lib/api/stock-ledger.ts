@@ -7,6 +7,7 @@ import { warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode, setProductWarehouseStock } from '@/lib/api/product-warehouse';
 import { txOpts } from '@/lib/api/transaction';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 import type { AuthContext } from '@/types/auth';
 
 type StockLedgerProduct = Record<string, unknown> & {
@@ -30,9 +31,8 @@ interface RecordMasterStockChangeParams {
   session?: ClientSession;
 }
 
-function genNoPenyesuaian(): string {
-  const now = new Date();
-  return `PS${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`;
+async function genNoPenyesuaian(db: Db, tenantId: string, session?: ClientSession): Promise<string> {
+  return nextDocNumber(db, tenantId, 'PS', 'PS', session);
 }
 
 /**
@@ -59,7 +59,7 @@ export async function recordMasterProductStockChange(
   const tid = tenantId || 'default';
   const lokasiKode = normalizeWarehouseKode(gudangKode);
   const now = new Date();
-  const noPS = genNoPenyesuaian();
+  const noPS = await genNoPenyesuaian(db, tid, session);
   const lokasiLabel = `${lokasiKode} - ${warehouseLabel(lokasiKode)}`;
   const harga = parseInt(String(product?.hargaBeli || 0), 10);
 

@@ -113,16 +113,26 @@ async function seedResultLines(
   if (typeof warehouseKode !== 'string') return warehouseKode;
 
   const tenantFilter = withTenantFilter(scopeAuth, {});
-  const menuIds = [...new Set((plan.lines || []).map((l) => l.menuId))];
-  const menus = await db.collection(MENUS_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: menuIds } })
-    .toArray() as unknown as MenuDoc[];
+  const menuIds = [...new Set(
+    (plan.lines || []).map((l) => String(l.menuId || '').trim()).filter(Boolean),
+  )];
+  const menus = menuIds.length
+    ? await db.collection(MENUS_COLLECTION)
+      .find({ ...tenantFilter, id: { $in: menuIds } })
+      .toArray() as unknown as MenuDoc[]
+    : [];
   if (menus.length !== menuIds.length) return { error: 'Menu rencana tidak lengkap' };
 
-  const recipeIds = [...new Set(menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)))];
-  const recipes = await db.collection(RECIPES_COLLECTION)
-    .find({ ...tenantFilter, id: { $in: recipeIds } })
-    .toArray() as unknown as RecipeDoc[];
+  const recipeIdsFromLines = (plan.lines || [])
+    .map((l) => String(l.recipeId || '').trim())
+    .filter(Boolean);
+  const recipeIdsFromMenus = menus.flatMap((m) => (m.items || []).map((i) => i.recipeId));
+  const recipeIds = [...new Set([...recipeIdsFromLines, ...recipeIdsFromMenus])];
+  const recipes = recipeIds.length
+    ? await db.collection(RECIPES_COLLECTION)
+      .find({ ...tenantFilter, id: { $in: recipeIds } })
+      .toArray() as unknown as RecipeDoc[]
+    : [];
   if (recipeIds.length && recipes.length !== recipeIds.length) {
     return { error: 'Resep rencana tidak lengkap' };
   }

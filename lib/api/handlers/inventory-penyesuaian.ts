@@ -20,6 +20,7 @@ import {
 } from '@/lib/api/stok-lokasi';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 import { resolveProductGudangKode, purgeOtherWarehouseRows } from '@/lib/api/product-warehouse';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { writeAuditLog } from '@/lib/api/audit-log';
@@ -65,7 +66,7 @@ export async function handlePenyesuaian({
     if (items.length === 0) return err('Tidak ada item');
     const tenantId = tenantIdForWrite(scopeAuth, invBody);
     const now = new Date();
-    const noPS = `PS${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`;
+    const noPS = await nextDocNumber(db, tenantId, 'PS', 'PS');
     const doc = stampTenantId(tenantId, {
       id: uuidv4(),
       noPenyesuaian: noPS,

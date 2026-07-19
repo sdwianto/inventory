@@ -15,6 +15,12 @@ import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
 import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { str } from '@/types/json';
+import {
+  DEFAULT_PCT_KECIL,
+  computeQtyKecil,
+  clampPctKecil,
+} from '@/lib/food-production/recipe';
+import { formatNumber } from '@/lib/format';
 
 interface ProductOpt {
   id: string;
@@ -27,7 +33,8 @@ interface ProductOpt {
 
 interface RecipeLineForm {
   productId: string;
-  qty: string;
+  qtyBesar: string;
+  pctKecil: string;
   satuan: string;
   notes: string;
 }
@@ -42,11 +49,26 @@ interface RecipeRow {
   wastePct?: number;
   catatan?: string;
   gambarUrl?: string;
-  lines: Array<{ productId: string; qty: number; satuan?: string; notes?: string; productNama?: string }>;
+  lines: Array<{
+    productId: string;
+    qty: number;
+    qtyBesar?: number;
+    pctKecil?: number;
+    qtyKecil?: number;
+    satuan?: string;
+    notes?: string;
+    productNama?: string;
+  }>;
   aktif: boolean;
 }
 
-const emptyLine = (): RecipeLineForm => ({ productId: '', qty: '1', satuan: '', notes: '' });
+const emptyLine = (): RecipeLineForm => ({
+  productId: '',
+  qtyBesar: '1',
+  pctKecil: String(DEFAULT_PCT_KECIL),
+  satuan: '',
+  notes: '',
+});
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -56,7 +78,19 @@ function normalizeNama(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-/** Same productId → one row; qty summed. Keeps at most one empty row at end. */
+function lineFromDoc(l: RecipeRow['lines'][number]): RecipeLineForm {
+  const qtyBesar = Number(l.qtyBesar ?? l.qty) || 0;
+  const pctKecil = l.pctKecil != null ? clampPctKecil(l.pctKecil) : DEFAULT_PCT_KECIL;
+  return {
+    productId: l.productId,
+    qtyBesar: String(qtyBesar),
+    pctKecil: String(pctKecil),
+    satuan: l.satuan || '',
+    notes: l.notes || '',
+  };
+}
+
+/** Same productId → one row; qtyBesar summed. Keeps at most one empty row at end. */
 function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
   const byId = new Map<string, RecipeLineForm>();
   let hasEmpty = false;
@@ -71,9 +105,9 @@ function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
       byId.set(id, { ...line, productId: id });
       continue;
     }
-    const q1 = Number(existing.qty) || 0;
-    const q2 = Number(line.qty) || 0;
-    existing.qty = String(q1 + q2);
+    const q1 = Number(existing.qtyBesar) || 0;
+    const q2 = Number(line.qtyBesar) || 0;
+    existing.qtyBesar = String(q1 + q2);
     if (!existing.satuan && line.satuan) existing.satuan = line.satuan;
     if (line.notes?.trim()) {
       const a = existing.notes.trim();
@@ -250,12 +284,7 @@ export default function FoodProductionRecipePage() {
     });
     setLines(
       (row.lines || []).length
-        ? row.lines.map((l) => ({
-          productId: l.productId,
-          qty: String(l.qty),
-          satuan: l.satuan || '',
-          notes: l.notes || '',
-        }))
+        ? row.lines.map((l) => lineFromDoc(l))
         : [emptyLine()],
     );
     setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
@@ -274,12 +303,7 @@ export default function FoodProductionRecipePage() {
     }));
     setLines(
       (row.lines || []).length
-        ? row.lines.map((l) => ({
-          productId: l.productId,
-          qty: String(l.qty),
-          satuan: l.satuan || '',
-          notes: l.notes || '',
-        }))
+        ? row.lines.map((l) => lineFromDoc(l))
         : [emptyLine()],
     );
     setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
@@ -310,7 +334,9 @@ export default function FoodProductionRecipePage() {
           .filter((l) => l.productId)
           .map((l) => ({
             productId: l.productId,
-            qty: Number(l.qty),
+            qtyBesar: Number(l.qtyBesar),
+            qty: Number(l.qtyBesar),
+            pctKecil: clampPctKecil(l.pctKecil),
             satuan: l.satuan || undefined,
             notes: l.notes.trim() || undefined,
           })),
@@ -560,7 +586,7 @@ export default function FoodProductionRecipePage() {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl w-[min(96vw,56rem)] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? 'Ubah Resep' : 'Tambah Resep'}</DialogTitle>
           </DialogHeader>
@@ -684,8 +710,13 @@ export default function FoodProductionRecipePage() {
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Bahan</Label>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <Label>Bahan</Label>
+                <p className="text-[11px] text-muted-foreground">
+                  Porsi besar &amp; Bumil Busui = 100%; kecil &amp; balita = % dari qty besar.
+                </p>
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -697,16 +728,26 @@ export default function FoodProductionRecipePage() {
               </Button>
             </div>
             <div className="rounded-md border overflow-hidden">
-              <div className="hidden sm:grid sm:grid-cols-12 gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
-                <div className="sm:col-span-6">Produk</div>
-                <div className="sm:col-span-2">Qty</div>
-                <div className="sm:col-span-2">Satuan</div>
-                <div className="sm:col-span-2" />
+              <div className="hidden sm:grid sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_4.5rem_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
+                <div>Produk</div>
+                <div>Qty besar</div>
+                <div>% kecil</div>
+                <div>Qty kecil</div>
+                <div>Satuan</div>
+                <div />
               </div>
               <div className="divide-y">
-                {lines.map((line, idx) => (
-                  <div key={idx} className="grid gap-2 sm:grid-cols-12 items-center px-2 py-1.5">
-                    <div className="sm:col-span-6">
+                {lines.map((line, idx) => {
+                  const qtyKecilPreview = computeQtyKecil(
+                    Number(line.qtyBesar) || 0,
+                    clampPctKecil(line.pctKecil),
+                  );
+                  return (
+                  <div
+                    key={idx}
+                    className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_4.5rem_2.5rem] items-center px-2 py-1.5"
+                  >
+                    <div className="min-w-0">
                       <span className="sm:hidden text-[11px] text-muted-foreground">Produk</span>
                       <ProductSearchSelect
                         value={line.productId}
@@ -734,18 +775,18 @@ export default function FoodProductionRecipePage() {
                               (l, i) => i !== idx && l.productId === productId,
                             );
                             if (existingIdx >= 0) {
-                              const addQty = Number(prev[idx]?.qty) || 0;
+                              const addQty = Number(prev[idx]?.qtyBesar) || 0;
                               const next = prev
                                 .map((l, i) => {
                                   if (i !== existingIdx) return l;
                                   return {
                                     ...l,
-                                    qty: String((Number(l.qty) || 0) + addQty),
+                                    qtyBesar: String((Number(l.qtyBesar) || 0) + addQty),
                                     satuan: satuan || l.satuan,
                                   };
                                 })
                                 .filter((_, i) => i !== idx);
-                              toast.message('Bahan sama digabung — qty dijumlahkan');
+                              toast.message('Bahan sama digabung — qty besar dijumlahkan');
                               return next.length ? next : [emptyLine()];
                             }
                             return consolidateFormLines(
@@ -759,20 +800,46 @@ export default function FoodProductionRecipePage() {
                         }}
                       />
                     </div>
-                    <div className="sm:col-span-2">
-                      <span className="sm:hidden text-[11px] text-muted-foreground">Qty</span>
+                    <div>
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Qty besar</span>
                       <Input
                         type="number"
                         min={0}
                         step="any"
-                        value={line.qty}
-                        aria-label={`Qty baris ${idx + 1}`}
+                        value={line.qtyBesar}
+                        aria-label={`Qty besar baris ${idx + 1}`}
                         onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                          i === idx ? { ...l, qty: e.target.value } : l
+                          i === idx ? { ...l, qtyBesar: e.target.value } : l
                         )))}
                       />
                     </div>
-                    <div className="sm:col-span-2">
+                    <div>
+                      <span className="sm:hidden text-[11px] text-muted-foreground">% kecil</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step="any"
+                        value={line.pctKecil}
+                        aria-label={`Persen kecil baris ${idx + 1}`}
+                        onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                          i === idx ? { ...l, pctKecil: e.target.value } : l
+                        )))}
+                      />
+                    </div>
+                    <div>
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Qty kecil</span>
+                      <Input
+                        type="text"
+                        readOnly
+                        tabIndex={-1}
+                        className="bg-muted/40 text-muted-foreground tabular-nums"
+                        value={formatNumber(qtyKecilPreview)}
+                        aria-label={`Qty kecil baris ${idx + 1} (otomatis)`}
+                        title="Otomatis dari qty besar × %"
+                      />
+                    </div>
+                    <div>
                       <span className="sm:hidden text-[11px] text-muted-foreground">Satuan</span>
                       <Input
                         value={line.satuan}
@@ -782,7 +849,7 @@ export default function FoodProductionRecipePage() {
                         )))}
                       />
                     </div>
-                    <div className="sm:col-span-2 flex justify-end">
+                    <div className="flex justify-end">
                       <Button
                         type="button"
                         variant="ghost"
@@ -795,7 +862,8 @@ export default function FoodProductionRecipePage() {
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

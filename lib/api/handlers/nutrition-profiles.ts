@@ -20,6 +20,7 @@ import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  collectPlanLineRefs,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { FP_MGMT_READ_ROLES, FP_MANAGE_ROLES } from '@/lib/food-production/roles';
@@ -142,14 +143,21 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       { ...tenantFilter, id },
     ) as ProductionPlanDoc | null;
     if (!plan) return err('Rencana tidak ditemukan', 404);
-    const menuIds = [...new Set((plan.lines || []).map((l) => l.menuId))];
-    const menus = await db.collection(MENUS_COLLECTION)
-      .find({ ...tenantFilter, id: { $in: menuIds } })
-      .toArray() as unknown as MenuDoc[];
-    const recipeIds = [...new Set(menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)))];
-    const recipes = await db.collection(RECIPES_COLLECTION)
-      .find({ ...tenantFilter, id: { $in: recipeIds } })
-      .toArray() as unknown as RecipeDoc[];
+    const { menuIds, recipeIds: directRecipeIds } = collectPlanLineRefs(plan.lines);
+    const menus = menuIds.length
+      ? await db.collection(MENUS_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: menuIds } })
+        .toArray() as unknown as MenuDoc[]
+      : [];
+    const recipeIds = [...new Set([
+      ...directRecipeIds,
+      ...menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
+    ])];
+    const recipes = recipeIds.length
+      ? await db.collection(RECIPES_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: recipeIds } })
+        .toArray() as unknown as RecipeDoc[]
+      : [];
     const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
     const products = await db.collection('products')
       .find({ ...tenantFilter, id: { $in: productIds } })

@@ -20,6 +20,7 @@ import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -92,7 +93,7 @@ export async function handleTransfer({
     }
 
     const now = new Date();
-    const noTransfer = `TR${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`;
+    const noTransfer = await nextDocNumber(db, tenantId, 'TR', 'TR');
     const doc = stampTenantId(tenantId, {
       id: uuidv4(), noTransfer, tanggal: now,
       lokasiAsal: invBody.lokasiAsal, lokasiAsalNama: invBody.lokasiAsalNama || '',

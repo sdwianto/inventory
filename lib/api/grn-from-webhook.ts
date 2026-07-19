@@ -237,6 +237,19 @@ export async function createGrnFromDelivery(
 
   const noGRN = await nextDocNumber(db, tenantId, 'GRN', 'GRN');
   const doc = await buildGrnInsertDoc(db, tenantId, payload, vendorTenantId, noGRN);
-  await db.collection('goods_receipts').insertOne(doc);
-  return doc;
+  try {
+    await db.collection('goods_receipts').insertOne(doc);
+    return doc;
+  } catch (e: unknown) {
+    // Unique (tenantId, vendorDeliveryId) — race create → kembalikan GRN yang menang.
+    const code = (e as { code?: number })?.code;
+    if (code === 11000 && payload.deliveryId) {
+      const existing = await db.collection('goods_receipts').findOne({
+        tenantId: tid,
+        vendorDeliveryId: payload.deliveryId,
+      });
+      if (existing) return existing as JsonObject;
+    }
+    throw e;
+  }
 }

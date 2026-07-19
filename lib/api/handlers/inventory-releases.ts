@@ -23,6 +23,7 @@ import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import type { AuthContext } from '@/types/auth';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -71,11 +72,6 @@ interface InventoryReleaseDoc extends Record<string, unknown> {
   keperluan?: string;
   items?: ReleaseLineItem[];
   createdBy?: ReleaseUserRef;
-}
-
-function genNoRelease(): string {
-  const now = new Date();
-  return `RL${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`;
 }
 
 async function loadRelease(
@@ -175,9 +171,10 @@ export async function handleInventoryReleases({
 
     const now = new Date();
     const submitNow = releaseBody.submit === true;
+    const noRelease = await nextDocNumber(db, tenantId, 'RL', 'RL');
     const doc = stampTenantId(tenantId, {
       id: uuidv4(),
-      noRelease: genNoRelease(),
+      noRelease,
       status: submitNow ? 'PENDING_APPROVAL' : 'DRAFT',
       tanggal: now,
       lokasiKode,

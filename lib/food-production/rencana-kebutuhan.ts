@@ -1,11 +1,22 @@
 /** Build day-level material needs from production plans (client preview / print). */
 
 import type { MenuDoc } from '@/lib/food-production/menu';
-import type { RecipeDoc } from '@/lib/food-production/recipe';
+import {
+  recipeQtyForFamily,
+  splitPorsiByKategoriFamily,
+  type RecipeDoc,
+} from '@/lib/food-production/recipe';
 import {
   roundQty,
   scaleRecipeIngredientQty,
 } from '@/lib/food-production/material-requirement';
+import {
+  materialExcludedSet,
+  materialOverrideKey,
+  materialOverridesMap,
+  resolvePlanLineRecipeSlots,
+  type PlanMaterialOverride,
+} from '@/lib/food-production/production-plan';
 
 export type RencanaKebutuhanSource = {
   planNo?: string;
@@ -28,58 +39,89 @@ export type RencanaKebutuhanPlanInput = {
   noDokumen?: string;
   kitchenNama?: string;
   status?: string;
+  kategoriPorsiList?: string[];
+  materialOverrides?: PlanMaterialOverride[];
   lines: Array<{
-    menuId: string;
+    menuId?: string;
     menuKode?: string;
+    recipeId?: string;
+    recipeKode?: string;
     targetPorsi: number;
+    kategoriPorsiList?: string[];
   }>;
 };
 
 export function buildRencanaKebutuhanLines(input: {
   plans: RencanaKebutuhanPlanInput[];
-  menusById: Map<string, Pick<MenuDoc, 'id' | 'kode' | 'items' | 'aktif'>>;
-  recipesById: Map<string, Pick<RecipeDoc, 'id' | 'kode' | 'yieldQty' | 'wastePct' | 'lines' | 'aktif'>>;
+  menusById: Map<string, Pick<MenuDoc, 'id' | 'kode' | 'nama'> & {
+    items?: MenuDoc['items'];
+    aktif?: boolean;
+  }>;
+  recipesById: Map<string, Pick<RecipeDoc, 'id' | 'kode'> & {
+    yieldQty?: number;
+    wastePct?: number;
+    lines?: RecipeDoc['lines'];
+    aktif?: boolean;
+  }>;
+  acuanByKategori?: Partial<Record<string, number>> | null;
 }): { lines: RencanaKebutuhanLine[]; errors: string[] } {
   const acc = new Map<string, RencanaKebutuhanLine>();
   const errors: string[] = [];
 
   for (const plan of input.plans) {
     if (plan.status === 'CANCELLED') continue;
+    const overrideQtyByKey = materialOverridesMap(plan.materialOverrides);
+    const excludedKeys = materialExcludedSet(plan.materialOverrides);
     for (const planLine of plan.lines || []) {
-      const menu = input.menusById.get(planLine.menuId);
-      if (!menu) {
-        errors.push(`Menu ${planLine.menuKode || planLine.menuId} tidak ditemukan`);
-        continue;
-      }
-      if (!menu.items?.length) {
-        errors.push(`Menu ${menu.kode || planLine.menuId} belum punya resep`);
+      const resolved = resolvePlanLineRecipeSlots(planLine, input.menusById);
+      if (!resolved.ok) {
+        errors.push(resolved.error);
         continue;
       }
       const targetPorsi = Number(planLine.targetPorsi) || 0;
       if (targetPorsi <= 0) continue;
 
-      for (const item of menu.items) {
-        const recipe = input.recipesById.get(item.recipeId);
+      const kpList = planLine.kategoriPorsiList?.length
+        ? planLine.kategoriPorsiList
+        : (plan.kategoriPorsiList || []);
+      const split = splitPorsiByKategoriFamily(kpList, targetPorsi, input.acuanByKategori);
+
+      for (const slot of resolved.slots) {
+        const recipe = input.recipesById.get(slot.recipeId);
         if (!recipe) {
-          errors.push(`Resep ${item.recipeId} tidak ditemukan`);
+          errors.push(`Resep ${slot.recipeId} tidak ditemukan`);
           continue;
         }
         if (!recipe.lines?.length) {
-          errors.push(`Resep ${recipe.kode || item.recipeId} belum punya bahan`);
+          errors.push(`Resep ${recipe.kode || slot.recipeId} belum punya bahan`);
           continue;
         }
-        const recipePorsiNeeded = targetPorsi * (Number(item.porsi) || 1);
+        const factor = Number(slot.recipeFactor) || 1;
+        const porsiBesarNeeded = split.porsiBesar * factor;
+        const porsiKecilNeeded = split.porsiKecil * factor;
         const yieldQty = Number(recipe.yieldQty) > 0 ? Number(recipe.yieldQty) : 1;
         const wastePct = Number(recipe.wastePct) || 0;
 
         for (const rLine of recipe.lines) {
-          const add = scaleRecipeIngredientQty(
-            Number(rLine.qty) || 0,
-            recipePorsiNeeded,
+          const addBesar = scaleRecipeIngredientQty(
+            recipeQtyForFamily(rLine, 'BESAR'),
+            porsiBesarNeeded,
             yieldQty,
             wastePct,
           );
-          if (add <= 0) continue;
+          const addKecil = scaleRecipeIngredientQty(
+            recipeQtyForFamily(rLine, 'KECIL'),
+            porsiKecilNeeded,
+            yieldQty,
+            wastePct,
+          );
+          const computed = addBesar + addKecil;
+          const ovKey = materialOverrideKey(recipe.id, rLine.productId);
+          if (excludedKeys.has(ovKey)) continue;
+          const add = overrideQtyByKey.has(ovKey)
+            ? Number(overrideQtyByKey.get(ovKey)) || 0
+            : computed;
+          if (!(add > 0)) continue;
           const prev = acc.get(rLine.productId) || {
             productId: rLine.productId,
             productKode: rLine.productKode,
@@ -95,8 +137,8 @@ export function buildRencanaKebutuhanLines(input: {
           prev.sources.push({
             planNo: plan.noDokumen,
             kitchenNama: plan.kitchenNama,
-            menuKode: menu.kode || planLine.menuKode,
-            recipeKode: recipe.kode,
+            menuKode: slot.menuKode || planLine.menuKode,
+            recipeKode: recipe.kode || planLine.recipeKode,
             qty: roundQty(add),
           });
           acc.set(rLine.productId, prev);
@@ -112,33 +154,60 @@ export function buildRencanaKebutuhanLines(input: {
   return { lines, errors: [...new Set(errors)] };
 }
 
-/** Qty bahan untuk satu resep pada target porsi menu. */
+/** Qty bahan untuk satu resep pada target porsi (dual besar/kecil). */
 export function recipeIngredientNeeds(input: {
-  recipe: Pick<RecipeDoc, 'yieldQty' | 'wastePct' | 'lines'>;
+  recipe: {
+    yieldQty?: number;
+    wastePct?: number;
+    lines?: RecipeDoc['lines'];
+  };
   menuTargetPorsi: number;
   recipePerMenuPorsi: number;
+  kategoriPorsiList?: string[];
+  acuanByKategori?: Partial<Record<string, number>> | null;
 }): Array<{
   productId: string;
   productKode?: string;
   productNama?: string;
   satuan?: string;
   qty: number;
+  qtyBesarPart?: number;
+  qtyKecilPart?: number;
 }> {
-  const recipePorsiNeeded = Number(input.menuTargetPorsi) * (Number(input.recipePerMenuPorsi) || 1);
+  const menuFactor = Number(input.recipePerMenuPorsi) || 1;
+  const split = splitPorsiByKategoriFamily(
+    input.kategoriPorsiList,
+    Number(input.menuTargetPorsi) || 0,
+    input.acuanByKategori,
+  );
+  const porsiBesarNeeded = split.porsiBesar * menuFactor;
+  const porsiKecilNeeded = split.porsiKecil * menuFactor;
   const yieldQty = Number(input.recipe.yieldQty) > 0 ? Number(input.recipe.yieldQty) : 1;
   const wastePct = Number(input.recipe.wastePct) || 0;
   return (input.recipe.lines || [])
-    .map((rLine) => ({
-      productId: rLine.productId,
-      productKode: rLine.productKode,
-      productNama: rLine.productNama,
-      satuan: rLine.satuan,
-      qty: roundQty(scaleRecipeIngredientQty(
-        Number(rLine.qty) || 0,
-        recipePorsiNeeded,
+    .map((rLine) => {
+      const qtyBesarPart = roundQty(scaleRecipeIngredientQty(
+        recipeQtyForFamily(rLine, 'BESAR'),
+        porsiBesarNeeded,
         yieldQty,
         wastePct,
-      )),
-    }))
+      ));
+      const qtyKecilPart = roundQty(scaleRecipeIngredientQty(
+        recipeQtyForFamily(rLine, 'KECIL'),
+        porsiKecilNeeded,
+        yieldQty,
+        wastePct,
+      ));
+      const qty = roundQty(qtyBesarPart + qtyKecilPart);
+      return {
+        productId: rLine.productId,
+        productKode: rLine.productKode,
+        productNama: rLine.productNama,
+        satuan: rLine.satuan,
+        qty,
+        qtyBesarPart,
+        qtyKecilPart,
+      };
+    })
     .filter((l) => l.qty > 0);
 }

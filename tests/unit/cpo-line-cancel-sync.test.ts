@@ -34,6 +34,40 @@ describe('cpo-line-cancel-sync', () => {
     expect(rows.find((r) => r.kode === 'B397767')?.cancelled).toBeFalsy();
   });
 
+  it('does not cancel other-vendor lines when scoped to one vendor SO', () => {
+    const rows = diffPoItemsAgainstActiveSo(
+      [
+        { lineId: 'l1', kode: 'B553057', nama: 'Abon', qty: 1, vendorTenantId: 'uddawam' },
+        { lineId: 'l2', kode: 'B711755', nama: 'Tempe', qty: 1, vendorTenantId: 'tempe' },
+      ],
+      [{ kode: 'B553057', qty: 1 }],
+      { noSO: 'SO-DAWAM', vendorTenantId: 'uddawam' },
+      new Date(),
+      { vendorTenantId: 'uddawam', onlyVendorLines: true },
+    );
+    expect(rows.find((r) => r.kode === 'B553057')?.cancelled).toBeFalsy();
+    expect(rows.find((r) => r.kode === 'B711755')?.cancelled).toBeFalsy();
+  });
+
+  it('restores auto-cancelled line when it reappears on SO', () => {
+    const rows = diffPoItemsAgainstActiveSo(
+      [{
+        lineId: 'l1',
+        kode: 'B950648',
+        nama: 'Jambu',
+        qty: 1,
+        cancelled: true,
+        cancelReason: 'Tidak ada di SO sales.app',
+        cancelledSource: 'sales.app',
+        qtyOriginal: 1,
+      }],
+      [{ kode: 'B950648', qty: 1 }],
+      { noSO: 'SO001' },
+    );
+    expect(rows[0].cancelled).toBeFalsy();
+    expect(rows[0].cancelReason).toBeFalsy();
+  });
+
   it('syncCpoFromSoPayload sets PARTIAL_CANCELLED status', () => {
     const result = syncCpoFromSoPayload(
       { id: 'cpo-1', status: 'SUBMITTED', items: poItems },

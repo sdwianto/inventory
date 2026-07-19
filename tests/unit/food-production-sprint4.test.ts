@@ -3,6 +3,7 @@ import {
   explodeMaterialRequirements,
   scaleRecipeIngredientQty,
   roundQty,
+  decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
 } from '@/lib/food-production/material-requirement';
 import { FP_DOC_PREFIX, FP_DOC_TYPES } from '@/lib/food-production/document';
@@ -32,8 +33,14 @@ describe('food-production sprint 4 — MRP', () => {
       yieldQty: 100,
       wastePct: 0,
       lines: [
-        { productId: 'beras', productKode: 'B001', productNama: 'Beras', qty: 10, satuan: 'KG' },
-        { productId: 'garam', productKode: 'G001', productNama: 'Garam', qty: 0.2, satuan: 'KG' },
+        {
+          productId: 'beras', productKode: 'B001', productNama: 'Beras',
+          qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
+        },
+        {
+          productId: 'garam', productKode: 'G001', productNama: 'Garam',
+          qty: 0.2, qtyBesar: 0.2, pctKecil: 70, qtyKecil: 0.14, satuan: 'KG',
+        },
       ],
       aktif: true,
       createdAt: new Date(),
@@ -119,7 +126,7 @@ describe('food-production sprint 4 — MRP', () => {
       version: 1,
       effectiveDate: '2026-07-01',
       yieldQty: 100,
-      lines: [{ productId: 'beras', qty: 1, satuan: 'KG' }],
+      lines: [{ productId: 'beras', qty: 1, qtyBesar: 1, pctKecil: 70, qtyKecil: 0.7, satuan: 'KG' }],
       aktif: false,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -175,5 +182,239 @@ describe('food-production sprint 4 — MRP', () => {
       expect(drift.summary.warnings?.[0]).toMatch(/v1/);
       expect(drift.lines[0].shortage).toBe(false);
     }
+  });
+
+  it('splits ingredient need by besar/kecil portion families', () => {
+    const recipe: RecipeDoc = {
+      id: 'r1',
+      tenantId: 't1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'beras',
+        qty: 10,
+        qtyBesar: 10,
+        pctKecil: 50,
+        qtyKecil: 5,
+        satuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const menu: MenuDoc = {
+      id: 'm1',
+      tenantId: 't1',
+      kode: 'MNU-1',
+      nama: 'Siang',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      items: [{ recipeId: 'r1', porsi: 1 }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    // 100 besar + 100 kecil → need = scale(10,100) + scale(5,100) = 10 + 5 = 15
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-07-16',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+        lines: [{
+          menuId: 'm1',
+          targetPorsi: 200,
+          kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+        }],
+      },
+      menusById: new Map([['m1', menu]]),
+      recipesById: new Map([['r1', recipe]]),
+      onHandByProduct: new Map([['beras', 0]]),
+      warehouseKode: 'GKERING',
+      acuanByKategori: { PORSI_BESAR: 100, PORSI_KECIL: 100 },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.lines[0].qtyGross).toBe(15);
+  });
+
+  it('skips excluded materials from plan overrides', () => {
+    const recipe: RecipeDoc = {
+      id: 'r1',
+      tenantId: 't1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-07-16',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'DRAFT',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        materialOverrides: [{ recipeId: 'r1', productId: 'beras', qty: 10, excluded: true }],
+        lines: [{
+          recipeId: 'r1',
+          targetPorsi: 100,
+          kategoriPorsiList: ['PORSI_BESAR'],
+        }],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r1', recipe]]),
+      onHandByProduct: new Map([['beras', 0]]),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/tidak ada bahan/i);
+  });
+
+  it('applies plan materialOverrides over computed recipe qty', () => {
+    const recipe: RecipeDoc = {
+      id: 'r1',
+      tenantId: 't1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-07-16',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'DRAFT',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        materialOverrides: [{ recipeId: 'r1', productId: 'beras', qty: 30 }],
+        lines: [{
+          recipeId: 'r1',
+          targetPorsi: 100,
+          kategoriPorsiList: ['PORSI_BESAR'],
+        }],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r1', recipe]]),
+      onHandByProduct: new Map([['beras', 0]]),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.lines[0].qtyGross).toBe(30);
+  });
+
+  it('explodes plan lines that point at recipeId directly', () => {
+    const recipe: RecipeDoc = {
+      id: 'r1',
+      tenantId: 't1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-07-16',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        lines: [{
+          recipeId: 'r1',
+          targetPorsi: 100,
+          kategoriPorsiList: ['PORSI_BESAR'],
+        }],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r1', recipe]]),
+      onHandByProduct: new Map([['beras', 0]]),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.lines[0].qtyGross).toBe(10);
+    expect(result.lines[0].sources[0].recipeId).toBe('r1');
+  });
+
+  it('decides regenerate mode safely vs issue/PR', () => {
+    expect(decideMrpRegenerateMode({
+      existingStatus: 'DRAFT',
+      hasBlockingIssue: false,
+      hasBlockingPr: false,
+    }).mode).toBe('recalculate');
+
+    expect(decideMrpRegenerateMode({
+      existingStatus: 'APPROVED',
+      hasBlockingIssue: false,
+      hasBlockingPr: false,
+    }).mode).toBe('supersede');
+
+    expect(decideMrpRegenerateMode({
+      existingStatus: null,
+      hasBlockingIssue: false,
+      hasBlockingPr: false,
+    }).mode).toBe('create');
+
+    expect(decideMrpRegenerateMode({
+      existingStatus: 'APPROVED',
+      hasBlockingIssue: true,
+      hasBlockingPr: false,
+    }).mode).toBe('blocked');
+
+    expect(decideMrpRegenerateMode({
+      existingStatus: 'SUBMITTED',
+      hasBlockingIssue: false,
+      hasBlockingPr: true,
+    }).mode).toBe('blocked');
+
+    expect(decideMrpRegenerateMode({
+      existingStatus: 'PROCESSING',
+      hasBlockingIssue: false,
+      hasBlockingPr: false,
+    }).mode).toBe('blocked');
   });
 });

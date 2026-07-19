@@ -22,7 +22,12 @@ type CpoDoc = JsonObject & {
   vendorNoDOMap?: Record<string, string | null>;
   vendorNoInvoice?: string;
   vendorInvoiceId?: string;
+  appliedShipDeliveryIds?: string[];
+  appliedReceiveGrnIds?: string[];
+  qtySyncVersion?: number;
 };
+
+const QTY_SYNC_RETRIES = 8;
 
 function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
   const base = { tenantId };
@@ -65,6 +70,76 @@ function rollupReceiveStatus(items: CpoLine[]) {
   return 'SHIPPED';
 }
 
+function hasAppliedId(list: unknown, id: string): boolean {
+  if (!id || !Array.isArray(list)) return false;
+  return list.some((x) => String(x) === id);
+}
+
+/** Filter optimistic concurrency — field belum ada dianggap versi 0. */
+function qtySyncVersionFilter(poId: string, ver: number, extra: Record<string, unknown> = {}) {
+  return {
+    id: poId,
+    ...extra,
+    $or: ver === 0
+      ? [{ qtySyncVersion: { $exists: false } }, { qtySyncVersion: 0 }]
+      : [{ qtySyncVersion: ver }],
+  };
+}
+
+async function applyDeliveryShipped(
+  db: Db,
+  lookupFilter: Record<string, unknown>,
+  payload: Record<string, unknown>,
+) {
+  const deliveryId = String(payload.deliveryId || '').trim();
+  if (!deliveryId) {
+    return { action: 'skipped', reason: 'missing_delivery_id' };
+  }
+
+  const now = new Date();
+  for (let attempt = 0; attempt < QTY_SYNC_RETRIES; attempt++) {
+    const po = await db.collection('customer_purchase_orders').findOne(lookupFilter) as CpoDoc | null;
+    if (!po) return { action: 'not_found', filter: lookupFilter };
+    if (hasAppliedId(po.appliedShipDeliveryIds, deliveryId)) {
+      return { action: 'skipped', reason: 'already_applied', deliveryId, poId: po.id };
+    }
+
+    const ver = Number(po.qtySyncVersion) || 0;
+    const usedShip = new Set<number>();
+    const webhookItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
+    const items = (po.items || []).map((line) => {
+      const shipped = findMatchingVendorWebhookLine(line as LocalPoLineLike, webhookItems, usedShip);
+      const add = parseFloat(String(shipped?.qty)) || 0;
+      return { ...line, qtyShipped: (Number(line.qtyShipped) || 0) + add };
+    });
+
+    const patch: Record<string, unknown> = {
+      items,
+      status: rollupShipStatus(items),
+      shippedAt: payload.shippedAt ? new Date(String(payload.shippedAt)) : now,
+      vendorNoDO: payload.noDO || po.vendorNoDO,
+      updatedAt: now,
+      lastVendorEvent: 'delivery.shipped',
+      lastVendorEventAt: now,
+      qtySyncVersion: ver + 1,
+    };
+    if (payload.vendorTenantId) {
+      const map = { ...(po.vendorNoDOMap || {}) };
+      map[String(payload.vendorTenantId)] = (payload.noDO as string) || map[String(payload.vendorTenantId)] || null;
+      patch.vendorNoDOMap = map;
+    }
+
+    const result = await db.collection('customer_purchase_orders').updateOne(
+      qtySyncVersionFilter(String(po.id), ver, { appliedShipDeliveryIds: { $ne: deliveryId } }),
+      { $set: patch, $addToSet: { appliedShipDeliveryIds: deliveryId } },
+    );
+    if (result.matchedCount > 0) {
+      return { action: 'updated', poId: po.id, noPO: po.noPO, status: patch.status };
+    }
+  }
+  return { action: 'skipped', reason: 'concurrent_conflict', deliveryId };
+}
+
 export async function syncCpoFromVendorEvent(
   db: Db,
   tenantId: string,
@@ -73,6 +148,10 @@ export async function syncCpoFromVendorEvent(
 ) {
   const filter = findCpoFilter(tenantId, payload);
   if (!filter) return { action: 'skipped', reason: 'no_po_reference' };
+
+  if (event === 'delivery.shipped') {
+    return applyDeliveryShipped(db, filter, payload);
+  }
 
   const po = await db.collection('customer_purchase_orders').findOne(filter) as CpoDoc | null;
   if (!po) return { action: 'not_found', filter };
@@ -140,23 +219,6 @@ export async function syncCpoFromVendorEvent(
         return match ? { ...sub, status: 'CANCELLED', cancelReason: payload.reason || payload.cancelReason, vendorSo: payload } : sub;
       });
     }
-  } else if (event === 'delivery.shipped') {
-    const usedShip = new Set<number>();
-    const webhookItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
-    const items = (po.items || []).map((line) => {
-      const shipped = findMatchingVendorWebhookLine(line as LocalPoLineLike, webhookItems, usedShip);
-      const add = parseFloat(String(shipped?.qty)) || 0;
-      return { ...line, qtyShipped: (Number(line.qtyShipped) || 0) + add };
-    });
-    patch.items = items;
-    patch.status = rollupShipStatus(items);
-    patch.shippedAt = payload.shippedAt ? new Date(String(payload.shippedAt)) : now;
-    patch.vendorNoDO = payload.noDO || po.vendorNoDO;
-    if (payload.vendorTenantId) {
-      const map = { ...(po.vendorNoDOMap || {}) };
-      map[String(payload.vendorTenantId)] = (payload.noDO as string) || map[String(payload.vendorTenantId)] || null;
-      patch.vendorNoDOMap = map;
-    }
   } else if (event === 'invoice.posted') {
     patch.status = 'INVOICED';
     patch.invoicedAt = payload.postedAt ? new Date(String(payload.postedAt)) : now;
@@ -169,36 +231,50 @@ export async function syncCpoFromVendorEvent(
   return { action: 'updated', poId: po.id, noPO: po.noPO, status: patch.status };
 }
 
-/** Update qty diterima setelah GRN diposting. */
+/** Update qty diterima setelah GRN diposting — idempotent per grn.id + optimistic concurrency. */
 export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
   if (!grn?.noPO) return { action: 'skipped' };
-  const po = await db.collection('customer_purchase_orders').findOne({
-    tenantId: grn.tenantId,
-    noPO: grn.noPO,
-  }) as CpoDoc | null;
-  if (!po) return { action: 'not_found' };
+  const grnId = String(grn.id || '').trim();
+  if (!grnId) return { action: 'skipped', reason: 'missing_grn_id' };
 
-  const usedGrn = new Set<number>();
+  const lookup = { tenantId: grn.tenantId, noPO: grn.noPO };
   const grnItems = Array.isArray(grn.items) ? grn.items as JsonObject[] : [];
-  const items = (po.items || []).map((line) => {
-    const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
-    const add = parseFloat(String(recv?.qtyReceived)) || 0;
-    return { ...line, qtyReceived: (Number(line.qtyReceived) || 0) + add };
-  });
 
-  const receiveStatus = rollupReceiveStatus(items);
-  const keepInvoiced = String(po.status || '') === 'INVOICED';
-  const status = keepInvoiced ? po.status : receiveStatus;
-  await db.collection('customer_purchase_orders').updateOne(
-    { id: po.id },
-    {
-      $set: {
-        items,
-        status,
-        receivedAt: new Date(),
-        updatedAt: new Date(),
+  for (let attempt = 0; attempt < QTY_SYNC_RETRIES; attempt++) {
+    const po = await db.collection('customer_purchase_orders').findOne(lookup) as CpoDoc | null;
+    if (!po) return { action: 'not_found' };
+    if (hasAppliedId(po.appliedReceiveGrnIds, grnId)) {
+      return { action: 'skipped', reason: 'already_applied', grnId, poId: po.id };
+    }
+
+    const ver = Number(po.qtySyncVersion) || 0;
+    const usedGrn = new Set<number>();
+    const items = (po.items || []).map((line) => {
+      const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
+      const add = parseFloat(String(recv?.qtyReceived)) || 0;
+      return { ...line, qtyReceived: (Number(line.qtyReceived) || 0) + add };
+    });
+
+    const receiveStatus = rollupReceiveStatus(items);
+    const keepInvoiced = String(po.status || '') === 'INVOICED';
+    const status = keepInvoiced ? po.status : receiveStatus;
+
+    const result = await db.collection('customer_purchase_orders').updateOne(
+      qtySyncVersionFilter(String(po.id), ver, { appliedReceiveGrnIds: { $ne: grnId } }),
+      {
+        $set: {
+          items,
+          status,
+          receivedAt: new Date(),
+          updatedAt: new Date(),
+          qtySyncVersion: ver + 1,
+        },
+        $addToSet: { appliedReceiveGrnIds: grnId },
       },
-    },
-  );
-  return { action: 'updated', poId: po.id, status };
+    );
+    if (result.matchedCount > 0) {
+      return { action: 'updated', poId: po.id, status };
+    }
+  }
+  return { action: 'skipped', reason: 'concurrent_conflict', grnId };
 }

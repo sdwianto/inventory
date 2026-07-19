@@ -5,7 +5,10 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import { FP_DEFAULT_TRANSITIONS, FP_OPEN_DOC_STATUSES } from '@/lib/food-production/document';
-import type { ProductionPlanLine } from '@/lib/food-production/production-plan';
+import {
+  resolvePlanLineRecipeSlots,
+  type ProductionPlanLine,
+} from '@/lib/food-production/production-plan';
 import type { MenuDoc } from '@/lib/food-production/menu';
 import type { RecipeDoc } from '@/lib/food-production/recipe';
 import { roundQty } from '@/lib/food-production/material-requirement';
@@ -18,7 +21,8 @@ export const PRODUCTION_RESULTS_COLLECTION = 'production_results';
 export type ProductionResultStatus = FpDocStatus;
 
 export interface ProductionResultLine {
-  menuId: string;
+  /** Legacy — kosong bila baris dari resep langsung di rencana. */
+  menuId?: string;
   menuKode?: string;
   menuNama?: string;
   recipeId: string;
@@ -89,41 +93,36 @@ export type BuildResultLinesResult =
   | { ok: true; lines: ProductionResultLine[]; warnings: string[] }
   | { ok: false; error: string };
 
-/** Pure: plan → menu items → baris hasil (porsi). Finished good opsional (MBG = tanpa stok FG). */
+/** Pure: plan → resep (langsung atau via menu legacy) → baris hasil (porsi). */
 export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildResultLinesResult {
   const { planLines, menusById, recipesById } = input;
-  if (!planLines?.length) return { ok: false, error: 'Rencana tidak punya baris menu' };
+  if (!planLines?.length) return { ok: false, error: 'Rencana tidak punya baris resep' };
 
   const warnings: string[] = [];
   const acc = new Map<string, ProductionResultLine>();
 
   for (const pl of planLines) {
-    const menu = menusById.get(pl.menuId);
-    if (!menu) return { ok: false, error: `Menu ${pl.menuId} tidak ditemukan` };
-    if (menu.aktif === false) return { ok: false, error: `Menu ${menu.kode || menu.id} nonaktif` };
-    if (!menu.items?.length) {
-      return { ok: false, error: `Menu ${menu.kode || menu.id} tidak punya item resep` };
-    }
-    for (const item of menu.items) {
-      const recipe = recipesById.get(item.recipeId);
-      if (!recipe) return { ok: false, error: `Resep ${item.recipeId} tidak ditemukan` };
+    const resolved = resolvePlanLineRecipeSlots(pl, menusById);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    for (const slot of resolved.slots) {
+      const recipe = recipesById.get(slot.recipeId);
+      if (!recipe) return { ok: false, error: `Resep ${slot.recipeId} tidak ditemukan` };
       if (recipe.aktif === false) {
         return { ok: false, error: `Resep ${recipe.kode || recipe.id} nonaktif` };
       }
       const fgId = String(recipe.finishedGoodProductId || '').trim() || undefined;
-      const target = roundQty(Number(pl.targetPorsi) * Number(item.porsi || 1));
+      const target = roundQty(Number(pl.targetPorsi) * Number(slot.recipeFactor || 1));
       if (!(target > 0)) continue;
-      // MBG: identitas baris = menu + resep (+ FG bila ada)
-      const key = `${pl.menuId}::${recipe.id}::${fgId || '_'}`;
+      const key = `${slot.menuId || '_'}::${recipe.id}::${fgId || '_'}`;
       const prev = acc.get(key);
       if (prev) {
         prev.targetPorsi = roundQty(prev.targetPorsi + target);
         prev.actualPorsi = prev.targetPorsi;
       } else {
         acc.set(key, {
-          menuId: pl.menuId,
-          menuKode: menu.kode || pl.menuKode,
-          menuNama: menu.nama || pl.menuNama,
+          menuId: slot.menuId,
+          menuKode: slot.menuKode || pl.menuKode,
+          menuNama: slot.menuNama || pl.menuNama,
           recipeId: recipe.id,
           recipeKode: recipe.kode,
           recipeNama: recipe.nama,
@@ -131,7 +130,7 @@ export function buildResultLinesFromPlan(input: BuildResultLinesInput): BuildRes
           finishedGoodKode: fgId ? recipe.finishedGoodKode : undefined,
           finishedGoodNama: fgId
             ? recipe.finishedGoodNama
-            : (recipe.nama || recipe.kode || menu.nama),
+            : (recipe.nama || recipe.kode || slot.menuNama || pl.recipeNama),
           satuan: 'PORSI',
           targetPorsi: target,
           actualPorsi: target,
@@ -174,12 +173,11 @@ export function normalizeResultLines(raw: unknown): ProductionResultLine[] | { e
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
     const finishedGoodProductId = String(row.finishedGoodProductId || '').trim() || undefined;
-    const menuId = String(row.menuId || '').trim();
+    const menuId = String(row.menuId || '').trim() || undefined;
     const recipeId = String(row.recipeId || '').trim();
     const targetPorsi = Number(row.targetPorsi);
     const actualPorsi = Number(row.actualPorsi);
     const wastePorsi = row.wastePorsi != null ? Number(row.wastePorsi) : 0;
-    if (!menuId) return { error: `Baris ${i + 1}: menuId wajib` };
     if (!recipeId) return { error: `Baris ${i + 1}: recipeId wajib` };
     if (!Number.isFinite(targetPorsi) || targetPorsi < 0) {
       return { error: `Baris ${i + 1}: targetPorsi tidak valid` };

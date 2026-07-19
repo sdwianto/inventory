@@ -47,5 +47,7 @@ export async function runProcurementRepair(db: Db, tenantId: string) {
     grnReconcileEnqueued: reconcile.autoFixEnqueued,
     grnStale: reconcile.grnInvoiceNotDone.length,
     cpoMismatch: reconcile.cpoStatusMismatch.length,
+    stuckGrnReverted: reconcile.stuckGrnReverted,
+    reconcileTruncated: reconcile.truncated,
   };
 }

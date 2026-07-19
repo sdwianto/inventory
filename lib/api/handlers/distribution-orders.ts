@@ -97,16 +97,32 @@ async function persistStatusPhotos(
 
 type ScopeAuth = AuthContext;
 
-function sourceItemsFromPlan(plan: ProductionPlanDoc) {
+type DistSourceItem = {
+  menuId?: string;
+  menuKode?: string;
+  menuNama?: string;
+  recipeId?: string;
+  recipeKode?: string;
+  recipeNama?: string;
+  finishedGoodProductId?: string;
+  finishedGoodKode?: string;
+  finishedGoodNama?: string;
+  qtyPorsi: number;
+};
+
+function sourceItemsFromPlan(plan: ProductionPlanDoc): DistSourceItem[] {
   return (plan.lines || []).map((l) => ({
     menuId: l.menuId,
     menuKode: l.menuKode,
-    menuNama: l.menuNama,
+    menuNama: l.menuNama || l.recipeNama,
+    recipeId: l.recipeId,
+    recipeKode: l.recipeKode,
+    recipeNama: l.recipeNama,
     qtyPorsi: Number(l.targetPorsi) || 0,
   }));
 }
 
-function sourceItemsFromResult(result: ProductionResultDoc) {
+function sourceItemsFromResult(result: ProductionResultDoc): DistSourceItem[] {
   return (result.lines || []).map((l) => ({
     menuId: l.menuId,
     menuKode: l.menuKode,
@@ -220,7 +236,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     let productionPlanNo: string | undefined;
     let productionResultId: string | undefined;
     let productionResultNo: string | undefined;
-    let sourceItems: ReturnType<typeof sourceItemsFromPlan> = [];
+    let sourceItems: DistSourceItem[] = [];
 
     if (sourceType === 'RESULT') {
       const rid = String(distBody.productionResultId || '').trim();
@@ -481,7 +497,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       const normalized = normalizeDistLines(distBody.lines);
       if ('error' in normalized) return err(normalized.error, 400);
 
-      let sourceItems: ReturnType<typeof sourceItemsFromPlan> = [];
+      let sourceItems: DistSourceItem[] = [];
       if (existing.sourceType === 'RESULT' && existing.productionResultId) {
         const result = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
           withTenantFilter(scopeAuth, { id: existing.productionResultId }),

@@ -205,16 +205,37 @@ export function analyzePlanStandardCost(input: {
   const warnings: string[] = [];
 
   for (const pl of input.planLines || []) {
-    const menu = input.menusById.get(pl.menuId);
-    if (!menu) return { error: `Menu ${pl.menuId} tidak ditemukan` };
+    const target = Number(pl.targetPorsi) || 0;
+    totalPorsi = roundQty(totalPorsi + target);
+
+    if (pl.recipeId) {
+      const recipe = input.recipesById.get(pl.recipeId);
+      if (!recipe) return { error: `Resep ${pl.recipeId} tidak ditemukan` };
+      const m = analyzeRecipeStandardCost({
+        recipe,
+        productsById: input.productsById,
+      });
+      total += m.standard.perPorsi * target;
+      missing += m.standard.missingPriceCount;
+      for (const l of m.lines) {
+        lines.push({
+          ...l,
+          amount: money(l.amount * (target / (m.standard.yieldPorsi || 1))),
+          qty: roundQty(l.qty * (target / (m.standard.yieldPorsi || 1))),
+        });
+      }
+      continue;
+    }
+
+    const menuId = String(pl.menuId || '').trim();
+    const menu = input.menusById.get(menuId);
+    if (!menu) return { error: `Menu ${menuId || '?'} tidak ditemukan` };
     const m = analyzeMenuStandardCost({
       menu,
       recipesById: input.recipesById,
       productsById: input.productsById,
     });
     if ('error' in m) return m;
-    const target = Number(pl.targetPorsi) || 0;
-    totalPorsi = roundQty(totalPorsi + target);
     total += m.standard.perPorsi * target;
     missing += m.standard.missingPriceCount;
     for (const l of m.lines) {

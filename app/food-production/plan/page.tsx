@@ -35,13 +35,16 @@ import {
   UtensilsCrossed, FileText, Printer,
 } from 'lucide-react';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
+import { MRP_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-requirement';
 import {
   KATEGORI_PORSI_OPTIONS,
   PLAN_STATUS_LABELS,
   kategoriPorsiListLabel,
   isPlanEditable,
+  materialOverrideKey,
   normalizeKategoriPorsiList,
   type KategoriPorsi,
+  type PlanMaterialOverride,
   type ProductionPlanStatus,
 } from '@/lib/food-production/production-plan';
 import {
@@ -96,12 +99,15 @@ interface RecipeOpt {
     productKode?: string;
     productNama?: string;
     qty: number;
+    qtyBesar?: number;
+    pctKecil?: number;
+    qtyKecil?: number;
     satuan?: string;
   }>;
 }
 
 interface PlanLineForm {
-  menuId: string;
+  recipeId: string;
   kategoriPorsiList: KategoriPorsi[];
   targetPorsi: string;
 }
@@ -127,8 +133,12 @@ interface PlanRow {
   totalTargetPorsi?: number;
   catatan?: string;
   history?: PlanHistoryEntry[];
+  materialOverrides?: PlanMaterialOverride[];
   lines: Array<{
-    menuId: string;
+    recipeId?: string;
+    recipeKode?: string;
+    recipeNama?: string;
+    menuId?: string;
     targetPorsi: number;
     menuKode?: string;
     menuNama?: string;
@@ -162,7 +172,7 @@ interface MaterialReadiness {
 }
 
 const emptyLine = (kategoriPorsiList: KategoriPorsi[] = []): PlanLineForm => ({
-  menuId: '',
+  recipeId: '',
   kategoriPorsiList,
   targetPorsi: '0',
 });
@@ -247,6 +257,10 @@ function FoodProductionPlanPageContent() {
   const [stockFetchPending, setStockFetchPending] = useState<Record<string, boolean>>({});
   const [readinessById, setReadinessById] = useState<Record<string, MaterialReadiness>>({});
   const [procuringId, setProcuringId] = useState<string | null>(null);
+  const [regeneratingMrpId, setRegeneratingMrpId] = useState<string | null>(null);
+  /** Draft input qty kebutuhan: planId::recipeId::productId → string */
+  const [qtyOverrideDraft, setQtyOverrideDraft] = useState<Record<string, string>>({});
+  const [savingOverrideKey, setSavingOverrideKey] = useState<string | null>(null);
   const [needsOpen, setNeedsOpen] = useState(false);
   const [needsPrinting, setNeedsPrinting] = useState(false);
   const [needsDoc, setNeedsDoc] = useState<{
@@ -394,9 +408,9 @@ function FoodProductionPlanPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link once per planId after load
   }, [searchParams, rows, loading]);
 
-  const activeMenus = useMemo(
-    () => menus.filter((m) => m.aktif !== false),
-    [menus],
+  const activeRecipes = useMemo(
+    () => Object.values(recipesById).filter((r) => r.aktif !== false),
+    [recipesById],
   );
 
   const filteredList = useMemo(() => {
@@ -606,30 +620,47 @@ function FoodProductionPlanPageContent() {
       kitchenId: row.kitchenId,
       catatan: row.catatan || '',
     });
-    setLines(
-      (row.lines || []).length
-        ? row.lines.map((l) => {
-          const lineKp = l.kategoriPorsiList?.length ? l.kategoriPorsiList : planKp;
-          return {
-            menuId: l.menuId,
-            kategoriPorsiList: lineKp,
-            targetPorsi: String(l.targetPorsi),
-          };
-        })
-        : [emptyLine(planKp)],
-    );
+    const formLines: PlanLineForm[] = [];
+    for (const l of row.lines || []) {
+      const lineKp = l.kategoriPorsiList?.length ? l.kategoriPorsiList : planKp;
+      if (l.recipeId) {
+        formLines.push({
+          recipeId: l.recipeId,
+          kategoriPorsiList: lineKp,
+          targetPorsi: String(l.targetPorsi),
+        });
+        continue;
+      }
+      // Legacy menu → pecah ke baris resep agar form tetap recipe-first
+      if (l.menuId) {
+        const children = menuChildren(l.menuId);
+        if (children.length) {
+          for (const child of children) {
+            formLines.push({
+              recipeId: child.recipeId,
+              kategoriPorsiList: lineKp,
+              targetPorsi: String(Math.max(
+                1,
+                Math.round((Number(l.targetPorsi) || 0) * (Number(child.porsi) || 1)),
+              )),
+            });
+          }
+        }
+      }
+    }
+    setLines(formLines.length ? formLines : [emptyLine(planKp)]);
     setOpen(true);
   }
 
   async function save() {
-    const validLines = lines.filter((l) => l.menuId);
+    const validLines = lines.filter((l) => l.recipeId);
     if (!validLines.length) {
-      toast.error('Minimal satu baris menu');
+      toast.error('Minimal satu baris resep');
       return;
     }
     const missingKp = validLines.some((l) => !l.kategoriPorsiList.length);
     if (missingKp) {
-      toast.error('Setiap baris menu wajib punya minimal satu kategori porsi');
+      toast.error('Setiap baris resep wajib punya minimal satu kategori porsi');
       return;
     }
     const kategoriPorsiList = unionKategoriFromLines(validLines);
@@ -646,7 +677,7 @@ function FoodProductionPlanPageContent() {
         kategoriPorsiList: kpOk,
         catatan: form.catatan.trim() || undefined,
         lines: validLines.map((l) => ({
-          menuId: l.menuId,
+          recipeId: l.recipeId,
           kategoriPorsiList: l.kategoriPorsiList,
           targetPorsi: Number(l.targetPorsi) || 0,
         })),
@@ -811,6 +842,259 @@ function FoodProductionPlanPageContent() {
     return menus.find((m) => m.id === menuId)?.items || [];
   }
 
+  function overrideDraftKey(planId: string, recipeId: string, productId: string) {
+    return `${planId}::${materialOverrideKey(recipeId, productId)}`;
+  }
+
+  function getPlanOverride(
+    row: PlanRow,
+    recipeId: string,
+    productId: string,
+  ): PlanMaterialOverride | null {
+    return (row.materialOverrides || []).find(
+      (o) => o.recipeId === recipeId && o.productId === productId,
+    ) || null;
+  }
+
+  async function saveMaterialOverride(input: {
+    row: PlanRow;
+    recipeId: string;
+    productId: string;
+    productKode?: string;
+    productNama?: string;
+    satuan?: string;
+    qtyText?: string;
+    computedQty: number;
+    excluded?: boolean;
+    clear?: boolean;
+  }) {
+    const { row, recipeId, productId, clear } = input;
+    if (!canManage || !isPlanEditable(row.status)) return;
+    const draftKey = overrideDraftKey(row.id, recipeId, productId);
+    const prev = getPlanOverride(row, recipeId, productId);
+
+    setSavingOverrideKey(draftKey);
+    try {
+      const body: Record<string, unknown> = {
+        recipeId,
+        productId,
+        fallbackQty: input.computedQty,
+        productKode: input.productKode,
+        productNama: input.productNama,
+        satuan: input.satuan,
+      };
+
+      if (clear) {
+        body.clear = true;
+      } else if (input.excluded !== undefined) {
+        body.excluded = input.excluded;
+        if (prev && Number.isFinite(Number(prev.qty))) body.qty = Number(prev.qty);
+      } else if (input.qtyText != null) {
+        const qty = Number(String(input.qtyText).replace(',', '.'));
+        if (!Number.isFinite(qty) || qty < 0) {
+          toast.error('Qty kebutuhan tidak valid');
+          setQtyOverrideDraft((prevDraft) => {
+            const next = { ...prevDraft };
+            delete next[draftKey];
+            return next;
+          });
+          return;
+        }
+        body.qty = qty;
+        if (prev?.excluded) body.excluded = true;
+      } else {
+        return;
+      }
+
+      const res = await fetch(`/api/production-plans/${row.id}/material-override`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal menyimpan');
+      setRows((prevRows) => prevRows.map((r) => (
+        r.id === row.id ? { ...r, ...data, id: row.id } : r
+      )));
+      setQtyOverrideDraft((prevDraft) => {
+        const next = { ...prevDraft };
+        delete next[draftKey];
+        return next;
+      });
+      if (clear) toast.success('Qty kembali ke hitungan resep');
+      else if (input.excluded === true) toast.success('Item dicoret — tidak masuk MRP/PO');
+      else if (input.excluded === false) toast.success('Coret dibatalkan — item aktif lagi');
+      else toast.success('Qty kebutuhan disimpan (dipakai ke MRP/PO)');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
+    } finally {
+      setSavingOverrideKey(null);
+    }
+  }
+
+  function renderIngredientQtyCell(input: {
+    row: PlanRow;
+    recipeId: string;
+    ing: {
+      productId: string;
+      productKode?: string;
+      productNama?: string;
+      satuan?: string;
+      qty: number;
+    };
+  }) {
+    const { row, recipeId, ing } = input;
+    const ov = getPlanOverride(row, recipeId, ing.productId);
+    const excluded = ov?.excluded === true;
+    const hasQtyOverride = ov != null && !excluded && Number(ov.qty) !== Number(ing.qty);
+    const displayQty = ov != null && !excluded ? Number(ov.qty) : ing.qty;
+    const draftKey = overrideDraftKey(row.id, recipeId, ing.productId);
+    const canEditQty = canManage && isPlanEditable(row.status);
+    const draftVal = qtyOverrideDraft[draftKey];
+    const saving = savingOverrideKey === draftKey;
+
+    if (!canEditQty) {
+      return (
+        <td className={cn(
+          'p-2 text-right text-xs tabular-nums font-medium',
+          excluded ? 'text-slate-400 line-through' : 'text-orange-700',
+        )}>
+          {formatNumber(displayQty)}
+          {ing.satuan ? (
+            <span className="ml-1 text-[10px] font-normal text-slate-500">{ing.satuan}</span>
+          ) : null}
+          {!excluded && hasQtyOverride && (
+            <span className="ml-1 block text-[9px] font-normal text-amber-700">diubah</span>
+          )}
+        </td>
+      );
+    }
+
+    return (
+      <td className="p-2 text-right" onClick={(e) => e.stopPropagation()}>
+        <div className="inline-flex flex-col items-end gap-0.5">
+          <div className="inline-flex items-center gap-1">
+            <Input
+              type="number"
+              min={0}
+              step="any"
+              className={cn(
+                'h-7 w-[5.5rem] text-right tabular-nums text-xs px-1.5',
+                excluded && 'line-through text-slate-400 bg-slate-50',
+                !excluded && hasQtyOverride && 'border-amber-400 bg-amber-50/60',
+              )}
+              disabled={saving || excluded}
+              value={draftVal != null ? draftVal : String(displayQty)}
+              onChange={(e) => setQtyOverrideDraft((prev) => ({
+                ...prev,
+                [draftKey]: e.target.value,
+              }))}
+              onBlur={() => {
+                if (excluded) return;
+                const text = draftVal != null ? draftVal : String(displayQty);
+                void saveMaterialOverride({
+                  row,
+                  recipeId,
+                  productId: ing.productId,
+                  productKode: ing.productKode,
+                  productNama: ing.productNama,
+                  satuan: ing.satuan,
+                  qtyText: text,
+                  computedQty: ing.qty,
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              title={excluded
+                ? 'Item dicoret — aktifkan lagi untuk mengubah qty'
+                : 'Edit qty kebutuhan — dipakai ke MRP/PO'}
+            />
+            {ing.satuan ? (
+              <span className={cn('text-[10px] text-slate-500', excluded && 'line-through')}>
+                {ing.satuan}
+              </span>
+            ) : null}
+          </div>
+          {!excluded && hasQtyOverride ? (
+            <button
+              type="button"
+              className="text-[9px] text-amber-700 underline-offset-2 hover:underline disabled:opacity-50"
+              disabled={saving}
+              onClick={() => void saveMaterialOverride({
+                row,
+                recipeId,
+                productId: ing.productId,
+                computedQty: ing.qty,
+                clear: true,
+              })}
+            >
+              reset ke resep
+            </button>
+          ) : null}
+        </div>
+      </td>
+    );
+  }
+
+  function renderExcludeCheckbox(input: {
+    row: PlanRow;
+    recipeId: string;
+    ing: {
+      productId: string;
+      productKode?: string;
+      productNama?: string;
+      satuan?: string;
+      qty: number;
+    };
+  }) {
+    const { row, recipeId, ing } = input;
+    const ov = getPlanOverride(row, recipeId, ing.productId);
+    const excluded = ov?.excluded === true;
+    const canEdit = canManage && isPlanEditable(row.status);
+    const draftKey = overrideDraftKey(row.id, recipeId, ing.productId);
+    const saving = savingOverrideKey === draftKey;
+
+    if (!canEdit) {
+      return (
+        <td className="p-2 w-8 align-top">
+          {excluded ? (
+            <span className="block text-center text-[10px] text-slate-400" title="Dicoret">×</span>
+          ) : null}
+        </td>
+      );
+    }
+
+    return (
+      <td className="p-2 w-8 align-top" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className="mt-1 h-3.5 w-3.5 accent-slate-700 cursor-pointer"
+          checked={excluded}
+          disabled={saving}
+          title={excluded
+            ? 'Hapus coret — ikut ke MRP/PO lagi'
+            : 'Coret item — tidak masuk MRP/PO'}
+          aria-label={excluded ? 'Batalkan coret item' : 'Coret item'}
+          onChange={(e) => {
+            void saveMaterialOverride({
+              row,
+              recipeId,
+              productId: ing.productId,
+              productKode: ing.productKode,
+              productNama: ing.productNama,
+              satuan: ing.satuan,
+              computedQty: ing.qty,
+              excluded: e.target.checked,
+            });
+          }}
+        />
+      </td>
+    );
+  }
+
   function openRencanaKebutuhanForDate(tanggal: string, fallbackKitchen = '') {
     const tgl = dateKey(tanggal);
     if (!tgl) {
@@ -831,14 +1115,26 @@ function FoodProductionPlanPageContent() {
         noDokumen: p.noDokumen,
         kitchenNama: p.kitchenNama,
         status: p.status,
+        kategoriPorsiList: p.kategoriPorsiList?.length
+          ? p.kategoriPorsiList
+          : (p.kategoriPorsi ? [p.kategoriPorsi] : []),
+        materialOverrides: p.materialOverrides,
         lines: (p.lines || []).map((l) => ({
+          recipeId: l.recipeId,
+          recipeKode: l.recipeKode,
           menuId: l.menuId,
           menuKode: l.menuKode,
           targetPorsi: l.targetPorsi,
+          kategoriPorsiList: l.kategoriPorsiList?.length
+            ? l.kategoriPorsiList
+            : (p.kategoriPorsiList?.length
+              ? p.kategoriPorsiList
+              : (p.kategoriPorsi ? [p.kategoriPorsi] : [])),
         })),
       })),
-      menusById: menusMap,
-      recipesById: recipesMap,
+      menusById: menusMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['menusById'],
+      recipesById: recipesMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['recipesById'],
+      acuanByKategori: portionTargets,
     });
     if (built.errors.length && !built.lines.length) {
       toast.error(built.errors[0] || 'Gagal hitung kebutuhan');
@@ -951,6 +1247,53 @@ function FoodProductionPlanPageContent() {
     setHistoryOpen(true);
   }
 
+  /** Hitung ulang MRP dari resep + acuan porsi terkini (koreksi explode tanpa acuan). */
+  async function regenerateMrp(row: PlanRow) {
+    const okConfirm = await confirm({
+      title: 'Hitung ulang MRP?',
+      description:
+        `${row.noDokumen}: kebutuhan bahan dihitung ulang dari resep dan acuan porsi tanggal/dapur. `
+        + 'MRP Disetujui tanpa PR/pengeluaran diganti dokumen baru (Draft). '
+        + 'Jika sudah ada pengeluaran atau PR aktif, regenerasi ditolak.',
+      confirmText: 'Hitung ulang',
+      variant: 'warning',
+    });
+    if (!okConfirm) return;
+
+    setRegeneratingMrpId(row.id);
+    try {
+      const res = await fetch('/api/material-requirements/regenerate-for-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({ productionPlanId: row.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal hitung ulang MRP');
+
+      const mrpNo = String(data.mrp?.noDokumen || '');
+      const shortage = Number(data.mrp?.summary?.shortageCount || 0);
+      if (data.mode === 'recalculate') {
+        toast.success(
+          `MRP ${mrpNo} dihitung ulang${data.acuanApplied ? ' (acuan porsi)' : ''}. Kekurangan: ${shortage}`,
+        );
+      } else if (data.mode === 'supersede') {
+        toast.success(
+          `MRP baru ${mrpNo} (Draft) menggantikan ${data.supersededNo || 'MRP lama'}. Ajukan & setujui ulang bila perlu.`,
+        );
+      } else {
+        toast.success(`MRP ${mrpNo} dibuat. Kekurangan: ${shortage}`);
+      }
+      if (!data.acuanApplied) {
+        toast.message('Acuan porsi tanggal/dapur belum diisi — pecah besar/kecil proporsional.');
+      }
+      await fetchReadiness(row.id);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal hitung ulang MRP');
+    } finally {
+      setRegeneratingMrpId(null);
+    }
+  }
+
   /** Kekurangan stok → hitung MRP → setujui → PR + Draft CPO → submit PO ke Vendor. */
   async function procureShortage(row: PlanRow) {
     setProcuringId(row.id);
@@ -1031,7 +1374,7 @@ function FoodProductionPlanPageContent() {
   const canSave = Boolean(
     form.tanggal
     && form.kitchenId
-    && lines.some((l) => l.menuId && l.kategoriPorsiList.length > 0),
+    && lines.some((l) => l.recipeId && l.kategoriPorsiList.length > 0),
   );
   const dayPorsi = filteredList.reduce((s, r) => s + (Number(r.totalTargetPorsi) || 0), 0);
 
@@ -1230,7 +1573,7 @@ function FoodProductionPlanPageContent() {
                       </span>
                     )}
                     <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
-                      {row.totalTargetPorsi ?? 0} porsi · {(row.lines || []).length} menu
+                      {row.totalTargetPorsi ?? 0} porsi · {(row.lines || []).length} resep
                     </span>
                   </button>
 
@@ -1256,21 +1599,162 @@ function FoodProductionPlanPageContent() {
                             <tr>
                               <th className="text-left p-2 font-medium w-8" />
                               <th className="text-left p-2 font-medium">Kode</th>
-                              <th className="text-left p-2 font-medium">Menu</th>
+                              <th className="text-left p-2 font-medium">Resep</th>
                               <th className="text-right p-2 font-medium">Porsi</th>
                             </tr>
                           </thead>
                           <tbody>
                             {(row.lines || []).map((l, idx) => {
-                              const children = menuChildren(l.menuId);
-                              const mKey = menuExpandKey(row.id, l.menuId);
+                              const lineKp = l.kategoriPorsiList?.length
+                                ? l.kategoriPorsiList
+                                : (row.kategoriPorsiList?.length
+                                  ? row.kategoriPorsiList
+                                  : (row.kategoriPorsi ? [row.kategoriPorsi] : []));
+
+                              if (l.recipeId) {
+                                const rKey = recipeExpandKey(row.id, '_', l.recipeId);
+                                const recipeOpen = !!expandedRecipeKeys[rKey];
+                                const recipe = recipesById[l.recipeId];
+                                const ingredients = recipe
+                                  ? recipeIngredientNeeds({
+                                    recipe: {
+                                      yieldQty: recipe.yieldQty,
+                                      wastePct: recipe.wastePct,
+                                      lines: recipe.lines as Parameters<typeof recipeIngredientNeeds>[0]['recipe']['lines'],
+                                    },
+                                    menuTargetPorsi: Number(l.targetPorsi) || 0,
+                                    recipePerMenuPorsi: 1,
+                                    kategoriPorsiList: lineKp,
+                                    acuanByKategori: portionTargets,
+                                  })
+                                  : [];
+                                return (
+                                  <Fragment key={`recipe-${l.recipeId}-${idx}`}>
+                                    <tr
+                                      className="border-t cursor-pointer hover:bg-muted/30"
+                                      onClick={() => toggleRecipeExpand(row.id, '_', l.recipeId!)}
+                                    >
+                                      <td className="p-2 w-8">
+                                        {recipeOpen
+                                          ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
+                                          : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+                                      </td>
+                                      <td className="p-2 font-mono text-xs">
+                                        {l.recipeKode || recipe?.kode || '—'}
+                                      </td>
+                                      <td className="p-2">
+                                        <span className="font-medium">
+                                          {l.recipeNama || recipe?.nama || l.recipeId}
+                                        </span>
+                                        {ingredients.length > 0 && (
+                                          <span className="ml-2 text-[11px] text-muted-foreground">
+                                            {ingredients.length} bahan
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
+                                    </tr>
+                                    {recipeOpen && ingredients.map((ing) => {
+                                      const stock = stockByProductId[ing.productId];
+                                      const stockLoading = !!stockFetchPending[ing.productId];
+                                      const qtyKering = Number(stock?.GKERING) || 0;
+                                      const qtyBasah = Number(stock?.GBASAH) || 0;
+                                      const excluded = getPlanOverride(row, l.recipeId!, ing.productId)?.excluded === true;
+                                      return (
+                                        <tr
+                                          key={`${l.recipeId}-${ing.productId}`}
+                                          className={cn(
+                                            'border-t bg-white',
+                                            excluded && 'bg-slate-50/80 opacity-70',
+                                          )}
+                                        >
+                                          {renderExcludeCheckbox({
+                                            row,
+                                            recipeId: l.recipeId!,
+                                            ing,
+                                          })}
+                                          <td className={cn(
+                                            'p-2 font-mono text-[11px] text-slate-500',
+                                            excluded && 'line-through',
+                                          )}>
+                                            <div className="border-l-2 border-orange-200 pl-5 ml-1">
+                                              {ing.productKode || '—'}
+                                            </div>
+                                          </td>
+                                          <td className={cn(
+                                            'p-2 text-xs text-slate-600',
+                                            excluded && 'line-through text-slate-400',
+                                          )}>
+                                            <div className="pl-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                              <span>
+                                                {ing.productNama || ing.productId}
+                                                {excluded && (
+                                                  <span className="ml-1.5 text-[10px] text-slate-500 no-underline">
+                                                    dicoret
+                                                  </span>
+                                                )}
+                                                {!excluded && (Number(ing.qtyBesarPart) > 0 && Number(ing.qtyKecilPart) > 0) && (
+                                                  <span className="ml-1.5 text-[10px] text-slate-400">
+                                                    (besar {formatNumber(ing.qtyBesarPart)}
+                                                    {' · '}
+                                                    kecil {formatNumber(ing.qtyKecilPart)})
+                                                  </span>
+                                                )}
+                                              </span>
+                                              {!excluded && stockLoading && (
+                                                <span className="text-[10px] text-slate-400">
+                                                  cek stok…
+                                                </span>
+                                              )}
+                                              {!excluded && !stockLoading && stock && qtyKering > 0 && (
+                                                <span className="inline-flex items-center rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] leading-tight text-emerald-800 tabular-nums no-underline">
+                                                  Stok — {formatNumber(qtyKering)}
+                                                  {ing.satuan ? ` ${ing.satuan}` : ''} di GKERING
+                                                </span>
+                                              )}
+                                              {!excluded && !stockLoading && stock && qtyBasah > 0 && (
+                                                <span className="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] leading-tight text-sky-800 tabular-nums no-underline">
+                                                  Stok — {formatNumber(qtyBasah)}
+                                                  {ing.satuan ? ` ${ing.satuan}` : ''} di GBASAH
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          {renderIngredientQtyCell({
+                                            row,
+                                            recipeId: l.recipeId!,
+                                            ing,
+                                          })}
+                                        </tr>
+                                      );
+                                    })}
+                                    {recipeOpen && !recipe && (
+                                      <tr className="border-t bg-white">
+                                        <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                          Detail resep belum termuat
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {recipeOpen && recipe && ingredients.length === 0 && (
+                                      <tr className="border-t bg-white">
+                                        <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                          Resep belum punya baris bahan
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              }
+
+                              const children = menuChildren(l.menuId || '');
+                              const mKey = menuExpandKey(row.id, l.menuId || '');
                               const menuOpen = !!expandedMenuKeys[mKey];
                               const hasChildren = children.length > 0;
                               return (
-                                <Fragment key={`${l.menuId}-${idx}`}>
+                                <Fragment key={`menu-${l.menuId}-${idx}`}>
                                   <tr
                                     className="border-t cursor-pointer hover:bg-muted/30"
-                                    onClick={() => toggleMenuExpand(row.id, l.menuId)}
+                                    onClick={() => toggleMenuExpand(row.id, l.menuId || '')}
                                   >
                                     <td className="p-2 w-8">
                                       {menuOpen
@@ -1282,6 +1766,7 @@ function FoodProductionPlanPageContent() {
                                       <span className="font-medium">
                                         {l.menuNama || l.menuId}
                                       </span>
+                                      <span className="ml-2 text-[11px] text-amber-700">menu lama</span>
                                       {hasChildren && (
                                         <span className="ml-2 text-[11px] text-muted-foreground">
                                           {children.length} resep
@@ -1291,14 +1776,21 @@ function FoodProductionPlanPageContent() {
                                     <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
                                   </tr>
                                   {menuOpen && hasChildren && children.map((child) => {
-                                    const rKey = recipeExpandKey(row.id, l.menuId, child.recipeId);
-                                    const recipeOpen = !!expandedRecipeKeys[rKey];
+                                    const recipeOpen = !!expandedRecipeKeys[
+                                      recipeExpandKey(row.id, l.menuId || '', child.recipeId)
+                                    ];
                                     const recipe = recipesById[child.recipeId];
                                     const ingredients = recipe
                                       ? recipeIngredientNeeds({
-                                        recipe,
+                                        recipe: {
+                                          yieldQty: recipe.yieldQty,
+                                          wastePct: recipe.wastePct,
+                                          lines: recipe.lines as Parameters<typeof recipeIngredientNeeds>[0]['recipe']['lines'],
+                                        },
                                         menuTargetPorsi: Number(l.targetPorsi) || 0,
                                         recipePerMenuPorsi: Number(child.porsi) || 1,
+                                        kategoriPorsiList: lineKp,
+                                        acuanByKategori: portionTargets,
                                       })
                                       : [];
                                     return (
@@ -1307,7 +1799,7 @@ function FoodProductionPlanPageContent() {
                                           className="border-t bg-slate-50/80 cursor-pointer hover:bg-slate-100/80"
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            toggleRecipeExpand(row.id, l.menuId, child.recipeId);
+                                            toggleRecipeExpand(row.id, l.menuId || '', child.recipeId);
                                           }}
                                         >
                                           <td className="p-2 w-8">
@@ -1344,52 +1836,72 @@ function FoodProductionPlanPageContent() {
                                           const stockLoading = !!stockFetchPending[ing.productId];
                                           const qtyKering = Number(stock?.GKERING) || 0;
                                           const qtyBasah = Number(stock?.GBASAH) || 0;
+                                          const excluded = getPlanOverride(row, child.recipeId, ing.productId)?.excluded === true;
                                           return (
                                             <tr
                                               key={`${child.recipeId}-${ing.productId}`}
-                                              className="border-t bg-white"
+                                              className={cn(
+                                                'border-t bg-white',
+                                                excluded && 'bg-slate-50/80 opacity-70',
+                                              )}
                                             >
-                                              <td className="p-2" />
-                                              <td className="p-2 font-mono text-[11px] text-slate-500">
-                                                <div className="border-l-2 border-orange-200 pl-5 ml-4">
+                                              {renderExcludeCheckbox({
+                                                row,
+                                                recipeId: child.recipeId,
+                                                ing,
+                                              })}
+                                              <td className={cn(
+                                                'p-2 font-mono text-[11px] text-slate-500',
+                                                excluded && 'line-through',
+                                              )}>
+                                                <div className="border-l-2 border-orange-200 pl-5 ml-1">
                                                   {ing.productKode || '—'}
                                                 </div>
                                               </td>
-                                              <td className="p-2 text-xs text-slate-600">
-                                                <div className="pl-6 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                              <td className={cn(
+                                                'p-2 text-xs text-slate-600',
+                                                excluded && 'line-through text-slate-400',
+                                              )}>
+                                                <div className="pl-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                                                   <span>
                                                     {ing.productNama || ing.productId}
-                                                    <span className="ml-1.5 text-[10px] text-muted-foreground">
-                                                      kebutuhan
-                                                    </span>
+                                                    {excluded && (
+                                                      <span className="ml-1.5 text-[10px] text-slate-500 no-underline">
+                                                        dicoret
+                                                      </span>
+                                                    )}
+                                                    {!excluded && (Number(ing.qtyBesarPart) > 0 && Number(ing.qtyKecilPart) > 0) && (
+                                                      <span className="ml-1.5 text-[10px] text-slate-400">
+                                                        (besar {formatNumber(ing.qtyBesarPart)}
+                                                        {' · '}
+                                                        kecil {formatNumber(ing.qtyKecilPart)})
+                                                      </span>
+                                                    )}
                                                   </span>
-                                                  {stockLoading && (
+                                                  {!excluded && stockLoading && (
                                                     <span className="text-[10px] text-slate-400">
                                                       cek stok…
                                                     </span>
                                                   )}
-                                                  {!stockLoading && stock && qtyKering > 0 && (
-                                                    <span className="inline-flex items-center rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] leading-tight text-emerald-800 tabular-nums">
+                                                  {!excluded && !stockLoading && stock && qtyKering > 0 && (
+                                                    <span className="inline-flex items-center rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] leading-tight text-emerald-800 tabular-nums no-underline">
                                                       Stok — {formatNumber(qtyKering)}
                                                       {ing.satuan ? ` ${ing.satuan}` : ''} di GKERING
                                                     </span>
                                                   )}
-                                                  {!stockLoading && stock && qtyBasah > 0 && (
-                                                    <span className="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] leading-tight text-sky-800 tabular-nums">
+                                                  {!excluded && !stockLoading && stock && qtyBasah > 0 && (
+                                                    <span className="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] leading-tight text-sky-800 tabular-nums no-underline">
                                                       Stok — {formatNumber(qtyBasah)}
                                                       {ing.satuan ? ` ${ing.satuan}` : ''} di GBASAH
                                                     </span>
                                                   )}
                                                 </div>
                                               </td>
-                                              <td className="p-2 text-right text-xs tabular-nums text-orange-700 font-medium">
-                                                {formatNumber(ing.qty)}
-                                                {ing.satuan ? (
-                                                  <span className="ml-1 text-[10px] font-normal text-slate-500">
-                                                    {ing.satuan}
-                                                  </span>
-                                                ) : null}
-                                              </td>
+                                              {renderIngredientQtyCell({
+                                                row,
+                                                recipeId: child.recipeId,
+                                                ing,
+                                              })}
                                             </tr>
                                           );
                                         })}
@@ -1436,6 +1948,21 @@ function FoodProductionPlanPageContent() {
                         >
                           <FileText className="h-4 w-4 mr-1" /> Rencana Kebutuhan
                         </Button>
+                        {canManage && MRP_ELIGIBLE_PLAN_STATUSES.has(row.status) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={regeneratingMrpId === row.id}
+                            title="Hitung ulang MRP dari resep + acuan porsi"
+                            onClick={() => void regenerateMrp(row)}
+                          >
+                            <RefreshCw className={cn(
+                              'h-4 w-4 mr-1',
+                              regeneratingMrpId === row.id && 'animate-spin',
+                            )} />
+                            {regeneratingMrpId === row.id ? 'Menghitung…' : 'Hitung ulang MRP'}
+                          </Button>
+                        )}
                         {ISSUE_ELIGIBLE_PLAN_STATUSES.has(row.status) && (() => {
                           const ready = readinessById[row.id];
                           if (ready?.loading) {
@@ -1720,9 +2247,9 @@ function FoodProductionPlanPageContent() {
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <Label>Menu × porsi</Label>
+                <Label>Resep × porsi</Label>
                 <p className="text-xs text-muted-foreground">
-                  Pilih kategori (multi) dan menu — porsi mengikuti acuan kategori.
+                  Pilih kategori (multi) dan resep — porsi mengikuti acuan kategori.
                 </p>
               </div>
               <div className="flex gap-2 shrink-0">
@@ -1730,10 +2257,10 @@ function FoodProductionPlanPageContent() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => router.push('/food-production/menu')}
+                  onClick={() => router.push('/food-production/recipe')}
                 >
                   <UtensilsCrossed className="h-3 w-3 mr-1" />
-                  Kelola
+                  Kelola resep
                 </Button>
                 <Button
                   type="button"
@@ -1749,7 +2276,7 @@ function FoodProductionPlanPageContent() {
 
             <div className="hidden sm:grid sm:grid-cols-[minmax(12rem,1.1fr)_minmax(16rem,1.6fr)_6.5rem_2.5rem] gap-3 px-1 text-[11px] font-medium text-muted-foreground">
               <span>Kategori porsi *</span>
-              <span>Jenis menu *</span>
+              <span>Resep *</span>
               <span className="text-right pr-1">Porsi</span>
               <span />
             </div>
@@ -1827,20 +2354,23 @@ function FoodProductionPlanPageContent() {
                     )}
                   </div>
                   <div className="min-w-0 space-y-1">
-                    <Label className="text-xs sm:hidden">Jenis menu *</Label>
+                    <Label className="text-xs sm:hidden">Resep *</Label>
                     <select
                       className="w-full border rounded-md px-2.5 py-1.5 text-sm bg-white h-9"
-                      value={line.menuId}
+                      value={line.recipeId}
                       onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                        i === idx ? { ...l, menuId: e.target.value } : l
+                        i === idx ? { ...l, recipeId: e.target.value } : l
                       )))}
                     >
-                      <option value="">— Pilih menu —</option>
-                      {(activeMenus.length ? activeMenus : menus)
-                        .filter((m) => m.aktif !== false || m.id === line.menuId)
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.kode} — {m.nama}{m.aktif === false ? ' (nonaktif)' : ''}
+                      <option value="">— Pilih resep —</option>
+                      {(activeRecipes.length
+                        ? activeRecipes
+                        : Object.values(recipesById)
+                      )
+                        .filter((r) => r.aktif !== false || r.id === line.recipeId)
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.kode} — {r.nama}{r.aktif === false ? ' (nonaktif)' : ''}
                           </option>
                         ))}
                     </select>
@@ -1874,9 +2404,9 @@ function FoodProductionPlanPageContent() {
               ))}
             </div>
 
-            {activeMenus.length === 0 && (
+            {activeRecipes.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                Belum ada menu aktif. Buat di Food Production → Menu.
+                Belum ada resep aktif. Buat di Food Production → Resep.
               </p>
             )}
             {kitchens.length === 0 && (

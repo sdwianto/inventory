@@ -2,6 +2,7 @@ import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import type { CreateJournalParams, JournalDetail, JournalEntry } from '@/types/finance';
 import { txOpts } from '@/lib/api/transaction';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 
 export class JournalError extends Error {
   constructor(message: string) {
@@ -35,7 +36,9 @@ export async function createJournal(
   }
 
   const now = tanggal || new Date();
-  const noJurnal = `J${sourceType.charAt(0)}${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`;
+  const letter = String(sourceType || 'X').charAt(0).toUpperCase() || 'X';
+  const prefix = `J${letter}`;
+  const noJurnal = await nextDocNumber(db, tenantId || 'default', prefix, prefix, session);
 
   const doc: JournalEntry = {
     id: uuidv4(),

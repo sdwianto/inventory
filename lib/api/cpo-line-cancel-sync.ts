@@ -19,6 +19,7 @@ type CpoLine = JsonObject & {
   lineId?: string;
   kode?: string;
   vendorKode?: string;
+  vendorTenantId?: string;
   nama?: string;
   qty?: number | string;
   cancelled?: boolean;
@@ -98,22 +99,68 @@ export function applyCancelledLinesToPoItems(
   });
 }
 
-/** Bandingkan baris PO dengan item aktif di SO — yang hilang ditandai dibatalkan. */
+export type DiffPoAgainstSoOpts = {
+  /**
+   * Jika diisi: hanya baris dengan vendorTenantId yang sama yang di-diff.
+   * Baris vendor lain / tanpa vendorTenantId (mode multi) tidak diubah.
+   */
+  vendorTenantId?: string;
+  /** true = jangan batalkan baris tanpa vendorTenantId (aman untuk PO multi-vendor). */
+  onlyVendorLines?: boolean;
+};
+
+function clearAutoCancel(line: CpoLine): CpoLine {
+  // Hanya pulihkan cancel otomatis dari diff SO — bukan cancel eksplisit webhook
+  if (line.cancelledSource && line.cancelledSource !== 'sales.app') return line;
+  if (line.cancelReason && !String(line.cancelReason).includes('Tidak ada di SO')) {
+    return line;
+  }
+  const {
+    cancelled: _c,
+    qtyCancelled: _qc,
+    cancelledAt: _ca,
+    cancelReason: _cr,
+    cancelledSource: _cs,
+    ...rest
+  } = line;
+  if (rest.qtyOriginal != null && (rest.qty == null || parseQty(rest.qty) === 0)) {
+    return { ...rest, qty: rest.qtyOriginal };
+  }
+  return rest;
+}
+
+/** Bandingkan baris PO dengan item aktif di SO — yang hilang ditandai dibatalkan; yang ketemu lagi dipulihkan. */
 export function diffPoItemsAgainstActiveSo(
   poItems: CpoLine[],
   activeSoItems: JsonObject[],
-  meta: { salesOrderId?: string; noSO?: string },
+  meta: { salesOrderId?: string; noSO?: string; vendorTenantId?: string },
   now = new Date(),
+  opts?: DiffPoAgainstSoOpts,
 ): CpoLine[] {
   if (!activeSoItems.length) return poItems;
 
+  const scopeVendor = String(opts?.vendorTenantId || meta.vendorTenantId || '').trim();
+  const onlyVendorLines = opts?.onlyVendorLines === true;
+  const usedIndices = new Set<number>();
+
   return poItems.map((line) => {
-    if (line.cancelled) return line;
+    if (scopeVendor) {
+      const lineVendor = String(line.vendorTenantId || '').trim();
+      if (lineVendor && lineVendor !== scopeVendor) return line;
+      if (onlyVendorLines && lineVendor !== scopeVendor) return line;
+    }
+
     const matched = findMatchingVendorWebhookLine(
       line as LocalPoLineLike,
       activeSoItems as Parameters<typeof findMatchingVendorWebhookLine>[1],
+      usedIndices,
     );
-    if (matched) return line;
+    if (matched) {
+      // Item masih di SO — pulihkan jika sebelumnya tercoret karena mismatch sync
+      if (line.cancelled) return clearAutoCancel(line);
+      return line;
+    }
+    if (line.cancelled) return line;
     return markLineCancelled(line, {
       kode: line.kode ? String(line.kode) : undefined,
       nama: line.nama ? String(line.nama) : undefined,
@@ -167,8 +214,17 @@ export function syncCpoFromSoPayload(
   }
 
   const activeItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
+  const payloadVendor = String(payload.vendorTenantId || '').trim();
   if (activeItems.length) {
-    items = diffPoItemsAgainstActiveSo(items, activeItems, meta, now);
+    items = diffPoItemsAgainstActiveSo(
+      items,
+      activeItems,
+      { ...meta, vendorTenantId: payloadVendor || undefined },
+      now,
+      payloadVendor
+        ? { vendorTenantId: payloadVendor, onlyVendorLines: true }
+        : undefined,
+    );
   }
 
   const soSnap = buildVendorSoSnapshot(payload);

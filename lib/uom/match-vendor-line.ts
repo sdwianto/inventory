@@ -58,11 +58,11 @@ export function findMatchingVendorWebhookLine<T extends VendorWebhookLineLike>(
     }
   }
 
-  const kode = String(localLine.vendorKode || localLine.kode || '');
+  const kode = String(localLine.vendorKode || localLine.kode || '').trim().toUpperCase();
   if (kode) {
     const matches = webhookItems
       .map((s, i) => ({ s, i }))
-      .filter(({ s, i }) => !used.has(i) && String(s.kode || '') === kode);
+      .filter(({ s, i }) => !used.has(i) && String(s.kode || '').trim().toUpperCase() === kode);
     if (matches.length === 1) {
       used.add(matches[0].i);
       return matches[0].s;
