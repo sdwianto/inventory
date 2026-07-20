@@ -211,30 +211,44 @@ export default function VendorInvoiceDocument({
           <VarianceRow label="Nilai SO (sales.app)" value={soT} delta={soT && poEst ? soT - poEst : null} showDelta={!!soT} />
           <VarianceRow label="Invoice (aktual)" value={invT} delta={soT ? invT - soT : null} showDelta={!!soT} />
           {lineVariance.length > 0 && (() => {
+            const fmtDelta = (v: number | null) => {
+              if (v == null || v === 0) return '—';
+              return v > 0 ? `+${v}` : String(v);
+            };
             const qtyRows = lineVariance
-              .map((row) => ({
-                row,
-                dSo: num(row.variancePoToSo),
-                dInv: num(row.varianceSoToInvoice),
-                soQty: num(row.soQty),
-                poQty: num(row.poQty),
-                invQty: num(row.invoiceQty),
-              }))
-              .filter(({ dSo, dInv, poQty, invQty }) => (
-                soLineDataAvailable
-                  ? dSo !== 0 || dInv !== 0
-                  : poQty !== invQty
-              ));
+              .map((row) => {
+                const soMissing = row.soLineMissing === true
+                  || (!soLineDataAvailable && num(row.soQty) === 0 && num(row.poQty) > 0);
+                const invMissing = row.invLineMissing === true;
+                const dSo = row.variancePoToSo == null ? null : num(row.variancePoToSo);
+                const dInv = row.varianceSoToInvoice == null ? null : num(row.varianceSoToInvoice);
+                return {
+                  row,
+                  dSo,
+                  dInv,
+                  soQty: num(row.soQty),
+                  poQty: num(row.poQty),
+                  invQty: num(row.invoiceQty),
+                  soMissing,
+                  invMissing,
+                };
+              })
+              .filter(({ dSo, dInv, poQty, invQty, soMissing, invMissing }) => {
+                if (soMissing || invMissing) return poQty !== invQty || soMissing;
+                return dSo !== 0 || dInv !== 0;
+              });
             if (!qtyRows.length) return null;
-            const missingSoLines = !soLineDataAvailable;
-            const hasQtyMismatch = qtyRows.some(({ dSo, dInv, soQty }) => soQty > 0 && (dSo !== 0 || dInv !== 0));
+            const hasQtyMismatch = qtyRows.some(({ dSo, dInv, soMissing }) => (
+              !soMissing && ((dSo != null && dSo !== 0) || (dInv != null && dInv !== 0))
+            ));
+            const hasMissingSo = qtyRows.some(({ soMissing }) => soMissing);
             return (
             <div className="mt-3 pt-2 border-t border-slate-200">
               <p className="text-[10px] font-bold uppercase text-slate-500 mb-0.5">Selisih qty per barang</p>
               <p className="text-[9px] text-slate-400 mb-1.5 leading-snug">
                 PO (inventory) → SO (snapshot sales.app) → Inv (faktur vendor).
-                {missingSoLines
-                  ? ' Kolom SO kosong = data baris SO belum tersinkron ke inventory (bukan berarti vendor belum kirim).'
+                {hasMissingSo
+                  ? ' SO “—” = baris tidak ada di snapshot SO (bukan qty 0). Δ Inv memakai Inv − PO bila SO tidak ada.'
                   : hasQtyMismatch
                     ? ' Baris kuning = qty berbeda antar tahap.'
                     : ''}
@@ -251,29 +265,24 @@ export default function VendorInvoiceDocument({
                     <th className="text-right py-0.5" title="Qty di snapshot SO sales.app">SO</th>
                     <th className="text-right py-0.5" title="Qty di faktur vendor">Inv</th>
                     <th className="text-right py-0.5" title="SO − PO">Δ SO</th>
-                    <th className="text-right py-0.5" title="Inv − SO">Δ Inv</th>
+                    <th className="text-right py-0.5" title="Inv − SO (atau Inv − PO jika SO tidak ada)">Δ Inv</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {qtyRows.map(({ row, dSo, dInv, soQty }, i) => {
-                    const missingSo = soQty === 0 && num(row.poQty) > 0 && missingSoLines;
-                    const warn = !missingSo && (dSo !== 0 || dInv !== 0);
+                  {qtyRows.map(({ row, dSo, dInv, soQty, invQty, soMissing, invMissing }, i) => {
+                    const warn = !soMissing && ((dSo != null && dSo !== 0) || (dInv != null && dInv !== 0));
                     return (
                       <tr
                         key={`${str(row.kode)}-${str(row.satuan)}-${i}`}
-                        className={missingSo ? 'text-slate-500 bg-slate-100/80' : warn ? 'text-amber-800 bg-amber-50/60' : ''}
+                        className={soMissing ? 'text-slate-500 bg-slate-100/80' : warn ? 'text-amber-800 bg-amber-50/60' : ''}
                       >
                         <td className="font-mono py-0.5">{str(row.kode)}</td>
                         <td className="text-center py-0.5">{str(row.satuan)}</td>
                         <td className="text-right tabular-nums py-0.5">{num(row.poQty)}</td>
-                        <td className="text-right tabular-nums py-0.5">{soQty === 0 && missingSoLines ? '—' : soQty}</td>
-                        <td className="text-right tabular-nums py-0.5">{num(row.invoiceQty)}</td>
-                        <td className="text-right tabular-nums py-0.5 font-medium">
-                          {missingSo ? '—' : dSo === 0 ? '—' : dSo > 0 ? `+${dSo}` : dSo}
-                        </td>
-                        <td className="text-right tabular-nums py-0.5 font-medium">
-                          {missingSo ? '—' : dInv === 0 ? '—' : dInv > 0 ? `+${dInv}` : dInv}
-                        </td>
+                        <td className="text-right tabular-nums py-0.5">{soMissing ? '—' : soQty}</td>
+                        <td className="text-right tabular-nums py-0.5">{invMissing ? '—' : invQty}</td>
+                        <td className="text-right tabular-nums py-0.5 font-medium">{fmtDelta(dSo)}</td>
+                        <td className="text-right tabular-nums py-0.5 font-medium">{fmtDelta(dInv)}</td>
                       </tr>
                     );
                   })}

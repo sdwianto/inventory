@@ -283,72 +283,167 @@ export async function resolveHutangVariance(
   };
 }
 
-type LineQtyRow = { kode: string; uomId?: string; satuan?: string; qty: number };
+type LineQtyRow = {
+  kode: string;
+  uomId?: string;
+  satuan?: string;
+  qty: number;
+  present: boolean;
+};
 
 function normalizeKode(kode: string): string {
   return String(kode || '').trim().toUpperCase();
 }
 
 function normalizeSatuan(satuan?: string): string {
-  return String(satuan || '').trim().toUpperCase();
+  const s = String(satuan || '').trim().toUpperCase();
+  if (!s || s === '—' || s === '-') return '';
+  return s;
 }
 
-function lineBucketKey(kode: string, uomId?: string, satuan?: string): string {
-  const k = normalizeKode(kode);
+/** Item PO yang relevan untuk tagihan vendor ini (multi-vendor → filter supplier). */
+export function poItemsForHutang(
+  po: JsonObject | null | undefined,
+  hutang: HutangDoc | null = null,
+): JsonObject[] {
+  if (!po) return [];
+  const items = asArray(po.items) as JsonObject[];
+  if (!items.length) return [];
+  if (!isMultiVendorPo(po)) return items;
+
+  const targetVid = resolveVendorTenantForHutang(po, hutang);
+  if (targetVid) {
+    const byVendor = items.filter(
+      (it) => hutangVendorKey(String(it.vendorTenantId ?? '')) === targetVid,
+    );
+    if (byVendor.length) return byVendor;
+  }
+
+  const snap = resolveSoSnapshotForPo(po, hutang);
+  const snapKodes = new Set(
+    asArray(snap?.items).map((it) => normalizeKode(String((it as JsonObject).kode || ''))).filter(Boolean),
+  );
+  if (snapKodes.size) {
+    const bySnap = items.filter((it) => {
+      const k = normalizeKode(String(it.kode || it.vendorKode || ''));
+      return k && snapKodes.has(k);
+    });
+    if (bySnap.length) return bySnap;
+  }
+  return items;
+}
+
+function lineQtyValue(it: JsonObject, qtyField: string): number {
+  if (qtyField === 'qty') {
+    return parseFloat(String(it.qty ?? it.qtyOrdered ?? it.qtyReceived ?? 0)) || 0;
+  }
+  return parseFloat(String(it[qtyField] ?? it.qty ?? it.qtyOrdered ?? 0)) || 0;
+}
+
+function collectRawLines(items: JsonObject[], qtyField: string): LineQtyRow[] {
+  const out: LineQtyRow[] = [];
+  for (const it of items) {
+    const kodeRaw = String(it.kode || it.vendorKode || it.localKode || '').trim();
+    if (!kodeRaw) continue;
+    out.push({
+      kode: kodeRaw,
+      uomId: it.uomId ? String(it.uomId) : undefined,
+      satuan: it.satuan ? String(it.satuan) : undefined,
+      qty: lineQtyValue(it, qtyField),
+      present: true,
+    });
+  }
+  return out;
+}
+
+/** Satuan unik per kode dari sumber yang punya satuan (biasanya PO / itemsFull). */
+function satuanHintsByKode(lines: LineQtyRow[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const line of lines) {
+    const k = normalizeKode(line.kode);
+    const sat = normalizeSatuan(line.satuan);
+    if (!k || !sat) continue;
+    if (!map.has(k)) map.set(k, new Set());
+    map.get(k)!.add(sat);
+  }
+  return map;
+}
+
+function resolveBucketKey(line: LineQtyRow, hints: Map<string, Set<string>>): string {
+  const k = normalizeKode(line.kode);
   if (!k) return '';
-  // Prioritas satuan agar baris PO (uomId lokal) dan invoice (satuan vendor) tetap satu bucket.
-  const sat = normalizeSatuan(satuan);
+  let sat = normalizeSatuan(line.satuan);
+  if (!sat) {
+    const hinted = hints.get(k);
+    if (hinted && hinted.size === 1) sat = [...hinted][0];
+  }
   if (sat) return `${k}::${sat}`;
-  const uom = String(uomId || '').trim();
-  if (uom) return `${k}::${uom}`;
+  // Jangan pakai uomId mentah — beda sistem ID memecah baris yang sama.
   return `${k}::_default`;
 }
 
-function collectLineQty(items: JsonObject[], qtyField: string): Map<string, LineQtyRow> {
+function collectLineQty(
+  items: JsonObject[],
+  qtyField: string,
+  hints: Map<string, Set<string>>,
+): Map<string, LineQtyRow> {
   const map = new Map<string, LineQtyRow>();
-  for (const it of items) {
-    const kode = String(it.kode || it.vendorKode || it.localKode || '').trim();
-    if (!kode) continue;
-    const key = lineBucketKey(kode, String(it.uomId || ''), String(it.satuan || ''));
-    const qty = parseFloat(String(
-      qtyField === 'qty'
-        ? (it.qty ?? it.qtyOrdered ?? 0)
-        : (it[qtyField] ?? it.qty ?? it.qtyOrdered ?? 0),
-    )) || 0;
+  for (const line of collectRawLines(items, qtyField)) {
+    const key = resolveBucketKey(line, hints);
+    if (!key) continue;
+    const sat = key.split('::')[1];
     const prev = map.get(key);
-    if (prev) prev.qty += qty;
-    else {
+    if (prev) {
+      prev.qty += line.qty;
+      prev.present = true;
+      if (!prev.satuan && line.satuan) prev.satuan = line.satuan;
+      if (!prev.uomId && line.uomId) prev.uomId = line.uomId;
+    } else {
       map.set(key, {
-        kode,
-        uomId: it.uomId ? String(it.uomId) : undefined,
-        satuan: it.satuan ? String(it.satuan) : undefined,
-        qty,
+        kode: line.kode,
+        uomId: line.uomId,
+        satuan: line.satuan || (sat !== '_default' ? sat : undefined),
+        qty: line.qty,
+        present: true,
       });
     }
   }
   return map;
 }
 
-/** Variance per baris kode+UOM — PO vs SO snapshot vs invoice (P1.3b). */
+export type LineVarianceByUomRow = {
+  kode: string;
+  uomId?: string;
+  satuan: string;
+  poQty: number;
+  soQty: number;
+  invoiceQty: number;
+  /** false = baris tidak ada di snapshot SO (bukan SO qty 0) */
+  soLineMissing: boolean;
+  /** false = baris tidak ada di faktur */
+  invLineMissing: boolean;
+  variancePoToSo: number | null;
+  varianceSoToInvoice: number | null;
+};
+
+/** Variance per baris kode+satuan — PO vs SO snapshot vs invoice (P1.3b). */
 export function buildLineVarianceByUom(params: {
   poItems?: JsonObject[];
   soItems?: JsonObject[];
   invoiceItems?: JsonObject[];
-}) {
-  const poMap = collectLineQty(params.poItems || [], 'qty');
-  const soMap = collectLineQty(params.soItems || [], 'qty');
-  const invMap = collectLineQty(params.invoiceItems || [], 'qty');
+}): LineVarianceByUomRow[] {
+  const poLines = collectRawLines(params.poItems || [], 'qty');
+  const soLines = collectRawLines(params.soItems || [], 'qty');
+  const invLines = collectRawLines(params.invoiceItems || [], 'qty');
+
+  // Hint satuan: PO dulu, lalu invoice/SO yang sudah punya satuan.
+  const hints = satuanHintsByKode([...poLines, ...invLines, ...soLines]);
+
+  const poMap = collectLineQty(params.poItems || [], 'qty', hints);
+  const soMap = collectLineQty(params.soItems || [], 'qty', hints);
+  const invMap = collectLineQty(params.invoiceItems || [], 'qty', hints);
   const keys = new Set([...poMap.keys(), ...soMap.keys(), ...invMap.keys()]);
-  const rows: Array<{
-    kode: string;
-    uomId?: string;
-    satuan: string;
-    poQty: number;
-    soQty: number;
-    invoiceQty: number;
-    variancePoToSo: number;
-    varianceSoToInvoice: number;
-  }> = [];
+  const rows: LineVarianceByUomRow[] = [];
 
   for (const key of keys) {
     const po = poMap.get(key);
@@ -357,15 +452,23 @@ export function buildLineVarianceByUom(params: {
     const poQty = po?.qty || 0;
     const soQty = so?.qty || 0;
     const invoiceQty = inv?.qty || 0;
+    const soLineMissing = !so?.present;
+    const invLineMissing = !inv?.present;
+    const satKey = key.split('::')[1];
     rows.push({
       kode: po?.kode || so?.kode || inv?.kode || key.split('::')[0],
       uomId: po?.uomId || so?.uomId || inv?.uomId,
-      satuan: po?.satuan || so?.satuan || inv?.satuan || (key.split('::')[1] === '_default' ? '—' : key.split('::')[1]) || '—',
+      satuan: po?.satuan || so?.satuan || inv?.satuan || (satKey === '_default' ? '—' : satKey) || '—',
       poQty,
       soQty,
       invoiceQty,
-      variancePoToSo: soQty - poQty,
-      varianceSoToInvoice: invoiceQty - soQty,
+      soLineMissing,
+      invLineMissing,
+      // Jangan anggap SO missing sebagai qty 0 — itu menyesatkan.
+      variancePoToSo: soLineMissing ? null : soQty - poQty,
+      varianceSoToInvoice: soLineMissing
+        ? (invLineMissing ? null : invoiceQty - poQty)
+        : invoiceQty - soQty,
     });
   }
 

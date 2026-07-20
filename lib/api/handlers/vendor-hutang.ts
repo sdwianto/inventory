@@ -10,7 +10,13 @@ import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-mast
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot } from '@/lib/api/hutang-approval';
-import { resolveHutangVariance, buildLineVarianceByUom, resolveSoSnapshotForPo, findPoForHutang } from '@/lib/api/hutang-variance-enrich';
+import {
+  resolveHutangVariance,
+  buildLineVarianceByUom,
+  resolveSoSnapshotForPo,
+  findPoForHutang,
+  poItemsForHutang,
+} from '@/lib/api/hutang-variance-enrich';
 import { buildHutangDetailEnrichment } from '@/lib/api/hutang-detail-enrich';
 import { backfillLegacyVendorInvoices } from '@/lib/api/migrate-hutang-approval';
 import { backfixVendorHutangFromPostedGrns } from '@/lib/api/hutang-reconcile';
@@ -215,10 +221,18 @@ export async function handleVendorHutang({
     ]);
     const linkedPo = await findPoForHutang(db, doc);
     const soSnap = resolveSoSnapshotForPo(linkedPo as import('@/types/json').JsonObject | null, doc);
+    const invoiceLines = (
+      (billing as { itemsFull?: unknown[] }).itemsFull?.length
+        ? (billing as { itemsFull: unknown[] }).itemsFull
+        : (doc.items || [])
+    ) as import('@/types/json').JsonObject[];
     const lineVarianceByUom = buildLineVarianceByUom({
-      poItems: (linkedPo?.items || []) as import('@/types/json').JsonObject[],
+      poItems: poItemsForHutang(
+        linkedPo as import('@/types/json').JsonObject | null,
+        doc,
+      ),
       soItems: (soSnap?.items || []) as import('@/types/json').JsonObject[],
-      invoiceItems: (doc.items || []) as import('@/types/json').JsonObject[],
+      invoiceItems: invoiceLines,
     });
     const soLineDataAvailable = (soSnap?.items || []).some(
       (it) => (parseFloat(String(it.qty ?? it.qtyOrdered ?? 0)) || 0) > 0,
