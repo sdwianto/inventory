@@ -88,6 +88,11 @@ node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 .env
 .env.*
 *.env
+# Template deploy boleh di-commit
+!.env.example
+!.env.docker.example
+!env.example
+!env.docker.example
 credentials.json
 *.key
 .credentials
