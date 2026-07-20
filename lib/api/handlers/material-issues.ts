@@ -41,10 +41,10 @@ import {
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
-  nextFpDocNumber,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
+import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import type { HandlerContext } from '@/types/api/handler';
 

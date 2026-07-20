@@ -35,10 +35,10 @@ import {
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
-  nextFpDocNumber,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
+import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import type { AuthContext } from '@/types/auth';
 import type { HandlerContext } from '@/types/api/handler';

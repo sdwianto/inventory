@@ -1,11 +1,7 @@
 /**
  * Thin document helpers for Food Production (ADR-001 Phase 0).
- * Not a full workflow engine — status maps per document type.
+ * Pure / client-safe — no Mongo or document-sequence imports.
  */
-
-import { nextDocNumber } from '@/lib/api/document-sequence';
-
-export { nextDocNumber };
 
 export const FP_DOC_TYPES = {
   PRODUCTION_PLAN: 'FP_PLAN',
@@ -86,12 +82,4 @@ export function appendDocHistory(
   entry: DocHistoryEntry,
 ): DocHistoryEntry[] {
   return [...(history || []), entry];
-}
-
-export async function nextFpDocNumber(
-  db: Parameters<typeof nextDocNumber>[0],
-  tenantId: string | null | undefined,
-  docType: FpDocType,
-): Promise<string> {
-  return nextDocNumber(db, tenantId, docType, FP_DOC_PREFIX[docType]);
 }

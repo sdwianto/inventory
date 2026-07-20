@@ -34,10 +34,10 @@ import {
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
-  nextFpDocNumber,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
+import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles';
 import type { HandlerContext } from '@/types/api/handler';
 

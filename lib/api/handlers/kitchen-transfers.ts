@@ -30,10 +30,10 @@ import {
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
-  nextFpDocNumber,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
+import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;

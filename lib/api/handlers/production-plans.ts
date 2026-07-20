@@ -29,10 +29,10 @@ import {
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
-  nextFpDocNumber,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
+import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { todayIsoDate } from '@/lib/food-production/recipe';
 import {
   MATERIAL_ISSUES_COLLECTION,
