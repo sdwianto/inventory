@@ -1,19 +1,52 @@
-# Inventory app + background job worker
-# Usage: docker compose up -d
+# Inventory standalone (lite VPS).
+# Prefer full stack dari sales/sales (Redis job bus + workers) untuk production enterprise.
+#
+# Usage:
+#   cp .env.docker.example .env.docker   # isi secrets
+#   docker compose --env-file .env.docker up --build -d
+#
+# Build butuh sibling packages Sales (BuildKit additional_contexts).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
 
 services:
   inventory-app:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        # Path relatif dari inventory-app → Assignment/sales/sales/packages
+        sales_pkgs: ../../sales/sales/packages
     ports:
       - "3001:3001"
+    logging: *default-logging
     environment:
-      - MONGO_URL=mongodb://mongo:27017
-      - DB_NAME=inventory_customer
-      - SESSION_SECRET=${SESSION_SECRET:-change-me-min-32-chars-for-production}
+      - NODE_ENV=production
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+      - DB_NAME=${DB_NAME:-inventory_customer}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET wajib di .env.docker}
+      - WORKER_SECRET=${WORKER_SECRET:?WORKER_SECRET wajib di .env.docker}
+      - MASTER_BOOTSTRAP_EMAIL=${MASTER_BOOTSTRAP_EMAIL:-master@dawam.com}
+      - MASTER_BOOTSTRAP_PASSWORD=${MASTER_BOOTSTRAP_PASSWORD:?MASTER_BOOTSTRAP_PASSWORD wajib}
+      - INTEGRATION_SETUP_TOKEN=${INTEGRATION_SETUP_TOKEN:?INTEGRATION_SETUP_TOKEN wajib}
       - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-http://localhost:3001}
-      - WORKER_SECRET=${WORKER_SECRET:-dev-worker-secret}
+      - SALES_APP_URL=${SALES_APP_URL:-http://host.docker.internal:3000}
+      - MEDIA_STORAGE_PATH=/app/storage/media
+      # HTTP VPS: matikan HSTS sampai TLS (Caddy) aktif
+      - ENABLE_HSTS=${ENABLE_HSTS:-0}
+      # Lite stack: legacy HTTP poll worker (jangan set DEPLOYMENT_MODE=vps tanpa job bus)
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
+      - JOB_BUS_ENABLED=${JOB_BUS_ENABLED:-0}
+    volumes:
+      - media_data:/app/storage
     depends_on:
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -24,15 +57,22 @@ services:
     restart: unless-stopped
 
   inventory-worker:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        sales_pkgs: ../../sales/sales/packages
     command: ["node", "scripts/run-bg-worker.mjs"]
+    logging: *default-logging
     environment:
-      - MONGO_URL=mongodb://mongo:27017
-      - DB_NAME=inventory_customer
+      - NODE_ENV=production
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+      - DB_NAME=${DB_NAME:-inventory_customer}
       - BG_WORKER_INTERVAL_MS=${BG_WORKER_INTERVAL_MS:-30000}
-      - BG_WORKER_BATCH=${BG_WORKER_BATCH:-5}
       - WORKER_INTERNAL_URL=http://inventory-app:3001
-      - WORKER_SECRET=${WORKER_SECRET:-dev-worker-secret}
+      - WORKER_SECRET=${WORKER_SECRET:?WORKER_SECRET wajib di .env.docker}
+      - MEDIA_STORAGE_PATH=/app/storage/media
+    volumes:
+      - media_data:/app/storage
     depends_on:
       mongo:
         condition: service_healthy
@@ -42,15 +82,50 @@ services:
 
   mongo:
     image: mongo:7
+    logging: *default-logging
+    # Hanya localhost — jangan expose publik di VPS
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --bind_ip_all
     volumes:
       - mongo_data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }).ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:6379:6379"
+    command:
+      - redis-server
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --appendonly
+      - "yes"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
 volumes:
   mongo_data:
+  media_data:

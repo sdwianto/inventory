@@ -74,7 +74,10 @@ export async function storeBase64Image(
     await writeFile(filePath, buf);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { error: `Gagal menyimpan media: ${msg}` };
+    const hint = /EACCES|EPERM|EROFS|permission denied/i.test(msg)
+      ? ` — pastikan ${storageRoot()} writable (Docker: volume media_data + uid nextjs/1001)`
+      : '';
+    return { error: `Gagal menyimpan media: ${msg}${hint}` };
   }
 
   return { url: mediaPublicPath(tid, filename), filename };
