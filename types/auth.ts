@@ -3,7 +3,8 @@ export type UserRole =
   | 'ADMIN'
   | 'OWNER'
   | 'SUPERVISOR'
-  | 'GUDANG';
+  | 'GUDANG'
+  | 'DRIVER';
 
 export interface AuthContext {
   userId: string;

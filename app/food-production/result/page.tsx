@@ -324,7 +324,10 @@ function FoodProductionResultPageContent() {
       setCompleteOpen(false);
       setCompleteTarget(null);
       await load();
-      if (detail?.id === row.id) {
+      if (status === 'COMPLETED' || status === 'CANCELLED') {
+        // Workflow selesai — tutup dialog detail
+        if (detail?.id === row.id) setDetail(null);
+      } else if (detail?.id === row.id) {
         setDetail(data as ResultRow);
         setEditLines(data.lines || []);
       }

@@ -12,6 +12,10 @@ import { roundQty } from '@/lib/food-production/material-requirement';
 
 export const DISTRIBUTION_ORDERS_COLLECTION = 'distribution_orders';
 
+/** Satu set makanan per porsi (MBG) — bukan per resep. */
+export const FOOD_TRAY_ID = 'FOOD_TRAY';
+export const FOOD_TRAY_LABEL = 'Food Tray';
+
 export type DistributionSourceType = 'PLAN' | 'RESULT';
 export type DistributionStatus = FpDocStatus;
 
@@ -24,6 +28,10 @@ export interface DistributionLine {
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
+  /** Identitas baris MBG bila rencana langsung resep (tanpa menu / FG). */
+  recipeId?: string;
+  recipeKode?: string;
+  recipeNama?: string;
   finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
@@ -157,11 +165,16 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
       return { error: `Baris ${i + 1}: qtyPorsi harus > 0` };
     }
     const menuId = row.menuId != null ? String(row.menuId).trim() || undefined : undefined;
+    const recipeId = row.recipeId != null ? String(row.recipeId).trim() || undefined : undefined;
     const fgId = row.finishedGoodProductId != null
       ? String(row.finishedGoodProductId).trim() || undefined
       : undefined;
-    const key = `${servicePointId}|${menuId || ''}|${fgId || ''}`;
-    if (seen.has(key)) return { error: `Baris ${i + 1}: duplikat titik × menu/FG` };
+    const itemKey = distLineKey({ menuId, finishedGoodProductId: fgId, recipeId });
+    if (itemKey === '|') {
+      return { error: `Baris ${i + 1}: wajib menuId, finishedGoodProductId, atau recipeId` };
+    }
+    const key = `${servicePointId}|${itemKey}`;
+    if (seen.has(key)) return { error: `Baris ${i + 1}: duplikat titik × menu/FG/resep` };
     seen.add(key);
     const kapasitas = optionalNonNegQty(row.kapasitasPorsi);
     const qtyDikirim = optionalNonNegQty(row.qtyDikirim);
@@ -175,6 +188,9 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
       menuId,
       menuKode: row.menuKode != null ? String(row.menuKode) : undefined,
       menuNama: row.menuNama != null ? String(row.menuNama) : undefined,
+      recipeId,
+      recipeKode: row.recipeKode != null ? String(row.recipeKode) : undefined,
+      recipeNama: row.recipeNama != null ? String(row.recipeNama) : undefined,
       finishedGoodProductId: fgId,
       finishedGoodKode: row.finishedGoodKode != null ? String(row.finishedGoodKode) : undefined,
       finishedGoodNama: row.finishedGoodNama != null ? String(row.finishedGoodNama) : undefined,
@@ -195,6 +211,7 @@ export function applyDistLineActuals(
   actuals?: Array<{
     servicePointId: string;
     menuId?: string;
+    recipeId?: string;
     finishedGoodProductId?: string;
     qty: number;
     notes?: string;
@@ -212,14 +229,14 @@ export function applyDistLineActuals(
       return { error: 'Qty actual per titik harus ≥ 0' };
     }
     const notes = a.notes != null ? String(a.notes).trim() : undefined;
-    byKey.set(`${sp}|${a.menuId || ''}|${a.finishedGoodProductId || ''}`, {
+    byKey.set(`${sp}|${distLineKey(a)}`, {
       qty: roundQty(qty),
       notes: a.notes != null ? (notes || '') : undefined,
     });
   }
 
   return lines.map((line) => {
-    const key = `${line.servicePointId}|${line.menuId || ''}|${line.finishedGoodProductId || ''}`;
+    const key = `${line.servicePointId}|${distLineKey(line)}`;
     const actual = byKey.get(key);
     const next = { ...line };
     if (toStatus === 'PROCESSING') {
@@ -238,6 +255,7 @@ export function applyDistSettleLines(
   settles?: Array<{
     servicePointId: string;
     menuId?: string;
+    recipeId?: string;
     finishedGoodProductId?: string;
     qtyDiterima: number;
     qtyDikembalikan: number;
@@ -261,7 +279,7 @@ export function applyDistSettleLines(
       return { error: 'Qty dikembalikan per titik harus ≥ 0' };
     }
     const notes = a.notes != null ? String(a.notes).trim() : undefined;
-    byKey.set(`${sp}|${a.menuId || ''}|${a.finishedGoodProductId || ''}`, {
+    byKey.set(`${sp}|${distLineKey(a)}`, {
       qtyDiterima: roundQty(qtyDiterima),
       qtyDikembalikan: roundQty(qtyDikembalikan),
       notes: a.notes != null ? (notes || '') : undefined,
@@ -271,7 +289,7 @@ export function applyDistSettleLines(
   const out: DistributionLine[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const key = `${line.servicePointId}|${line.menuId || ''}|${line.finishedGoodProductId || ''}`;
+    const key = `${line.servicePointId}|${distLineKey(line)}`;
     const settle = byKey.get(key);
     const next = { ...line };
     if (next.qtyDikirim == null) next.qtyDikirim = line.qtyPorsi;
@@ -311,12 +329,39 @@ export function movementQtyForStatus(lines: DistributionLine[], toStatus: string
   return roundQty(lines.reduce((s, l) => s + (Number(l.qtyPorsi) || 0), 0));
 }
 
+/**
+ * Gabung baris resep/menu → 1 item Food Tray.
+ * Qty = max porsi baris (1 tray = 1 set makanan, bukan penjumlahan tiap resep).
+ */
+export function collapseSourceToFoodTray(
+  items: Array<{ qtyPorsi: number }>,
+): Array<{
+  recipeId: string;
+  recipeNama: string;
+  menuNama: string;
+  finishedGoodNama: string;
+  qtyPorsi: number;
+}> | { error: string } {
+  const qtys = (items || []).map((i) => Number(i.qtyPorsi) || 0).filter((q) => q > 0);
+  if (!qtys.length) return { error: 'Sumber alokasi tidak ditemukan' };
+  return [{
+    recipeId: FOOD_TRAY_ID,
+    recipeNama: FOOD_TRAY_LABEL,
+    menuNama: FOOD_TRAY_LABEL,
+    finishedGoodNama: FOOD_TRAY_LABEL,
+    qtyPorsi: roundQty(Math.max(...qtys)),
+  }];
+}
+
 /** Build draft packing lines: each plan/result line × each service point (equal split). */
 export function allocatePorsiAcrossPoints(input: {
   items: Array<{
     menuId?: string;
     menuKode?: string;
     menuNama?: string;
+    recipeId?: string;
+    recipeKode?: string;
+    recipeNama?: string;
     finishedGoodProductId?: string;
     finishedGoodKode?: string;
     finishedGoodNama?: string;
@@ -381,7 +426,10 @@ export function allocatePorsiAcrossPoints(input: {
           : undefined,
         menuId: item.menuId,
         menuKode: item.menuKode,
-        menuNama: item.menuNama,
+        menuNama: item.menuNama || item.recipeNama || item.finishedGoodNama,
+        recipeId: item.recipeId,
+        recipeKode: item.recipeKode,
+        recipeNama: item.recipeNama,
         finishedGoodProductId: item.finishedGoodProductId,
         finishedGoodKode: item.finishedGoodKode,
         finishedGoodNama: item.finishedGoodNama,
@@ -400,6 +448,9 @@ export function remainingSourceItems(
     menuId?: string;
     menuKode?: string;
     menuNama?: string;
+    recipeId?: string;
+    recipeKode?: string;
+    recipeNama?: string;
     finishedGoodProductId?: string;
     finishedGoodKode?: string;
     finishedGoodNama?: string;
@@ -410,6 +461,9 @@ export function remainingSourceItems(
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
+  recipeId?: string;
+  recipeKode?: string;
+  recipeNama?: string;
   finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
@@ -424,7 +478,9 @@ export function remainingSourceItems(
   const out: typeof sourceItems = [];
   for (const src of sourceItems) {
     const key = distLineKey(src);
-    if (key === '|') return { error: 'Baris sumber tidak punya menuId/finishedGoodProductId' };
+    if (key === '|') {
+      return { error: 'Baris sumber tidak punya menuId/finishedGoodProductId/recipeId' };
+    }
     const remain = roundQty((Number(src.qtyPorsi) || 0) - (used.get(key) || 0));
     if (remain > 0) {
       out.push({ ...src, qtyPorsi: remain });
@@ -439,16 +495,31 @@ export function remainingSourceItems(
   return out;
 }
 
+/**
+ * Identitas item alokasi.
+ * Prefer menu|FG (legacy); fallback recipe:… untuk MBG resep-langsung tanpa menu/FG.
+ */
 export function distLineKey(line: {
   menuId?: string;
   finishedGoodProductId?: string;
+  recipeId?: string;
 }): string {
-  return `${line.menuId || ''}|${line.finishedGoodProductId || ''}`;
+  const menuId = String(line.menuId || '').trim();
+  const fgId = String(line.finishedGoodProductId || '').trim();
+  const recipeId = String(line.recipeId || '').trim();
+  if (menuId || fgId) return `${menuId}|${fgId}`;
+  if (recipeId) return `recipe:${recipeId}`;
+  return '|';
 }
 
 /** Remaining porsi vs source — includes non-cancelled DST already consumed. */
 export function assertDistQtyWithinSource(input: {
-  sourceItems: Array<{ menuId?: string; finishedGoodProductId?: string; qtyPorsi: number }>;
+  sourceItems: Array<{
+    menuId?: string;
+    finishedGoodProductId?: string;
+    recipeId?: string;
+    qtyPorsi: number;
+  }>;
   newLines: DistributionLine[];
   /** Non-CANCELLED lines already allocated (open + completed). */
   existingConsumedLines?: DistributionLine[];
@@ -459,7 +530,7 @@ export function assertDistQtyWithinSource(input: {
   const availByKey = new Map<string, number>();
   for (const src of input.sourceItems) {
     const key = distLineKey(src);
-    if (key === '|') return 'Baris sumber tidak punya menuId/finishedGoodProductId';
+    if (key === '|') return 'Baris sumber tidak punya menuId/finishedGoodProductId/recipeId';
     availByKey.set(key, roundQty((availByKey.get(key) || 0) + (Number(src.qtyPorsi) || 0)));
   }
 

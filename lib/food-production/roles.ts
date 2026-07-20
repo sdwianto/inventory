@@ -15,3 +15,9 @@ export const FP_MGMT_READ_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as 
  * Threshold / template master / APPROVE·COMPLETE·CANCEL tetap FP_MANAGE_ROLES.
  */
 export const FP_OPS_WRITE_ROLES = ['GUDANG', 'ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
+
+/**
+ * Driver: lihat Titik Layanan + update status Distribusi (dikirim/selesai).
+ * Create/edit/delete DO & master Titik Layanan tetap FP_MANAGE_ROLES.
+ */
+export const FP_DIST_STATUS_ROLES = ['DRIVER', 'ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;

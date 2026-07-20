@@ -15,6 +15,7 @@ import {
   normalizeDistLines,
   summarizeDistLines,
   allocatePorsiAcrossPoints,
+  collapseSourceToFoodTray,
   remainingSourceItems,
   assertDistQtyWithinSource,
   applyDistLineActuals,
@@ -29,7 +30,7 @@ import { SERVICE_POINTS_COLLECTION, type ServicePointDoc } from '@/lib/food-prod
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
-import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import { FP_DIST_STATUS_ROLES, FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -126,7 +127,10 @@ function sourceItemsFromResult(result: ProductionResultDoc): DistSourceItem[] {
   return (result.lines || []).map((l) => ({
     menuId: l.menuId,
     menuKode: l.menuKode,
-    menuNama: l.menuNama || l.finishedGoodNama,
+    menuNama: l.menuNama || l.recipeNama || l.finishedGoodNama,
+    recipeId: l.recipeId,
+    recipeKode: l.recipeKode,
+    recipeNama: l.recipeNama,
     finishedGoodProductId: l.finishedGoodProductId,
     finishedGoodKode: l.finishedGoodKode,
     finishedGoodNama: l.finishedGoodNama,
@@ -284,7 +288,9 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       productionResultNo = result.noDokumen;
       productionPlanId = result.productionPlanId;
       productionPlanNo = result.productionPlanNo;
-      sourceItems = sourceItemsFromResult(result);
+      const collapsed = collapseSourceToFoodTray(sourceItemsFromResult(result));
+      if ('error' in collapsed) return err(collapsed.error, 400);
+      sourceItems = collapsed;
     } else {
       const pid = String(distBody.productionPlanId || '').trim();
       if (!pid) return err('productionPlanId wajib untuk sumber rencana', 400);
@@ -299,7 +305,11 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       kitchenNama = plan.kitchenNama;
       productionPlanId = plan.id;
       productionPlanNo = plan.noDokumen;
-      sourceItems = sourceItemsFromPlan(plan);
+      {
+        const collapsed = collapseSourceToFoodTray(sourceItemsFromPlan(plan));
+        if ('error' in collapsed) return err(collapsed.error, 400);
+        sourceItems = collapsed;
+      }
       // Prefer HSL once available — avoid double budget Plan+Result.
       const hslDone = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, {
@@ -503,13 +513,17 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           withTenantFilter(scopeAuth, { id: existing.productionResultId }),
         ) as ProductionResultDoc | null;
         if (!result) return err('Sumber HSL tidak ditemukan', 400);
-        sourceItems = sourceItemsFromResult(result);
+        const collapsed = collapseSourceToFoodTray(sourceItemsFromResult(result));
+        if ('error' in collapsed) return err(collapsed.error, 400);
+        sourceItems = collapsed;
       } else if (existing.productionPlanId) {
         const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
           withTenantFilter(scopeAuth, { id: existing.productionPlanId }),
         ) as ProductionPlanDoc | null;
         if (!plan) return err('Sumber rencana tidak ditemukan', 400);
-        sourceItems = sourceItemsFromPlan(plan);
+        const collapsed = collapseSourceToFoodTray(sourceItemsFromPlan(plan));
+        if ('error' in collapsed) return err(collapsed.error, 400);
+        sourceItems = collapsed;
       } else {
         return err('Dokumen distribusi tanpa sumber', 400);
       }
@@ -553,7 +567,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
   }
 
   if (path[0] === 'distribution-orders' && path[1] && path[2] === 'status' && method === 'POST') {
-    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    const deniedRole = requireRole(auth, [...FP_DIST_STATUS_ROLES]);
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: distBody, request });
     if (denied) return denied;
@@ -594,6 +608,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         return {
           servicePointId: String(row.servicePointId || '').trim(),
           menuId: row.menuId != null ? String(row.menuId).trim() || undefined : undefined,
+          recipeId: row.recipeId != null ? String(row.recipeId).trim() || undefined : undefined,
           finishedGoodProductId: row.finishedGoodProductId != null
             ? String(row.finishedGoodProductId).trim() || undefined
             : undefined,
@@ -614,6 +629,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         return {
           servicePointId: String(row.servicePointId || '').trim(),
           menuId: row.menuId != null ? String(row.menuId).trim() || undefined : undefined,
+          recipeId: row.recipeId != null ? String(row.recipeId).trim() || undefined : undefined,
           finishedGoodProductId: row.finishedGoodProductId != null
             ? String(row.finishedGoodProductId).trim() || undefined
             : undefined,

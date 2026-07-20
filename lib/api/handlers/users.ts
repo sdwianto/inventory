@@ -10,7 +10,7 @@ import type { HandlerContext } from '@/types/api/handler';
 import { assertEmailAvailableInTenant, normalizeUserEmail, userEmailFields } from '@/lib/api/user-email';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 
-const TENANT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER'];
+const TENANT_ROLES = ['GUDANG', 'DRIVER', 'SUPERVISOR', 'ADMIN', 'OWNER'];
 const ALL_ROLES = [...TENANT_ROLES, 'MASTER'];
 
 interface UserDoc extends Record<string, unknown> {

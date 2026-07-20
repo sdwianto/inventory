@@ -24,6 +24,8 @@ import {
 } from '@/lib/food-production/distribution';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
+/** Manage + DRIVER — update status kirim/selesai. */
+const STATUS_ROLES = new Set([...MANAGE_ROLES, 'DRIVER']);
 
 interface ResultOpt {
   id: string;
@@ -51,6 +53,9 @@ interface DistLine {
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
+  recipeId?: string;
+  recipeKode?: string;
+  recipeNama?: string;
   finishedGoodProductId?: string;
   finishedGoodKode?: string;
   finishedGoodNama?: string;
@@ -110,6 +115,7 @@ interface StatusLineQty {
   servicePointKode?: string;
   servicePointNama?: string;
   menuId?: string;
+  recipeId?: string;
   finishedGoodProductId?: string;
   menuLabel: string;
   kapasitasPorsi?: number;
@@ -124,9 +130,12 @@ interface StatusLineQty {
 
 function DistributionPageContent() {
   const searchParams = useSearchParams();
-  const canManage = useMemo(() => {
+  const { canManage, canUpdateStatus } = useMemo(() => {
     const role = String((getUser() as { role?: string } | null)?.role || '');
-    return MANAGE_ROLES.has(role);
+    return {
+      canManage: MANAGE_ROLES.has(role),
+      canUpdateStatus: STATUS_ROLES.has(role),
+    };
   }, []);
 
   const [rows, setRows] = useState<DistRow[]>([]);
@@ -187,13 +196,21 @@ function DistributionPageContent() {
         ? (line.qtyDikembalikan != null ? Number(line.qtyDikembalikan) : 0)
         : Number(line.qtyDikembalikan) || 0;
       return {
-        key: `${line.servicePointId}|${line.menuId || ''}|${line.finishedGoodProductId || ''}|${idx}`,
+        key: `${line.servicePointId}|${line.menuId || ''}|${line.recipeId || ''}|${line.finishedGoodProductId || ''}|${idx}`,
         servicePointId: line.servicePointId,
         servicePointKode: line.servicePointKode,
         servicePointNama: line.servicePointNama,
         menuId: line.menuId,
+        recipeId: line.recipeId,
         finishedGoodProductId: line.finishedGoodProductId,
-        menuLabel: line.finishedGoodNama || line.menuNama || line.finishedGoodKode || line.menuKode || '—',
+        menuLabel:
+          line.finishedGoodNama
+          || line.menuNama
+          || line.recipeNama
+          || line.finishedGoodKode
+          || line.menuKode
+          || line.recipeKode
+          || '—',
         kapasitasPorsi: line.kapasitasPorsi,
         qtyAlokasi: Number(line.qtyPorsi) || 0,
         qtyDikirim,
@@ -393,6 +410,7 @@ function DistributionPageContent() {
               ? {
                 servicePointId: l.servicePointId,
                 menuId: l.menuId,
+                recipeId: l.recipeId,
                 finishedGoodProductId: l.finishedGoodProductId,
                 qtyDiterima: l.qtyDiterima,
                 qtyDikembalikan: l.qtyDikembalikan,
@@ -401,6 +419,7 @@ function DistributionPageContent() {
               : {
                 servicePointId: l.servicePointId,
                 menuId: l.menuId,
+                recipeId: l.recipeId,
                 finishedGoodProductId: l.finishedGoodProductId,
                 qty: l.qty,
                 notes: l.note,
@@ -527,7 +546,7 @@ function DistributionPageContent() {
                     >
                       <Eye className="h-4 w-4" />
                     </Button>
-                    {canManage && DIST_UI_STATUS_NEXT[row.status] && (
+                    {canUpdateStatus && DIST_UI_STATUS_NEXT[row.status] && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -695,7 +714,7 @@ function DistributionPageContent() {
                 </div>
               )}
               <DialogFooter className="gap-2 sm:gap-0">
-                {canManage && DIST_UI_STATUS_NEXT[detail.status] && (
+                {canUpdateStatus && DIST_UI_STATUS_NEXT[detail.status] && (
                   <Button
                     type="button"
                     variant="outline"

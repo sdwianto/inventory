@@ -184,6 +184,11 @@ const FP_MGMT_ROUTES = [
 const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
+  DRIVER: [
+    '/dashboard',
+    '/food-production/service-point',
+    '/food-production/distribution',
+  ],
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_OPS_ROUTES,
     ...KA_OPS_ROUTES,
@@ -614,6 +619,9 @@ export default function AppShell({ children }: AppShellProps) {
               )}
               {user.role === 'GUDANG' && (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs font-bold rounded">GUDANG</span>
+              )}
+              {user.role === 'DRIVER' && (
+                <span className="px-2 py-0.5 bg-cyan-100 text-cyan-800 text-xs font-bold rounded">DRIVER</span>
               )}
               <span className="text-slate-300 hidden sm:inline">|</span>
               {user.role === 'MASTER' && !scopeTenantLabel ? (

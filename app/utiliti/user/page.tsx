@@ -35,6 +35,7 @@ const ROLE_BADGE: Record<string, string> = {
   ADMIN: 'bg-blue-100 text-blue-700',
   SUPERVISOR: 'bg-amber-100 text-amber-800',
   GUDANG: 'bg-slate-100 text-slate-700',
+  DRIVER: 'bg-cyan-100 text-cyan-800',
   OWNER: 'bg-purple-100 text-purple-700',
 };
 
@@ -304,6 +305,7 @@ export default function UserManagementPage() {
               <Label>Role</Label>
               <select value={form.role} onChange={e => setForm({...form, role: e.target.value})} className="w-full border rounded px-3 py-2 text-sm">
                 <option value="GUDANG">GUDANG (staff gudang — terima barang, release, buat PO)</option>
+                <option value="DRIVER">DRIVER (titik layanan & distribusi — update status kirim)</option>
                 <option value="SUPERVISOR">SUPERVISOR (supervisor — approve release & ajukan PO)</option>
                 <option value="ADMIN">ADMIN (akses penuh dalam tenant)</option>
                 <option value="OWNER">OWNER (pemilik tenant — setara ADMIN)</option>

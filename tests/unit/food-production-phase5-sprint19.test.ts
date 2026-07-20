@@ -13,6 +13,9 @@ import {
   summarizeDistLines,
   applyDistLineActuals,
   applyDistSettleLines,
+  collapseSourceToFoodTray,
+  FOOD_TRAY_ID,
+  FOOD_TRAY_LABEL,
   DIST_UI_STATUS_NEXT,
   DIST_STATUS_TRANSITIONS,
 } from '@/lib/food-production/distribution';
@@ -28,6 +31,32 @@ describe('food-production phase 5 sprint 19', () => {
     expect(normalizeServicePointKode(' Ti 01 ')).toBe('Ti-01');
     expect(normalizeKapasitasPorsi('120')).toBe(120);
     expect(normalizeKapasitasPorsi(-1)).toBeUndefined();
+  });
+
+  it('collapses recipe lines to one Food Tray (max porsi = set makanan)', () => {
+    const tray = collapseSourceToFoodTray([
+      { qtyPorsi: 300 },
+      { qtyPorsi: 300 },
+    ]);
+    expect('error' in (tray as object)).toBe(false);
+    if ('error' in (tray as object)) return;
+    expect(tray).toHaveLength(1);
+    expect(tray[0].recipeId).toBe(FOOD_TRAY_ID);
+    expect(tray[0].menuNama).toBe(FOOD_TRAY_LABEL);
+    expect(tray[0].qtyPorsi).toBe(300);
+
+    const lines = allocatePorsiAcrossPoints({
+      items: tray,
+      servicePoints: [
+        { id: 'a', nama: 'A', kapasitasPorsi: 40 },
+        { id: 'b', nama: 'B', kapasitasPorsi: 50 },
+      ],
+    });
+    expect('error' in (lines as object)).toBe(false);
+    if ('error' in (lines as object)) return;
+    expect(lines).toHaveLength(2);
+    expect(lines.every((l) => l.menuNama === FOOD_TRAY_LABEL)).toBe(true);
+    expect(summarizeDistLines(lines).qtyPorsiTotal).toBe(300);
   });
 
   it('allocates porsi across points by kapasitas weight', () => {
@@ -113,6 +142,13 @@ describe('food-production phase 5 sprint 19', () => {
     expect(assertDistQtyWithinSource({
       sourceItems: [{ menuId: 'm1', finishedGoodProductId: 'fg1', qtyPorsi: 100 }],
       newLines: [{ servicePointId: 'a', menuId: 'm1', finishedGoodProductId: 'fg1', qtyPorsi: 50 }],
+      existingConsumedLines: [],
+    })).toBeNull();
+
+    // MBG recipe-direct (no menu / FG) — HSL → DST
+    expect(assertDistQtyWithinSource({
+      sourceItems: [{ recipeId: 'r1', qtyPorsi: 300 }],
+      newLines: [{ servicePointId: 'a', recipeId: 'r1', qtyPorsi: 100 }],
       existingConsumedLines: [],
     })).toBeNull();
   });
