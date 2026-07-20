@@ -23,16 +23,37 @@ function getMongoConfig() {
   };
 }
 
+/** Drop cached client after network blips (ECONNRESET) so next request reconnects. */
+export function invalidateMongoClient(): void {
+  clientPromise = null;
+}
+
+export function isMongoNetworkError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e || '');
+  const name = e instanceof Error ? e.name : '';
+  return (
+    msg.includes('ECONNRESET') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('MongoNetworkError') ||
+    msg.includes('MongoServerSelectionError') ||
+    name === 'MongoNetworkError' ||
+    name === 'MongoServerSelectionError'
+  );
+}
+
 async function connectMongoClient(): Promise<{ client: MongoClient; db: Db }> {
   if (!clientPromise) {
     const { uri, dbName } = getMongoConfig();
     clientPromise = (async () => {
       const client = new MongoClient(uri, {
-        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 8,
+        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 16,
         minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 0,
         maxIdleTimeMS: 60_000,
         serverSelectionTimeoutMS: 8_000,
         connectTimeoutMS: 10_000,
+        retryReads: true,
+        retryWrites: true,
       });
       await client.connect();
       return { client, db: client.db(dbName) };

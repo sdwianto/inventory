@@ -2,7 +2,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import type { Db } from 'mongodb';
-import { connectToMongo, cors, ok, err } from '@/lib/api/db';
+import { connectToMongo, cors, ok, err, invalidateMongoClient, isMongoNetworkError } from '@/lib/api/db';
 import { logger } from '@/lib/api/logger';
 import { captureException } from '@/lib/api/sentry';
 import { runWithRequestTrace } from '@/lib/execution/tracing/trace-context';
@@ -202,6 +202,9 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
   } catch (e) {
     const durationMs = Date.now() - started;
     const errMsg = e instanceof Error ? e.message : String(e);
+    if (isMongoNetworkError(e)) {
+      invalidateMongoClient();
+    }
     logger.error('api_request_failed', {
       route,
       method,
@@ -220,9 +223,14 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
     }
     void captureException(e, { route, method });
     const msg = publicApiErrorMessage(e, 'Terjadi kesalahan server');
-    if (msg.includes('MONGO_URL') || msg.includes('Database tidak terjangkau')) {
+    if (
+      isMongoNetworkError(e) ||
+      msg.includes('MONGO_URL') ||
+      msg.includes('Database tidak terjangkau') ||
+      errMsg.includes('ECONNRESET')
+    ) {
       return err(
-        msg.includes('MONGO_URL') ? msg : 'Database tidak terjangkau. Hubungi administrator.',
+        msg.includes('MONGO_URL') ? msg : 'Database tidak terjangkau. Silakan coba lagi.',
         503,
       );
     }

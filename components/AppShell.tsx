@@ -17,6 +17,7 @@ import {
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, BadgeCheck, LineChart, LayoutGrid, ClipboardList,
   PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck,
+  ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
 } from 'lucide-react';
 import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
@@ -107,6 +108,17 @@ const NAV: NavEntry[] = [
     ],
   },
   {
+    type: 'group', key: 'kitchenAssurance', label: 'Kitchen Assurance', icon: ShieldAlert,
+    items: [
+      { href: '/kitchen-assurance', label: 'Dashboard', icon: LayoutDashboard },
+      { href: '/kitchen-assurance/monitoring', label: 'Monitoring', icon: ListChecks },
+      { href: '/kitchen-assurance/cases', label: 'Cases', icon: FolderOpen },
+      { href: '/kitchen-assurance/follow-up', label: 'Follow Up', icon: SquareCheck },
+      { href: '/kitchen-assurance/reports', label: 'Reports', icon: FileChartColumn },
+      { href: '/kitchen-assurance/analytics', label: 'Analytics', icon: LineChart },
+    ],
+  },
+  {
     type: 'group', key: 'master', label: 'Master Data', icon: Database,
     items: [
       { href: '/produk', label: 'Produk', icon: Package },
@@ -153,6 +165,16 @@ const FP_OPS_ROUTES = [
   '/food-production/haccp', '/food-production/batch', '/food-production/qc',
 ] as const;
 
+/** Kitchen Assurance — ops band (ADR-002). */
+const KA_OPS_ROUTES = [
+  '/kitchen-assurance',
+  '/kitchen-assurance/monitoring',
+  '/kitchen-assurance/cases',
+  '/kitchen-assurance/follow-up',
+  '/kitchen-assurance/reports',
+  '/kitchen-assurance/analytics',
+] as const;
+
 /** Cost / Nutrition / Forecast / AI / Dashboard — management (ADR coding #5). */
 const FP_MGMT_ROUTES = [
   '/food-production/nutrition', '/food-production/cost', '/food-production/forecast',
@@ -164,19 +186,23 @@ const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_OPS_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
+          ...KA_OPS_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
+          ...KA_OPS_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
@@ -391,6 +417,7 @@ export default function AppShell({ children }: AppShellProps) {
     if (pathname?.startsWith('/retur')) next.retur = true;
     if (pathname?.startsWith('/utiliti')) next.utiliti = true;
     if (pathname?.startsWith('/maintenance')) next.maintenance = true;
+    if (pathname?.startsWith('/kitchen-assurance')) next.kitchenAssurance = true;
     queueMicrotask(() => setExpanded((s) => ({ ...s, ...next })));
   }, [pathname]);
 

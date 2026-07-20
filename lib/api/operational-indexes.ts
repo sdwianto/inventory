@@ -182,6 +182,48 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'qc_results', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_qc_res_tenant_no', unique: true },
   { collection: 'qc_results', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_qc_res_tenant_plan' },
   { collection: 'qc_results', index: { tenantId: 1, tanggal: -1 }, name: 'idx_qc_res_tenant_tanggal' },
+  { collection: 'ka_policies', index: { tenantId: 1, id: 1 }, name: 'idx_ka_pol_tenant_id' },
+  { collection: 'ka_policies', index: { tenantId: 1, kode: 1 }, name: 'uniq_ka_pol_tenant_kode', unique: true },
+  { collection: 'ka_policies', index: { tenantId: 1, capabilityId: 1, aktif: 1 }, name: 'idx_ka_pol_tenant_capability' },
+  { collection: 'ka_monitoring_definitions', index: { tenantId: 1, id: 1 }, name: 'idx_ka_mdef_tenant_id' },
+  { collection: 'ka_monitoring_definitions', index: { tenantId: 1, kode: 1 }, name: 'uniq_ka_mdef_tenant_kode', unique: true },
+  { collection: 'ka_monitoring_definitions', index: { tenantId: 1, capabilityId: 1, aktif: 1 }, name: 'idx_ka_mdef_tenant_capability' },
+  { collection: 'ka_observations', index: { tenantId: 1, signalKey: 1, status: 1 }, name: 'idx_ka_obs_tenant_signal_status' },
+  { collection: 'ka_observations', index: { tenantId: 1, id: 1 }, name: 'idx_ka_obs_tenant_id' },
+  { collection: 'ka_observations', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_ka_obs_tenant_no', unique: true },
+  { collection: 'ka_observations', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_ka_obs_tenant_status' },
+  { collection: 'ka_observations', index: { tenantId: 1, category: 1, createdAt: -1 }, name: 'idx_ka_obs_tenant_category' },
+  { collection: 'ka_safety_cases', index: { tenantId: 1, id: 1 }, name: 'idx_ka_scf_tenant_id' },
+  { collection: 'ka_safety_cases', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_ka_scf_tenant_no', unique: true },
+  { collection: 'ka_safety_cases', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_ka_scf_tenant_status' },
+  { collection: 'ka_safety_cases', index: { tenantId: 1, category: 1, status: 1 }, name: 'idx_ka_scf_tenant_category_status' },
+  { collection: 'ka_safety_cases', index: { tenantId: 1, kitchenId: 1, status: 1 }, name: 'idx_ka_scf_tenant_kitchen_status' },
+  {
+    collection: 'ka_safety_cases',
+    index: { tenantId: 1, sourceKey: 1 },
+    name: 'uniq_ka_scf_open_source_key',
+    unique: true,
+    // Avoid $gt:'' (can fail on some Mongo builds); empty sourceKey never written by ensureOpenKaIssue.
+    partialFilterExpression: {
+      sourceKey: { $exists: true, $type: 'string' },
+      status: { $in: ['OPEN', 'IN_PROGRESS', 'PENDING_VERIFY'] },
+    },
+  },
+  { collection: 'ka_follow_ups', index: { tenantId: 1, id: 1 }, name: 'idx_ka_kfu_tenant_id' },
+  { collection: 'ka_follow_ups', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_ka_kfu_tenant_no', unique: true },
+  { collection: 'ka_follow_ups', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_ka_kfu_tenant_status' },
+  { collection: 'ka_follow_ups', index: { tenantId: 1, safetyCaseId: 1 }, name: 'idx_ka_kfu_tenant_case' },
+  {
+    collection: 'ka_follow_ups',
+    index: { tenantId: 1, safetyCaseId: 1 },
+    name: 'uniq_ka_kfu_active_per_case',
+    unique: true,
+    partialFilterExpression: {
+      safetyCaseId: { $exists: true, $type: 'string' },
+      status: { $in: ['OPEN', 'DONE'] },
+    },
+  },
+  { collection: 'ka_follow_ups', index: { tenantId: 1, kitchenId: 1, status: 1 }, name: 'idx_ka_kfu_tenant_kitchen_status' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, purchaseRequirementId: 1 }, name: 'idx_cpo_tenant_pr' },
   { collection: 'integration_links', index: { customerTenantId: 1, vendorTenantId: 1 }, name: 'uniq_integration_link', unique: true },
   { collection: 'integration_links', index: { webhookSecret: 1, status: 1 }, name: 'idx_integration_link_secret' },
@@ -283,6 +325,10 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   await dropIndexIfExists(db, 'menus', 'idx_menus_tenant_kode_ver');
   // Ganti index non-unique lama → unique partial (cegah GRN dobel dari DO yang sama).
   await dropIndexIfExists(db, 'goods_receipts', 'idx_grn_tenant_delivery');
+  // Recreate KA open-sourceKey unique index if prior partial filter was incompatible.
+  await dropIndexIfExists(db, 'ka_safety_cases', 'uniq_ka_scf_open_source_key');
+  // Recreate active-FU-per-case unique (fails until duplicate OPEN/DONE rows dibersihkan).
+  await dropIndexIfExists(db, 'ka_follow_ups', 'uniq_ka_kfu_active_per_case');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

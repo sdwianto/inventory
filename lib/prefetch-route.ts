@@ -208,6 +208,24 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/integrasi':
       prefetch(queryKeys.integrations.status(false), '/api/integrations/status');
       break;
+    case '/kitchen-assurance':
+      prefetch(['kitchen-assurance', 'dashboard'], '/api/ka-dashboard');
+      break;
+    case '/kitchen-assurance/monitoring':
+      prefetch(['kitchen-assurance', 'monitoring'], '/api/ka-monitoring');
+      break;
+    case '/kitchen-assurance/cases':
+      prefetch(['kitchen-assurance', 'cases'], '/api/ka-safety-cases');
+      break;
+    case '/kitchen-assurance/follow-up':
+      prefetch(['kitchen-assurance', 'follow-ups'], '/api/ka-follow-ups');
+      break;
+    case '/kitchen-assurance/reports':
+      prefetch(['kitchen-assurance', 'reports'], '/api/ka-reports?days=14');
+      break;
+    case '/kitchen-assurance/analytics':
+      prefetch(['kitchen-assurance', 'analytics'], '/api/ka-analytics?days=14');
+      break;
     default:
       break;
   }

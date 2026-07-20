@@ -32,6 +32,7 @@ import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
 import { SERVICE_POINTS_COLLECTION } from '@/lib/food-production/service-point';
 import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { ensureOpenKaIssue } from '@/lib/kitchen-assurance/auto-issue';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
@@ -422,7 +423,49 @@ export async function handleTemperatureLogs(ctx: HandlerContext): Promise<NextRe
       metadata: { stage: stageRaw, suhuC: suhu, alertStatus },
       ...actor,
     });
-    return ok(clean(doc as unknown as Record<string, unknown>), 201);
+
+    // P3: auto Issue on critical cold-chain (idempotent per kitchen+stage)
+    let kaIssue: { noDokumen?: string; created?: boolean; skipped?: string } | undefined;
+    if (alertStatus === 'CRITICAL' || alertStatus === 'OUT_OF_RANGE') {
+      try {
+        const sourceKey = `temp:${kitchenId || 'all'}:${stageRaw}`;
+        const ensured = await ensureOpenKaIssue(db, {
+          tenantId: doc.tenantId,
+          sourceKey,
+          title: `Cold chain · ${TEMP_STAGE_LABELS[stageRaw] || stageRaw}${kitchenNama ? ` · ${kitchenNama}` : ''}`,
+          category: 'FOOD',
+          caseKind: 'BREACH',
+          severity: alertStatus === 'CRITICAL' ? 'CRITICAL' : 'HIGH',
+          description: `${suhu}°C (${alertStatus}) · threshold ${band.minC}–${band.maxC}°C`,
+          kitchenId,
+          kitchenNama,
+          sourceHref: '/food-production/cold-chain',
+          actor,
+        });
+        kaIssue = {
+          noDokumen: ensured.case.noDokumen,
+          created: ensured.created,
+          skipped: ensured.skipped,
+        };
+        if (ensured.created) {
+          await writeAuditLog(db, {
+            tenantId: doc.tenantId,
+            action: 'KA_CASE_CREATE',
+            entityType: 'ka_safety_case',
+            entityId: ensured.case.id,
+            summary: `Auto Issue ${ensured.case.noDokumen} dari temp alert`,
+            ...actor,
+          });
+        }
+      } catch {
+        /* non-blocking — temp log remains source of truth */
+      }
+    }
+
+    return ok({
+      ...clean(doc as unknown as Record<string, unknown>),
+      ...(kaIssue ? { kaIssue } : {}),
+    }, 201);
   }
 
   // ── Acknowledge alert ───────────────────────────────────────────────

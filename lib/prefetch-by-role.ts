@@ -39,6 +39,15 @@ const FP_OPS_ROUTES = [
   '/food-production/haccp', '/food-production/batch', '/food-production/qc',
 ] as const;
 
+const KA_OPS_ROUTES = [
+  '/kitchen-assurance',
+  '/kitchen-assurance/monitoring',
+  '/kitchen-assurance/cases',
+  '/kitchen-assurance/follow-up',
+  '/kitchen-assurance/reports',
+  '/kitchen-assurance/analytics',
+] as const;
+
 const FP_MGMT_ROUTES = [
   '/food-production/nutrition', '/food-production/cost', '/food-production/forecast',
   '/food-production/recommendations', '/food-production/dashboard', '/food-production/price-book',
@@ -49,19 +58,23 @@ const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_OPS_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/transfer'],
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
     ...FP_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
     '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
     ...FP_ROUTES,
+    ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi',
     '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
