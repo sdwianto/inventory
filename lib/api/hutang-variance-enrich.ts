@@ -382,6 +382,25 @@ function resolveBucketKey(line: LineQtyRow, hints: Map<string, Set<string>>): st
   return `${k}::_default`;
 }
 
+function addToQtyMap(map: Map<string, LineQtyRow>, key: string, line: LineQtyRow): void {
+  const sat = key.split('::')[1];
+  const prev = map.get(key);
+  if (prev) {
+    prev.qty += line.qty;
+    prev.present = true;
+    if (!prev.satuan && line.satuan) prev.satuan = line.satuan;
+    if (!prev.uomId && line.uomId) prev.uomId = line.uomId;
+    return;
+  }
+  map.set(key, {
+    kode: line.kode,
+    uomId: line.uomId,
+    satuan: line.satuan || (sat !== '_default' ? sat : undefined),
+    qty: line.qty,
+    present: true,
+  });
+}
+
 function collectLineQty(
   items: JsonObject[],
   qtyField: string,
@@ -391,22 +410,36 @@ function collectLineQty(
   for (const line of collectRawLines(items, qtyField)) {
     const key = resolveBucketKey(line, hints);
     if (!key) continue;
-    const sat = key.split('::')[1];
-    const prev = map.get(key);
-    if (prev) {
-      prev.qty += line.qty;
-      prev.present = true;
-      if (!prev.satuan && line.satuan) prev.satuan = line.satuan;
-      if (!prev.uomId && line.uomId) prev.uomId = line.uomId;
-    } else {
-      map.set(key, {
-        kode: line.kode,
-        uomId: line.uomId,
-        satuan: line.satuan || (sat !== '_default' ? sat : undefined),
-        qty: line.qty,
-        present: true,
-      });
+    addToQtyMap(map, key, line);
+  }
+  return map;
+}
+
+/**
+ * Gabungkan baris `kode::_default` ke bucket satuan konkret bila unik
+ * (satu satuan untuk kode itu, atau satu baris PO dengan qty sama).
+ */
+function collapseDefaultBuckets(
+  map: Map<string, LineQtyRow>,
+  prefer: Map<string, LineQtyRow>,
+): Map<string, LineQtyRow> {
+  const defaults = [...map.entries()].filter(([key]) => key.endsWith('::_default'));
+  for (const [defaultKey, row] of defaults) {
+    const kode = normalizeKode(row.kode);
+    const candidates = [...prefer.keys()].filter((k) => {
+      const [ck, sat] = k.split('::');
+      return ck === kode && sat && sat !== '_default';
+    });
+    let target: string | null = null;
+    if (candidates.length === 1) {
+      target = candidates[0];
+    } else if (candidates.length > 1) {
+      const byQty = candidates.filter((k) => Math.abs((prefer.get(k)?.qty || 0) - row.qty) < 1e-9);
+      if (byQty.length === 1) target = byQty[0];
     }
+    if (!target) continue;
+    addToQtyMap(map, target, row);
+    map.delete(defaultKey);
   }
   return map;
 }
@@ -440,8 +473,11 @@ export function buildLineVarianceByUom(params: {
   const hints = satuanHintsByKode([...poLines, ...invLines, ...soLines]);
 
   const poMap = collectLineQty(params.poItems || [], 'qty', hints);
-  const soMap = collectLineQty(params.soItems || [], 'qty', hints);
-  const invMap = collectLineQty(params.invoiceItems || [], 'qty', hints);
+  let soMap = collectLineQty(params.soItems || [], 'qty', hints);
+  let invMap = collectLineQty(params.invoiceItems || [], 'qty', hints);
+  // SO/Inv tanpa satuan → tempel ke bucket PO yang jelas.
+  soMap = collapseDefaultBuckets(soMap, poMap);
+  invMap = collapseDefaultBuckets(invMap, poMap);
   const keys = new Set([...poMap.keys(), ...soMap.keys(), ...invMap.keys()]);
   const rows: LineVarianceByUomRow[] = [];
 
