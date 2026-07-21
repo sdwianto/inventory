@@ -58,6 +58,7 @@ interface PlanBody extends Record<string, unknown> {
   lines?: unknown;
   materialOverrides?: unknown;
   catatan?: string;
+  tanggalKedatangan?: string;
   status?: string;
   note?: string;
   recipeId?: string;
@@ -662,6 +663,27 @@ export async function handleProductionPlans({
         }
         : null,
     });
+  }
+
+  // POST /production-plans/:id/procure-shortage — satu request (explode sekali → MRP → PR → submit)
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'procure-shortage' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const { runProcureShortageFromPlan } = await import('@/lib/api/procure-shortage-run');
+    const result = await runProcureShortageFromPlan(db, { auth, request, url }, {
+      productionPlanId: path[1],
+      scopeAuth,
+      tanggalKedatangan: planBody.tanggalKedatangan
+        ? String(planBody.tanggalKedatangan)
+        : undefined,
+      catatan: planBody.catatan ? String(planBody.catatan) : undefined,
+    });
+    if (!result.ok) return err(result.error, result.status || 400);
+    return ok(result);
   }
 
   // DELETE = cancel (soft)

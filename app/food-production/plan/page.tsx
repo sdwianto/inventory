@@ -1294,75 +1294,55 @@ function FoodProductionPlanPageContent() {
     }
   }
 
-  /** Kekurangan stok → hitung MRP → setujui → PR + Draft CPO → submit PO ke Vendor. */
+  /** Kekurangan stok → satu API (explode sekali → MRP → PR → submit). Sync vendor di background. */
   async function procureShortage(row: PlanRow) {
     setProcuringId(row.id);
     try {
-      const ready = await fetchReadiness(row.id);
-      if (ready?.linkedPo?.id) {
-        toast.message(`PO ${ready.linkedPo.noPO || ''} sudah ada (${ready.linkedPo.status})`);
-        router.push(`/pembelian-po?highlight=${ready.linkedPo.id}`);
-        return;
-      }
-      if (ready?.materialsReady) {
-        toast.message('Bahan sudah lengkap — tidak perlu PO. Gunakan Ambil Bahan.');
-        return;
-      }
-
-      const mrpRes = await fetch('/api/material-requirements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
-        body: JSON.stringify({ productionPlanId: row.id }),
-      });
-      const mrp = await mrpRes.json();
-      if (!mrpRes.ok) throw new Error(mrp?.error || 'Gagal hitung kebutuhan bahan');
-      if (Number(mrp.summary?.shortageCount || 0) === 0) {
-        toast.success('Bahan lengkap — siap Ambil Bahan');
-        await fetchReadiness(row.id);
-        return;
-      }
-
-      for (const status of ['SUBMITTED', 'APPROVED'] as const) {
-        const sRes = await fetch(`/api/material-requirements/${mrp.id}/status`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
-          body: JSON.stringify({ status, note: 'Otomatis dari Rencana Produksi' }),
-        });
-        const sData = await sRes.json();
-        if (!sRes.ok) throw new Error(sData?.error || `Gagal status MRP → ${status}`);
-      }
-
-      const prRes = await fetch('/api/purchase-requirements', {
+      const res = await fetch(`/api/production-plans/${row.id}/procure-shortage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
         body: JSON.stringify({
-          materialRequirementId: mrp.id,
           tanggalKedatangan: row.tanggal,
           catatan: `Dari rencana ${row.noDokumen}`,
         }),
       });
-      const pr = await prRes.json();
-      if (!prRes.ok) throw new Error(pr?.error || 'Gagal buat PO dari kekurangan');
-      const cpoId = String(pr.draftCpoId || '');
+      const data = await res.json() as {
+        error?: string;
+        materialsReady?: boolean;
+        linkedPo?: { id?: string; noPO?: string; status?: string };
+        draftCpoId?: string;
+        draftCpoNo?: string;
+        noPO?: string;
+        poStatus?: string;
+        submitError?: string;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(data?.error || 'Gagal buat PO ke Vendor');
+
+      if (data.linkedPo?.id) {
+        toast.message(data.message || `PO ${data.linkedPo.noPO || ''} sudah ada`);
+        router.push(`/pembelian-po?highlight=${data.linkedPo.id}`);
+        return;
+      }
+      if (data.materialsReady) {
+        toast.success(data.message || 'Bahan lengkap — siap Ambil Bahan');
+        void fetchReadiness(row.id);
+        return;
+      }
+
+      const cpoId = String(data.draftCpoId || '');
       if (!cpoId) throw new Error('Draft PO tidak terbentuk');
 
-      const submitRes = await fetch(`/api/customer-purchase-orders/${cpoId}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
-        body: JSON.stringify({}),
-      });
-      const submitData = await submitRes.json();
-      if (!submitRes.ok) {
+      if (data.submitError) {
         toast.message(
-          `PO ${pr.draftCpoNo || ''} dibuat (Draft). Buka PO ke Vendor untuk kirim — ${submitData?.error || 'perlu approval/submit'}`,
+          data.message
+            || `PO ${data.draftCpoNo || ''} dibuat (Draft). Buka PO ke Vendor untuk kirim — ${data.submitError}`,
         );
         router.push(`/pembelian-po?highlight=${cpoId}`);
         return;
       }
 
-      const finalStatus = String(submitData.status || 'SUBMITTED');
-      toast.success(`PO ${submitData.noPO || pr.draftCpoNo || ''} → ${finalStatus}`);
-      await fetchReadiness(row.id);
+      toast.success(data.message || `PO ${data.noPO || data.draftCpoNo || ''} → ${data.poStatus || 'APPROVED'}`);
       router.push(`/pembelian-po?highlight=${cpoId}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal buat PO ke Vendor');

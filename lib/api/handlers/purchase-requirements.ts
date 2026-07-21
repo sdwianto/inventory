@@ -145,17 +145,26 @@ async function assertPriorsSupersedable(
     }), txOpts(session))
     .toArray() as unknown as PurchaseRequirementDoc[];
 
+  const cpoIds = [...new Set(
+    prior.map((old) => String(old.draftCpoId || '').trim()).filter(Boolean),
+  )];
+  const cpos = cpoIds.length
+    ? await db.collection('customer_purchase_orders')
+      .find({ id: { $in: cpoIds } }, txOpts(session))
+      .project({ id: 1, status: 1, noPO: 1, tenantId: 1 })
+      .toArray()
+    : [];
+  const cpoById = new Map(cpos.map((c) => [String(c.id), c]));
+
   for (const old of prior) {
     const cpoId = String(old.draftCpoId || '').trim();
     if (!cpoId) continue;
-    const cpo = await db.collection('customer_purchase_orders').findOne(
-      { id: cpoId, tenantId: old.tenantId },
-      txOpts(session),
-    );
-    const st = cpo ? String(cpo.status) : 'MISSING';
+    const cpo = cpoById.get(cpoId);
+    const sameTenant = cpo && String(cpo.tenantId || '') === String(old.tenantId || '');
+    const st = sameTenant ? String(cpo!.status) : 'MISSING';
     if (!isLinkedCpoSupersedable(st)) {
       return {
-        error: `PR ${old.noDokumen} masih tertaut CPO ${String(cpo?.noPO || cpoId)} status ${st} — batalkan/selesaikan CPO dulu sebelum buat ulang`,
+        error: `PR ${old.noDokumen} masih tertaut CPO ${String(sameTenant ? cpo?.noPO : cpoId)} status ${st} — batalkan/selesaikan CPO dulu sebelum buat ulang`,
       };
     }
   }
