@@ -286,7 +286,8 @@ export default function SandboxResetPage() {
             <h1 className="text-xl font-bold">Reset Sandbox</h1>
             <p className="text-sm text-slate-600 mt-1">
               Hapus data transaksi inventory + sales, termasuk Food Production (rencana → PBL/HSL → QC/HACCP → distribusi,
-              plus resep, menu, template QC/HACCP, dan price book). Setup dapur, produk, user, tenant, dan integrasi tetap.
+              plus resep, menu, template QC/HACCP, dan price book) serta Kitchen Assurance (observation, case, follow-up,
+              policy, monitoring definitions). Setup dapur, produk, user, tenant, dan integrasi tetap.
               Hapus data transaksi uji coba (master data tetap). Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.
             </p>
           </div>
@@ -321,6 +322,10 @@ export default function SandboxResetPage() {
               <div className="text-xs text-amber-800">
                 Food Production ikut dihapus: rencana, MRP/PBL/HSL, batch, transfer dapur, QC/HACCP result,
                 distribusi, suhu, resep, menu, template QC/HACCP, supplier price book.
+              </div>
+              <div className="text-xs text-amber-800">
+                Kitchen Assurance ikut dihapus: observations, safety cases, follow-ups, policies,
+                monitoring definitions.
               </div>
               <div className="text-xs text-amber-800">
                 Tetap dipertahankan: {status?.keepHint?.slice(0, 8).join(', ')}…

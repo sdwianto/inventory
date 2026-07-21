@@ -9,6 +9,7 @@ import {
 /**
  * Koleksi yang dihapus saat reset sandbox.
  * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
+ * Kitchen Assurance: observation / case / follow-up + policy & monitoring definitions.
  * Setup dapur (kitchens, service_points, temperature_thresholds) tetap.
  */
 export const SANDBOX_TRANSACTION_COLLECTIONS = [
@@ -68,6 +69,12 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'supplier_price_book',
   'qc_templates',
   'haccp_templates',
+  // Kitchen Assurance — transaksi + definisi simulasi
+  'ka_follow_ups',
+  'ka_safety_cases',
+  'ka_observations',
+  'ka_policies',
+  'ka_monitoring_definitions',
 ] as const;
 
 export const SANDBOX_KEEP_HINT = [

@@ -63,7 +63,7 @@ async function pollSalesGrnJob(
   salesAppUrl: string,
   salesApiKey: string,
   jobId: string,
-  { maxWaitMs = 60_000, intervalMs = 1000 } = {},
+  { maxWaitMs = 25_000, intervalMs = 750 } = {},
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
@@ -76,18 +76,24 @@ async function pollSalesGrnJob(
       return { error: String(job.error || `Sales job poll HTTP ${res.status}`) };
     }
     const status = String(job.status || '');
-    if (status === 'DONE') {
+    if (status === 'DONE' || status === 'SUCCEEDED') {
       const result = (job.result || {}) as Record<string, unknown>;
       if (result.error) return { error: String(result.error), ...result };
       if (result.ok) return result;
       return result;
     }
-    if (status === 'FAILED') {
+    if (status === 'FAILED' || status === 'DLQ') {
       return { error: String(job.lastError || resultError(job) || 'Job sales gagal') };
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  return { error: 'Timeout menunggu job grn-posted di sales.app' };
+  // Timeout: biarkan GRN_INVOICE_SYNC retry (invoice mungkin sudah terbentuk di sales).
+  return {
+    error: 'Timeout menunggu job grn-posted di sales.app',
+    pending: true,
+    salesJobId: jobId,
+    retryable: true,
+  };
 }
 
 function resultError(job: Record<string, unknown>) {
@@ -275,6 +281,8 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
         error: String(polled.error),
         draftNoInvoice: polled.draftNoInvoice,
         async: true,
+        pending: Boolean(polled.pending),
+        retryable: Boolean(polled.retryable),
         salesJobId: data.jobId,
       };
     }
