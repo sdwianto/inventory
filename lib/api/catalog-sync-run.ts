@@ -69,15 +69,16 @@ function isLegacyCatalogPayload(data: JsonObject): boolean {
 const CATALOG_RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function shouldRunFullCatalogReconcile(
-  settingsRow: { lastCatalogReconcileAt?: unknown } | null | undefined,
+  settingsRow: unknown,
   lastSync: Date | null,
   force?: boolean,
 ): boolean {
   if (force) return true;
   // Full sync (belum pernah watermark) — wajib reconcile.
   if (!lastSync) return true;
-  const lastRec = settingsRow?.lastCatalogReconcileAt
-    ? new Date(String(settingsRow.lastCatalogReconcileAt))
+  const row = settingsRow as { lastCatalogReconcileAt?: unknown } | null | undefined;
+  const lastRec = row?.lastCatalogReconcileAt
+    ? new Date(String(row.lastCatalogReconcileAt))
     : null;
   if (!lastRec || Number.isNaN(lastRec.getTime())) return true;
   return Date.now() - lastRec.getTime() >= CATALOG_RECONCILE_INTERVAL_MS;
