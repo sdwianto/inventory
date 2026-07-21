@@ -60,15 +60,24 @@ export async function handleBgJobs({
 
   if (isWorkerProcessRoute(method, route)) {
     if (!verifyWorkerOrCronSecret(request)) return err('Unauthorized', 401);
+    const limitRaw = Number(url.searchParams.get('limit') || 15);
+    const limit = Number.isFinite(limitRaw) ? Math.min(30, Math.max(1, limitRaw)) : 15;
     if (!shouldUseLegacyBgPoll()) {
+      const { processExecutionJobs } = await import('@/lib/api/process-execution-jobs');
+      const execution = await processExecutionJobs(db, {
+        limit,
+        domain: 'inventory',
+        capabilities: ['SYNC', 'CPU_BATCH', 'WEBHOOK'],
+      });
       return ok({
         legacyPollDisabled: true,
-        message: 'VPS menggunakan inventory-worker — HTTP poll dinonaktifkan (EE-10)',
+        processed: execution.processed,
+        execution,
         at: new Date().toISOString(),
       });
     }
     const recovered = await recoverStaleRunningJobs(db);
-    const results = await processPendingJobs(db, { limit: 15 });
+    const results = await processPendingJobs(db, { limit });
     return ok({
       recoveredStaleRunning: recovered,
       processed: results.length,

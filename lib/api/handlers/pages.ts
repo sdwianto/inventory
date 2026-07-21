@@ -3,6 +3,7 @@ import { ok, clean } from '@/lib/api/db';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { enrichGrnList } from '@/lib/api/grn-enrich';
 import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection';
+import { recoverStuckGrnInvoiceSyncs } from '@/lib/api/grn-invoice-sync-recover';
 import {
   parseCursorPageParams,
   applyDescDateIdCursor,
@@ -51,6 +52,19 @@ export async function handlePages({
       .toArray();
     const { items, hasMore } = sliceCursorPage(list, limit);
     const enriched = await enrichGrnList(db, tenantId, items);
+    // Opportunistic: PENDING/SYNCING > 45s → re-enqueue GRN_INVOICE_SYNC (dedupe; no Sales poll).
+    void recoverStuckGrnInvoiceSyncs(
+      db,
+      enriched as Array<{
+        id?: string;
+        tenantId?: string;
+        noInvoice?: string | null;
+        invoiceSyncStatus?: string | null;
+        invoiceSyncAt?: Date | string | null;
+        postedAt?: Date | string | null;
+        updatedAt?: Date | string | null;
+      }>,
+    ).catch(() => {});
     const cleaned = enriched.map((row) => clean(stripGrnListRow(row as Record<string, unknown>)));
     const last = items[items.length - 1] as Record<string, unknown> | undefined;
     return ok({

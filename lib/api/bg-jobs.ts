@@ -229,6 +229,8 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
       invoiceSyncStatus: 'PENDING',
       invoiceSyncError: null,
       salesJobId: result.salesJobId || null,
+      // Anchor wait age for UI + stuck recovery (not postedAt).
+      invoiceSyncAt: new Date(),
     });
     return { ok: true, pending: true, result };
   }
@@ -537,9 +539,25 @@ export async function processPendingJobs(
   return results;
 }
 
-/** Fire-and-forget — no-op on VPS when execution platform worker is active (EE-10). */
+/**
+ * Wake / drain workers after enqueue.
+ * VPS/job-bus: in-process processOneTick (cepat) + Redis wake dari enqueue.
+ * Legacy: in-process poll.
+ */
 export function scheduleJobProcessing(db: Db, { limit = 3 }: { limit?: number } = {}) {
-  if (!shouldUseLegacyBgPoll()) return;
+  if (!shouldUseLegacyBgPoll()) {
+    void import('@/lib/api/process-execution-jobs').then(({ processExecutionJobs }) =>
+      processExecutionJobs(db, {
+        limit: Math.min(8, Math.max(2, limit)),
+        domain: 'inventory',
+        workerId: 'schedule-kick',
+        capabilities: ['SYNC', 'CPU_BATCH', 'WEBHOOK'],
+      }),
+    ).catch((e: unknown) => {
+      console.warn('[bg-jobs] execution drain error:', e instanceof Error ? e.message : e);
+    });
+    return;
+  }
 
   setImmediate(() => {
     processPendingJobs(db, { limit }).catch((e) => {

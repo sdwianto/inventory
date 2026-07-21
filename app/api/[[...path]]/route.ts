@@ -8,6 +8,7 @@ import { captureException } from '@/lib/api/sentry';
 import { runWithRequestTrace } from '@/lib/execution/tracing/trace-context';
 import { getExecutionMetricsSnapshot } from '@/lib/execution/metrics/prometheus';
 import { refreshObservabilityGauges } from '@/lib/execution/metrics/observability-collector';
+import { refreshGrnInvoiceSyncGauges } from '@/lib/api/grn-invoice-sync-metrics';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
@@ -74,7 +75,10 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       let metricsDb: Db | null = null;
       try {
         metricsDb = await connectToMongo();
-        if (metricsDb) await refreshObservabilityGauges(metricsDb);
+        if (metricsDb) {
+          await refreshObservabilityGauges(metricsDb);
+          await refreshGrnInvoiceSyncGauges(metricsDb);
+        }
       } catch {
         metricsDb = null;
       }

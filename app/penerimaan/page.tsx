@@ -54,9 +54,33 @@ function itemRowKey(it: JsonObject | undefined, idx: number) {
   return `${it?.lineId || 'line'}-${idx}`;
 }
 
+function invoiceSyncWaitLabel(row: JsonObject): string {
+  const raw = row.invoiceSyncAt || row.postedAt || row.updatedAt;
+  if (!raw) return '';
+  const ms = Date.now() - new Date(String(raw)).getTime();
+  if (!(ms >= 0)) return '';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec} dtk`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} mnt`;
+  return `${Math.floor(min / 60)} jam`;
+}
+
 function invoiceSyncLabel(row: JsonObject) {
   if (row?.invoiceSyncStatus === 'PENDING' || row?.invoiceSyncStatus === 'SYNCING') {
-    return <span className="inline-flex items-center gap-1 text-blue-600 text-xs"><Loader2 className="w-3 h-3 animate-spin" /> Sync faktur…</span>;
+    const age = invoiceSyncWaitLabel(row);
+    const title = age
+      ? `Menunggu faktur dari sales.app (±${age}). Hutang masuk lewat invoice.posted — bukan sync lokal.`
+      : 'Menunggu faktur dari sales.app. Hutang masuk lewat invoice.posted — bukan sync lokal.';
+    return (
+      <span className="inline-flex items-center gap-1 text-blue-600 text-xs" title={title}>
+        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+        <span className="leading-tight">
+          Menunggu faktur…
+          {age ? <span className="text-blue-500/80"> ({age})</span> : null}
+        </span>
+      </span>
+    );
   }
   if (row?.invoiceSyncStatus === 'FAILED') {
     return <span className="text-red-600 text-xs" title={str(row.invoiceSyncError)}>Gagal faktur</span>;

@@ -112,6 +112,8 @@ export async function handleGoodsReceipts({
     ) as GrnDoc | null;
     if (!grn) return err('Tidak ditemukan', 404);
     if (grn.invoiceSyncStatus === 'PENDING' || grn.invoiceSyncStatus === 'SYNCING') {
+      const { recoverStuckGrnInvoiceSyncs } = await import('@/lib/api/grn-invoice-sync-recover');
+      await recoverStuckGrnInvoiceSyncs(db, [grn as Record<string, unknown>]).catch(() => {});
       scheduleJobProcessing(db);
       const fresh = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
       if (!fresh) return err('Tidak ditemukan', 404);
@@ -122,6 +124,8 @@ export async function handleGoodsReceipts({
         invoiceSyncStatus: fresh.invoiceSyncStatus || 'NONE',
         invoiceSyncError: fresh.invoiceSyncError || null,
         hutangId: fresh.hutangId || null,
+        invoiceSyncAt: fresh.invoiceSyncAt || null,
+        postedAt: fresh.postedAt || null,
       });
     }
     return ok({

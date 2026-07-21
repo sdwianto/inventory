@@ -7,6 +7,7 @@ import { enrichGrnDoc } from '@/lib/api/grn-enrich';
 import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/lib/api/bg-jobs';
 import { shouldProcessGrnJobInline } from '@/lib/api/execution-inline-grn';
+import { shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
@@ -46,8 +47,12 @@ export async function postGoodsReceipt(
     grn.vendorTenantId ? String(grn.vendorTenantId) : undefined,
   );
   const canSyncInvoice = !!(salesApiKey && (grn.noDO || grn.vendorDeliveryId));
-  // Vercel: jalankan GRN_INVOICE_SYNC dalam request POST (await) — void processJobById mati saat lambda freeze.
-  const syncInvoiceInline = asyncInvoice === false && !process.env.VERCEL;
+  // VPS: sync faktur in-request (Sales sync-first) agar DONE sebelum response POST.
+  // Opt-out: GRN_INVOICE_ASYNC=1. Vercel: jangan block lambda kecuali asyncInvoice=false.
+  const forceVpsInline = !shouldUseLegacyBgPoll()
+    && process.env.GRN_INVOICE_ASYNC !== '1'
+    && !process.env.VERCEL;
+  const syncInvoiceInline = (asyncInvoice === false || forceVpsInline) && !process.env.VERCEL;
 
   const priorStatus = String(grn.status || 'DRAFT');
   let txResult: { lokasiSet: Set<string>; invoicePatch: Record<string, unknown> } | { error: string };
@@ -85,7 +90,7 @@ export async function postGoodsReceipt(
     };
 
     if (canSyncInvoice) {
-      invoicePatch.invoiceSyncStatus = asyncInvoice ? 'PENDING' : 'SYNCING';
+      invoicePatch.invoiceSyncStatus = syncInvoiceInline ? 'SYNCING' : 'PENDING';
     } else if (!salesApiKey) {
       invoicePatch.invoiceSyncStatus = 'SKIPPED';
       invoicePatch.invoiceSyncError = 'not_paired';
@@ -222,6 +227,27 @@ export async function postGoodsReceipt(
           noInvoice: posted.noInvoice,
         };
       }
+    } else if (!shouldUseLegacyBgPoll()) {
+      // VPS fallback: drain inventory tick in-request (asyncInvoice opt-out path).
+      try {
+        const { processExecutionJobs } = await import('@/lib/api/process-execution-jobs');
+        await processExecutionJobs(db, {
+          limit: 4,
+          domain: 'inventory',
+          workerId: 'grn-post-invoice-drain',
+          capabilities: ['SYNC', 'CPU_BATCH'],
+        });
+        const refreshedPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
+        if (refreshedPosted) Object.assign(posted, refreshedPosted);
+      } catch {
+        /* worker Redis tetap jalur cadangan */
+      }
+      invoiceSync = {
+        async: posted.invoiceSyncStatus !== 'DONE',
+        jobId,
+        status: posted.invoiceSyncStatus || 'PENDING',
+        noInvoice: posted.noInvoice,
+      };
     } else {
       invoiceSync = {
         async: true,
@@ -277,6 +303,7 @@ export async function postGoodsReceipt(
     } else if (invoiceSync.pending || (invoiceSync.async && invoiceSync.salesJobId)) {
       patch.invoiceSyncStatus = 'PENDING';
       patch.invoiceSyncError = null;
+      patch.invoiceSyncAt = new Date();
       if (invoiceSync.salesJobId) patch.salesJobId = invoiceSync.salesJobId;
     } else {
       patch.invoiceSyncStatus = 'DONE';

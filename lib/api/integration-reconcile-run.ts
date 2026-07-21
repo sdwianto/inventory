@@ -6,8 +6,9 @@ import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import { sweepStuckGrnPosting } from '@/lib/api/stuck-posting-sweep';
 
-const GRN_STALE_MS = 60 * 60 * 1000;
-const GRN_SYNCING_STUCK_MS = 5 * 60 * 1000;
+/** PENDING/FAILED without invoice — re-notify quickly (was 60m). */
+const GRN_STALE_MS = 45 * 1000;
+const GRN_SYNCING_STUCK_MS = 45 * 1000;
 const PAGE = 200;
 const MAX_PAGES = 25;
 

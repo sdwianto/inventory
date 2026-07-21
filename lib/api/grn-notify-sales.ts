@@ -208,24 +208,37 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     })),
   };
 
-  // async=1: sales enqueue job invoice. Jangan poll — hutang via webhook invoice.posted.
-  const url = `${config.salesAppUrl}/api/integrations/grn-posted?async=1`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Api-Key': salesApiKey,
+    ...buildTraceHttpHeaders(),
+  };
+  const bodyJson = JSON.stringify(payload);
+  const baseUrl = `${config.salesAppUrl}/api/integrations/grn-posted`;
   const holdStarted = Date.now();
+
+  // Fast path: sync create+post+push invoice (biasanya <3s). Fallback async bila timeout/5xx.
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetch(baseUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Api-Key': salesApiKey,
-        ...buildTraceHttpHeaders(),
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(12_000),
+      headers,
+      body: bodyJson,
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (e) {
-    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-    return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };
+    // Timeout / offline → async enqueue (202) agar tidak gagal keras; hutang via invoice.posted.
+    try {
+      res = await fetch(`${baseUrl}?async=1`, {
+        method: 'POST',
+        headers,
+        body: bodyJson,
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch (e2) {
+      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
+      return { error: salesFetchErrorMessage(e2, config.salesAppUrl), offline: true };
+    }
   }
 
   let data: Record<string, unknown>;
@@ -234,6 +247,32 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   } catch {
     recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
     return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
+  }
+
+  // Sync gagal dengan 5xx → satu kali fallback async.
+  if (!res.ok && res.status >= 500) {
+    try {
+      const asyncRes = await fetch(`${baseUrl}?async=1`, {
+        method: 'POST',
+        headers,
+        body: bodyJson,
+        signal: AbortSignal.timeout(8_000),
+      });
+      let asyncData: Record<string, unknown> = {};
+      try {
+        asyncData = await asyncRes.json() as Record<string, unknown>;
+      } catch {
+        asyncData = {};
+      }
+      if (asyncRes.status === 202 && asyncData.jobId) {
+        recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
+        return { async: true, pending: true, salesJobId: asyncData.jobId };
+      }
+      res = asyncRes;
+      data = asyncData;
+    } catch {
+      /* keep original error below */
+    }
   }
 
   if (res.status === 202 && data.jobId) {
