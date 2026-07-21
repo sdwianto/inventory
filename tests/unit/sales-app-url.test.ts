@@ -22,4 +22,14 @@ describe('sales-app-url', () => {
     expect(resolveEffectiveSalesAppUrl('https://other.vendor.app')).toBe('https://other.vendor.app');
     process.env.SALES_APP_URL = prev;
   });
+
+  it('on VPS prefers env over stale Vercel stored URL', () => {
+    const prevUrl = process.env.SALES_APP_URL;
+    const prevMode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'vps';
+    process.env.SALES_APP_URL = 'http://sales:3000';
+    expect(resolveEffectiveSalesAppUrl('https://penarukan2.vercel.app')).toBe('http://sales:3000');
+    process.env.SALES_APP_URL = prevUrl;
+    process.env.DEPLOYMENT_MODE = prevMode;
+  });
 });

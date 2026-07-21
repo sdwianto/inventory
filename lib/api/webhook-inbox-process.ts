@@ -25,14 +25,15 @@ export interface WebhookProcessInput {
   vendorTenantId?: string;
 }
 
-/** Event yang diproses sinkron — latency-critical (EE-3 PR-3c). */
+/** Event yang diproses sinkron — hanya non-VPS untuk delivery fallback. */
 export function shouldProcessWebhookInline(event: string): boolean {
-  // Primary GRN path is DELIVERY_SHIP_PUSH → inventory API; webhook is fallback only.
-  if (event === 'delivery.shipped') {
-    return process.env.DEPLOYMENT_MODE !== 'vps';
-  }
+  // VPS: semua event via WEBHOOK_INBOX job (worker) — jangan blok HTTP webhook sales.
   if (process.env.DEPLOYMENT_MODE === 'vps') {
-    return event === 'sales_order.confirmed' || event === 'sales_order.updated';
+    return false;
+  }
+  // Serverless / CI: delivery.shipped inline jika tanpa worker; confirmed tetap async.
+  if (event === 'delivery.shipped') {
+    return true;
   }
   return false;
 }

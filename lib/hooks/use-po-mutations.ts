@@ -147,12 +147,12 @@ export function usePoMutations(
   const syncVendorForVendor = useCallback(async (id: string, vendorTenantId: string) => {
     return withOptimistic(
       id,
-      { vendorSyncStatus: 'SYNCING' },
+      { vendorSyncPending: true, vendorSyncStatus: 'SYNCING' },
       () => fetchOrQueue(`/api/customer-purchase-orders/${id}/sync-vendor/${encodeURIComponent(vendorTenantId)}`, {
         method: 'POST',
         offlineLabel: `Sync vendor ${vendorTenantId} PO ${id}`,
       }),
-      { keepOnAmbiguous: true },
+      { keepOnAmbiguous: true, skipReload: true },
     );
   }, [withOptimistic]);
 

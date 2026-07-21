@@ -19,6 +19,11 @@ function buildUrl(base: string, limit: number, cursor: string | null) {
   return url;
 }
 
+type RefetchIntervalOption =
+  | number
+  | false
+  | ((query: { state: { data?: { pages?: CursorPage<unknown>[] } } }) => number | false | undefined);
+
 export function useCursorQuery<T>(
   queryKey: QueryKey,
   baseUrl: string | null | undefined,
@@ -30,7 +35,7 @@ export function useCursorQuery<T>(
   }: {
     limit?: number;
     enabled?: boolean;
-    refetchInterval?: number | false;
+    refetchInterval?: RefetchIntervalOption;
     staleTime?: number;
   } = {},
 ) {
@@ -45,7 +50,8 @@ export function useCursorQuery<T>(
       lastPage?.hasMore && lastPage?.nextCursor ? lastPage.nextCursor : undefined,
     enabled: Boolean(baseUrl) && enabled,
     staleTime,
-    refetchInterval: refetchInterval === false ? false : refetchInterval,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- RQ menerima number | false | (query) => …
+    refetchInterval: refetchInterval as any,
     refetchOnWindowFocus: true,
   });
 

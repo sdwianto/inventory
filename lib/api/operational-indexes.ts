@@ -36,6 +36,8 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'hutang', index: { tenantId: 1, referenceType: 1, approvalStatus: 1 }, name: 'idx_hutang_tenant_ref_approval' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_cpo_tenant_tanggal' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, noPO: 1 }, name: 'idx_cpo_tenant_nopo' },
+  { collection: 'customer_purchase_orders', index: { tenantId: 1, vendorSoId: 1 }, name: 'idx_cpo_tenant_vendor_so' },
+  { collection: 'customer_purchase_orders', index: { tenantId: 1, vendorNoSO: 1 }, name: 'idx_cpo_tenant_vendor_noso' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_cpo_tenant_mwr' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, poChannel: 1, status: 1 }, name: 'idx_cpo_tenant_channel_status' },
   { collection: 'local_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_lpo_tenant_tanggal' },

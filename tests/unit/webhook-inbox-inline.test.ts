@@ -16,13 +16,10 @@ describe('shouldProcessWebhookInline', () => {
     expect(shouldProcessWebhookInline('delivery.shipped')).toBe(true);
   });
 
-  it('inlines sales_order events on VPS', () => {
+  it('never inlines sales_order events (always WEBHOOK_INBOX job)', () => {
     process.env.DEPLOYMENT_MODE = 'vps';
-    expect(shouldProcessWebhookInline('sales_order.confirmed')).toBe(true);
-    expect(shouldProcessWebhookInline('sales_order.updated')).toBe(true);
-  });
-
-  it('does not inline sales_order events on serverless', () => {
+    expect(shouldProcessWebhookInline('sales_order.confirmed')).toBe(false);
+    expect(shouldProcessWebhookInline('sales_order.updated')).toBe(false);
     process.env.DEPLOYMENT_MODE = 'serverless';
     expect(shouldProcessWebhookInline('sales_order.confirmed')).toBe(false);
   });

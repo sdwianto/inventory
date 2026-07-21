@@ -18,12 +18,13 @@ afterEach(() => {
 });
 
 describe('executeSandboxResetJob guard (EE-9E)', () => {
-  it('blocks purge in production when ALLOW_SANDBOX_RESET is not set', async () => {
+  it('blocks purge in production when ALLOW_SANDBOX_RESET is not set (non-VPS)', async () => {
     vi.stubEnv('ALLOW_SANDBOX_RESET', '');
+    vi.stubEnv('DEPLOYMENT_MODE', '');
     const db = {} as never;
     const result = await executeSandboxResetJob(db, { tenantId: 't1' });
     expect(result).toEqual({
-      error: 'Production: set ALLOW_SANDBOX_RESET=1 untuk purge sandbox via worker.',
+      error: 'Production: set ALLOW_SANDBOX_RESET=1 (atau DEPLOYMENT_MODE=vps) untuk purge sandbox via worker.',
     });
     const { runSandboxResetJob } = await import('@/lib/api/sandbox-purge');
     expect(runSandboxResetJob).not.toHaveBeenCalled();
@@ -40,5 +41,13 @@ describe('executeSandboxResetJob guard (EE-9E)', () => {
       includeSales: true,
       preserveJobId: 'job-1',
     });
+  });
+
+  it('allows purge on VPS when ALLOW_SANDBOX_RESET unset', async () => {
+    vi.stubEnv('ALLOW_SANDBOX_RESET', '');
+    vi.stubEnv('DEPLOYMENT_MODE', 'vps');
+    const db = {} as never;
+    const result = await executeSandboxResetJob(db, { tenantId: 't1' }, 'job-2');
+    expect(result).toEqual({ ok: true });
   });
 });

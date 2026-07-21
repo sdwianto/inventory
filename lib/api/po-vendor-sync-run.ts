@@ -8,27 +8,55 @@ import {
   VENDOR_SYNC_RETRY_COOLDOWN_MS,
   VENDOR_SYNC_PARALLEL,
 } from '@/lib/api/customer-po-vendor-sync';
+import { retryVendorSyncForSingleVendor } from '@/lib/api/customer-po-vendor-retry';
 import type { JsonObject } from '@/types/json';
 import type { AuthContext } from '@/types/auth';
 
 export async function runPoVendorSyncPending(
   db: Db,
   scopeAuth: AuthContext | null | undefined,
-  { poId }: { poId?: string } = {},
+  { poId, vendorTenantId }: { poId?: string; vendorTenantId?: string } = {},
 ) {
-  const cutoff = new Date(Date.now() - VENDOR_SYNC_RETRY_COOLDOWN_MS);
-  let filter: Record<string, unknown> = {
-    status: 'APPROVED',
-    vendorSyncPending: { $ne: false },
-  };
-  if (poId) {
-    filter.id = String(poId);
-  } else {
-    filter.$or = [
-      { vendorSyncAt: { $exists: false } },
-      { vendorSyncAt: { $lt: cutoff } },
-    ];
+  // Retry satu vendor gagal — hanya di worker, bukan di HTTP request UI.
+  if (poId && vendorTenantId) {
+    const filter = withTenantFilter(scopeAuth, { id: String(poId) });
+    const po = await db.collection('customer_purchase_orders').findOne(filter);
+    if (!po) return { attempted: 0, synced: [], failed: [{ id: poId, error: 'PO tidak ditemukan' }] };
+    const result = await retryVendorSyncForSingleVendor(db, po, String(vendorTenantId));
+    if (result.error) {
+      return {
+        attempted: 1,
+        synced: [],
+        failed: [{ id: po.id, noPO: po.noPO, error: result.error, vendorTenantId }],
+      };
+    }
+    return {
+      attempted: 1,
+      synced: [{
+        id: result.po?.id || po.id,
+        noPO: result.po?.noPO || po.noPO,
+        vendorNoSO: result.po?.vendorNoSO,
+        vendorTenantId,
+      }],
+      failed: [],
+    };
   }
+
+  const cutoff = new Date(Date.now() - VENDOR_SYNC_RETRY_COOLDOWN_MS);
+  // Targeted retry (poId): izinkan APPROVED/SUBMITTED. Batch otomatis: hanya APPROVED pending.
+  let filter: Record<string, unknown> = poId
+    ? {
+        id: String(poId),
+        status: { $in: ['APPROVED', 'SUBMITTED'] },
+      }
+    : {
+        status: 'APPROVED',
+        vendorSyncPending: { $ne: false },
+        $or: [
+          { vendorSyncAt: { $exists: false } },
+          { vendorSyncAt: { $lt: cutoff } },
+        ],
+      };
   filter = withTenantFilter(scopeAuth, filter);
 
   const pending = await db.collection('customer_purchase_orders')

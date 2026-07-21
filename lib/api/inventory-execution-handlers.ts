@@ -94,7 +94,8 @@ export async function executePoVendorSyncJob(
 ): Promise<Record<string, unknown>> {
   const scopeAuth = { tenantId } as AuthContext;
   const poId = payload.poId ? String(payload.poId) : undefined;
-  return runPoVendorSyncPending(db, scopeAuth, { poId });
+  const vendorTenantId = payload.vendorTenantId ? String(payload.vendorTenantId) : undefined;
+  return runPoVendorSyncPending(db, scopeAuth, { poId, vendorTenantId });
 }
 
 export async function executeGrnInvoiceSyncJob(

@@ -74,9 +74,9 @@ export function useApiMutation<TBody = unknown, TResult = unknown>(
       const res = await fetchOrQueue(url, init);
       return parseMutationResponse<TResult>(res);
     },
-    onSuccess: async () => {
+    onSuccess: () => {
       for (const key of invalidateKeys) {
-        await queryClient.invalidateQueries({ queryKey: key });
+        void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' });
       }
     },
   });

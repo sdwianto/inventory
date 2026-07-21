@@ -664,8 +664,14 @@ export function useCustomerPoPage() {
     setSubmitting(key);
     try {
       const data = await poMutations.syncVendorForVendor(id, vendorTenantId);
-      toast.success(`Vendor ${vendorNameById[vendorTenantId] || vendorTenantId} tersinkron`);
-      if (!data.vendorSynced) {
+      trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
+      if (data.async || data.vendorSyncPending) {
+        toast.success(`Retry ${vendorNameById[vendorTenantId] || vendorTenantId} di background`, {
+          description: 'Nomor SO muncul otomatis setelah sync selesai',
+        });
+      } else if (data.vendorSynced) {
+        toast.success(`Vendor ${vendorNameById[vendorTenantId] || vendorTenantId} tersinkron`);
+      } else {
         toast.warning('Masih ada vendor lain yang gagal — ulangi untuk vendor tersebut');
       }
     } catch (e) {

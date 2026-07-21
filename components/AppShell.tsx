@@ -19,7 +19,6 @@ import {
   PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck,
   ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
 } from 'lucide-react';
-import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
@@ -145,9 +144,8 @@ const NAV: NavEntry[] = [
       { href: '/utiliti/api-keys', label: 'API Keys', icon: KeyRound },
       { href: '/utiliti/audit', label: 'Audit Log (MASTER)', icon: Shield },
       { href: '/utiliti/ops', label: 'Ops Dashboard (MASTER)', icon: Activity },
-      ...(isSandboxResetMenuVisible()
-        ? [{ href: '/utiliti/sandbox', label: 'Reset Sandbox (MASTER)', icon: Eraser }]
-        : []),
+      // Selalu di menu MASTER; API + halaman tetap gate ENABLE/ALLOW / DEPLOYMENT_MODE=vps.
+      { href: '/utiliti/sandbox', label: 'Reset Sandbox (MASTER)', icon: Eraser },
     ],
   },
 ];

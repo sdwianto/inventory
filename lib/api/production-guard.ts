@@ -37,8 +37,14 @@ export function getDangerousRouteBlockReason(
   if (kind === 'auth_seed' && process.env.ALLOW_AUTH_SEED !== '1') {
     return 'Endpoint /auth/seed dinonaktifkan di production (set ALLOW_AUTH_SEED=1 untuk darurat)';
   }
-  if (kind === 'sandbox' && process.env.ALLOW_SANDBOX_RESET !== '1') {
-    return 'Production: set ALLOW_SANDBOX_RESET=1 untuk reset sandbox';
+  if (kind === 'sandbox') {
+    if (process.env.ALLOW_SANDBOX_RESET === '0') {
+      return 'Production: ALLOW_SANDBOX_RESET=0 — reset sandbox dimatikan';
+    }
+    const vps = String(process.env.DEPLOYMENT_MODE || '').toLowerCase() === 'vps';
+    if (process.env.ALLOW_SANDBOX_RESET !== '1' && !vps) {
+      return 'Production: set ALLOW_SANDBOX_RESET=1 (atau DEPLOYMENT_MODE=vps) untuk reset sandbox';
+    }
   }
   return null;
 }

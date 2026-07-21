@@ -41,6 +41,10 @@ services:
       # Lite stack: legacy HTTP poll worker (jangan set DEPLOYMENT_MODE=vps tanpa job bus)
       - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-}
       - JOB_BUS_ENABLED=${JOB_BUS_ENABLED:-0}
+      - ENABLE_SANDBOX_RESET_UI=${ENABLE_SANDBOX_RESET_UI:-1}
+      - ALLOW_SANDBOX_RESET=${ALLOW_SANDBOX_RESET:-1}
+      - NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI=${NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI:-1}
+      - NEXT_PUBLIC_DEPLOYMENT_MODE=${NEXT_PUBLIC_DEPLOYMENT_MODE:-vps}
     volumes:
       - media_data:/app/storage
     depends_on:

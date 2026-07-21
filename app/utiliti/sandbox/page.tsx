@@ -8,7 +8,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { AlertTriangle, Eraser, Eye, Loader2, ShieldAlert } from 'lucide-react';
 import { useSessionUser } from '@/lib/hooks/use-session-user';
-import { isSandboxResetMenuVisible } from '@/lib/sandbox-client';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
@@ -150,7 +149,6 @@ export default function SandboxResetPage() {
   const [resetJobId, setResetJobId] = useState<string | null>(null);
   const { data: resetJob, status: resetJobStatus } = useBgJob(resetJobId);
 
-  const menuVisible = isSandboxResetMenuVisible();
   const isMaster = user?.role === 'MASTER';
 
   const { data: status } = useApiQuery<StatusResponse>(
@@ -257,19 +255,19 @@ export default function SandboxResetPage() {
     );
   }
 
-  if (!menuVisible || (status && !status.enabled)) {
+  if (status && !status.enabled) {
     return (
       <div className="p-6 max-w-2xl">
           <Card>
             <CardContent className="p-6">
               <div className="font-semibold mb-2">Reset Sandbox tidak aktif</div>
               <p className="text-sm text-slate-600">
-                Fitur ini disembunyikan secara default. Untuk uji sandbox, set di environment:
+                Fitur di-gate di server. Untuk VPS uji coba pastikan:
               </p>
               <ul className="text-sm text-slate-600 mt-2 list-disc pl-5 space-y-1">
-                <li><code className="text-xs bg-slate-100 px-1 rounded">ENABLE_SANDBOX_RESET_UI=1</code></li>
-                <li><code className="text-xs bg-slate-100 px-1 rounded">NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI=1</code></li>
-                <li>Production: <code className="text-xs bg-slate-100 px-1 rounded">ALLOW_SANDBOX_RESET=1</code></li>
+                <li><code className="text-xs bg-slate-100 px-1 rounded">DEPLOYMENT_MODE=vps</code> (auto-enable), atau</li>
+                <li><code className="text-xs bg-slate-100 px-1 rounded">ENABLE_SANDBOX_RESET_UI=1</code> + <code className="text-xs bg-slate-100 px-1 rounded">ALLOW_SANDBOX_RESET=1</code></li>
+                <li>Matikan permanen: <code className="text-xs bg-slate-100 px-1 rounded">ALLOW_SANDBOX_RESET=0</code></li>
               </ul>
               {status?.blockReason && (
                 <p className="text-sm text-amber-700 mt-3">{status.blockReason}</p>
@@ -289,7 +287,7 @@ export default function SandboxResetPage() {
             <p className="text-sm text-slate-600 mt-1">
               Hapus data transaksi inventory + sales, termasuk Food Production (rencana → PBL/HSL → QC/HACCP → distribusi,
               plus resep, menu, template QC/HACCP, dan price book). Setup dapur, produk, user, tenant, dan integrasi tetap.
-              Gunakan setelah simulasi di Vercel sandbox — sembunyikan fitur ini setelah go-live.
+              Hapus data transaksi uji coba (master data tetap). Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.
             </p>
           </div>
         </div>

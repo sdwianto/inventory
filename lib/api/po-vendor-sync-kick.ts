@@ -40,10 +40,17 @@ async function triggerWorker(jobId: string): Promise<boolean> {
 export async function enqueueAndKickPoVendorSync(
   db: Db,
   tenantId: string,
-  { poId }: { poId?: string } = {},
+  { poId, vendorTenantId }: { poId?: string; vendorTenantId?: string } = {},
 ) {
+  const vendorKey = vendorTenantId ? String(vendorTenantId) : '';
   const payload = poId
-    ? { poId: String(poId), dedupeKey: `po-vendor:${poId}` }
+    ? {
+        poId: String(poId),
+        ...(vendorKey ? { vendorTenantId: vendorKey } : {}),
+        dedupeKey: vendorKey
+          ? `po-vendor:${poId}:${vendorKey}`
+          : `po-vendor:${poId}`,
+      }
     : {};
 
   const { jobId, reused } = await enqueueJob(db, {

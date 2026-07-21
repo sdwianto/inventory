@@ -243,8 +243,8 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     })),
   };
 
-  // inline=1: buat & post invoice di sales.app dalam satu request (tanpa job + polling ganda).
-  const url = `${config.salesAppUrl}/api/integrations/grn-posted?inline=1`;
+  // async=1: sales enqueue job invoice (sesuai integration-inbound); poll jika 202.
+  const url = `${config.salesAppUrl}/api/integrations/grn-posted?async=1`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -255,7 +255,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
         ...buildTraceHttpHeaders(),
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(30_000),
     });
   } catch (e) {
     return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };

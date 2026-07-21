@@ -2,14 +2,27 @@
 
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
+import { str } from '@/types/json';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useCursorQuery, type CursorPage } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
+import { isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
 
 type InfinitePoData = {
   pages: CursorPage<JsonObject>[];
   pageParams: unknown[];
 };
+
+/** Poll singkat saat menunggu sync vendor / konfirmasi SO di sales. */
+function needsStatusPoll(items: JsonObject[]): boolean {
+  return items.some((p) => {
+    if (isPendingOptimisticPo(p)) return false;
+    const status = str(p.status);
+    if (status === 'SUBMITTED') return true;
+    if (status === 'APPROVED' && p.vendorSyncPending !== false) return true;
+    return false;
+  });
+}
 
 export function useCustomerPoList() {
   const queryClient = useQueryClient();
@@ -23,7 +36,15 @@ export function useCustomerPoList() {
   } = useCursorQuery<JsonObject>(
     queryKeys.customerPurchaseOrders.list,
     '/api/customer-purchase-orders',
-    { limit: 100 },
+    {
+      limit: 100,
+      staleTime: 15_000,
+      refetchInterval: (query) => {
+        const pages = query.state.data?.pages ?? [];
+        const flat = pages.flatMap((p) => (p.items ?? []) as JsonObject[]);
+        return needsStatusPoll(flat) ? 5_000 : false;
+      },
+    },
   );
 
   // Update optimistis: terapkan updater pada gabungan seluruh halaman,

@@ -29,6 +29,11 @@ RUN mkdir -p node_modules/@sdwianto \
   && test -f node_modules/@sdwianto/metrics/src/prometheus.ts \
   && test -f node_modules/@sdwianto/platform/src/metrics/observability-collector.ts
 ENV NEXT_TELEMETRY_DISABLED=1
+# Bake client flags untuk menu Reset Sandbox di VPS (bisa override via --build-arg).
+ARG NEXT_PUBLIC_DEPLOYMENT_MODE=vps
+ARG NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI=1
+ENV NEXT_PUBLIC_DEPLOYMENT_MODE=$NEXT_PUBLIC_DEPLOYMENT_MODE
+ENV NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI=$NEXT_PUBLIC_ENABLE_SANDBOX_RESET_UI
 RUN npm run build
 
 FROM base AS runner
