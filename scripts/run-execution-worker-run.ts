@@ -4,6 +4,7 @@
  */
 
 import { hostname } from 'node:os';
+import type { Db } from 'mongodb';
 import { connectToMongo } from '@/lib/api/db';
 import { loadPlatformConfig, validatePlatformConfig } from '@/lib/execution/runtime/config';
 import { startExecutionMetricsServer } from '@/lib/execution/metrics/metrics-http-server';
@@ -23,8 +24,10 @@ async function main() {
     throw new Error('WORKER_DOMAIN is required');
   }
 
-  const db = await connectToMongo();
+  // Bind /metrics sebelum Mongo connect agar scrape tidak connection-refused saat boot.
+  let db: Db | null = null;
   const stopMetrics = startExecutionMetricsServer({ getDb: () => db });
+  db = await connectToMongo();
 
   const workerId = config.workerId ?? `${config.workerDomain}-${hostname()}`;
   const capabilities = config.workerCapabilities;

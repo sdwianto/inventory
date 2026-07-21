@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const runner = resolve(__dirname, 'run-execution-worker-run.ts');
+// Pakai tsx lokal — jangan npx download di VPS offline / mirror lock.
 const result = spawnSync(
-  'npx',
-  ['tsx', runner, ...process.argv.slice(2)],
+  process.platform === 'win32' ? 'npx.cmd' : 'npx',
+  ['--no-install', 'tsx', runner, ...process.argv.slice(2)],
   { stdio: 'inherit', shell: true, cwd: resolve(__dirname, '..') },
 );
 process.exit(result.status ?? 1);
