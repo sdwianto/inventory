@@ -59,48 +59,6 @@ function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record
   };
 }
 
-async function pollSalesGrnJob(
-  salesAppUrl: string,
-  salesApiKey: string,
-  jobId: string,
-  { maxWaitMs = 25_000, intervalMs = 750 } = {},
-): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + maxWaitMs;
-  while (Date.now() < deadline) {
-    const res = await fetch(`${salesAppUrl}/api/bg-jobs/${encodeURIComponent(jobId)}`, {
-      headers: { 'X-Api-Key': salesApiKey, ...buildTraceHttpHeaders() },
-      signal: AbortSignal.timeout(15000),
-    });
-    const job = await res.json() as Record<string, unknown>;
-    if (!res.ok) {
-      return { error: String(job.error || `Sales job poll HTTP ${res.status}`) };
-    }
-    const status = String(job.status || '');
-    if (status === 'DONE' || status === 'SUCCEEDED') {
-      const result = (job.result || {}) as Record<string, unknown>;
-      if (result.error) return { error: String(result.error), ...result };
-      if (result.ok) return result;
-      return result;
-    }
-    if (status === 'FAILED' || status === 'DLQ') {
-      return { error: String(job.lastError || resultError(job) || 'Job sales gagal') };
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  // Timeout: biarkan GRN_INVOICE_SYNC retry (invoice mungkin sudah terbentuk di sales).
-  return {
-    error: 'Timeout menunggu job grn-posted di sales.app',
-    pending: true,
-    salesJobId: jobId,
-    retryable: true,
-  };
-}
-
-function resultError(job: Record<string, unknown>) {
-  const result = job.result as Record<string, unknown> | undefined;
-  return result?.error ? String(result.error) : null;
-}
-
 async function upsertHutangFromSalesPayload(
   db: Db,
   tenantId: string,
@@ -249,7 +207,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     })),
   };
 
-  // async=1: sales enqueue job invoice (sesuai integration-inbound); poll jika 202.
+  // async=1: sales enqueue job invoice. Jangan poll — hutang via webhook invoice.posted.
   const url = `${config.salesAppUrl}/api/integrations/grn-posted?async=1`;
   let res: Response;
   try {
@@ -261,7 +219,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
         ...buildTraceHttpHeaders(),
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(12_000),
     });
   } catch (e) {
     return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };
@@ -275,24 +233,21 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   }
 
   if (res.status === 202 && data.jobId) {
-    const polled = await pollSalesGrnJob(config.salesAppUrl, salesApiKey, String(data.jobId));
-    if (polled.error) {
-      return {
-        error: String(polled.error),
-        draftNoInvoice: polled.draftNoInvoice,
-        async: true,
-        pending: Boolean(polled.pending),
-        retryable: Boolean(polled.retryable),
-        salesJobId: data.jobId,
-      };
-    }
-    data = normalizeSalesGrnResponse(polled);
-  } else if (!res.ok) {
+    return {
+      async: true,
+      pending: true,
+      salesJobId: data.jobId,
+    };
+  }
+
+  if (!res.ok) {
     const hint = data.draftNoInvoice
       ? ` — DRAFT ${data.draftNoInvoice} ada di sales.app, post manual jika perlu`
       : '';
     return { error: `${data.error || `Sales.app ${res.status}`}${hint}`, draftNoInvoice: data.draftNoInvoice };
   }
+
+  data = normalizeSalesGrnResponse(data);
 
   if (!data.invoiceId) {
     return { error: 'Sales.app tidak mengembalikan invoiceId — faktur tidak dibuat' };

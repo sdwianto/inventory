@@ -274,6 +274,10 @@ export async function postGoodsReceipt(
     } else if (invoiceSync.skipped) {
       patch.invoiceSyncStatus = 'SKIPPED';
       patch.invoiceSyncError = invoiceSync.reason || null;
+    } else if (invoiceSync.pending || (invoiceSync.async && invoiceSync.salesJobId)) {
+      patch.invoiceSyncStatus = 'PENDING';
+      patch.invoiceSyncError = null;
+      if (invoiceSync.salesJobId) patch.salesJobId = invoiceSync.salesJobId;
     } else {
       patch.invoiceSyncStatus = 'DONE';
       if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;

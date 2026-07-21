@@ -13,8 +13,16 @@ describe('grn-notify-sales async contract', () => {
     expect(src).not.toMatch(/grn-posted\?inline=1/);
   });
 
-  it('caps sales job poll under 60s so workers do not block indefinitely', () => {
-    expect(src).toMatch(/maxWaitMs\s*=\s*25_000/);
-    expect(src).not.toMatch(/maxWaitMs\s*=\s*60_000/);
+  it('does not poll sales bg-jobs on HTTP 202 (hutang via webhook)', () => {
+    expect(src).not.toMatch(/pollSalesGrnJob/);
+    expect(src).not.toMatch(/\/api\/bg-jobs\//);
+    expect(src).toMatch(/pending:\s*true/);
+    expect(src).toMatch(/salesJobId/);
+  });
+
+  it('caps outbound POST timeout under 15s hard', () => {
+    expect(src).toMatch(/AbortSignal\.timeout\(12_000\)/);
+    expect(src).not.toMatch(/AbortSignal\.timeout\(30_000\)/);
+    expect(src).not.toMatch(/AbortSignal\.timeout\(45_000\)/);
   });
 });

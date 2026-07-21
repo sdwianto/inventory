@@ -223,6 +223,16 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
     return { skipped: true, result };
   }
 
+  // 202 dari Sales: invoice dikerjakan async; hutang via webhook invoice.posted.
+  if (result.pending || (result.async && result.salesJobId)) {
+    await setGrnInvoiceSync(db, grn.id, {
+      invoiceSyncStatus: 'PENDING',
+      invoiceSyncError: null,
+      salesJobId: result.salesJobId || null,
+    });
+    return { ok: true, pending: true, result };
+  }
+
   const patch: Record<string, unknown> = {
     invoiceSyncStatus: 'DONE',
     invoiceSyncError: null,

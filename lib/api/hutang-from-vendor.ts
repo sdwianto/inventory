@@ -378,6 +378,37 @@ async function syncExistingVendorHutangFromPayload(
   };
 }
 
+/** Tandai GRN invoice sync selesai (webhook invoice.posted / recovery). */
+async function markGrnInvoiceSyncDone(
+  db: Db,
+  tid: string,
+  payload: VendorInvoicePayload,
+  hutangId: string,
+  invoiceId: string,
+  vendorTenantId: string | null | undefined,
+) {
+  if (!payload.noDO) return;
+  const grnFilter: Record<string, unknown> = {
+    ...tenantIdMatchFilter(tid),
+    noDO: payload.noDO,
+    status: 'POSTED',
+    invoiceSyncStatus: { $in: ['PENDING', 'SYNCING', 'FAILED', 'NONE'] },
+  };
+  const vid = hutangVendorKey(vendorTenantId);
+  if (vid) grnFilter.vendorTenantId = vid;
+  await db.collection('goods_receipts').updateMany(grnFilter, {
+    $set: {
+      vendorInvoiceId: invoiceId,
+      noInvoice: payload.noInvoice,
+      hutangId,
+      invoiceSyncStatus: 'DONE',
+      invoiceSyncError: null,
+      invoiceSyncAt: new Date(),
+      updatedAt: new Date(),
+    },
+  });
+}
+
 export async function createHutangFromVendorInvoice(
   db: Db,
   customerTenantId: string,
@@ -391,7 +422,24 @@ export async function createHutangFromVendorInvoice(
 
   const existing = await findExistingVendorHutang(db, tid, invoiceId, vendorTenantId);
   if (existing) {
-    return syncExistingVendorHutangFromPayload(db, tid, existing as HutangDoc, payload, vendorTenantId);
+    const result = await syncExistingVendorHutangFromPayload(
+      db,
+      tid,
+      existing as HutangDoc,
+      payload,
+      vendorTenantId,
+    );
+    if (!('error' in result && result.error) && result.hutangId) {
+      await markGrnInvoiceSyncDone(
+        db,
+        tid,
+        payload,
+        String(result.hutangId),
+        invoiceId,
+        vendorTenantId,
+      );
+    }
+    return result;
   }
 
   const paymentTerms = payload.paymentTerms || 'KREDIT';
@@ -512,7 +560,16 @@ export async function createHutangFromVendorInvoice(
       if (vid) grnFilter.vendorTenantId = vid;
       await txDb.collection('goods_receipts').updateMany(
         grnFilter,
-        { $set: { vendorInvoiceId: invoiceId, noInvoice: payload.noInvoice, hutangId: hutang.id } },
+        {
+          $set: {
+            vendorInvoiceId: invoiceId,
+            noInvoice: payload.noInvoice,
+            hutangId: hutang.id,
+            invoiceSyncStatus: 'DONE',
+            invoiceSyncError: null,
+            invoiceSyncAt: new Date(),
+          },
+        },
         txOpts(session),
       );
     }
@@ -528,6 +585,8 @@ export async function createHutangFromVendorInvoice(
   });
 
   logger.info('hutang_created', { tenantId: tid, hutangId: hutang.id, noHutang, invoiceId });
+
+  await markGrnInvoiceSyncDone(db, tid, payload, hutang.id, invoiceId, vendorTenantId);
 
   return {
     action: 'created',

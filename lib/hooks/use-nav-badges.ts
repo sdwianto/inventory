@@ -63,8 +63,8 @@ export function useNavBadges(enabled = true) {
     queryKey: [...NAV_BADGES_QUERY_KEY, scopeKey],
     queryFn: () => fetchJson<NavBadgesData>(url!),
     enabled: enabled && Boolean(url),
-    staleTime: 5_000,
-    refetchInterval: 5_000,
+    staleTime: 45_000,
+    refetchInterval: 45_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

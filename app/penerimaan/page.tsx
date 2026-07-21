@@ -72,6 +72,15 @@ const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
   ),
 );
 
+/** Poll list hanya saat ada GRN draft atau invoice sync masih jalan. */
+function needsGrnListPoll(items: JsonObject[]): boolean {
+  return items.some((row) => {
+    if (str(row.status) === 'DRAFT') return true;
+    const sync = str(row.invoiceSyncStatus);
+    return sync === 'PENDING' || sync === 'SYNCING';
+  });
+}
+
 export default function PenerimaanPage() {
   const queryClient = useQueryClient();
   const invalidateGrn = useInvalidateGrn();
@@ -88,7 +97,15 @@ export default function PenerimaanPage() {
   } = useCursorQuery<JsonObject>(
     listKey,
     '/api/pages/penerimaan',
-    { limit: 100, refetchInterval: 5_000, staleTime: 5_000 },
+    {
+      limit: 100,
+      staleTime: 15_000,
+      refetchInterval: (query) => {
+        const pages = query.state.data?.pages ?? [];
+        const flat = pages.flatMap((p) => (p.items ?? []) as JsonObject[]);
+        return needsGrnListPoll(flat) ? 5_000 : false;
+      },
+    },
   );
   const { postGrn: postGrnMutation, replayInvoice: replayInvoiceMutation, syncFromSales: syncFromSalesMutation } = useGrnMutations(
     listKey,

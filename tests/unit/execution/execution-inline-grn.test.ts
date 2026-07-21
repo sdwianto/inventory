@@ -23,6 +23,14 @@ describe('execution-inline-grn (EE-9D)', () => {
     expect(shouldProcessGrnJobInline()).toBe(true);
   });
 
+  it('VERCEL does not short-circuit force-inline when wave enqueues GRN', () => {
+    process.env.JOB_BUS_ENABLED = '1';
+    process.env.EXECUTION_WAVE = 'all';
+    delete process.env.EXECUTION_INLINE_GRN;
+    process.env.VERCEL = '1';
+    expect(shouldProcessGrnJobInline()).toBe(false);
+  });
+
   it('non-VPS defaults to inline', () => {
     process.env.DEPLOYMENT_MODE = 'serverless';
     delete process.env.EXECUTION_INLINE_GRN;
