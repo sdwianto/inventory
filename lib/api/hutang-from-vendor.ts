@@ -21,7 +21,7 @@ import type { VendorInvoicePayload } from '@/types/integration';
 import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 
 export type HutangCreateOptions = {
-  createdVia?: 'grn-posted' | 'invoice-posted-webhook';
+  createdVia?: 'grn-posted' | 'invoice-posted-webhook' | 'invoice-posted-push';
 };
 
 /** Skip webhook invoice.posted jika hutang sudah dibuat lewat jalur grn-posted (primary). */
@@ -41,7 +41,8 @@ export async function hutangAlreadyFromGrnPrimaryPath(
         hutangId: existing.id,
         noHutang: existing.noHutang,
         createdVia: (existing as HutangDoc).createdVia || null,
-        skippedWebhook: (existing as HutangDoc).createdVia === 'grn-posted',
+        skippedWebhook: (existing as HutangDoc).createdVia === 'grn-posted'
+          || (existing as HutangDoc).createdVia === 'invoice-posted-push',
       };
     }
   }
