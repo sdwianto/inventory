@@ -14,7 +14,9 @@ import {
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import type { JsonObject } from '@/types/json';
 
-const VENDOR_PUSH_RETRIES = 2;
+const VENDOR_PUSH_RETRIES = 1;
+/** Default hold per vendor — selaras Performance Budget PO_VENDOR_SYNC (P95 < 15s). */
+const VENDOR_PUSH_TIMEOUT_MS = 15_000;
 
 export type PushPoToVendorResult =
   | { error: string; partialFailures?: JsonObject[] }
@@ -107,7 +109,7 @@ export async function pushPoGroupToVendor(
     timeoutMs?: number;
   },
 ) {
-  const timeoutMs = args.timeoutMs ?? 45_000;
+  const timeoutMs = args.timeoutMs ?? VENDOR_PUSH_TIMEOUT_MS;
   let last = await pushPoGroupOnce(db, { ...args, timeoutMs });
   for (let attempt = 1; attempt < VENDOR_PUSH_RETRIES && last.error && isTimeoutError(last.error); attempt += 1) {
     await sleep(1_500 * attempt);
@@ -122,7 +124,7 @@ export async function pushPoToVendor(
   tenantId: string,
   opts: PushPoToVendorOptions = {},
 ): Promise<PushPoToVendorResult> {
-  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const timeoutMs = opts.timeoutMs ?? VENDOR_PUSH_TIMEOUT_MS;
   const config = await getIntegrationConfig(db, tenantId);
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) {
