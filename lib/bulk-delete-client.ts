@@ -6,6 +6,7 @@ export async function postBulkDelete(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids }),
+    signal: AbortSignal.timeout(30_000),
   });
   const data = await res.json() as { deleted?: number; error?: string };
   if (!res.ok) throw new Error(data.error || 'Gagal hapus');

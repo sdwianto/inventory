@@ -20,7 +20,11 @@ export default function WorkerHealthBanner({ enabled }: { enabled: boolean }) {
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await fetch('/api/health', { credentials: 'include', cache: 'no-store' });
+        const res = await fetch('/api/health', {
+          credentials: 'include',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(8_000),
+        });
         const data = await res.json() as { checks?: { worker?: WorkerHealth } };
         if (!cancelled) setWorker(data.checks?.worker || null);
       } catch {

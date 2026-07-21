@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb';
-import type { NextResponse } from 'next/server';
-import { ok, clean, okCached } from '@/lib/api/db';
+import { NextResponse } from 'next/server';
+import { clean, okCached, err } from '@/lib/api/db';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { requireMaster } from '@/lib/api/require-auth';
@@ -11,6 +11,31 @@ import type { AuthContext } from '@/types/auth';
 
 function okPrivate(data: unknown): NextResponse {
   return okCached(data, { maxAge: 0 });
+}
+
+function logoResponseFromDataUrl(raw: string): NextResponse | null {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^data:([^;]+);base64,(.+)$/i);
+  if (m) {
+    return new NextResponse(Buffer.from(m[2], 'base64'), {
+      status: 200,
+      headers: {
+        'Content-Type': m[1],
+        'Cache-Control': 'private, max-age=300',
+      },
+    });
+  }
+  if (/^[A-Za-z0-9+/=]+$/.test(trimmed.slice(0, 64))) {
+    return new NextResponse(Buffer.from(trimmed, 'base64'), {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'private, max-age=300',
+      },
+    });
+  }
+  return null;
 }
 
 async function loadTenantSettings(db: Db, tenantId: string): Promise<Record<string, unknown> | null> {
@@ -74,12 +99,25 @@ export async function handleWorkspace({
   auth,
   request,
 }: HandlerContext): Promise<NextResponse | null> {
-  if (route !== '/workspace/bootstrap' || method !== 'GET') return null;
+  if (method !== 'GET' || !route.startsWith('/workspace/')) return null;
+
+  const brandTenantId = auth?.tenantId || 'default';
+
+  if (route === '/workspace/logo') {
+    const brandSettings = await loadTenantSettings(db, brandTenantId);
+    const external = String(brandSettings?.logoUrl || '').trim();
+    if (/^https?:\/\//i.test(external)) {
+      return NextResponse.redirect(external, 302);
+    }
+    const img = logoResponseFromDataUrl(String(brandSettings?.logoBase64 || ''));
+    if (!img) return err('Logo tidak ditemukan', 404);
+    return img;
+  }
+
+  if (route !== '/workspace/bootstrap') return null;
 
   const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
   if (denied) return denied;
-
-  const brandTenantId = auth?.tenantId || 'default';
 
   const [brandSettings, scopeSettings, lokasi, tenants] =
     await Promise.all([
@@ -94,6 +132,12 @@ export async function handleWorkspace({
           })()
         : Promise.resolve([]),
     ]);
+
+  const hasEmbeddedLogo = Boolean(String(brandSettings?.logoBase64 || '').trim());
+  const externalLogo = String(brandSettings?.logoUrl || '').trim();
+  const logoUrl = hasEmbeddedLogo
+    ? '/api/workspace/logo'
+    : (/^https?:\/\//i.test(externalLogo) ? externalLogo : '');
 
   return okPrivate({
     scope: {
@@ -112,8 +156,8 @@ export async function handleWorkspace({
         (brandSettings?.companyName as string)
         || auth?.tenantName
         || 'Inventory App',
-      logoUrl: (brandSettings?.logoUrl as string) || '',
-      logoBase64: (brandSettings?.logoBase64 as string) || '',
+      logoUrl,
+      logoBase64: '',
     },
     tenants,
     user: auth

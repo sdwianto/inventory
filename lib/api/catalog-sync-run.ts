@@ -66,6 +66,23 @@ function isLegacyCatalogPayload(data: JsonObject): boolean {
 }
 
 /** Ambil semua kunci produk aktif dari katalog sales (tanpa updatedSince) untuk rekonsiliasi. */
+const CATALOG_RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function shouldRunFullCatalogReconcile(
+  settingsRow: { lastCatalogReconcileAt?: unknown } | null | undefined,
+  lastSync: Date | null,
+  force?: boolean,
+): boolean {
+  if (force) return true;
+  // Full sync (belum pernah watermark) — wajib reconcile.
+  if (!lastSync) return true;
+  const lastRec = settingsRow?.lastCatalogReconcileAt
+    ? new Date(String(settingsRow.lastCatalogReconcileAt))
+    : null;
+  if (!lastRec || Number.isNaN(lastRec.getTime())) return true;
+  return Date.now() - lastRec.getTime() >= CATALOG_RECONCILE_INTERVAL_MS;
+}
+
 async function fetchAllCatalogVendorKeys(
   salesAppUrl: string,
   headers: Record<string, string>,
@@ -133,7 +150,7 @@ export async function runCatalogSync(
   db: Db,
   tenantId: string,
   config: { salesAppUrl?: string },
-  opts: { jobId?: string } = {},
+  opts: { jobId?: string; forceReconcile?: boolean } = {},
 ) {
   const salesAppUrl = config.salesAppUrl || '';
   const headers: Record<string, string> = {
@@ -170,7 +187,7 @@ export async function runCatalogSync(
 
     const pageRes = await fetchCatalogPage(salesAppUrl, headers, {
       cursor,
-      updatedSince: page === 1 ? lastSync : null,
+      updatedSince: lastSync,
     });
     if (!pageRes.ok) {
       if (totalFetched > 0) break;
@@ -190,22 +207,33 @@ export async function runCatalogSync(
 
     const products = Array.isArray(data.products) ? data.products as JsonObject[] : [];
     if (!products.length && page === 1 && !isLegacyCatalogPayload(data)) {
-      const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+      let deactivated = 0;
+      let sample: unknown[] = [];
       const now = new Date();
-      await db.collection('integration_settings').updateOne(
-        { tenantId },
-        { $set: { lastCatalogSyncAt: now, updatedAt: now } },
-      );
+      if (shouldRunFullCatalogReconcile(settingsRow, lastSync, opts.forceReconcile)) {
+        const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+        deactivated = reconcile.deactivated;
+        sample = reconcile.sample;
+        await db.collection('integration_settings').updateOne(
+          { tenantId },
+          { $set: { lastCatalogSyncAt: now, lastCatalogReconcileAt: now, updatedAt: now } },
+        );
+      } else {
+        await db.collection('integration_settings').updateOne(
+          { tenantId },
+          { $set: { lastCatalogSyncAt: now, updatedAt: now } },
+        );
+      }
       return {
         ...results,
         total: 0,
         pages: 0,
         allTenants: true,
         incremental: !!lastSync,
-        reconciled: reconcile.deactivated,
-        reconciledSample: reconcile.sample,
-        message: reconcile.deactivated
-          ? `Katalog up-to-date — ${reconcile.deactivated} produk usang dinonaktifkan`
+        reconciled: deactivated,
+        reconciledSample: sample,
+        message: deactivated
+          ? `Katalog up-to-date — ${deactivated} produk usang dinonaktifkan`
           : 'Katalog sudah up-to-date',
       };
     }
@@ -245,7 +273,14 @@ export async function runCatalogSync(
     return { error: 'Katalog kosong di sales.app — pastikan ada produk aktif' };
   }
 
-  const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+  let reconciled = 0;
+  let reconciledSample: unknown[] = [];
+  const doReconcile = shouldRunFullCatalogReconcile(settingsRow, lastSync, opts.forceReconcile);
+  if (doReconcile) {
+    const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+    reconciled = reconcile.deactivated;
+    reconciledSample = reconcile.sample;
+  }
   const namesBackfilled = await backfillProductVendorNames(db, tenantId);
   const uomBackfill = await backfillVendorUomLinks(db, tenantId);
   const tierSync = await syncVendorTiersFromSales(db, tenantId, config);
@@ -254,7 +289,13 @@ export async function runCatalogSync(
   const now = new Date();
   await db.collection('integration_settings').updateOne(
     { tenantId },
-    { $set: { lastCatalogSyncAt: now, updatedAt: now } },
+    {
+      $set: {
+        lastCatalogSyncAt: now,
+        updatedAt: now,
+        ...(doReconcile ? { lastCatalogReconcileAt: now } : {}),
+      },
+    },
   );
 
   return {
@@ -270,8 +311,9 @@ export async function runCatalogSync(
     uomVendorLinksBackfilled: uomBackfill.fixed,
     tierSync: tierSync?.error ? { error: tierSync.error } : tierSync,
     grnRefreshed,
-    reconciled: reconcile.deactivated,
-    reconciledSample: reconcile.sample,
+    reconciled,
+    reconciledSample,
+    reconcileSkipped: !doReconcile,
     availableTenants,
   };
 }

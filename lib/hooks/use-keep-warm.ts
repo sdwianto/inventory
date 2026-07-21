@@ -13,7 +13,11 @@ export function useKeepWarm(enabled = true) {
 
     const ping = () => {
       if (document.visibilityState !== 'visible') return;
-      void fetch('/api/health', { credentials: 'include', cache: 'no-store' }).catch(() => {});
+      void fetch('/api/', {
+        credentials: 'include',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8_000),
+      }).catch(() => {});
     };
 
     ping();

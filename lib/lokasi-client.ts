@@ -93,7 +93,7 @@ export async function loadLokasiForTenant(
     url += `?tenantId=${encodeURIComponent(actingTenantId)}`;
   }
 
-  _lokasiPromise = fetch(url)
+  _lokasiPromise = fetch(url, { signal: AbortSignal.timeout(15_000) })
     .then((res) => res.json())
     .then((list: unknown) => {
       const arr = Array.isArray(list) ? list as LokasiItem[] : [];

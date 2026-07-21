@@ -117,9 +117,11 @@ export async function handleProductionReports(ctx: HandlerContext): Promise<Next
     const [issueRows, resultRows] = await Promise.all([
       db.collection(MATERIAL_ISSUES_COLLECTION)
         .find(withTenantFilter(scopeAuth, { productionPlanId: { $in: planIds } }))
+        .limit(2_000)
         .toArray(),
       db.collection(PRODUCTION_RESULTS_COLLECTION)
         .find(withTenantFilter(scopeAuth, { productionPlanId: { $in: planIds } }))
+        .limit(2_000)
         .toArray(),
     ]);
     const issues = issueRows as unknown as MaterialIssueDoc[];

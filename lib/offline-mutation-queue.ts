@@ -163,6 +163,7 @@ async function replayOne(row: OfflineMutation): Promise<ReplayOutcome> {
       },
       body: row.body,
       credentials: 'include',
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       const message = await parseErrorMessage(res);
@@ -253,5 +254,8 @@ export async function fetchOrQueue(
   }
 
   const { offlineLabel: _label, ...fetchInit } = init;
-  return fetch(url, { credentials: 'include', ...fetchInit });
+  const withSignal = fetchInit.signal
+    ? fetchInit
+    : { ...fetchInit, signal: AbortSignal.timeout(30_000) };
+  return fetch(url, { credentials: 'include', ...withSignal });
 }

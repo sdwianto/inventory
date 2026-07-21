@@ -39,7 +39,10 @@ interface AuthMeResponse {
 /** Sinkronkan profil dari session server (/api/auth/me). */
 export async function syncSessionUser(): Promise<SessionUser | null> {
   try {
-    const res = await fetch('/api/auth/me', { credentials: 'include' });
+    const res = await fetch('/api/auth/me', {
+      credentials: 'include',
+      signal: AbortSignal.timeout(15_000),
+    });
     if (!res.ok) {
       clearUser();
       return null;

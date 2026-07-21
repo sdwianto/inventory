@@ -30,7 +30,9 @@ export const fetchTenantSettings = async (
   if (bustCache) params.set('_t', String(Date.now()));
   const qs = params.toString();
 
-  _cachePromise = fetch(`/api/tenant/settings${qs ? `?${qs}` : ''}`)
+  _cachePromise = fetch(`/api/tenant/settings${qs ? `?${qs}` : ''}`, {
+    signal: AbortSignal.timeout(15_000),
+  })
     .then((r) => r.json())
     .then((d: TenantSettings) => {
       _cache = { ...d, tenantId: d.tenantId || tid };
