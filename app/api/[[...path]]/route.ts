@@ -30,6 +30,7 @@ import {
   isFpRoute,
   FP_SLOW_REQUEST_MS,
 } from '@/lib/api/request-metrics';
+import { recordHotpathHttp } from '@/lib/api/erp-hotpath-metrics';
 
 export async function OPTIONS() {
   return cors(new NextResponse(null, { status: 200 }));
@@ -154,6 +155,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
     }
 
     const durationMs = Date.now() - started;
+    recordHotpathHttp('inventory', method, route, durationMs);
     const status = handlerResponse.status;
     if (isFpRoute(route)) {
       void recordRequestDuration(method, route, durationMs, status);

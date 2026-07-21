@@ -9,6 +9,7 @@ import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { syncGrnDeliveryFromSales } from '@/lib/api/grn-delivery-sync';
 import { salesFetchErrorMessage, integrationCorrelationId } from '@/lib/api/integration-common';
 import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
+import { recordIntegrationHold } from '@/lib/api/erp-hotpath-metrics';
 
 function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record<string, unknown>) {
   if ((data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId) {
@@ -209,6 +210,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
 
   // async=1: sales enqueue job invoice. Jangan poll — hutang via webhook invoice.posted.
   const url = `${config.salesAppUrl}/api/integrations/grn-posted?async=1`;
+  const holdStarted = Date.now();
   let res: Response;
   try {
     res = await fetch(url, {
@@ -222,6 +224,7 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
       signal: AbortSignal.timeout(12_000),
     });
   } catch (e) {
+    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
     return { error: salesFetchErrorMessage(e, config.salesAppUrl), offline: true };
   }
 
@@ -229,10 +232,12 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   try {
     data = await res.json() as Record<string, unknown>;
   } catch {
+    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
     return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
   }
 
   if (res.status === 202 && data.jobId) {
+    recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
     return {
       async: true,
       pending: true,
@@ -241,11 +246,14 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   }
 
   if (!res.ok) {
+    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
     const hint = data.draftNoInvoice
       ? ` — DRAFT ${data.draftNoInvoice} ada di sales.app, post manual jika perlu`
       : '';
     return { error: `${data.error || `Sales.app ${res.status}`}${hint}`, draftNoInvoice: data.draftNoInvoice };
   }
+
+  recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
 
   data = normalizeSalesGrnResponse(data);
 

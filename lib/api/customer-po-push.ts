@@ -12,6 +12,7 @@ import {
   summarizeVendorNoSo,
 } from '@/lib/api/customer-po-so-extract';
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
+import { recordIntegrationHold } from '@/lib/api/erp-hotpath-metrics';
 import type { JsonObject } from '@/types/json';
 
 const VENDOR_PUSH_RETRIES = 1;
@@ -110,11 +111,18 @@ export async function pushPoGroupToVendor(
   },
 ) {
   const timeoutMs = args.timeoutMs ?? VENDOR_PUSH_TIMEOUT_MS;
+  const holdStarted = Date.now();
   let last = await pushPoGroupOnce(db, { ...args, timeoutMs });
   for (let attempt = 1; attempt < VENDOR_PUSH_RETRIES && last.error && isTimeoutError(last.error); attempt += 1) {
     await sleep(1_500 * attempt);
     last = await pushPoGroupOnce(db, { ...args, timeoutMs });
   }
+  recordIntegrationHold(
+    'inventory',
+    'po_vendor_push',
+    !last.error,
+    Date.now() - holdStarted,
+  );
   return last;
 }
 
