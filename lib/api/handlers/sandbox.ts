@@ -19,6 +19,7 @@ import {
 } from '@/lib/api/sandbox-purge';
 import { enqueueJob, processJobById, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import { shouldProcessJobInline } from '@/lib/api/execution-wave';
+import { runSandboxResetJobById } from '@/lib/api/sandbox-reset-run';
 import type { HandlerContext } from '@/types/api/handler';
 import { parseHandlerBody } from '@/types/api/handler';
 
@@ -132,13 +133,22 @@ export async function handleSandbox({
       payload: { tenantId, includeSales },
     });
 
-    if (shouldProcessJobInline(JOB_TYPES.SANDBOX_RESET)) {
-      after(async () => {
-        const freshDb = await connectToMongo();
+    // Pastikan domain inventory (worker claim) — perbaikan job stale domain=maintenance.
+    await db.collection('bg_jobs').updateOne(
+      { id: jobId, status: { $in: ['PENDING', 'RUNNING'] } },
+      { $set: { domain: 'inventory', updatedAt: new Date() } },
+    );
+
+    // VPS EE-10: jangan andalkan legacy poll. Jalankan di after() + worker race-safe.
+    after(async () => {
+      const freshDb = await connectToMongo();
+      if (shouldProcessJobInline(JOB_TYPES.SANDBOX_RESET)) {
         await processJobById(freshDb, jobId);
-      });
-      scheduleJobProcessing(db, { limit: 1 });
-    }
+        return;
+      }
+      await runSandboxResetJobById(freshDb, jobId);
+    });
+    scheduleJobProcessing(db, { limit: 1 });
 
     return ok({
       jobId,

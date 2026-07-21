@@ -53,7 +53,9 @@ export default function WorkerHealthBanner({ enabled }: { enabled: boolean }) {
         {ageMin != null ? ` (${ageMin} menit)` : ''}
         — {worker.pendingCount ?? 0} job PENDING
         {worker.deadLetterCount ? `, ${worker.deadLetterCount} dead-letter` : ''}
-        . Periksa cron <code className="text-xs">/api/bg-jobs/process</code>.
+        . Di VPS periksa <code className="text-xs">sales-inventory-worker-1</code>
+        {' '}(<code className="text-xs">docker logs</code> / restart); legacy: cron{' '}
+        <code className="text-xs">/api/bg-jobs/process</code>.
       </span>
     </div>
   );
