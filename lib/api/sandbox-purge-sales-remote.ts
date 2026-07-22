@@ -31,6 +31,10 @@ function mapRemoteDb(data: Record<string, unknown>, label: string): SandboxDbRes
   return { label, dbName, counts, summary } as SandboxDbResult & { summary?: unknown };
 }
 
+function hasSandboxCounts(payload: Record<string, unknown>): boolean {
+  return !!payload.counts && typeof payload.counts === 'object';
+}
+
 async function parseRemoteResponse(res: Response): Promise<RemoteOutcome> {
   let data: Record<string, unknown> = {};
   try {
@@ -47,6 +51,14 @@ async function parseRemoteResponse(res: Response): Promise<RemoteOutcome> {
     };
   }
   const payload = (data.result || data) as Record<string, unknown>;
+  // Hindari false-success: HTTP 200 tanpa struktur purge (HTML/proxy/empty).
+  if (!hasSandboxCounts(payload)) {
+    return {
+      ok: false,
+      status: res.status,
+      error: 'Respons sales purge tidak valid (field counts hilang)',
+    };
+  }
   return {
     ok: true,
     result: mapRemoteDb(payload, 'sales'),

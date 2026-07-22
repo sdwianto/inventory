@@ -7,7 +7,30 @@ import type { JsonObject } from '@/types/json';
 
 export const BG_JOB_QUERY_KEY = ['bg-job'] as const;
 
-const TERMINAL = new Set(['DONE', 'FAILED']);
+/** Legacy poll memakai DONE/FAILED; EE job-bus memakai SUCCEEDED/DLQ/CANCELLED. */
+export const BG_JOB_TERMINAL_STATUSES = [
+  'DONE',
+  'FAILED',
+  'SUCCEEDED',
+  'DLQ',
+  'CANCELLED',
+] as const;
+
+export const BG_JOB_TERMINAL = new Set<string>(BG_JOB_TERMINAL_STATUSES);
+
+export function isBgJobTerminal(status: string): boolean {
+  return BG_JOB_TERMINAL.has(String(status || '').toUpperCase());
+}
+
+export function isBgJobSuccess(status: string): boolean {
+  const s = String(status || '').toUpperCase();
+  return s === 'DONE' || s === 'SUCCEEDED';
+}
+
+export function isBgJobFailed(status: string): boolean {
+  const s = String(status || '').toUpperCase();
+  return s === 'FAILED' || s === 'DLQ';
+}
 
 function streamUrl(jobId: string) {
   return `/api/bg-jobs/${encodeURIComponent(jobId)}/stream`;
@@ -42,7 +65,7 @@ function useBgJobStream(jobId: string | null | undefined) {
         setData(parsed);
         queryClient.setQueryData([...BG_JOB_QUERY_KEY, jobId], parsed);
         const status = String(parsed.status || '');
-        if (TERMINAL.has(status)) {
+        if (isBgJobTerminal(status)) {
           setDone(true);
           es.close();
         }
@@ -76,7 +99,7 @@ export function useBgJob(jobId: string | null | undefined) {
     refetchInterval: (query) => {
       if (query.state.error) return false;
       const status = String((stream.data ?? query.state.data)?.status || '');
-      if (TERMINAL.has(status)) return false;
+      if (isBgJobTerminal(status)) return false;
       if (!status || status === 'PENDING' || status === 'RUNNING') return 1000;
       return false;
     },

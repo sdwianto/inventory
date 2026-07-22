@@ -32,7 +32,7 @@ import { fetchDefaultProductUom, primeProductUomsCacheFromProducts } from '@/lib
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { patchPoEstimasiLineOnUomChange } from '@/lib/uom/line-patch';
 import type { ProductUom } from '@/lib/uom/types';
-import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { useBgJob, isBgJobTerminal, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { usePoMutations } from '@/lib/hooks/use-po-mutations';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
@@ -236,11 +236,11 @@ export function useCustomerPoPage() {
   useEffect(() => {
     if (!vendorSyncJob || !vendorSyncJobId) return undefined;
     const status = String(vendorSyncJob.status || '');
-    if (status !== 'DONE' && status !== 'FAILED') return undefined;
+    if (!isBgJobTerminal(status)) return undefined;
 
     // Defer supaya setState tidak sinkron di dalam effect (react-hooks/set-state-in-effect).
     const t = setTimeout(() => {
-      if (status === 'DONE') {
+      if (isBgJobSuccess(status)) {
         const result = asObject(vendorSyncJob.result);
         const syncedRows = asArray(result.synced) as JsonObject[];
         if (syncedRows.length > 0) {

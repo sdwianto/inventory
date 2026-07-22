@@ -4,11 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
 import type { JsonObject } from '@/types/json';
-import { BG_JOB_QUERY_KEY, jobProgressMessage } from '@/lib/hooks/use-bg-job';
+import { BG_JOB_QUERY_KEY, jobProgressMessage, isBgJobTerminal } from '@/lib/hooks/use-bg-job';
 
 export const CATALOG_JOB_QUERY_KEY = ['integrations', 'catalog-job'] as const;
-
-const TERMINAL = new Set(['DONE', 'FAILED']);
 
 function streamUrl(jobId: string) {
   return `/api/integrations/jobs/${encodeURIComponent(jobId)}/stream`;
@@ -42,7 +40,7 @@ function useCatalogJobStream(jobId: string | null | undefined) {
         queryClient.setQueryData([...CATALOG_JOB_QUERY_KEY, jobId], parsed);
         queryClient.setQueryData([...BG_JOB_QUERY_KEY, jobId], parsed);
         const status = String(parsed.status || '');
-        if (TERMINAL.has(status)) {
+        if (isBgJobTerminal(status)) {
           setDone(true);
           es.close();
         }
@@ -71,6 +69,7 @@ export function useCatalogSyncJob(jobId: string | null | undefined) {
     enabled: !!jobId && stream.streamFailed,
     refetchInterval: (query) => {
       const status = String(query.state.data?.status || '');
+      if (isBgJobTerminal(status)) return false;
       if (status === 'PENDING' || status === 'RUNNING') return 2000;
       return false;
     },

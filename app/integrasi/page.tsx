@@ -9,6 +9,7 @@ import { str, num } from '@/types/json';
 import { getUser, syncSessionUser } from '@/lib/auth-client';
 import type { SessionUser } from '@/types/auth';
 import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
+import { BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
@@ -70,8 +71,8 @@ export default function IntegrasiPage() {
   }, [probeStatus, refetchProbe]);
 
   const catalogJobStatus = jobData && activeJobId ? String(jobData.status || '') : null;
-  useOnceTerminalEffect(activeJobId, jobData, catalogJobStatus, ['DONE', 'FAILED'], (status) => {
-    if (status === 'DONE') {
+  useOnceTerminalEffect(activeJobId, jobData, catalogJobStatus, BG_JOB_TERMINAL_STATUSES, (status) => {
+    if (isBgJobSuccess(status)) {
       const result = (jobData?.result || {}) as JsonObject;
       toast.success(`Sync selesai — ${num(result.created)} baru, ${num(result.updated)} diperbarui`);
       window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: result }));

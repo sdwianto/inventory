@@ -115,6 +115,9 @@ export type SandboxDbResult = {
   label: string;
   dbName: string;
   counts: Record<string, CollectionCount | StockResetInfo | AssetResetInfo>;
+  /** remote = via sales.app; mongo = langsung ke SALES_DB_NAME; remote+mongo = keduanya */
+  purgeMode?: 'remote' | 'mongo' | 'remote+mongo';
+  warning?: string;
 };
 
 type StockResetInfo =
@@ -288,28 +291,66 @@ async function previewSalesPurge(
   client: MongoClient,
   tenantId?: string,
 ): Promise<SandboxDbResult> {
+  let remoteWarning: string | undefined;
+  let remoteResult: SandboxDbResult | null = null;
+
   if (salesRemotePurgeConfigured()) {
     const remote = await previewSalesSandboxRemote(tenantId);
-    if (remote?.ok) return remote.result;
-    if (remote && !remote.notFound && remote.status !== 0) {
-      throw new Error(remote.error);
+    if (remote?.ok) {
+      remoteResult = remote.result;
+    } else if (remote?.error) {
+      remoteWarning = remote.error;
     }
   }
-  return purgeSalesLocal(client, tenantId, false);
+
+  const local = await purgeSalesLocal(client, tenantId, false);
+  const remoteDocs = remoteResult ? summarizeSandboxCounts(remoteResult).documents : 0;
+  const localDocs = summarizeSandboxCounts(local).documents;
+
+  // Tampilkan sumber yang punya data lebih banyak agar preview tidak “kosong palsu”.
+  if (remoteResult && remoteDocs >= localDocs) {
+    return {
+      ...remoteResult,
+      purgeMode: 'remote',
+      warning: remoteWarning,
+    };
+  }
+  return {
+    ...local,
+    purgeMode: remoteResult ? 'remote+mongo' : 'mongo',
+    warning: remoteWarning,
+  };
 }
 
+/**
+ * Purge sales harus reliable di VPS (shared mongo).
+ * Remote HTTP saja bisa false-success / gagal diam-diam — selalu ikuti purge mongo lokal.
+ */
 async function executeSalesPurge(
   client: MongoClient,
   tenantId?: string,
 ): Promise<SandboxDbResult> {
+  let remoteWarning: string | undefined;
+  let remoteOk = false;
+
   if (salesRemotePurgeConfigured()) {
     const remote = await executeSalesSandboxRemote(tenantId);
-    if (remote?.ok) return remote.result;
-    if (remote && !remote.notFound && remote.status !== 0) {
-      throw new Error(`Purge sales.app gagal: ${remote.error}`);
+    if (remote?.ok) {
+      remoteOk = true;
+    } else if (remote?.error) {
+      remoteWarning = remote.error;
+    } else {
+      remoteWarning = 'Sales remote purge tidak merespons';
     }
   }
-  return purgeSalesLocal(client, tenantId, true);
+
+  // Authoritative: hapus transaksi di SALES_DB_NAME lewat Mongo yang sama.
+  const local = await purgeSalesLocal(client, tenantId, true);
+  return {
+    ...local,
+    purgeMode: remoteOk ? 'remote+mongo' : 'mongo',
+    warning: remoteWarning,
+  };
 }
 
 export async function previewSandboxPurge(
@@ -341,17 +382,29 @@ export async function executeSandboxPurge(
   const { tenantId, includeSales = true, preserveBgJobIds } = options;
   const purgeOpts = preserveBgJobIds?.length ? { preserveBgJobIds } : undefined;
 
-  const [inventory, sales] = await Promise.all([
-    purgeSandboxDatabase(
-      inventoryDb,
-      'inventory',
-      inventoryDb.databaseName,
-      tenantId,
-      true,
-      purgeOpts,
-    ),
-    includeSales ? executeSalesPurge(client, tenantId) : Promise.resolve(null),
-  ]);
+  // Sequential: inventory dulu, sales belakangan — error sales tidak menyembunyikan hasil inventory,
+  // dan sales selalu memakai jalur mongo lokal (lihat executeSalesPurge).
+  const inventory = await purgeSandboxDatabase(
+    inventoryDb,
+    'inventory',
+    inventoryDb.databaseName,
+    tenantId,
+    true,
+    purgeOpts,
+  );
+
+  let sales: SandboxDbResult | null = null;
+  if (includeSales) {
+    try {
+      sales = await executeSalesPurge(client, tenantId);
+    } catch (e) {
+      throw new Error(
+        `Inventory sudah di-reset, tetapi purge sales gagal: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  }
 
   return { inventory, sales };
 }
@@ -363,7 +416,7 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
   let documents = 0;
   let collections = 0;
   for (const [name, info] of Object.entries(result.counts)) {
-    if (name === '_stock_reset' || name === '_asset_reset') continue;
+    if (name === '_stock_reset' || name === '_asset_reset' || name === '_sales_purge_meta') continue;
     if ('skipped' in info && info.skipped) continue;
     if ('dryRun' in info && 'before' in info) {
       documents += info.before;

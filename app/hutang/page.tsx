@@ -20,7 +20,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useNavBadges } from '@/lib/hooks/use-nav-badges';
 import { useHutangPageRefresh } from '@/lib/hooks/use-vendor-hutang';
 import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
-import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
+import { useBgJob, jobProgressMessage, BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -103,8 +103,8 @@ export default function HutangVendorPage() {
   }, [debouncedRefresh]);
 
   const syncJobStatus = syncJob && activeSyncJobId ? String(syncJob.status || '') : null;
-  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, ['DONE', 'FAILED'], (status) => {
-    if (status === 'DONE') {
+  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, BG_JOB_TERMINAL_STATUSES, (status) => {
+    if (isBgJobSuccess(status)) {
       const data = asObject(syncJob?.result);
       if (data.skipped) {
         toast.info(String(data.error || 'Sync dilewati'));

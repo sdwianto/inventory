@@ -6,6 +6,7 @@ import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { queryKeys } from '@/lib/query-keys';
 import { invalidateDashboardAndStockCaches } from '@/lib/hooks/invalidate-operational';
+import { isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import type { SessionUser } from '@/types/auth';
 
 const STORAGE_KEY = 'vendor-catalog-auto-sync-at';
@@ -75,7 +76,7 @@ export function useVendorCatalogAutoSync(user: SessionUser | null) {
       sessionStorage.setItem(STORAGE_KEY, String(Date.now()));
       setJobId(null);
 
-      if (status === 'DONE') {
+      if (isBgJobSuccess(status)) {
         invalidateDashboardAndStockCaches(queryClient);
         void queryClient.invalidateQueries({ queryKey: queryKeys.integrations.all });
         window.dispatchEvent(

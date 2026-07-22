@@ -20,7 +20,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { useGrnInvoiceStatus, useInvalidateGrn } from '@/lib/hooks/use-goods-receipts';
 import { useInvalidateHutangBadges } from '@/lib/hooks/use-nav-badges';
 import { useGrnMutations } from '@/lib/hooks/use-grn-mutations';
-import { useBgJob } from '@/lib/hooks/use-bg-job';
+import { useBgJob, BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -175,8 +175,8 @@ export default function PenerimaanPage() {
   });
 
   const syncJobStatus = syncJob && activeSyncJobId ? String(syncJob.status || '') : null;
-  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, ['DONE', 'FAILED'], (status) => {
-    if (status === 'DONE') {
+  useOnceTerminalEffect(activeSyncJobId, syncJob, syncJobStatus, BG_JOB_TERMINAL_STATUSES, (status) => {
+    if (isBgJobSuccess(status)) {
       const result = asObject(syncJob?.result);
       toast.success(`Sync DO: ${num(result.created)} GRN baru, ${num(result.existing)} sudah ada`);
       if (num(result.grnRefreshed) > 0) {

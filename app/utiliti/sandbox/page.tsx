@@ -13,7 +13,13 @@ import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchJson } from '@/lib/fetch-json';
-import { useBgJob, jobProgressMessage } from '@/lib/hooks/use-bg-job';
+import {
+  useBgJob,
+  jobProgressMessage,
+  isBgJobSuccess,
+  isBgJobFailed,
+  isBgJobTerminal,
+} from '@/lib/hooks/use-bg-job';
 
 type CountInfo =
   | { skipped: true; before: 0; deleted: 0 }
@@ -30,6 +36,8 @@ type DbPreview = {
   dbName: string;
   summary: { documents: number; collections: number };
   counts: Record<string, CountInfo | StockResetPreview | StockResetDone | AssetResetPreview | AssetResetDone>;
+  purgeMode?: 'remote' | 'mongo' | 'remote+mongo';
+  warning?: string;
 };
 
 type PreviewResponse = {
@@ -214,26 +222,29 @@ export default function SandboxResetPage() {
 
   useEffect(() => {
     if (!resetJobId) return undefined;
-    if (resetJobStatus === 'DONE' || resetJobStatus === 'FAILED') {
-      const t = setTimeout(() => {
-        if (resetJobStatus === 'DONE' && resetJob) {
-          const result = resetJob.result as PreviewResponse | undefined;
-          if (result?.inventory) {
-            setPreview(result);
-          }
-          setConfirmPhrase('');
-          setAcknowledge(false);
-          toast.success('Reset sandbox selesai — transaksi dihapus, master data tetap');
-        } else if (resetJobStatus === 'FAILED') {
-          toast.error(String(resetJob?.lastError || 'Reset sandbox gagal'));
+    if (!isBgJobTerminal(resetJobStatus)) return undefined;
+    const t = setTimeout(() => {
+      if (isBgJobSuccess(resetJobStatus) && resetJob) {
+        const result = resetJob.result as PreviewResponse | undefined;
+        if (result?.inventory) {
+          setPreview(result);
         }
-        setResetJobId(null);
-        setResetting(false);
-        void queryClient.invalidateQueries({ queryKey: queryKeys.sandbox.all });
-      }, 0);
-      return () => clearTimeout(t);
-    }
-    return undefined;
+        setConfirmPhrase('');
+        setAcknowledge(false);
+        const salesWarn = result?.sales?.warning;
+        if (salesWarn) {
+          toast.warning(`Reset selesai; sales remote bermasalah (mongo lokal tetap dipurge): ${salesWarn}`);
+        } else {
+          toast.success('Reset sandbox selesai — transaksi inventory + sales dihapus, master data tetap');
+        }
+      } else if (isBgJobFailed(resetJobStatus)) {
+        toast.error(String(resetJob?.lastError || 'Reset sandbox gagal'));
+      }
+      setResetJobId(null);
+      setResetting(false);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sandbox.all });
+    }, 0);
+    return () => clearTimeout(t);
   }, [resetJob, resetJobId, resetJobStatus, queryClient]);
 
   const confirmOk = useMemo(
@@ -373,14 +384,29 @@ export default function SandboxResetPage() {
 
             {preview && (
               <div className="space-y-3">
+                {includeSales && !preview.sales && (
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Preview sales kosong — cek koneksi sales.app / SALES_DB_NAME.
+                  </div>
+                )}
                 {[preview.inventory, preview.sales].filter(Boolean).map((db) => (
                   <div key={db!.label} className="border rounded-lg overflow-hidden">
-                    <div className="bg-slate-50 px-3 py-2 text-sm font-semibold flex justify-between">
-                      <span>{db!.label} ({db!.dbName})</span>
-                      <span className="text-slate-500 font-normal">
+                    <div className="bg-slate-50 px-3 py-2 text-sm font-semibold flex justify-between gap-2">
+                      <span>
+                        {db!.label} ({db!.dbName})
+                        {db!.purgeMode ? (
+                          <span className="ml-2 text-xs font-normal text-slate-500">via {db!.purgeMode}</span>
+                        ) : null}
+                      </span>
+                      <span className="text-slate-500 font-normal shrink-0">
                         {db!.summary.documents} dokumen · {db!.summary.collections} koleksi
                       </span>
                     </div>
+                    {db!.warning ? (
+                      <div className="px-3 py-1.5 text-xs text-amber-800 bg-amber-50 border-b border-amber-100">
+                        {db!.warning}
+                      </div>
+                    ) : null}
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-xs text-slate-500">
