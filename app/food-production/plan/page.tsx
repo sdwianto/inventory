@@ -68,6 +68,25 @@ import { cn } from '@/lib/utils';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
+function parseQtyInput(raw: string | number): number {
+  return Number(String(raw ?? '').trim().replace(',', '.'));
+}
+
+function isWholeQty(n: number): boolean {
+  return Number.isFinite(n) && Math.abs(n - Math.round(n)) < 1e-9;
+}
+
+/** Belanja bahan = bilangan bulat. Spinner: pecahan → ceil/floor dulu, lalu ±1. */
+function stepQtyFromSpinner(prevRaw: string | number, direction: 'up' | 'down'): number {
+  const prev = parseQtyInput(prevRaw);
+  if (!Number.isFinite(prev) || prev < 0) return direction === 'up' ? 1 : 0;
+  if (!isWholeQty(prev)) {
+    return direction === 'up' ? Math.ceil(prev) : Math.max(0, Math.floor(prev));
+  }
+  const whole = Math.round(prev);
+  return direction === 'up' ? whole + 1 : Math.max(0, whole - 1);
+}
+
 interface KitchenOpt {
   id: string;
   nama: string;
@@ -890,7 +909,7 @@ function FoodProductionPlanPageContent() {
         body.excluded = input.excluded;
         if (prev && Number.isFinite(Number(prev.qty))) body.qty = Number(prev.qty);
       } else if (input.qtyText != null) {
-        const qty = Number(String(input.qtyText).replace(',', '.'));
+        const qty = parseQtyInput(input.qtyText);
         if (!Number.isFinite(qty) || qty < 0) {
           toast.error('Qty kebutuhan tidak valid');
           setQtyOverrideDraft((prevDraft) => {
@@ -900,7 +919,8 @@ function FoodProductionPlanPageContent() {
           });
           return;
         }
-        body.qty = qty;
+        // Kebutuhan belanja tidak pecahan — simpan bilangan bulat (ceil agar tidak kurang).
+        body.qty = Math.max(0, Math.ceil(qty - 1e-9));
         if (prev?.excluded) body.excluded = true;
       } else {
         return;
@@ -977,7 +997,8 @@ function FoodProductionPlanPageContent() {
             <Input
               type="number"
               min={0}
-              step="any"
+              step={1}
+              inputMode="numeric"
               className={cn(
                 'h-7 w-[5.5rem] text-right tabular-nums text-xs px-1.5',
                 excluded && 'line-through text-slate-400 bg-slate-50',
@@ -985,10 +1006,27 @@ function FoodProductionPlanPageContent() {
               )}
               disabled={saving || excluded}
               value={draftVal != null ? draftVal : String(displayQty)}
-              onChange={(e) => setQtyOverrideDraft((prev) => ({
-                ...prev,
-                [draftKey]: e.target.value,
-              }))}
+              onChange={(e) => {
+                const prevText = draftVal != null ? draftVal : String(displayQty);
+                const nextText = e.target.value;
+                const prev = parseQtyInput(prevText);
+                const next = parseQtyInput(nextText);
+                // Spinner mouse: dari pecahan meloncat ≥0.5 → bulatkan dulu (bukan +1 ke 4,45).
+                if (
+                  nextText !== ''
+                  && Number.isFinite(prev)
+                  && Number.isFinite(next)
+                  && !isWholeQty(prev)
+                  && Math.abs(next - prev) >= 0.5
+                ) {
+                  const snapped = next > prev
+                    ? stepQtyFromSpinner(prev, 'up')
+                    : stepQtyFromSpinner(prev, 'down');
+                  setQtyOverrideDraft((p) => ({ ...p, [draftKey]: String(snapped) }));
+                  return;
+                }
+                setQtyOverrideDraft((p) => ({ ...p, [draftKey]: nextText }));
+              }}
               onBlur={() => {
                 if (excluded) return;
                 const text = draftVal != null ? draftVal : String(displayQty);
@@ -1004,13 +1042,23 @@ function FoodProductionPlanPageContent() {
                 });
               }}
               onKeyDown={(e) => {
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  const prevText = draftVal != null ? draftVal : String(displayQty);
+                  const snapped = stepQtyFromSpinner(
+                    prevText,
+                    e.key === 'ArrowUp' ? 'up' : 'down',
+                  );
+                  setQtyOverrideDraft((p) => ({ ...p, [draftKey]: String(snapped) }));
+                  return;
+                }
                 if (e.key === 'Enter') {
                   (e.target as HTMLInputElement).blur();
                 }
               }}
               title={excluded
                 ? 'Item dicoret — aktifkan lagi untuk mengubah qty'
-                : 'Edit qty kebutuhan — dipakai ke MRP/PO'}
+                : 'Edit qty kebutuhan (bulat) — dipakai ke MRP/PO'}
             />
             {ing.satuan ? (
               <span className={cn('text-[10px] text-slate-500', excluded && 'line-through')}>
