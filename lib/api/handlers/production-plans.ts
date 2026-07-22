@@ -17,6 +17,7 @@ import {
   isIsoDate,
   normalizeKategoriPorsiList,
   totalTargetPorsi,
+  RECIPE_NEED_BUFFER_PCT,
   type ProductionPlanDoc,
   type ProductionPlanLine,
   type ProductionPlanStatus,
@@ -70,6 +71,8 @@ interface PlanBody extends Record<string, unknown> {
   productNama?: string;
   satuan?: string;
   clear?: boolean;
+  bufferPct?: number | boolean;
+  enabled?: boolean;
 }
 
 async function enrichKitchen(
@@ -441,6 +444,78 @@ export async function handleProductionPlans({
       entityType: 'production_plan',
       entityId: id,
       summary: `${auditBit} pada ${existing.noDokumen}`,
+      ...auditActor(auth),
+    });
+    return ok(projectPlan(saved as Record<string, unknown>));
+  }
+
+  // POST /production-plans/:id/recipe-buffer — { recipeId, enabled?: boolean, bufferPct?: number }
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'recipe-buffer' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const recipeId = String(planBody.recipeId || '').trim();
+    if (!recipeId) return err('recipeId wajib', 400);
+
+    const existing = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!existing) return err('Rencana tidak ditemukan', 404);
+    if (!isPlanEditable(existing.status)) {
+      return err(`Buffer hanya dapat diubah saat Draft/Diajukan (status: ${existing.status})`, 400);
+    }
+
+    const lineHasRecipe = (existing.lines || []).some((l) => {
+      if (l.recipeId === recipeId) return true;
+      return false;
+    });
+    // Juga izinkan recipeId dari menu children — validasi lewat resep master.
+    const recipe = await db.collection(RECIPES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: recipeId }),
+      { projection: { id: 1, kode: 1 } },
+    );
+    if (!recipe && !lineHasRecipe) return err('Resep tidak ditemukan pada rencana', 404);
+
+    let enabled = planBody.enabled;
+    if (enabled === undefined) {
+      if (planBody.bufferPct === false || planBody.bufferPct === 0) enabled = false;
+      else if (planBody.bufferPct === true) enabled = true;
+      else if (planBody.bufferPct != null) enabled = Number(planBody.bufferPct) > 0;
+      else enabled = true;
+    }
+    const pct = enabled === false
+      ? 0
+      : (planBody.bufferPct != null && planBody.bufferPct !== true
+        ? Math.round(Number(planBody.bufferPct))
+        : RECIPE_NEED_BUFFER_PCT);
+    if (enabled !== false && (!Number.isFinite(pct) || pct < 0 || pct > 100)) {
+      return err('bufferPct tidak valid', 400);
+    }
+
+    const nextMap: Record<string, number> = { ...(existing.recipeBufferPct || {}) };
+    if (enabled === false || pct <= 0) delete nextMap[recipeId];
+    else nextMap[recipeId] = pct;
+
+    const now = new Date();
+    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id }),
+      { $set: { recipeBufferPct: nextMap, updatedAt: now } },
+    );
+    const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'PRODUCTION_PLAN_RECIPE_BUFFER',
+      entityType: 'production_plan',
+      entityId: id,
+      summary: enabled === false || pct <= 0
+        ? `Buffer resep ${recipeId} dimatikan pada ${existing.noDokumen}`
+        : `Buffer ${pct}% resep ${recipeId} pada ${existing.noDokumen}`,
       ...auditActor(auth),
     });
     return ok(projectPlan(saved as Record<string, unknown>));

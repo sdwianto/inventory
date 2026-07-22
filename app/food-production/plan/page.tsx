@@ -31,7 +31,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { addDays, format } from 'date-fns';
 import {
   CalendarDays, Plus, Pencil, RefreshCw, Trash2, History,
-  ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight, ShoppingBag,
+  ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight,
+  PanelLeftClose, PanelLeftOpen, ShoppingBag,
   UtensilsCrossed, FileText, Printer,
 } from 'lucide-react';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
@@ -39,7 +40,9 @@ import { MRP_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-requi
 import {
   KATEGORI_PORSI_OPTIONS,
   PLAN_STATUS_LABELS,
+  RECIPE_NEED_BUFFER_PCT,
   kategoriPorsiListLabel,
+  getRecipeBufferPct,
   isPlanEditable,
   materialOverrideKey,
   normalizeKategoriPorsiList,
@@ -153,6 +156,7 @@ interface PlanRow {
   catatan?: string;
   history?: PlanHistoryEntry[];
   materialOverrides?: PlanMaterialOverride[];
+  recipeBufferPct?: Record<string, number>;
   lines: Array<{
     recipeId?: string;
     recipeKode?: string;
@@ -280,6 +284,9 @@ function FoodProductionPlanPageContent() {
   /** Draft input qty kebutuhan: planId::recipeId::productId → string */
   const [qtyOverrideDraft, setQtyOverrideDraft] = useState<Record<string, string>>({});
   const [savingOverrideKey, setSavingOverrideKey] = useState<string | null>(null);
+  const [savingBufferKey, setSavingBufferKey] = useState<string | null>(null);
+  /** Panel Kategori Porsi — collapse agar Rencana Menu lebih lebar. */
+  const [portionPanelOpen, setPortionPanelOpen] = useState(true);
   const [needsOpen, setNeedsOpen] = useState(false);
   const [needsPrinting, setNeedsPrinting] = useState(false);
   const [needsDoc, setNeedsDoc] = useState<{
@@ -875,6 +882,35 @@ function FoodProductionPlanPageContent() {
     ) || null;
   }
 
+  async function toggleRecipeBuffer(row: PlanRow, recipeId: string, enabled: boolean) {
+    if (!canManage || !isPlanEditable(row.status)) return;
+    const key = `${row.id}::${recipeId}`;
+    setSavingBufferKey(key);
+    try {
+      const res = await fetch(`/api/production-plans/${row.id}/recipe-buffer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({
+          recipeId,
+          enabled,
+          bufferPct: enabled ? RECIPE_NEED_BUFFER_PCT : 0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal menyimpan buffer');
+      setRows((prevRows) => prevRows.map((r) => (
+        r.id === row.id ? { ...r, ...data, id: row.id } : r
+      )));
+      toast.success(enabled
+        ? `Buffer ${RECIPE_NEED_BUFFER_PCT}% aktif — kebutuhan bahan ditambah`
+        : 'Buffer dimatikan — kembali ke hitungan resep');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menyimpan buffer');
+    } finally {
+      setSavingBufferKey(null);
+    }
+  }
+
   async function saveMaterialOverride(input: {
     row: PlanRow;
     recipeId: string;
@@ -973,24 +1009,20 @@ function FoodProductionPlanPageContent() {
     const draftVal = qtyOverrideDraft[draftKey];
     const saving = savingOverrideKey === draftKey;
 
-    if (!canEditQty) {
-      return (
-        <td className={cn(
-          'p-2 text-right text-xs tabular-nums font-medium',
-          excluded ? 'text-slate-400 line-through' : 'text-orange-700',
-        )}>
-          {formatNumber(displayQty)}
-          {ing.satuan ? (
-            <span className="ml-1 text-[10px] font-normal text-slate-500">{ing.satuan}</span>
-          ) : null}
-          {!excluded && hasQtyOverride && (
-            <span className="ml-1 block text-[9px] font-normal text-amber-700">diubah</span>
-          )}
-        </td>
-      );
-    }
-
-    return (
+    const qtyCell = !canEditQty ? (
+      <td className={cn(
+        'p-2 text-right text-xs tabular-nums font-medium',
+        excluded ? 'text-slate-400 line-through' : 'text-orange-700',
+      )}>
+        {formatNumber(displayQty)}
+        {ing.satuan ? (
+          <span className="ml-1 text-[10px] font-normal text-slate-500">{ing.satuan}</span>
+        ) : null}
+        {!excluded && hasQtyOverride && (
+          <span className="ml-1 block text-[9px] font-normal text-amber-700">diubah</span>
+        )}
+      </td>
+    ) : (
       <td className="p-2 text-right" onClick={(e) => e.stopPropagation()}>
         <div className="inline-flex flex-col items-end gap-0.5">
           <div className="inline-flex items-center gap-1">
@@ -1085,6 +1117,14 @@ function FoodProductionPlanPageContent() {
         </div>
       </td>
     );
+
+    return (
+      <Fragment>
+        {/* Kolom Buffer hanya di baris resep — sel kosong agar qty sejajar kolom Porsi */}
+        <td className="p-2" aria-hidden />
+        {qtyCell}
+      </Fragment>
+    );
   }
 
   function renderExcludeCheckbox(input: {
@@ -1167,6 +1207,7 @@ function FoodProductionPlanPageContent() {
           ? p.kategoriPorsiList
           : (p.kategoriPorsi ? [p.kategoriPorsi] : []),
         materialOverrides: p.materialOverrides,
+        recipeBufferPct: p.recipeBufferPct,
         lines: (p.lines || []).map((l) => ({
           recipeId: l.recipeId,
           recipeKode: l.recipeKode,
@@ -1469,56 +1510,94 @@ function FoodProductionPlanPageContent() {
         canCreate={canManage}
       />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(220px,280px)_1fr]">
-        <div className="bg-white border rounded-xl p-3 shadow-sm lg:max-w-[280px]">
-          <h2 className="font-semibold text-sm mb-1">Kategori Porsi</h2>
-          <p className="text-[11px] text-slate-500 mb-1">
-            {formatPlanDateLabel(selectedDate)}
-          </p>
-          <p className="text-[11px] text-slate-500 mb-3">
-            Acuan manual per tanggal{scopeKitchenId ? '' : ' — pilih dapur dulu'}.
-            Dipakai saat buat rencana.
-          </p>
-          <ul className="space-y-1.5">
-            {KATEGORI_PORSI_OPTIONS.map((opt) => (
-              <li
-                key={opt.value}
-                className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5"
+      <div className={cn(
+        'grid gap-4',
+        portionPanelOpen
+          ? 'lg:grid-cols-[minmax(220px,280px)_1fr]'
+          : 'lg:grid-cols-[auto_1fr]',
+      )}>
+        {portionPanelOpen ? (
+          <div className="bg-white border rounded-xl p-3 shadow-sm lg:max-w-[280px] relative">
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <h2 className="font-semibold text-sm">Kategori Porsi</h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 shrink-0"
+                title="Sembunyikan panel Kategori Porsi"
+                onClick={() => setPortionPanelOpen(false)}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium text-slate-800 leading-snug">{opt.label}</div>
-                  {opt.hint ? (
-                    <div className="text-[10px] text-slate-500 leading-snug">{opt.hint}</div>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Input
-                    type="number"
-                    min={0}
-                    step={1}
-                    disabled={!canManage || !scopeKitchenId || savingPortion}
-                    className="h-7 w-[4.5rem] px-1.5 text-right text-sm font-semibold tabular-nums text-orange-700"
-                    value={portionDraft[opt.value]}
-                    onChange={(e) => setPortionDraft((prev) => ({
-                      ...prev,
-                      [opt.value]: e.target.value,
-                    }))}
-                    onBlur={() => {
-                      const n = Math.max(0, Math.floor(Number(portionDraft[opt.value]) || 0));
-                      const next = { ...portionTargets, [opt.value]: n };
-                      if (n === portionTargets[opt.value]) return;
-                      void savePortionTargets(next);
-                    }}
-                    aria-label={`Porsi ${opt.label}`}
-                  />
-                  <span className="text-[10px] text-slate-500 w-8">porsi</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+                <PanelLeftClose className="h-4 w-4" />
+              </Button>
+            </div>
+            <p className="text-[11px] text-slate-500 mb-1">
+              {formatPlanDateLabel(selectedDate)}
+            </p>
+            <p className="text-[11px] text-slate-500 mb-3">
+              Acuan manual per tanggal{scopeKitchenId ? '' : ' — pilih dapur dulu'}.
+              Dipakai saat buat rencana.
+            </p>
+            <ul className="space-y-1.5">
+              {KATEGORI_PORSI_OPTIONS.map((opt) => (
+                <li
+                  key={opt.value}
+                  className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-slate-800 leading-snug">{opt.label}</div>
+                    {opt.hint ? (
+                      <div className="text-[10px] text-slate-500 leading-snug">{opt.hint}</div>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      disabled={!canManage || !scopeKitchenId || savingPortion}
+                      className="h-7 w-[4.5rem] px-1.5 text-right text-sm font-semibold tabular-nums text-orange-700"
+                      value={portionDraft[opt.value]}
+                      onChange={(e) => setPortionDraft((prev) => ({
+                        ...prev,
+                        [opt.value]: e.target.value,
+                      }))}
+                      onBlur={() => {
+                        const n = Math.max(0, Math.floor(Number(portionDraft[opt.value]) || 0));
+                        const next = { ...portionTargets, [opt.value]: n };
+                        if (n === portionTargets[opt.value]) return;
+                        void savePortionTargets(next);
+                      }}
+                      aria-label={`Porsi ${opt.label}`}
+                    />
+                    <span className="text-[10px] text-slate-500 w-8">porsi</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div className="bg-white border rounded-xl shadow-sm p-1.5 flex lg:flex-col items-center gap-1 self-start">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              title="Tampilkan panel Kategori Porsi"
+              onClick={() => setPortionPanelOpen(true)}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </Button>
+            <span
+              className="hidden lg:inline text-[10px] font-medium text-slate-500 writing-mode-vertical"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+            >
+              Kategori Porsi
+            </span>
+          </div>
+        )}
 
-        <div className="bg-white border rounded-xl p-4 shadow-sm flex flex-col min-h-[320px]">
+        <div className="bg-white border rounded-xl p-4 shadow-sm flex flex-col min-h-[320px] min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div>
               <h2 className="font-semibold">{listTitle}</h2>
@@ -1628,6 +1707,7 @@ function FoodProductionPlanPageContent() {
                               <th className="text-left p-2 font-medium w-8" />
                               <th className="text-left p-2 font-medium">Kode</th>
                               <th className="text-left p-2 font-medium">Resep</th>
+                              <th className="text-center p-2 font-medium whitespace-nowrap">Buffer {RECIPE_NEED_BUFFER_PCT}%</th>
                               <th className="text-right p-2 font-medium">Porsi</th>
                             </tr>
                           </thead>
@@ -1643,6 +1723,9 @@ function FoodProductionPlanPageContent() {
                                 const rKey = recipeExpandKey(row.id, '_', l.recipeId);
                                 const recipeOpen = !!expandedRecipeKeys[rKey];
                                 const recipe = recipesById[l.recipeId];
+                                const bufferPct = getRecipeBufferPct(row.recipeBufferPct, l.recipeId);
+                                const bufferOn = bufferPct > 0;
+                                const bufferBusy = savingBufferKey === `${row.id}::${l.recipeId}`;
                                 const ingredients = recipe
                                   ? recipeIngredientNeeds({
                                     recipe: {
@@ -1654,6 +1737,7 @@ function FoodProductionPlanPageContent() {
                                     recipePerMenuPorsi: 1,
                                     kategoriPorsiList: lineKp,
                                     acuanByKategori: portionTargets,
+                                    bufferPct,
                                   })
                                   : [];
                                 return (
@@ -1679,6 +1763,26 @@ function FoodProductionPlanPageContent() {
                                             {ingredients.length} bahan
                                           </span>
                                         )}
+                                        {bufferOn && (
+                                          <span className="ml-2 text-[10px] text-amber-700 font-medium">
+                                            +{bufferPct}%
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td
+                                        className="p-2 text-center"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          className="h-3.5 w-3.5 accent-amber-600"
+                                          checked={bufferOn}
+                                          disabled={!canManage || !isPlanEditable(row.status) || bufferBusy}
+                                          title={`Buffer ${RECIPE_NEED_BUFFER_PCT}% — tambah kebutuhan tiap bahan`}
+                                          onChange={(e) => {
+                                            void toggleRecipeBuffer(row, l.recipeId!, e.target.checked);
+                                          }}
+                                        />
                                       </td>
                                       <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
                                     </tr>
@@ -1758,14 +1862,14 @@ function FoodProductionPlanPageContent() {
                                     })}
                                     {recipeOpen && !recipe && (
                                       <tr className="border-t bg-white">
-                                        <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                        <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
                                           Detail resep belum termuat
                                         </td>
                                       </tr>
                                     )}
                                     {recipeOpen && recipe && ingredients.length === 0 && (
                                       <tr className="border-t bg-white">
-                                        <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                        <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
                                           Resep belum punya baris bahan
                                         </td>
                                       </tr>
@@ -1801,6 +1905,7 @@ function FoodProductionPlanPageContent() {
                                         </span>
                                       )}
                                     </td>
+                                    <td className="p-2" />
                                     <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
                                   </tr>
                                   {menuOpen && hasChildren && children.map((child) => {
@@ -1808,6 +1913,9 @@ function FoodProductionPlanPageContent() {
                                       recipeExpandKey(row.id, l.menuId || '', child.recipeId)
                                     ];
                                     const recipe = recipesById[child.recipeId];
+                                    const bufferPct = getRecipeBufferPct(row.recipeBufferPct, child.recipeId);
+                                    const bufferOn = bufferPct > 0;
+                                    const bufferBusy = savingBufferKey === `${row.id}::${child.recipeId}`;
                                     const ingredients = recipe
                                       ? recipeIngredientNeeds({
                                         recipe: {
@@ -1819,6 +1927,7 @@ function FoodProductionPlanPageContent() {
                                         recipePerMenuPorsi: Number(child.porsi) || 1,
                                         kategoriPorsiList: lineKp,
                                         acuanByKategori: portionTargets,
+                                        bufferPct,
                                       })
                                       : [];
                                     return (
@@ -1853,7 +1962,27 @@ function FoodProductionPlanPageContent() {
                                                   {ingredients.length} bahan
                                                 </span>
                                               )}
+                                              {bufferOn && (
+                                                <span className="ml-2 text-[10px] text-amber-700 font-medium">
+                                                  +{bufferPct}%
+                                                </span>
+                                              )}
                                             </div>
+                                          </td>
+                                          <td
+                                            className="p-2 text-center"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              className="h-3.5 w-3.5 accent-amber-600"
+                                              checked={bufferOn}
+                                              disabled={!canManage || !isPlanEditable(row.status) || bufferBusy}
+                                              title={`Buffer ${RECIPE_NEED_BUFFER_PCT}% — tambah kebutuhan tiap bahan`}
+                                              onChange={(e) => {
+                                                void toggleRecipeBuffer(row, child.recipeId, e.target.checked);
+                                              }}
+                                            />
                                           </td>
                                           <td className="p-2 text-right text-muted-foreground tabular-nums">
                                             {Number(l.targetPorsi) * Number(child.porsi || 1)}
@@ -1935,14 +2064,14 @@ function FoodProductionPlanPageContent() {
                                         })}
                                         {recipeOpen && !recipe && (
                                           <tr className="border-t bg-white">
-                                            <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                            <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
                                               Detail resep belum termuat
                                             </td>
                                           </tr>
                                         )}
                                         {recipeOpen && recipe && ingredients.length === 0 && (
                                           <tr className="border-t bg-white">
-                                            <td colSpan={4} className="p-2 pl-14 text-xs text-muted-foreground">
+                                            <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
                                               Resep belum punya baris bahan
                                             </td>
                                           </tr>
@@ -1952,7 +2081,7 @@ function FoodProductionPlanPageContent() {
                                   })}
                                   {menuOpen && !hasChildren && (
                                     <tr className="border-t bg-slate-50/80">
-                                      <td colSpan={4} className="p-2 pl-10 text-xs text-muted-foreground">
+                                      <td colSpan={5} className="p-2 pl-10 text-xs text-muted-foreground">
                                         Menu belum punya resep anak
                                       </td>
                                     </tr>

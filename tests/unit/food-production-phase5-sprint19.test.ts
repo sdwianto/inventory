@@ -4,6 +4,8 @@ import {
   normalizeServicePointJenis,
   normalizeServicePointKode,
   normalizeKapasitasPorsi,
+  normalizeJamKirim,
+  normalizeServicePointDrops,
   resolvePenerimaManfaat,
   sumPorsiByKategori,
 } from '@/lib/food-production/service-point';
@@ -16,6 +18,10 @@ import {
   applyDistLineActuals,
   applyDistSettleLines,
   collapseSourceToFoodTray,
+  buildDistributionArmadas,
+  buildDistributionLoadings,
+  resolveDistLoadings,
+  splitStopIntoDrops,
   FOOD_TRAY_ID,
   FOOD_TRAY_LABEL,
   DIST_UI_STATUS_NEXT,
@@ -25,6 +31,145 @@ import {
 describe('food-production phase 5 sprint 19', () => {
   it('registers DST doc prefix', () => {
     expect(FP_DOC_PREFIX[FP_DOC_TYPES.DISTRIBUTION_ORDER]).toBe('DST');
+  });
+
+  it('normalizes jam makan HH:mm', () => {
+    expect(normalizeJamKirim('7:30')).toBe('07:30');
+    expect(normalizeJamKirim('')).toBeUndefined();
+    expect(normalizeJamKirim('25:00')).toEqual({ error: 'Jam makan tidak valid' });
+  });
+
+  it('normalizes service point drops', () => {
+    const drops = normalizeServicePointDrops([
+      { label: 'Jl. Lawu', jamKirim: '8:50', qtyHint: 30 },
+      { id: 'd2', label: 'Jl. Adi Santoso', jamKirim: '09:00', qtyHint: 46 },
+    ]);
+    expect('error' in (drops as object)).toBe(false);
+    if ('error' in (drops as object)) return;
+    expect(drops).toHaveLength(2);
+    expect(drops[0].jamKirim).toBe('08:50');
+    expect(drops[1].qtyHint).toBe(46);
+  });
+
+  it('builds armada routes ordered by jam makan with kategori totals', () => {
+    const lines = allocatePorsiAcrossPoints({
+      items: [{ menuId: 'm1', menuNama: 'Tray', qtyPorsi: 100 }],
+      servicePoints: [
+        {
+          id: 'a', nama: 'A', kapasitasPorsi: 60, jamKirim: '08:00',
+          porsiByKategori: { PORSI_BESAR: 40, PORSI_KECIL: 20 },
+        },
+        {
+          id: 'b', nama: 'B', kapasitasPorsi: 40, jamKirim: '07:00',
+          porsiByKategori: { PORSI_BESAR: 10, POSYANDU_BALITA: 30 },
+        },
+      ],
+    });
+    expect('error' in (lines as object)).toBe(false);
+    if ('error' in (lines as object)) return;
+
+    const built = buildDistributionArmadas({
+      assignments: [{
+        armadaId: 'arm1',
+        armadaKode: 'ARM-01',
+        armadaNama: 'Box 1',
+        servicePointIds: ['a', 'b'],
+      }],
+      lines,
+    });
+    expect('error' in (built as object)).toBe(false);
+    if ('error' in (built as object)) return;
+    expect(built.armadas).toHaveLength(1);
+    expect(built.armadas[0].stops.map((s) => s.servicePointId)).toEqual(['b', 'a']);
+    expect(built.armadas[0].stops[0].jamKirim).toBe('07:00');
+    expect(built.armadas[0].qtyPorsiTotal).toBe(100);
+    expect(built.armadas[0].porsiByKategori.PORSI_BESAR).toBeGreaterThan(0);
+    expect(built.lines.every((l) => l.armadaId === 'arm1')).toBe(true);
+  });
+
+  it('builds loadings with two waves and sub-drops', () => {
+    const lines = allocatePorsiAcrossPoints({
+      items: [{ menuId: 'm1', menuNama: 'Tray', qtyPorsi: 200 }],
+      servicePoints: [
+        {
+          id: 'a', nama: 'SD A', kapasitasPorsi: 100, jamKirim: '07:10',
+          porsiByKategori: { PORSI_KECIL: 40, PORSI_BESAR: 60 },
+        },
+        {
+          id: 'b', nama: 'SMP Muh', kapasitasPorsi: 100, jamKirim: '08:40',
+          porsiByKategori: { PORSI_BESAR: 100 },
+        },
+      ],
+    });
+    expect('error' in (lines as object)).toBe(false);
+    if ('error' in (lines as object)) return;
+
+    const built = buildDistributionLoadings({
+      loadings: [
+        {
+          urutan: 1,
+          label: 'Loading pertama',
+          jamStart: '06:30',
+          jamMax: '07:00',
+          armadas: [{
+            armadaId: 'bumble',
+            armadaNama: 'Bumblebee',
+            servicePointIds: ['a'],
+          }],
+        },
+        {
+          urutan: 2,
+          label: 'Loading kedua',
+          jamStart: '07:30',
+          jamMax: '08:00',
+          armadas: [{
+            armadaId: 'suzuki',
+            armadaNama: 'Suzuki',
+            servicePointIds: ['b'],
+          }],
+        },
+      ],
+      lines,
+      dropsByServicePointId: {
+        b: [
+          { dropId: 'd1', label: 'Jl. Lawu', jamKirim: '08:50', qtyHint: 30 },
+          { dropId: 'd2', label: 'Jl. Adi Santoso', jamKirim: '09:00', qtyHint: 46 },
+        ],
+      },
+    });
+    expect('error' in (built as object)).toBe(false);
+    if ('error' in (built as object)) return;
+    expect(built.loadings).toHaveLength(2);
+    expect(built.loadings[0].jamStart).toBe('06:30');
+    expect(built.loadings[0].armadas[0].qtyPorsiTotal).toBe(100);
+    expect(built.loadings[0].armadas[0].porsiByKategori.PORSI_KECIL).toBeGreaterThan(0);
+    const stopB = built.loadings[1].armadas[0].stops[0];
+    expect(stopB.drops).toHaveLength(2);
+    expect(stopB.drops!.reduce((s, d) => s + d.qtyPorsi, 0)).toBe(stopB.qtyPorsi);
+    expect(summarizeDistLines(built.lines, { loadings: built.loadings }).loadingCount).toBe(2);
+  });
+
+  it('splits stop into drops by qtyHint and resolves legacy armadas', () => {
+    const drops = splitStopIntoDrops({
+      qtyPorsi: 76,
+      porsiByKategori: { PORSI_BESAR: 76 },
+      drops: [
+        { dropId: 'd1', label: 'Jl. Lawu', jamKirim: '08:50', qtyHint: 30 },
+        { dropId: 'd2', label: 'Jl. Adi', jamKirim: '09:00', qtyHint: 46 },
+      ],
+    });
+    expect(drops.map((d) => d.qtyPorsi)).toEqual([30, 46]);
+    const resolved = resolveDistLoadings({
+      armadas: [{
+        armadaId: 'x',
+        stops: [],
+        porsiByKategori: {},
+        qtyPorsiTotal: 10,
+        servicePointCount: 1,
+      }],
+    });
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].label).toBe('Loading 1');
   });
 
   it('normalizes service point fields', () => {

@@ -22,11 +22,17 @@ import {
   applyDistSettleLines,
   movementQtyForStatus,
   allDistLinesSettled,
+  buildDistributionLoadings,
+  scalePorsiByKategoriForQty,
   type DistributionOrderDoc,
   type DistributionStatus,
   type DistributionLine,
+  type DistributionArmada,
+  type DistributionLoading,
+  type DistLoadingInput,
 } from '@/lib/food-production/distribution';
 import { SERVICE_POINTS_COLLECTION, type ServicePointDoc } from '@/lib/food-production/service-point';
+import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/food-production/armada';
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
@@ -54,6 +60,10 @@ interface DistBody extends Record<string, unknown> {
   productionPlanId?: string;
   productionResultId?: string;
   servicePointIds?: unknown;
+  /** Gelombang loading → armada → titik (jadwal lapangan). */
+  loadings?: unknown;
+  /** @deprecated gunakan loadings */
+  armadaAssignments?: unknown;
   lines?: unknown;
   catatan?: string;
   status?: string;
@@ -364,6 +374,8 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           kode: p.kode,
           nama: p.nama,
           kapasitasPorsi: p.kapasitasPorsi,
+          jamKirim: p.jamKirim,
+          porsiByKategori: p.porsiByKategori,
         })),
       });
       if ('error' in allocated) return err(allocated.error, 400);
@@ -372,25 +384,144 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       return err('Kirim lines atau servicePointIds untuk alokasi', 400);
     }
 
-    // Pastikan kapasitas titik tersimpan di tiap baris (untuk pelacakan actual vs kapasitas).
+    // Pastikan kapasitas / jamKirim / kategori tersimpan di tiap baris.
     {
       const spIds = [...new Set(lines.map((l) => l.servicePointId).filter(Boolean))];
       if (spIds.length) {
         const spDocs = await db.collection(SERVICE_POINTS_COLLECTION)
           .find(withTenantFilter(scopeAuth, { id: { $in: spIds } }))
-          .project({ id: 1, kapasitasPorsi: 1 })
-          .toArray() as unknown as Pick<ServicePointDoc, 'id' | 'kapasitasPorsi'>[];
-        const kapById = new Map(spDocs.map((p) => [p.id, p.kapasitasPorsi]));
-        lines = lines.map((l) => ({
-          ...l,
-          kapasitasPorsi: l.kapasitasPorsi ?? (
-            Number.isFinite(Number(kapById.get(l.servicePointId)))
-            && Number(kapById.get(l.servicePointId)) > 0
-              ? Number(kapById.get(l.servicePointId))
+          .project({ id: 1, kapasitasPorsi: 1, jamKirim: 1, porsiByKategori: 1 })
+          .toArray() as unknown as Pick<
+            ServicePointDoc,
+            'id' | 'kapasitasPorsi' | 'jamKirim' | 'porsiByKategori'
+          >[];
+        const byId = new Map(spDocs.map((p) => [p.id, p]));
+        lines = lines.map((l) => {
+          const sp = byId.get(l.servicePointId);
+          const kapasitasPorsi = l.kapasitasPorsi ?? (
+            Number.isFinite(Number(sp?.kapasitasPorsi)) && Number(sp?.kapasitasPorsi) > 0
+              ? Number(sp?.kapasitasPorsi)
               : undefined
-          ),
+          );
+          return {
+            ...l,
+            kapasitasPorsi,
+            jamKirim: l.jamKirim || sp?.jamKirim,
+            porsiByKategori: l.porsiByKategori || scalePorsiByKategoriForQty(
+              sp?.porsiByKategori,
+              l.qtyPorsi,
+              kapasitasPorsi,
+            ),
+          };
+        });
+      }
+    }
+
+    let armadas: DistributionArmada[] | undefined;
+    let loadings: DistributionLoading[] | undefined;
+
+    const hasLoadings = Array.isArray(distBody.loadings) && distBody.loadings.length > 0;
+    const hasLegacyArmada = Array.isArray(distBody.armadaAssignments)
+      && distBody.armadaAssignments.length > 0;
+
+    if (hasLoadings || hasLegacyArmada) {
+      const loadingInputs: DistLoadingInput[] = hasLoadings
+        ? (distBody.loadings as Array<Record<string, unknown>>).map((L, idx) => ({
+          urutan: Number(L.urutan) > 0 ? Number(L.urutan) : idx + 1,
+          label: L.label != null ? String(L.label) : undefined,
+          jamStart: String(L.jamStart || ''),
+          jamMax: String(L.jamMax || ''),
+          armadas: (Array.isArray(L.armadas) ? L.armadas : []).map((a) => {
+            const row = a as Record<string, unknown>;
+            return {
+              armadaId: String(row.armadaId || '').trim(),
+              servicePointIds: Array.isArray(row.servicePointIds)
+                ? row.servicePointIds.map(String)
+                : [],
+              stopDrops: row.stopDrops && typeof row.stopDrops === 'object'
+                ? row.stopDrops as DistLoadingInput['armadas'][0]['stopDrops']
+                : undefined,
+            };
+          }),
+        }))
+        : [{
+          urutan: 1,
+          label: 'Loading pertama',
+          jamStart: '00:00',
+          jamMax: '00:00',
+          armadas: (distBody.armadaAssignments as Array<Record<string, unknown>>).map((a) => ({
+            armadaId: String(a.armadaId || '').trim(),
+            servicePointIds: Array.isArray(a.servicePointIds)
+              ? a.servicePointIds.map(String)
+              : [],
+          })),
+        }];
+
+      const armadaIds = [...new Set(
+        loadingInputs.flatMap((L) => L.armadas.map((a) => a.armadaId)).filter(Boolean),
+      )];
+      if (!armadaIds.length) return err('Minimal satu armada wajib dipilih', 400);
+      const armadaDocs = await db.collection(ARMADAS_COLLECTION)
+        .find(withTenantFilter(scopeAuth, { id: { $in: armadaIds }, aktif: true }))
+        .toArray() as unknown as ArmadaDoc[];
+      if (armadaDocs.length !== armadaIds.length) {
+        return err('Beberapa armada tidak valid / nonaktif', 400);
+      }
+      for (const a of armadaDocs) {
+        if (a.kitchenId && a.kitchenId !== kitchenId) {
+          return err(`Armada "${a.nama}" terikat dapur lain`, 400);
+        }
+      }
+      const byArmada = new Map(armadaDocs.map((a) => [a.id, a]));
+
+      const spIdsForDrops = [...new Set(
+        loadingInputs.flatMap((L) => L.armadas.flatMap((a) => a.servicePointIds)),
+      )];
+      const spDropDocs = spIdsForDrops.length
+        ? await db.collection(SERVICE_POINTS_COLLECTION)
+          .find(withTenantFilter(scopeAuth, { id: { $in: spIdsForDrops } }))
+          .project({ id: 1, drops: 1 })
+          .toArray() as unknown as Array<Pick<ServicePointDoc, 'id' | 'drops'>>
+        : [];
+      const dropsByServicePointId: Record<string, Array<{
+        dropId: string;
+        label: string;
+        jamKirim?: string;
+        qtyHint?: number;
+      }>> = {};
+      for (const sp of spDropDocs) {
+        if (!sp.drops?.length) continue;
+        dropsByServicePointId[sp.id] = sp.drops.map((d) => ({
+          dropId: d.id,
+          label: d.label,
+          jamKirim: d.jamKirim,
+          qtyHint: d.qtyHint,
         }));
       }
+
+      const enrichedInputs: DistLoadingInput[] = loadingInputs.map((L) => ({
+        ...L,
+        armadas: L.armadas.map((a) => {
+          const doc = byArmada.get(a.armadaId);
+          return {
+            ...a,
+            armadaKode: doc?.kode,
+            armadaNama: doc?.nama,
+            platNomor: doc?.platNomor,
+            kapasitasPorsi: doc?.kapasitasPorsi,
+          };
+        }),
+      }));
+
+      const built = buildDistributionLoadings({
+        loadings: enrichedInputs,
+        lines,
+        dropsByServicePointId,
+      });
+      if ('error' in built) return err(built.error, 400);
+      loadings = built.loadings;
+      armadas = built.armadas;
+      lines = built.lines;
     }
 
     // TOCTOU: re-load consumed immediately before insert.
@@ -435,9 +566,11 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       productionResultId,
       productionResultNo,
       lines,
+      ...(loadings?.length ? { loadings } : {}),
+      ...(armadas?.length ? { armadas } : {}),
       status: 'DRAFT',
       history,
-      summary: summarizeDistLines(lines),
+      summary: summarizeDistLines(lines, { armadas, loadings }),
       catatan: createNote || undefined,
       createdAt: now,
       updatedAt: now,

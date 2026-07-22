@@ -16,6 +16,17 @@ export type ServicePointJenis = 'SEKOLAH' | 'POSYANDU' | 'LAINNYA';
 /** Qty penerima manfaat per kategori porsi. */
 export type ServicePointPorsiByKategori = Partial<Record<KategoriPorsi, number>>;
 
+/** Sub-lokasi drop dalam satu titik (contoh: Jl. Lawu, Jl. Adi Santoso). */
+export interface ServicePointDrop {
+  id: string;
+  label: string;
+  /** Jam makan/kirim drop (HH:mm). */
+  jamKirim?: string;
+  /** Petunjuk qty porsi di drop ini (opsional). */
+  qtyHint?: number;
+  catatan?: string;
+}
+
 export interface ServicePointDoc {
   id: string;
   tenantId: string;
@@ -32,12 +43,27 @@ export interface ServicePointDoc {
   kapasitasPorsi?: number;
   /** Rincian penerima manfaat per kategori porsi. */
   porsiByKategori?: ServicePointPorsiByKategori;
+  /**
+   * Jam makan / jam kirim target (HH:mm, lokal dapur).
+   * Label UI lapangan: Jam Makan.
+   */
+  jamKirim?: string;
+  /** Drop points opsional di bawah titik. */
+  drops?: ServicePointDrop[];
   pic?: string;
   picNoTelp?: string;
   aktif: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
+
+/** Label singkat kategori untuk catatan lapangan (PK / PB). */
+export const KATEGORI_PORSI_SHORT: Partial<Record<KategoriPorsi, string>> = {
+  PORSI_KECIL: 'PK',
+  PORSI_BESAR: 'PB',
+  POSYANDU_BUMIL_BUSUI: 'Bumil',
+  POSYANDU_BALITA: 'Balita',
+};
 
 export const SERVICE_POINT_JENIS_LABELS: Record<ServicePointJenis, string> = {
   SEKOLAH: 'Sekolah',
@@ -66,6 +92,70 @@ export function normalizeKapasitasPorsi(raw: unknown): number | undefined {
 export function normalizePicNoTelp(raw: unknown): string | undefined {
   const digits = String(raw || '').replace(/\D/g, '');
   return digits || undefined;
+}
+
+/** Normalize jam makan/kirim ke HH:mm (00–23:59). Kosong → undefined. */
+export function normalizeJamKirim(raw: unknown): string | undefined | { error: string } {
+  if (raw == null || raw === '') return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (!m) return { error: 'Jam makan harus format HH:mm' };
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+    return { error: 'Jam makan tidak valid' };
+  }
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+/** Parse drop points titik layanan. */
+export function normalizeServicePointDrops(
+  raw: unknown,
+): ServicePointDrop[] | { error: string } {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return { error: 'drops harus array' };
+  const out: ServicePointDrop[] = [];
+  const seenLabel = new Set<string>();
+  for (let i = 0; i < raw.length; i++) {
+    const row = raw[i] as Record<string, unknown>;
+    const label = String(row?.label || '').trim();
+    if (!label) return { error: `Drop ${i + 1}: label wajib` };
+    const labelKey = label.toLowerCase();
+    if (seenLabel.has(labelKey)) return { error: `Drop duplikat: ${label}` };
+    seenLabel.add(labelKey);
+    const jam = normalizeJamKirim(row?.jamKirim);
+    if (jam && typeof jam === 'object' && 'error' in jam) {
+      return { error: `Drop "${label}": ${jam.error}` };
+    }
+    let qtyHint: number | undefined;
+    if (row?.qtyHint != null && row.qtyHint !== '') {
+      const n = Number(row.qtyHint);
+      if (!Number.isFinite(n) || n < 0) {
+        return { error: `Drop "${label}": qtyHint tidak valid` };
+      }
+      qtyHint = Math.round(n) || undefined;
+    }
+    const id = String(row?.id || '').trim() || `drop-${i + 1}`;
+    out.push({
+      id,
+      label,
+      jamKirim: jam || undefined,
+      qtyHint,
+      catatan: String(row?.catatan || '').trim() || undefined,
+    });
+  }
+  return out;
+}
+
+/** Urutkan titik berdasarkan jamKirim naik; tanpa jam di akhir. */
+export function compareJamKirim(a?: string | null, b?: string | null): number {
+  const aa = String(a || '').trim();
+  const bb = String(b || '').trim();
+  if (!aa && !bb) return 0;
+  if (!aa) return 1;
+  if (!bb) return -1;
+  return aa.localeCompare(bb);
 }
 
 /** Parse map kategori → qty; abaikan kategori kosong / non-positif. */

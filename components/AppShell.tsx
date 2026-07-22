@@ -16,7 +16,7 @@ import {
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, BadgeCheck, LineChart, LayoutGrid, ClipboardList,
-  PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck,
+  PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck, Car,
   ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -93,7 +93,8 @@ const NAV: NavEntry[] = [
       { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
       { href: '/food-production/transfer', label: 'Transfer Dapur', icon: ArrowLeftRight },
       { href: '/food-production/service-point', label: 'Titik Layanan', icon: MapPinned },
-      { href: '/food-production/distribution', label: 'Distribusi', icon: Truck },
+      { href: '/food-production/armada', label: 'Armada', icon: Car },
+      { href: '/food-production/distribution', label: 'Jadwal Pengiriman', icon: Truck },
       { href: '/food-production/cold-chain', label: 'Cold Chain', icon: Thermometer },
       { href: '/food-production/haccp', label: 'HACCP', icon: ShieldCheck },
       { href: '/food-production/batch', label: 'Batch & Expiry', icon: PackageOpen },
@@ -159,7 +160,7 @@ const FP_OPS_ROUTES = [
   '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
   '/food-production/report', '/food-production/calendar', '/food-production/transfer',
-  '/food-production/service-point', '/food-production/distribution', '/food-production/cold-chain',
+  '/food-production/service-point', '/food-production/armada', '/food-production/distribution', '/food-production/cold-chain',
   '/food-production/haccp', '/food-production/batch', '/food-production/qc',
 ] as const;
 

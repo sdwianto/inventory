@@ -113,6 +113,11 @@ export interface ProductionPlanDoc {
    * Hanya diedit saat Draft/Diajukan — resep master tidak berubah.
    */
   materialOverrides?: PlanMaterialOverride[];
+  /**
+   * Buffer kebutuhan per resep (recipeId → persen).
+   * Contoh: { [recipeId]: 3 } menambah 3% ke qty hitungan resep (bukan override manual).
+   */
+  recipeBufferPct?: Record<string, number>;
   status: ProductionPlanStatus;
   history: DocHistoryEntry[];
   catatan?: string;
@@ -124,6 +129,50 @@ export interface ProductionPlanDoc {
 
 export function materialOverrideKey(recipeId: string, productId: string): string {
   return `${String(recipeId || '').trim()}::${String(productId || '').trim()}`;
+}
+
+/** Buffer standar kebutuhan bahan (UI: Buffer 3%). */
+export const RECIPE_NEED_BUFFER_PCT = 3;
+
+export function getRecipeBufferPct(
+  map: Record<string, number> | null | undefined,
+  recipeId: string | null | undefined,
+): number {
+  const id = String(recipeId || '').trim();
+  if (!id || !map) return 0;
+  const n = Number(map[id]);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(100, Math.round(n));
+}
+
+/** Terapkan buffer persen ke qty hitungan (override manual tidak lewat sini). */
+export function applyRecipeBufferQty(qty: number, bufferPct: number): number {
+  const q = Number(qty) || 0;
+  const pct = Number(bufferPct) || 0;
+  if (!(q > 0) || !(pct > 0)) return q;
+  return q * (1 + pct / 100);
+}
+
+export function normalizeRecipeBufferPct(
+  raw: unknown,
+): Record<string, number> | { error: string } {
+  if (raw == null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'recipeBufferPct harus object' };
+  }
+  const out: Record<string, number> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const recipeId = String(key || '').trim();
+    if (!recipeId) continue;
+    if (val == null || val === '' || val === false || val === 0) continue;
+    const n = val === true ? RECIPE_NEED_BUFFER_PCT : Number(val);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      return { error: `Buffer resep ${recipeId} tidak valid` };
+    }
+    const pct = Math.round(n);
+    if (pct > 0) out[recipeId] = pct;
+  }
+  return out;
 }
 
 export function normalizeMaterialOverrides(

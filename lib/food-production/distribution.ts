@@ -9,6 +9,14 @@
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import { FP_DEFAULT_TRANSITIONS } from '@/lib/food-production/document';
 import { roundQty } from '@/lib/food-production/material-requirement';
+import {
+  KATEGORI_PORSI_OPTIONS,
+  compareJamKirim,
+  normalizeJamKirim,
+  sumPorsiByKategori,
+  type ServicePointPorsiByKategori,
+} from '@/lib/food-production/service-point';
+import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 
 export const DISTRIBUTION_ORDERS_COLLECTION = 'distribution_orders';
 
@@ -25,6 +33,12 @@ export interface DistributionLine {
   servicePointNama?: string;
   /** Kapasitas titik layanan saat packing dibuat. */
   kapasitasPorsi?: number;
+  /** Snapshot jam kirim titik (HH:mm). */
+  jamKirim?: string;
+  /** Snapshot kategori porsi titik, diskalakan ke qtyPorsi bila kapasitas ada. */
+  porsiByKategori?: ServicePointPorsiByKategori;
+  /** Armada yang membawa baris ini (jika di-assign). */
+  armadaId?: string;
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
@@ -46,6 +60,52 @@ export interface DistributionLine {
   notes?: string;
 }
 
+/** Sub-drop dalam satu stop (snapshot dari master titik.drops). */
+export interface DistributionStopDrop {
+  dropId: string;
+  label: string;
+  jamKirim?: string;
+  qtyPorsi: number;
+  porsiByKategori?: ServicePointPorsiByKategori;
+}
+
+/** Satu stop dalam rute armada (urut jam makan). */
+export interface DistributionArmadaStop {
+  urutan: number;
+  servicePointId: string;
+  servicePointKode?: string;
+  servicePointNama?: string;
+  jamKirim?: string;
+  kapasitasPorsi?: number;
+  qtyPorsi: number;
+  porsiByKategori?: ServicePointPorsiByKategori;
+  drops?: DistributionStopDrop[];
+}
+
+/** Armada + rute + ringkasan kategori porsi pada dokumen DST. */
+export interface DistributionArmada {
+  armadaId: string;
+  armadaKode?: string;
+  armadaNama?: string;
+  platNomor?: string;
+  kapasitasPorsi?: number;
+  stops: DistributionArmadaStop[];
+  porsiByKategori: ServicePointPorsiByKategori;
+  qtyPorsiTotal: number;
+  servicePointCount: number;
+}
+
+/** Gelombang loading (start/max) berisi satu atau lebih armada. */
+export interface DistributionLoading {
+  urutan: number;
+  label?: string;
+  jamStart: string;
+  jamMax: string;
+  armadas: DistributionArmada[];
+  qtyPorsiTotal: number;
+  servicePointCount: number;
+}
+
 export interface DistributionOrderDoc {
   id: string;
   tenantId: string;
@@ -59,6 +119,10 @@ export interface DistributionOrderDoc {
   productionResultId?: string;
   productionResultNo?: string;
   lines: DistributionLine[];
+  /** Jadwal lapangan: gelombang loading → armada → rute jam makan. */
+  loadings?: DistributionLoading[];
+  /** @deprecated legacy — dipakai bila loadings kosong (1 loading default). */
+  armadas?: DistributionArmada[];
   status: DistributionStatus;
   history: DocHistoryEntry[];
   summary: {
@@ -69,6 +133,8 @@ export interface DistributionOrderDoc {
     qtyDikembalikanTotal?: number;
     servicePointCount: number;
     settledCount?: number;
+    armadaCount?: number;
+    loadingCount?: number;
   };
   catatan?: string;
   lastStatusPhotoUrls?: string[];
@@ -131,9 +197,28 @@ export function allDistLinesSettled(lines: DistributionLine[]): boolean {
   return (lines || []).length > 0 && (lines || []).every(isDistLineSettled);
 }
 
-export function summarizeDistLines(lines: DistributionLine[]) {
+export function summarizeDistLines(
+  lines: DistributionLine[],
+  opts?: { armadas?: DistributionArmada[]; loadings?: DistributionLoading[] },
+) {
   const list = lines || [];
   const points = new Set(list.map((l) => l.servicePointId).filter(Boolean));
+  const loadings = opts?.loadings?.length
+    ? opts.loadings
+    : (opts?.armadas?.length
+      ? [{
+        urutan: 1,
+        label: 'Loading 1',
+        jamStart: '00:00',
+        jamMax: '00:00',
+        armadas: opts.armadas,
+        qtyPorsiTotal: roundQty(opts.armadas.reduce((s, a) => s + (Number(a.qtyPorsiTotal) || 0), 0)),
+        servicePointCount: opts.armadas.reduce((s, a) => s + (Number(a.servicePointCount) || 0), 0),
+      } satisfies DistributionLoading]
+      : undefined);
+  const armadaCount = loadings
+    ? loadings.reduce((s, l) => s + (l.armadas || []).length, 0)
+    : (opts?.armadas || []).length;
   return {
     lineCount: list.length,
     qtyPorsiTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyPorsi) || 0), 0)),
@@ -142,7 +227,341 @@ export function summarizeDistLines(lines: DistributionLine[]) {
     qtyDikembalikanTotal: roundQty(list.reduce((s, l) => s + (Number(l.qtyDikembalikan) || 0), 0)),
     servicePointCount: points.size,
     settledCount: list.filter(isDistLineSettled).length,
+    armadaCount: armadaCount || undefined,
+    loadingCount: loadings?.length || undefined,
   };
+}
+
+/** Kompatibel mundur: loadings, atau wrap armadas legacy jadi 1 loading. */
+export function resolveDistLoadings(doc: {
+  loadings?: DistributionLoading[] | null;
+  armadas?: DistributionArmada[] | null;
+}): DistributionLoading[] {
+  if (doc.loadings?.length) return doc.loadings;
+  if (doc.armadas?.length) {
+    return [{
+      urutan: 1,
+      label: 'Loading 1',
+      jamStart: '00:00',
+      jamMax: '00:00',
+      armadas: doc.armadas,
+      qtyPorsiTotal: roundQty(doc.armadas.reduce((s, a) => s + (Number(a.qtyPorsiTotal) || 0), 0)),
+      servicePointCount: doc.armadas.reduce((s, a) => s + (Number(a.servicePointCount) || 0), 0),
+    }];
+  }
+  return [];
+}
+
+export function loadingLabel(urutan: number, label?: string): string {
+  if (label?.trim()) return label.trim();
+  const names = ['pertama', 'kedua', 'ketiga', 'keempat', 'kelima'];
+  const n = names[urutan - 1];
+  return n ? `Loading ${n}` : `Loading ${urutan}`;
+}
+
+/** Split qty/kategori proporsional ke drops (by qtyHint atau equal). */
+export function splitStopIntoDrops(input: {
+  qtyPorsi: number;
+  porsiByKategori?: ServicePointPorsiByKategori;
+  drops: Array<{ dropId: string; label: string; jamKirim?: string; qtyHint?: number }>;
+}): DistributionStopDrop[] {
+  const drops = input.drops || [];
+  if (!drops.length) return [];
+  const total = Math.round(Number(input.qtyPorsi) || 0);
+  if (!(total > 0)) return [];
+  const weights = drops.map((d) => {
+    const h = Number(d.qtyHint);
+    return Number.isFinite(h) && h > 0 ? h : 1;
+  });
+  const wSum = weights.reduce((s, w) => s + w, 0) || drops.length;
+  const qtys: number[] = new Array(drops.length).fill(0);
+  let allocated = 0;
+  for (let i = 0; i < drops.length - 1; i++) {
+    const q = Math.max(0, Math.round((total * weights[i]) / wSum));
+    qtys[i] = q;
+    allocated += q;
+  }
+  qtys[drops.length - 1] = Math.max(0, total - allocated);
+
+  return drops.map((d, i) => ({
+    dropId: d.dropId,
+    label: d.label,
+    jamKirim: d.jamKirim,
+    qtyPorsi: qtys[i],
+    porsiByKategori: scalePorsiByKategoriForQty(
+      input.porsiByKategori,
+      qtys[i],
+      total,
+    ),
+  })).filter((d) => d.qtyPorsi > 0);
+}
+
+/** Skala kategori porsi titik ke qty alokasi (berdasarkan kapasitas). */
+export function scalePorsiByKategoriForQty(
+  map: ServicePointPorsiByKategori | null | undefined,
+  qtyPorsi: number,
+  kapasitasPorsi?: number,
+): ServicePointPorsiByKategori | undefined {
+  if (!map) return undefined;
+  const qty = Math.round(Number(qtyPorsi) || 0);
+  if (!(qty > 0)) return undefined;
+  const baseTotal = sumPorsiByKategori(map);
+  if (!(baseTotal > 0)) return undefined;
+  const kap = Number(kapasitasPorsi);
+  const factor = Number.isFinite(kap) && kap > 0 ? qty / kap : qty / baseTotal;
+  const keys = KATEGORI_PORSI_OPTIONS
+    .map((o) => o.value)
+    .filter((k) => (Number(map[k]) || 0) > 0) as KategoriPorsi[];
+  if (!keys.length) return undefined;
+
+  const out: ServicePointPorsiByKategori = {};
+  let allocated = 0;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    const share = Math.max(0, Math.round((Number(map[key]) || 0) * factor));
+    if (share > 0) {
+      out[key] = share;
+      allocated += share;
+    }
+  }
+  const last = keys[keys.length - 1];
+  const lastShare = Math.max(0, qty - allocated);
+  if (lastShare > 0) out[last] = lastShare;
+  return Object.keys(out).length ? out : undefined;
+}
+
+export function sumPorsiByKategoriMaps(
+  maps: Array<ServicePointPorsiByKategori | null | undefined>,
+): ServicePointPorsiByKategori {
+  const out: ServicePointPorsiByKategori = {};
+  for (const map of maps) {
+    if (!map) continue;
+    for (const opt of KATEGORI_PORSI_OPTIONS) {
+      const n = Number(map[opt.value]) || 0;
+      if (n > 0) out[opt.value] = (Number(out[opt.value]) || 0) + n;
+    }
+  }
+  return out;
+}
+
+export type DistLoadingArmadaInput = {
+  armadaId: string;
+  armadaKode?: string;
+  armadaNama?: string;
+  platNomor?: string;
+  kapasitasPorsi?: number;
+  servicePointIds: string[];
+  /** Opsional: override drops per titik. */
+  stopDrops?: Record<string, Array<{
+    dropId: string;
+    label: string;
+    jamKirim?: string;
+    qtyHint?: number;
+    qtyPorsi?: number;
+  }>>;
+};
+
+export type DistLoadingInput = {
+  urutan?: number;
+  label?: string;
+  jamStart: string;
+  jamMax: string;
+  armadas: DistLoadingArmadaInput[];
+};
+
+/**
+ * Bangun gelombang loading + armada + rute jam makan.
+ * Setiap titik alokasi harus masuk tepat satu armada (lintas loading).
+ */
+export function buildDistributionLoadings(input: {
+  loadings: DistLoadingInput[];
+  lines: DistributionLine[];
+  /** Master drops per servicePointId (fallback bila stopDrops tidak dikirim). */
+  dropsByServicePointId?: Record<string, Array<{
+    dropId: string;
+    label: string;
+    jamKirim?: string;
+    qtyHint?: number;
+  }>>;
+}): { loadings: DistributionLoading[]; armadas: DistributionArmada[]; lines: DistributionLine[] } | { error: string } {
+  const rawLoadings = input.loadings || [];
+  if (!rawLoadings.length) return { error: 'Minimal satu gelombang loading wajib' };
+
+  const qtyBySp = new Map<string, number>();
+  const metaBySp = new Map<string, DistributionLine>();
+  for (const line of input.lines || []) {
+    const id = String(line.servicePointId || '').trim();
+    if (!id) continue;
+    qtyBySp.set(id, roundQty((qtyBySp.get(id) || 0) + (Number(line.qtyPorsi) || 0)));
+    if (!metaBySp.has(id)) metaBySp.set(id, line);
+  }
+  const allSpIds = [...qtyBySp.keys()];
+  if (!allSpIds.length) return { error: 'Tidak ada titik untuk dirute' };
+
+  const claimed = new Map<string, string>();
+  const loadings: DistributionLoading[] = [];
+  const flatArmadas: DistributionArmada[] = [];
+
+  for (let li = 0; li < rawLoadings.length; li++) {
+    const L = rawLoadings[li];
+    const urutan = Number(L.urutan) > 0 ? Math.round(Number(L.urutan)) : li + 1;
+    const jamStart = normalizeJamKirim(L.jamStart);
+    if (jamStart && typeof jamStart === 'object' && 'error' in jamStart) {
+      return { error: `Loading ${urutan}: ${jamStart.error}` };
+    }
+    const jamMax = normalizeJamKirim(L.jamMax);
+    if (jamMax && typeof jamMax === 'object' && 'error' in jamMax) {
+      return { error: `Loading ${urutan}: ${jamMax.error}` };
+    }
+    if (!jamStart || !jamMax) {
+      return { error: `Loading ${urutan}: jamStart dan jamMax wajib` };
+    }
+    if (compareJamKirim(jamStart, jamMax) > 0) {
+      return { error: `Loading ${urutan}: jamStart tidak boleh setelah jamMax` };
+    }
+    if (!L.armadas?.length) {
+      return { error: `Loading ${urutan}: minimal satu armada` };
+    }
+
+    const armadas: DistributionArmada[] = [];
+    for (const asg of L.armadas) {
+      const armadaId = String(asg.armadaId || '').trim();
+      if (!armadaId) return { error: `Loading ${urutan}: armadaId wajib` };
+      const ids = [...new Set((asg.servicePointIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+      if (!ids.length) {
+        return { error: `Armada ${asg.armadaNama || asg.armadaKode || armadaId}: pilih minimal satu titik` };
+      }
+
+      for (const spId of ids) {
+        if (!qtyBySp.has(spId)) {
+          return { error: `Titik ${spId} tidak ada di alokasi packing` };
+        }
+        if (claimed.has(spId)) {
+          return { error: 'Titik tidak boleh masuk lebih dari satu armada / loading' };
+        }
+        claimed.set(spId, armadaId);
+      }
+
+      const stopsRaw = ids.map((spId) => {
+        const meta = metaBySp.get(spId)!;
+        const qtyPorsi = qtyBySp.get(spId) || 0;
+        const porsiByKategori = meta.porsiByKategori;
+        const dropSrc = asg.stopDrops?.[spId]
+          || input.dropsByServicePointId?.[spId]
+          || [];
+        const drops = dropSrc.length
+          ? (() => {
+            const withExplicit = dropSrc.every((d) => Number(d.qtyPorsi) > 0);
+            if (withExplicit) {
+              return dropSrc.map((d) => ({
+                dropId: d.dropId,
+                label: d.label,
+                jamKirim: d.jamKirim,
+                qtyPorsi: Math.round(Number(d.qtyPorsi) || 0),
+                porsiByKategori: scalePorsiByKategoriForQty(
+                  porsiByKategori,
+                  Math.round(Number(d.qtyPorsi) || 0),
+                  qtyPorsi,
+                ),
+              })).filter((d) => d.qtyPorsi > 0);
+            }
+            return splitStopIntoDrops({
+              qtyPorsi,
+              porsiByKategori,
+              drops: dropSrc.map((d) => ({
+                dropId: d.dropId,
+                label: d.label,
+                jamKirim: d.jamKirim,
+                qtyHint: d.qtyHint,
+              })),
+            });
+          })()
+          : undefined;
+        const jamKirim = drops?.length
+          ? (drops.map((d) => d.jamKirim).filter(Boolean).sort(compareJamKirim)[0] || meta.jamKirim)
+          : meta.jamKirim;
+        return {
+          servicePointId: spId,
+          servicePointKode: meta.servicePointKode,
+          servicePointNama: meta.servicePointNama,
+          jamKirim,
+          kapasitasPorsi: meta.kapasitasPorsi,
+          qtyPorsi,
+          porsiByKategori,
+          drops,
+        };
+      }).sort((a, b) => {
+        const byJam = compareJamKirim(a.jamKirim, b.jamKirim);
+        if (byJam !== 0) return byJam;
+        return String(a.servicePointNama || a.servicePointId)
+          .localeCompare(String(b.servicePointNama || b.servicePointId), 'id');
+      });
+
+      const stops: DistributionArmadaStop[] = stopsRaw.map((s, idx) => ({
+        urutan: idx + 1,
+        ...s,
+      }));
+      const porsiByKategori = sumPorsiByKategoriMaps(stops.map((s) => s.porsiByKategori));
+      const qtyPorsiTotal = roundQty(stops.reduce((s, x) => s + (Number(x.qtyPorsi) || 0), 0));
+      const armada: DistributionArmada = {
+        armadaId,
+        armadaKode: asg.armadaKode,
+        armadaNama: asg.armadaNama,
+        platNomor: asg.platNomor,
+        kapasitasPorsi: asg.kapasitasPorsi,
+        stops,
+        porsiByKategori,
+        qtyPorsiTotal,
+        servicePointCount: stops.length,
+      };
+      armadas.push(armada);
+      flatArmadas.push(armada);
+    }
+
+    loadings.push({
+      urutan,
+      label: L.label?.trim() || loadingLabel(urutan),
+      jamStart,
+      jamMax,
+      armadas,
+      qtyPorsiTotal: roundQty(armadas.reduce((s, a) => s + a.qtyPorsiTotal, 0)),
+      servicePointCount: armadas.reduce((s, a) => s + a.servicePointCount, 0),
+    });
+  }
+
+  for (const spId of allSpIds) {
+    if (!claimed.has(spId)) {
+      const meta = metaBySp.get(spId);
+      const label = meta?.servicePointNama || meta?.servicePointKode || spId;
+      return { error: `Titik "${label}" belum di-assign ke armada` };
+    }
+  }
+
+  const lines = (input.lines || []).map((l) => ({
+    ...l,
+    armadaId: claimed.get(l.servicePointId),
+  }));
+
+  return { loadings, armadas: flatArmadas, lines };
+}
+
+/** Legacy helper — wrap ke satu loading default. */
+export function buildDistributionArmadas(input: {
+  assignments: DistLoadingArmadaInput[];
+  lines: DistributionLine[];
+}): { armadas: DistributionArmada[]; lines: DistributionLine[] } | { error: string } {
+  const built = buildDistributionLoadings({
+    loadings: [{
+      urutan: 1,
+      label: 'Loading 1',
+      jamStart: '00:00',
+      jamMax: '00:00',
+      armadas: input.assignments,
+    }],
+    lines: input.lines,
+  });
+  if ('error' in built) return built;
+  return { armadas: built.armadas, lines: built.lines };
 }
 
 function optionalNonNegQty(raw: unknown): number | undefined {
@@ -180,11 +599,19 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
     const qtyDikirim = optionalNonNegQty(row.qtyDikirim);
     const qtyDiterima = optionalNonNegQty(row.qtyDiterima);
     const qtyDikembalikan = optionalNonNegQty(row.qtyDikembalikan);
+    const jamKirim = row.jamKirim != null ? String(row.jamKirim).trim() || undefined : undefined;
+    const armadaId = row.armadaId != null ? String(row.armadaId).trim() || undefined : undefined;
+    const porsiByKategori = row.porsiByKategori && typeof row.porsiByKategori === 'object'
+      ? (row.porsiByKategori as ServicePointPorsiByKategori)
+      : undefined;
     out.push({
       servicePointId,
       servicePointKode: row.servicePointKode != null ? String(row.servicePointKode) : undefined,
       servicePointNama: row.servicePointNama != null ? String(row.servicePointNama) : undefined,
       kapasitasPorsi: kapasitas,
+      jamKirim,
+      porsiByKategori,
+      armadaId,
       menuId,
       menuKode: row.menuKode != null ? String(row.menuKode) : undefined,
       menuNama: row.menuNama != null ? String(row.menuNama) : undefined,
@@ -372,6 +799,8 @@ export function allocatePorsiAcrossPoints(input: {
     kode?: string;
     nama: string;
     kapasitasPorsi?: number;
+    jamKirim?: string;
+    porsiByKategori?: ServicePointPorsiByKategori;
   }>;
 }): DistributionLine[] | { error: string } {
   if (!input.items.length) return { error: 'Tidak ada menu/hasil untuk dialokasikan' };
@@ -417,13 +846,16 @@ export function allocatePorsiAcrossPoints(input: {
       const share = shares[i];
       if (!(share > 0)) continue;
       const sp = points[i];
+      const kapasitasPorsi = Number.isFinite(Number(sp.kapasitasPorsi)) && Number(sp.kapasitasPorsi) > 0
+        ? Number(sp.kapasitasPorsi)
+        : undefined;
       out.push({
         servicePointId: sp.id,
         servicePointKode: sp.kode,
         servicePointNama: sp.nama,
-        kapasitasPorsi: Number.isFinite(Number(sp.kapasitasPorsi)) && Number(sp.kapasitasPorsi) > 0
-          ? Number(sp.kapasitasPorsi)
-          : undefined,
+        kapasitasPorsi,
+        jamKirim: sp.jamKirim,
+        porsiByKategori: scalePorsiByKategoriForQty(sp.porsiByKategori, share, kapasitasPorsi),
         menuId: item.menuId,
         menuKode: item.menuKode,
         menuNama: item.menuNama || item.recipeNama || item.finishedGoodNama,

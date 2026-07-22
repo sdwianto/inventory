@@ -11,6 +11,8 @@ import {
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
 import {
+  applyRecipeBufferQty,
+  getRecipeBufferPct,
   materialExcludedSet,
   materialOverrideKey,
   materialOverridesMap,
@@ -240,9 +242,10 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         const computed = addBesar + addKecil;
         const ovKey = materialOverrideKey(recipe.id, rLine.productId);
         if (excludedKeys.has(ovKey)) continue;
+        const bufferPct = getRecipeBufferPct(plan.recipeBufferPct, recipe.id);
         const add = overrideQtyByKey.has(ovKey)
           ? Number(overrideQtyByKey.get(ovKey)) || 0
-          : computed;
+          : applyRecipeBufferQty(computed, bufferPct);
         if (!(add > 0)) continue;
         const prev = acc.get(rLine.productId) || {
           productKode: rLine.productKode,

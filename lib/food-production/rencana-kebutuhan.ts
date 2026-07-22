@@ -11,6 +11,8 @@ import {
   scaleRecipeIngredientQty,
 } from '@/lib/food-production/material-requirement';
 import {
+  applyRecipeBufferQty,
+  getRecipeBufferPct,
   materialExcludedSet,
   materialOverrideKey,
   materialOverridesMap,
@@ -41,6 +43,7 @@ export type RencanaKebutuhanPlanInput = {
   status?: string;
   kategoriPorsiList?: string[];
   materialOverrides?: PlanMaterialOverride[];
+  recipeBufferPct?: Record<string, number>;
   lines: Array<{
     menuId?: string;
     menuKode?: string;
@@ -118,9 +121,10 @@ export function buildRencanaKebutuhanLines(input: {
           const computed = addBesar + addKecil;
           const ovKey = materialOverrideKey(recipe.id, rLine.productId);
           if (excludedKeys.has(ovKey)) continue;
+          const bufferPct = getRecipeBufferPct(plan.recipeBufferPct, recipe.id);
           const add = overrideQtyByKey.has(ovKey)
             ? Number(overrideQtyByKey.get(ovKey)) || 0
-            : computed;
+            : applyRecipeBufferQty(computed, bufferPct);
           if (!(add > 0)) continue;
           const prev = acc.get(rLine.productId) || {
             productId: rLine.productId,
@@ -165,6 +169,8 @@ export function recipeIngredientNeeds(input: {
   recipePerMenuPorsi: number;
   kategoriPorsiList?: string[];
   acuanByKategori?: Partial<Record<string, number>> | null;
+  /** Buffer persen (mis. 3) — diterapkan ke qty hitungan. */
+  bufferPct?: number;
 }): Array<{
   productId: string;
   productKode?: string;
@@ -175,6 +181,7 @@ export function recipeIngredientNeeds(input: {
   qtyKecilPart?: number;
 }> {
   const menuFactor = Number(input.recipePerMenuPorsi) || 1;
+  const bufferPct = Number(input.bufferPct) || 0;
   const split = splitPorsiByKategoriFamily(
     input.kategoriPorsiList,
     Number(input.menuTargetPorsi) || 0,
@@ -186,18 +193,18 @@ export function recipeIngredientNeeds(input: {
   const wastePct = Number(input.recipe.wastePct) || 0;
   return (input.recipe.lines || [])
     .map((rLine) => {
-      const qtyBesarPart = roundQty(scaleRecipeIngredientQty(
+      const qtyBesarPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
         recipeQtyForFamily(rLine, 'BESAR'),
         porsiBesarNeeded,
         yieldQty,
         wastePct,
-      ));
-      const qtyKecilPart = roundQty(scaleRecipeIngredientQty(
+      ), bufferPct));
+      const qtyKecilPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
         recipeQtyForFamily(rLine, 'KECIL'),
         porsiKecilNeeded,
         yieldQty,
         wastePct,
-      ));
+      ), bufferPct));
       const qty = roundQty(qtyBesarPart + qtyKecilPart);
       return {
         productId: rLine.productId,

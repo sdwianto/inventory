@@ -19,6 +19,7 @@ import {
   KATEGORI_PORSI_OPTIONS,
   SERVICE_POINT_JENIS_LABELS,
   sumPorsiByKategori,
+  type ServicePointDrop,
   type ServicePointJenis,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
@@ -27,6 +28,13 @@ import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
 interface KitchenOpt { id: string; nama: string }
+interface DropFormRow {
+  key: string;
+  id: string;
+  label: string;
+  jamKirim: string;
+  qtyHint: string;
+}
 interface SpRow {
   id: string;
   kode?: string;
@@ -37,6 +45,8 @@ interface SpRow {
   alamat?: string;
   kapasitasPorsi?: number;
   porsiByKategori?: ServicePointPorsiByKategori;
+  jamKirim?: string;
+  drops?: ServicePointDrop[];
   pic?: string;
   picNoTelp?: string;
   aktif: boolean;
@@ -67,12 +77,40 @@ function porsiFormToPayload(form: PorsiFormMap): ServicePointPorsiByKategori {
   return out;
 }
 
+function dropsFormFromRow(drops?: ServicePointDrop[]): DropFormRow[] {
+  return (drops || []).map((d, i) => ({
+    key: d.id || `drop-${i}`,
+    id: d.id || '',
+    label: d.label || '',
+    jamKirim: d.jamKirim || '',
+    qtyHint: d.qtyHint != null ? String(d.qtyHint) : '',
+  }));
+}
+
+function dropsFormToPayload(rows: DropFormRow[]): ServicePointDrop[] {
+  return rows
+    .map((r, i) => {
+      const label = r.label.trim();
+      if (!label) return null;
+      const qty = Number(r.qtyHint);
+      return {
+        id: r.id.trim() || `drop-${i + 1}`,
+        label,
+        jamKirim: r.jamKirim || undefined,
+        qtyHint: Number.isFinite(qty) && qty > 0 ? Math.round(qty) : undefined,
+      } as ServicePointDrop;
+    })
+    .filter((x): x is ServicePointDrop => !!x);
+}
+
 const emptyForm = {
   kode: '',
   nama: '',
   jenis: 'SEKOLAH' as ServicePointJenis,
   kitchenId: '',
   alamat: '',
+  jamKirim: '',
+  drops: [] as DropFormRow[],
   porsiByKategori: emptyPorsiForm(),
   pic: '',
   picNoTelp: '',
@@ -141,6 +179,7 @@ export default function ServicePointPage() {
       ...emptyForm,
       kode: nextServicePointKode(rows),
       porsiByKategori: emptyPorsiForm(),
+      drops: [],
     });
     setOpen(true);
   }
@@ -153,6 +192,8 @@ export default function ServicePointPage() {
       jenis: row.jenis || 'SEKOLAH',
       kitchenId: row.kitchenId || '',
       alamat: row.alamat || '',
+      jamKirim: row.jamKirim || '',
+      drops: dropsFormFromRow(row.drops),
       porsiByKategori: porsiFormFromRow(row.porsiByKategori),
       pic: row.pic || '',
       picNoTelp: row.picNoTelp || '',
@@ -171,6 +212,7 @@ export default function ServicePointPage() {
       const url = editing ? `/api/service-points/${editing.id}` : '/api/service-points';
       const method = editing ? 'PUT' : 'POST';
       const porsiByKategori = porsiFormToPayload(form.porsiByKategori);
+      const drops = dropsFormToPayload(form.drops);
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
@@ -180,6 +222,8 @@ export default function ServicePointPage() {
           jenis: form.jenis,
           kitchenId: form.kitchenId || undefined,
           alamat: form.alamat || undefined,
+          jamKirim: form.jamKirim || undefined,
+          drops,
           porsiByKategori,
           pic: form.pic || undefined,
           picNoTelp: form.picNoTelp || undefined,
@@ -287,6 +331,8 @@ export default function ServicePointPage() {
               <th className="text-left p-3">Nama</th>
               <th className="text-left p-3">Jenis</th>
               <th className="text-left p-3">Dapur</th>
+              <th className="text-left p-3">Jam Makan</th>
+              <th className="text-left p-3">Drop</th>
               <th className="text-right p-3">Penerima Manfaat</th>
               <th className="text-left p-3">PIC</th>
               <th className="text-left p-3">No Telp</th>
@@ -296,10 +342,10 @@ export default function ServicePointPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
+              <tr><td colSpan={11} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Belum ada titik layanan</td></tr>
+              <tr><td colSpan={11} className="p-6 text-center text-muted-foreground">Belum ada titik layanan</td></tr>
             )}
             {rows.map((row) => (
               <tr key={row.id} className="border-t">
@@ -307,6 +353,10 @@ export default function ServicePointPage() {
                 <td className="p-3 font-medium">{row.nama}</td>
                 <td className="p-3">{SERVICE_POINT_JENIS_LABELS[row.jenis || 'LAINNYA'] || 'Lainya'}</td>
                 <td className="p-3">{row.kitchenNama || '—'}</td>
+                <td className="p-3 font-mono text-xs tabular-nums">{row.jamKirim || '—'}</td>
+                <td className="p-3 text-xs text-muted-foreground">
+                  {(row.drops || []).length > 0 ? `${row.drops!.length} drop` : '—'}
+                </td>
                 <td className="p-3 text-right">{row.kapasitasPorsi ?? '—'}</td>
                 <td className="p-3">{row.pic || '—'}</td>
                 <td className="p-3 font-mono text-xs">{row.picNoTelp || '—'}</td>
@@ -365,16 +415,116 @@ export default function ServicePointPage() {
               <Label>Nama</Label>
               <Input value={form.nama} onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))} placeholder="SDN 01" />
             </div>
-            <div className="space-y-1">
-              <Label>Dapur penyalur</Label>
-              <select
-                className="w-full h-10 border rounded-md px-2 text-sm"
-                value={form.kitchenId}
-                onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
-              >
-                <option value="">—</option>
-                {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-              </select>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Dapur penyalur</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm"
+                  value={form.kitchenId}
+                  onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
+                >
+                  <option value="">—</option>
+                  {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Jam Makan</Label>
+                <Input
+                  type="time"
+                  value={form.jamKirim}
+                  onChange={(e) => setForm((f) => ({ ...f, jamKirim: e.target.value }))}
+                />
+                <p className="text-[10px] text-muted-foreground">Dipakai untuk urutan rute pengiriman</p>
+              </div>
+            </div>
+            <div className="space-y-2 rounded-md border p-3 bg-muted/20">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-sm font-medium">Drop points (opsional)</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setForm((f) => ({
+                    ...f,
+                    drops: [
+                      ...f.drops,
+                      {
+                        key: `new-${Date.now()}`,
+                        id: '',
+                        label: '',
+                        jamKirim: '',
+                        qtyHint: '',
+                      },
+                    ],
+                  }))}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Tambah drop
+                </Button>
+              </div>
+              {form.drops.length === 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  Contoh: SMP Muhammadiyah → Jl. Lawu, Jl. Adi Santoso
+                </p>
+              )}
+              <div className="space-y-2">
+                {form.drops.map((drop) => (
+                  <div key={drop.key} className="grid grid-cols-[1fr_6rem_5rem_auto] gap-2 items-end">
+                    <div className="space-y-1">
+                      <Label className="text-xs font-normal">Label</Label>
+                      <Input
+                        value={drop.label}
+                        placeholder="Jl. Lawu"
+                        onChange={(e) => setForm((f) => ({
+                          ...f,
+                          drops: f.drops.map((d) => (
+                            d.key === drop.key ? { ...d, label: e.target.value } : d
+                          )),
+                        }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs font-normal">Jam</Label>
+                      <Input
+                        type="time"
+                        value={drop.jamKirim}
+                        onChange={(e) => setForm((f) => ({
+                          ...f,
+                          drops: f.drops.map((d) => (
+                            d.key === drop.key ? { ...d, jamKirim: e.target.value } : d
+                          )),
+                        }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs font-normal">Qty</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={drop.qtyHint}
+                        placeholder="0"
+                        onChange={(e) => setForm((f) => ({
+                          ...f,
+                          drops: f.drops.map((d) => (
+                            d.key === drop.key ? { ...d, qtyHint: e.target.value } : d
+                          )),
+                        }))}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                      onClick={() => setForm((f) => ({
+                        ...f,
+                        drops: f.drops.filter((d) => d.key !== drop.key),
+                      }))}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="space-y-2 rounded-md border p-3 bg-muted/20">
               <div className="flex items-center justify-between gap-2">

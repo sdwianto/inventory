@@ -20,6 +20,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   products: async () => (await import('@/lib/api/handlers/products')).handleProducts,
   kitchens: async () => (await import('@/lib/api/handlers/kitchens')).handleKitchens,
   'service-points': async () => (await import('@/lib/api/handlers/service-points')).handleServicePoints,
+  armadas: async () => (await import('@/lib/api/handlers/armadas')).handleArmadas,
   'distribution-orders': async () => (await import('@/lib/api/handlers/distribution-orders')).handleDistributionOrders,
   'temperature-logs': async () => (await import('@/lib/api/handlers/temperature-logs')).handleTemperatureLogs,
   'temperature-thresholds': async () => (await import('@/lib/api/handlers/temperature-logs')).handleTemperatureLogs,

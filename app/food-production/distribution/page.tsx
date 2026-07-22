@@ -15,13 +15,26 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
-import { Truck, Plus, RefreshCw, Eye, Trash2 } from 'lucide-react';
+import { Truck, Plus, RefreshCw, Eye, Trash2, Car } from 'lucide-react';
 import {
   DIST_STATUS_LABELS,
   DIST_UI_STATUS_NEXT,
   DIST_UI_STATUS_NEXT_LABEL,
+  loadingLabel,
+  resolveDistLoadings,
   type DistributionStatus,
+  type DistributionArmada,
+  type DistributionLoading,
 } from '@/lib/food-production/distribution';
+import {
+  KATEGORI_PORSI_OPTIONS,
+  KATEGORI_PORSI_SHORT,
+  compareJamKirim,
+  type ServicePointDrop,
+  type ServicePointPorsiByKategori,
+} from '@/lib/food-production/service-point';
+import { Input } from '@/components/ui/input';
+import Link from 'next/link';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 /** Manage + DRIVER — update status kirim/selesai. */
@@ -43,6 +56,33 @@ interface SpOpt {
   kode?: string;
   nama: string;
   kapasitasPorsi?: number;
+  jamKirim?: string;
+  porsiByKategori?: ServicePointPorsiByKategori;
+  drops?: ServicePointDrop[];
+}
+
+interface ArmadaOpt {
+  id: string;
+  kode: string;
+  nama: string;
+  platNomor?: string;
+  kapasitasPorsi?: number;
+  aktif?: boolean;
+}
+
+interface FleetDraft {
+  key: string;
+  armadaId: string;
+  servicePointIds: string[];
+}
+
+interface LoadingDraft {
+  key: string;
+  urutan: number;
+  label: string;
+  jamStart: string;
+  jamMax: string;
+  fleets: FleetDraft[];
 }
 
 interface DistLine {
@@ -50,6 +90,9 @@ interface DistLine {
   servicePointKode?: string;
   servicePointNama?: string;
   kapasitasPorsi?: number;
+  jamKirim?: string;
+  porsiByKategori?: ServicePointPorsiByKategori;
+  armadaId?: string;
   menuId?: string;
   menuKode?: string;
   menuNama?: string;
@@ -97,6 +140,8 @@ interface DistRow {
   kitchenNama?: string;
   status: DistributionStatus;
   lines?: DistLine[];
+  loadings?: DistributionLoading[];
+  armadas?: DistributionArmada[];
   history?: DistHistoryEntry[];
   catatan?: string;
   summary?: {
@@ -106,6 +151,8 @@ interface DistRow {
     qtyDiterimaTotal?: number;
     qtyDikembalikanTotal?: number;
     servicePointCount: number;
+    armadaCount?: number;
+    loadingCount?: number;
   };
 }
 
@@ -141,6 +188,7 @@ function DistributionPageContent() {
   const [rows, setRows] = useState<DistRow[]>([]);
   const [results, setResults] = useState<ResultOpt[]>([]);
   const [points, setPoints] = useState<SpOpt[]>([]);
+  const [armadas, setArmadas] = useState<ArmadaOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<DistRow | null>(null);
@@ -150,10 +198,58 @@ function DistributionPageContent() {
   const [statusLineQtys, setStatusLineQtys] = useState<StatusLineQty[]>([]);
   const [statusSaving, setStatusSaving] = useState(false);
   const [resultId, setResultId] = useState('');
-  const [selectedPoints, setSelectedPoints] = useState<string[]>([]);
+  const [loadingDrafts, setLoadingDrafts] = useState<LoadingDraft[]>([]);
   const [createNote, setCreateNote] = useState('');
   const [saving, setSaving] = useState(false);
   const deepLinkHandled = useRef<string | null>(null);
+
+  const pointsById = useMemo(() => new Map(points.map((p) => [p.id, p])), [points]);
+  const armadasById = useMemo(() => new Map(armadas.map((a) => [a.id, a])), [armadas]);
+
+  /** Semua titik aktif, urut Jam Makan (untuk checkbox di tiap armada). */
+  const sortedPoints = useMemo(
+    () => [...points].sort((a, b) => {
+      const byJam = compareJamKirim(a.jamKirim, b.jamKirim);
+      if (byJam !== 0) return byJam;
+      return a.nama.localeCompare(b.nama, 'id');
+    }),
+    [points],
+  );
+
+  const assignedPointIds = useMemo(
+    () => new Set(loadingDrafts.flatMap((L) => L.fleets.flatMap((f) => f.servicePointIds))),
+    [loadingDrafts],
+  );
+
+  const selectedPointIds = useMemo(
+    () => [...assignedPointIds],
+    [assignedPointIds],
+  );
+
+  function kategoriSummaryForPoints(ids: string[]): ServicePointPorsiByKategori {
+    return ids.reduce<ServicePointPorsiByKategori>((acc, id) => {
+      const map = pointsById.get(id)?.porsiByKategori;
+      if (!map) return acc;
+      for (const opt of KATEGORI_PORSI_OPTIONS) {
+        const n = Number(map[opt.value]) || 0;
+        if (n > 0) acc[opt.value] = (Number(acc[opt.value]) || 0) + n;
+      }
+      return acc;
+    }, {});
+  }
+
+  function formatKategoriShort(map: ServicePointPorsiByKategori | undefined): string {
+    if (!map) return '—';
+    const parts = KATEGORI_PORSI_OPTIONS
+      .map((o) => {
+        const n = Number(map[o.value]) || 0;
+        if (!(n > 0)) return null;
+        const short = KATEGORI_PORSI_SHORT[o.value] || o.label;
+        return `${short} : ${n.toLocaleString('id-ID')}`;
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(', ') : '—';
+  }
 
   /**
    * HSL tidak muncul di packing baru bila:
@@ -244,18 +340,21 @@ function DistributionPageContent() {
     setLoading(true);
     try {
       const hdr = { ...actingTenantHeaders(), ...actingKitchenHeaders() };
-      const [dRes, rRes, sRes] = await Promise.all([
+      const [dRes, rRes, sRes, aRes] = await Promise.all([
         fetch('/api/distribution-orders', { headers: hdr }),
         fetch('/api/production-results?status=COMPLETED', { headers: hdr }),
         fetch('/api/service-points?aktif=1', { headers: hdr }),
+        fetch('/api/armadas?aktif=1', { headers: hdr }),
       ]);
       const dData = await dRes.json();
       const rData = await rRes.json();
       const sData = await sRes.json();
+      const aData = await aRes.json();
       if (!dRes.ok) throw new Error(dData?.error || 'Gagal memuat');
       setRows(Array.isArray(dData) ? dData : []);
       setResults(Array.isArray(rData) ? rData : []);
       setPoints(Array.isArray(sData) ? sData : []);
+      setArmadas(Array.isArray(aData) ? aData : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
     } finally {
@@ -310,8 +409,104 @@ function DistributionPageContent() {
     }
   }, [resultId, blockedResultIds]);
 
-  function togglePoint(id: string) {
-    setSelectedPoints((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  function addLoadingDraft() {
+    const urutan = loadingDrafts.length + 1;
+    const defaults = urutan === 1
+      ? { jamStart: '06:30', jamMax: '07:00' }
+      : urutan === 2
+        ? { jamStart: '07:30', jamMax: '08:00' }
+        : { jamStart: '08:30', jamMax: '09:00' };
+    setLoadingDrafts((prev) => [
+      ...prev,
+      {
+        key: `load-${Date.now()}`,
+        urutan,
+        label: loadingLabel(urutan),
+        jamStart: defaults.jamStart,
+        jamMax: defaults.jamMax,
+        fleets: [],
+      },
+    ]);
+  }
+
+  function updateLoadingDraft(key: string, patch: Partial<LoadingDraft>) {
+    setLoadingDrafts((prev) => prev.map((L) => (L.key === key ? { ...L, ...patch } : L)));
+  }
+
+  function removeLoadingDraft(key: string) {
+    setLoadingDrafts((prev) => prev
+      .filter((L) => L.key !== key)
+      .map((L, i) => ({ ...L, urutan: i + 1, label: L.label || loadingLabel(i + 1) })));
+  }
+
+  function addFleetToLoading(loadingKey: string) {
+    const loading = loadingDrafts.find((L) => L.key === loadingKey);
+    // Armada boleh dipakai ulang di loading lain; unik hanya dalam satu gelombang.
+    const usedInLoading = new Set((loading?.fleets || []).map((f) => f.armadaId));
+    const pick = armadas.find((a) => !usedInLoading.has(a.id));
+    if (!pick) {
+      toast.message(armadas.length
+        ? 'Semua armada sudah dipakai di loading ini'
+        : 'Belum ada armada — buat di menu Armada dulu');
+      return;
+    }
+    setLoadingDrafts((prev) => prev.map((L) => {
+      if (L.key !== loadingKey) return L;
+      return {
+        ...L,
+        fleets: [
+          ...L.fleets,
+          {
+            key: `${pick.id}-${Date.now()}`,
+            armadaId: pick.id,
+            servicePointIds: [],
+          },
+        ],
+      };
+    }));
+  }
+
+  function setFleetArmada(loadingKey: string, fleetKey: string, armadaId: string) {
+    setLoadingDrafts((prev) => prev.map((L) => {
+      if (L.key !== loadingKey) return L;
+      return {
+        ...L,
+        fleets: L.fleets.map((f) => (f.key === fleetKey ? { ...f, armadaId } : f)),
+      };
+    }));
+  }
+
+  function toggleFleetPoint(loadingKey: string, fleetKey: string, spId: string) {
+    setLoadingDrafts((prev) => prev.map((L) => ({
+      ...L,
+      fleets: L.fleets.map((f) => {
+        const isTarget = L.key === loadingKey && f.key === fleetKey;
+        if (!isTarget) {
+          return { ...f, servicePointIds: f.servicePointIds.filter((id) => id !== spId) };
+        }
+        const has = f.servicePointIds.includes(spId);
+        return {
+          ...f,
+          servicePointIds: has
+            ? f.servicePointIds.filter((id) => id !== spId)
+            : [...f.servicePointIds, spId],
+        };
+      }),
+    })));
+  }
+
+  function removeFleetFromLoading(loadingKey: string, fleetKey: string) {
+    setLoadingDrafts((prev) => prev.map((L) => (
+      L.key === loadingKey
+        ? { ...L, fleets: L.fleets.filter((f) => f.key !== fleetKey) }
+        : L
+    )));
+  }
+
+  function resetCreateForm() {
+    setResultId('');
+    setLoadingDrafts([]);
+    setCreateNote('');
   }
 
   async function create() {
@@ -319,10 +514,30 @@ function DistributionPageContent() {
       toast.error('Pilih hasil produksi');
       return;
     }
-    if (!selectedPoints.length) {
-      toast.error('Pilih minimal satu titik layanan');
+    if (!armadas.length) {
+      toast.error('Buat Armada Kendaraan dulu sebelum packing');
       return;
     }
+
+    const drafts = loadingDrafts.map((L) => ({
+      ...L,
+      fleets: L.fleets.filter((f) => f.armadaId && f.servicePointIds.length > 0),
+    })).filter((L) => L.fleets.length > 0);
+
+    if (!drafts.length) {
+      toast.error('Tambah Loading → pilih Armada → centang minimal satu titik');
+      return;
+    }
+    if (drafts.some((L) => !L.jamStart || !L.jamMax)) {
+      toast.error('Setiap loading wajib punya jam start & maksimal');
+      return;
+    }
+
+    const servicePointIds = [...new Set(
+      drafts.flatMap((L) => L.fleets.flatMap((f) => f.servicePointIds)),
+    )];
+    const allFleets = drafts.flatMap((L) => L.fleets);
+
     setSaving(true);
     try {
       const res = await fetch('/api/distribution-orders', {
@@ -331,18 +546,35 @@ function DistributionPageContent() {
         body: JSON.stringify({
           sourceType: 'RESULT',
           productionResultId: resultId,
-          servicePointIds: selectedPoints,
+          servicePointIds,
+          loadings: drafts.map((L, idx) => ({
+            urutan: idx + 1,
+            label: L.label || loadingLabel(idx + 1),
+            jamStart: L.jamStart,
+            jamMax: L.jamMax,
+            armadas: L.fleets.map((f) => ({
+              armadaId: f.armadaId,
+              servicePointIds: [...f.servicePointIds].sort((a, b) => {
+                const pa = pointsById.get(a);
+                const pb = pointsById.get(b);
+                return compareJamKirim(pa?.jamKirim, pb?.jamKirim)
+                  || String(pa?.nama || a).localeCompare(String(pb?.nama || b), 'id');
+              }),
+            })),
+          })),
           catatan: createNote.trim() || undefined,
           allocate: true,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal');
-      toast.success(`DST ${data.noDokumen} · ${data.summary?.qtyPorsiTotal || 0} porsi`);
+      toast.success(
+        `DST ${data.noDokumen} · ${data.summary?.qtyPorsiTotal || 0} porsi · `
+        + `${data.summary?.loadingCount || drafts.length} loading · `
+        + `${data.summary?.armadaCount || allFleets.length} armada`,
+      );
       setOpen(false);
-      setResultId('');
-      setSelectedPoints([]);
-      setCreateNote('');
+      resetCreateForm();
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
@@ -475,10 +707,10 @@ function DistributionPageContent() {
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
             <Truck className="h-5 w-5" />
-            Distribusi / Packing
+            Jadwal Pengiriman
           </h1>
           <p className="text-sm text-muted-foreground">
-            Packing list dari HSL — disiapkan → dikirim → selesai per titik (diterima / dikembalikan)
+            Packing dari HSL — loading → armada → rute jam makan (PK/PB) → kirim / selesai per titik
           </p>
         </div>
         <div className="flex gap-2">
@@ -487,7 +719,7 @@ function DistributionPageContent() {
           </Button>
           {canManage && (
             <Button size="sm" onClick={() => setOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" /> Packing baru
+              <Plus className="h-4 w-4 mr-1" /> Jadwal baru
             </Button>
           )}
         </div>
@@ -601,62 +833,150 @@ function DistributionPageContent() {
               {detailLoading ? (
                 <p className="text-muted-foreground py-4 text-center">Memuat detail…</p>
               ) : (
-                <div className="rounded-md border overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2">Titik layanan</th>
-                        <th className="text-left p-2">Menu</th>
-                        <th className="text-right p-2">Kapasitas</th>
-                        <th className="text-right p-2">Alokasi</th>
-                        <th className="text-right p-2">Dikirim</th>
-                        <th className="text-right p-2">Diterima</th>
-                        <th className="text-right p-2">Kembali</th>
-                        <th className="text-left p-2">Komentar</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(detail.lines || []).length === 0 && (
-                        <tr>
-                          <td colSpan={8} className="p-4 text-center text-muted-foreground">
-                            Tidak ada baris alokasi
-                          </td>
-                        </tr>
-                      )}
-                      {(detail.lines || []).map((line, idx) => (
-                        <tr key={`${line.servicePointId}-${idx}`} className="border-t">
-                          <td className="p-2">
-                            <div className="font-medium">
-                              {line.servicePointNama || line.servicePointId}
+                <div className="space-y-3">
+                  {(() => {
+                    const loadings = resolveDistLoadings(detail);
+                    if (!loadings.length) return null;
+                    return (
+                      <div className="space-y-3 rounded-md border bg-slate-50/60 p-3">
+                        <p className="text-sm font-semibold">
+                          Jadwal pengiriman
+                          {detail.tanggal ? (
+                            <span className="font-normal text-muted-foreground">
+                              {' · '}
+                              {new Date(`${detail.tanggal}T00:00:00`).toLocaleDateString('id-ID', {
+                                weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+                              })}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Berdasarkan urutan Jam Makan</p>
+                        {loadings.map((L) => (
+                          <div key={`load-${L.urutan}`} className="space-y-2 border-t pt-2 first:border-t-0 first:pt-0">
+                            <div className="font-medium text-sm">
+                              {L.label || loadingLabel(L.urutan)}
                             </div>
-                            {line.servicePointKode && (
-                              <div className="text-xs font-mono text-muted-foreground">
-                                {line.servicePointKode}
+                            <div className="text-xs text-muted-foreground">
+                              Start loading {L.jamStart.replace(':', '.')}
+                              {' · '}
+                              Maksimal loading {L.jamMax.replace(':', '.')}
+                            </div>
+                            {L.armadas.map((armada) => (
+                              <div
+                                key={`${L.urutan}-${armada.armadaId}`}
+                                className="rounded-md border bg-white p-2.5 space-y-1.5"
+                              >
+                                <div className="font-medium text-sm flex items-center gap-1.5">
+                                  <Car className="h-3.5 w-3.5" />
+                                  Armada {armada.armadaNama || armada.armadaKode || armada.armadaId}
+                                  {armada.platNomor ? (
+                                    <span className="font-mono text-xs text-muted-foreground font-normal">
+                                      ({armada.platNomor})
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="text-xs">
+                                  Total pengiriman: <strong>{armada.qtyPorsiTotal}</strong>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {formatKategoriShort(armada.porsiByKategori)}
+                                </div>
+                                <ol className="text-xs space-y-1 list-decimal list-inside">
+                                  {armada.stops.map((stop) => (
+                                    <li key={`${armada.armadaId}-${stop.servicePointId}`}>
+                                      <span className="font-mono">
+                                        {(stop.jamKirim || '—:—').replace(':', '.')}
+                                      </span>
+                                      {' : '}
+                                      {stop.servicePointNama || stop.servicePointId}
+                                      {' : '}
+                                      <span className="tabular-nums font-medium">{stop.qtyPorsi}</span>
+                                      {stop.porsiByKategori && (
+                                        <span className="text-muted-foreground">
+                                          {' '}({formatKategoriShort(stop.porsiByKategori)})
+                                        </span>
+                                      )}
+                                      {!!stop.drops?.length && (
+                                        <ul className="ml-5 mt-0.5 space-y-0.5 list-none text-muted-foreground">
+                                          {stop.drops.map((d) => (
+                                            <li key={d.dropId}>
+                                              → {(d.jamKirim || '—:—').replace(':', '.')} {d.label}
+                                              {' : '}{d.qtyPorsi}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ol>
                               </div>
-                            )}
-                          </td>
-                          <td className="p-2">
-                            {line.finishedGoodNama || line.menuNama || '—'}
-                            {(line.finishedGoodKode || line.menuKode) && (
-                              <div className="text-xs font-mono text-muted-foreground">
-                                {line.finishedGoodKode || line.menuKode}
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-2 text-right text-muted-foreground">
-                            {line.kapasitasPorsi ?? '—'}
-                          </td>
-                          <td className="p-2 text-right font-medium">{line.qtyPorsi}</td>
-                          <td className="p-2 text-right">{line.qtyDikirim ?? '—'}</td>
-                          <td className="p-2 text-right">{line.qtyDiterima ?? '—'}</td>
-                          <td className="p-2 text-right">{line.qtyDikembalikan ?? '—'}</td>
-                          <td className="p-2 text-muted-foreground max-w-[12rem] truncate" title={line.notes || ''}>
-                            {line.notes || '—'}
-                          </td>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  <div className="rounded-md border overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="text-left p-2">Titik layanan</th>
+                          <th className="text-left p-2">Jam</th>
+                          <th className="text-left p-2">Menu</th>
+                          <th className="text-right p-2">Kapasitas</th>
+                          <th className="text-right p-2">Alokasi</th>
+                          <th className="text-right p-2">Dikirim</th>
+                          <th className="text-right p-2">Diterima</th>
+                          <th className="text-right p-2">Kembali</th>
+                          <th className="text-left p-2">Komentar</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {(detail.lines || []).length === 0 && (
+                          <tr>
+                            <td colSpan={9} className="p-4 text-center text-muted-foreground">
+                              Tidak ada baris alokasi
+                            </td>
+                          </tr>
+                        )}
+                        {(detail.lines || []).map((line, idx) => (
+                          <tr key={`${line.servicePointId}-${idx}`} className="border-t">
+                            <td className="p-2">
+                              <div className="font-medium">
+                                {line.servicePointNama || line.servicePointId}
+                              </div>
+                              {line.servicePointKode && (
+                                <div className="text-xs font-mono text-muted-foreground">
+                                  {line.servicePointKode}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-2 font-mono text-xs tabular-nums">
+                              {line.jamKirim || '—'}
+                            </td>
+                            <td className="p-2">
+                              {line.finishedGoodNama || line.menuNama || '—'}
+                              {(line.finishedGoodKode || line.menuKode) && (
+                                <div className="text-xs font-mono text-muted-foreground">
+                                  {line.finishedGoodKode || line.menuKode}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-2 text-right text-muted-foreground">
+                              {line.kapasitasPorsi ?? '—'}
+                            </td>
+                            <td className="p-2 text-right font-medium">{line.qtyPorsi}</td>
+                            <td className="p-2 text-right">{line.qtyDikirim ?? '—'}</td>
+                            <td className="p-2 text-right">{line.qtyDiterima ?? '—'}</td>
+                            <td className="p-2 text-right">{line.qtyDikembalikan ?? '—'}</td>
+                            <td className="p-2 text-muted-foreground max-w-[12rem] truncate" title={line.notes || ''}>
+                              {line.notes || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
               {(detail.history || []).length > 0 && (
@@ -1010,18 +1330,14 @@ function DistributionPageContent() {
         open={open}
         onOpenChange={(o) => {
           setOpen(o);
-          if (!o) {
-            setResultId('');
-            setSelectedPoints([]);
-            setCreateNote('');
-          }
+          if (!o) resetCreateForm();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Packing / Distribusi baru</DialogTitle>
+            <DialogTitle>Jadwal Pengiriman baru</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2">
+          <div className="space-y-4 py-2">
             <div className="space-y-1">
               <Label>Hasil produksi (HSL)</Label>
               <select
@@ -1036,33 +1352,258 @@ function DistributionPageContent() {
                   </option>
                 ))}
               </select>
-                {availableResults.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Tidak ada HSL siap packing — HSL yang masih aktif / sudah diterima tidak ditampilkan.
-                  </p>
-                )}
+              {availableResults.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Tidak ada HSL siap packing — HSL yang masih aktif / sudah diterima tidak ditampilkan.
+                </p>
+              )}
             </div>
-            <div className="space-y-2">
-              <Label>Titik layanan (alokasi otomatis berbobot kapasitas)</Label>
-              <div className="max-h-48 overflow-y-auto border rounded-md p-2 space-y-1">
-                {points.length === 0 && (
-                  <p className="text-xs text-muted-foreground">Belum ada titik aktif — buat di Titik Layanan.</p>
-                )}
-                {points.map((p) => (
-                  <label key={p.id} className="flex items-center gap-2 text-sm py-1">
-                    <input
-                      type="checkbox"
-                      checked={selectedPoints.includes(p.id)}
-                      onChange={() => togglePoint(p.id)}
-                    />
-                    <span>
-                      {p.kode ? `${p.kode} · ` : ''}{p.nama}
-                      {p.kapasitasPorsi != null ? ` (${p.kapasitasPorsi} porsi)` : ''}
-                    </span>
-                  </label>
+
+            <p className="text-xs text-muted-foreground rounded-md border bg-muted/30 px-3 py-2">
+              Urutan: <strong>1) Gelombang Loading</strong>
+              {' → '}
+              <strong>2) Armada</strong>
+              {' → '}
+              <strong>3) Titik distribusi</strong> (checkbox, urut Jam Makan)
+            </p>
+
+            {!armadas.length && (
+              <p className="text-xs text-amber-700">
+                Belum ada armada aktif.{' '}
+                <Link href="/food-production/armada" className="underline underline-offset-2">
+                  Buat armada
+                </Link>
+                {' '}dulu.
+              </p>
+            )}
+            {!sortedPoints.length && (
+              <p className="text-xs text-amber-700">
+                Belum ada titik aktif — buat di Titik Layanan (isi Jam Makan).
+              </p>
+            )}
+
+            {/* 1. Gelombang Loading */}
+            <div className="space-y-2 rounded-md border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-sm font-semibold">1. Gelombang Loading</Label>
+                <Button type="button" variant="outline" size="sm" onClick={addLoadingDraft}>
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Tambah loading
+                </Button>
+              </div>
+              {!loadingDrafts.length && (
+                <p className="text-[11px] text-muted-foreground">
+                  Tambah Loading pertama / kedua, isi jam start & maksimal loading.
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {loadingDrafts.map((L) => (
+                  <div key={L.key} className="rounded-md border bg-slate-50/40 p-3 space-y-3">
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="space-y-1 flex-1 min-w-[8rem]">
+                        <Label className="text-xs">Label</Label>
+                        <Input
+                          value={L.label}
+                          onChange={(e) => updateLoadingDraft(L.key, { label: e.target.value })}
+                          placeholder={loadingLabel(L.urutan)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Start loading</Label>
+                        <Input
+                          type="time"
+                          value={L.jamStart}
+                          onChange={(e) => updateLoadingDraft(L.key, { jamStart: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Maks loading</Label>
+                        <Input
+                          type="time"
+                          value={L.jamMax}
+                          onChange={(e) => updateLoadingDraft(L.key, { jamMax: e.target.value })}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() => removeLoadingDraft(L.key)}
+                      >
+                        Hapus
+                      </Button>
+                    </div>
+
+                    {/* 2. Armada */}
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs font-semibold flex items-center gap-1">
+                        <Car className="h-3.5 w-3.5" /> 2. Pilih Armada
+                      </Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!armadas.length}
+                        onClick={() => addFleetToLoading(L.key)}
+                      >
+                        <Plus className="h-3.5 w-3.5 mr-1" /> Armada
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {!L.fleets.length && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Pilih armada untuk loading ini, lalu centang titik di langkah 3.
+                        </p>
+                      )}
+                      {L.fleets.map((fleet) => {
+                        const armada = armadasById.get(fleet.armadaId);
+                        const kat = kategoriSummaryForPoints(fleet.servicePointIds);
+                        const totalKat = Object.values(kat).reduce((s, n) => s + (Number(n) || 0), 0);
+                        const routeStops = [...fleet.servicePointIds].sort((a, b) => {
+                          const pa = pointsById.get(a);
+                          const pb = pointsById.get(b);
+                          return compareJamKirim(pa?.jamKirim, pb?.jamKirim)
+                            || String(pa?.nama || a).localeCompare(String(pb?.nama || b), 'id');
+                        });
+                        // Unik armada hanya dalam loading yang sama (boleh dipakai lagi di loading lain).
+                        const usedInThisLoading = new Set(
+                          L.fleets
+                            .filter((f) => f.key !== fleet.key)
+                            .map((f) => f.armadaId),
+                        );
+                        return (
+                          <div key={fleet.key} className="rounded border bg-white p-2.5 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <select
+                                className="h-9 border rounded-md px-2 text-sm flex-1 min-w-[12rem]"
+                                value={fleet.armadaId}
+                                onChange={(e) => setFleetArmada(L.key, fleet.key, e.target.value)}
+                              >
+                                {armadas.map((a) => (
+                                  <option
+                                    key={a.id}
+                                    value={a.id}
+                                    disabled={usedInThisLoading.has(a.id)}
+                                  >
+                                    {a.kode} · {a.nama}{a.platNomor ? ` (${a.platNomor})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive"
+                                onClick={() => removeFleetFromLoading(L.key, fleet.key)}
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+
+                            {/* 3. Titik distribusi */}
+                            <div className="space-y-1">
+                              <Label className="text-xs font-semibold">
+                                3. Titik distribusi (urut Jam Makan)
+                              </Label>
+                              <p className="text-[10px] text-muted-foreground">
+                                Centang satu atau lebih titik untuk armada ini.
+                                Titik yang sudah dipakai armada lain dinonaktifkan.
+                              </p>
+                              <div className="max-h-40 overflow-y-auto border rounded-md">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-muted/40 sticky top-0">
+                                    <tr>
+                                      <th className="p-1.5 w-7" />
+                                      <th className="text-left p-1.5 font-medium whitespace-nowrap">Jam</th>
+                                      <th className="text-left p-1.5 font-medium">Titik</th>
+                                      <th className="text-right p-1.5 font-medium whitespace-nowrap">Porsi / Kategori</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {sortedPoints.length === 0 && (
+                                      <tr>
+                                        <td colSpan={4} className="p-2 text-muted-foreground">
+                                          Belum ada titik
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {sortedPoints.map((p) => {
+                                      const checked = fleet.servicePointIds.includes(p.id);
+                                      const takenElsewhere = !checked && assignedPointIds.has(p.id);
+                                      const katLine = formatKategoriShort(p.porsiByKategori);
+                                      return (
+                                        <tr
+                                          key={`${fleet.key}-${p.id}`}
+                                          className={`border-t ${takenElsewhere ? 'opacity-40' : ''}`}
+                                        >
+                                          <td className="p-1.5 align-top">
+                                            <input
+                                              type="checkbox"
+                                              checked={checked}
+                                              disabled={takenElsewhere}
+                                              onChange={() => toggleFleetPoint(L.key, fleet.key, p.id)}
+                                            />
+                                          </td>
+                                          <td className="p-1.5 font-mono tabular-nums whitespace-nowrap align-top">
+                                            {p.jamKirim || '—:—'}
+                                          </td>
+                                          <td className="p-1.5 align-top">
+                                            <div className="font-medium">
+                                              {p.kode ? `${p.kode} · ` : ''}{p.nama}
+                                            </div>
+                                            {(p.drops || []).length > 0 && (
+                                              <div className="text-[10px] text-muted-foreground">
+                                                {(p.drops || []).map((d) => (
+                                                  `→ ${(d.jamKirim || '—:—').replace(':', '.')} ${d.label}`
+                                                )).join(' · ')}
+                                              </div>
+                                            )}
+                                          </td>
+                                          <td className="p-1.5 text-right align-top">
+                                            <div className="tabular-nums font-medium">
+                                              {p.kapasitasPorsi ?? '—'}
+                                            </div>
+                                            <div className="text-[10px] text-muted-foreground leading-snug">
+                                              {katLine !== '—' ? `(${katLine})` : 'belum ada kategori'}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+
+                            {fleet.servicePointIds.length > 0 && (
+                              <div className="text-[11px] rounded border border-dashed px-2 py-1.5">
+                                Total: <strong>{totalKat || fleet.servicePointIds.length}</strong>
+                                {' · '}
+                                {formatKategoriShort(kat)}
+                                <div className="text-[10px] text-muted-foreground mt-0.5">
+                                  Rute: {routeStops.map((id, i) => {
+                                    const p = pointsById.get(id);
+                                    return `${i + 1}. ${(p?.jamKirim || '').replace(':', '.') || '—'} ${p?.nama || id}`;
+                                  }).join(' → ')}
+                                </div>
+                                {armada?.kapasitasPorsi != null && (
+                                  <div className="text-[10px] text-muted-foreground">
+                                    Kapasitas armada: {armada.kapasitasPorsi.toLocaleString('id-ID')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
+
             <div className="space-y-1">
               <Label>Komentar / Catatan disiapkan</Label>
               <Textarea
@@ -1075,8 +1616,16 @@ function DistributionPageContent() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
-            <Button onClick={() => void create()} disabled={saving || !resultId || availableResults.length === 0}>
-              {saving ? 'Menyimpan…' : 'Buat DST'}
+            <Button
+              onClick={() => void create()}
+              disabled={
+                saving
+                || !resultId
+                || availableResults.length === 0
+                || selectedPointIds.length === 0
+              }
+            >
+              {saving ? 'Menyimpan…' : 'Buat jadwal'}
             </Button>
           </DialogFooter>
         </DialogContent>

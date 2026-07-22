@@ -10,7 +10,7 @@ import {
  * Koleksi yang dihapus saat reset sandbox.
  * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
  * Kitchen Assurance: observation / case / follow-up + policy & monitoring definitions.
- * Setup dapur (kitchens, service_points, temperature_thresholds) tetap.
+ * Setup dapur (kitchens, service_points, armadas, temperature_thresholds) tetap.
  */
 export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'hutang_pembayaran',
@@ -91,6 +91,7 @@ export const SANDBOX_KEEP_HINT = [
   'stok_lokasi',
   'kitchens',
   'service_points',
+  'armadas',
   'temperature_thresholds',
   'assets',
   'users',

@@ -13,6 +13,8 @@ import {
   normalizeServicePointJenis,
   normalizeServicePointKode,
   normalizePicNoTelp,
+  normalizeJamKirim,
+  normalizeServicePointDrops,
   resolvePenerimaManfaat,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
@@ -30,6 +32,8 @@ interface SpBody extends Record<string, unknown> {
   alamat?: string;
   kapasitasPorsi?: number;
   porsiByKategori?: Record<string, number>;
+  jamKirim?: string;
+  drops?: unknown;
   pic?: string;
   picNoTelp?: string;
   aktif?: boolean;
@@ -106,6 +110,12 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       kapasitasPorsi: spBody.kapasitasPorsi,
     });
     if ('error' in penerima) return err(penerima.error, 400);
+    const jamKirim = normalizeJamKirim(spBody.jamKirim);
+    if (jamKirim && typeof jamKirim === 'object' && 'error' in jamKirim) {
+      return err(jamKirim.error, 400);
+    }
+    const drops = normalizeServicePointDrops(spBody.drops);
+    if ('error' in drops) return err(drops.error, 400);
 
     const now = new Date();
     const doc: ServicePointDoc = {
@@ -119,6 +129,8 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       alamat: String(spBody.alamat || '').trim() || undefined,
       kapasitasPorsi: penerima.kapasitasPorsi,
       porsiByKategori: penerima.porsiByKategori,
+      jamKirim: jamKirim || undefined,
+      drops: drops.length ? drops : undefined,
       pic: String(spBody.pic || '').trim() || undefined,
       picNoTelp: normalizePicNoTelp(spBody.picNoTelp),
       aktif: spBody.aktif !== false,
@@ -175,6 +187,18 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     }
     if (spBody.jenis !== undefined) update.jenis = normalizeServicePointJenis(spBody.jenis);
     if (spBody.alamat !== undefined) update.alamat = String(spBody.alamat || '').trim() || null;
+    if (spBody.jamKirim !== undefined) {
+      const jamKirim = normalizeJamKirim(spBody.jamKirim);
+      if (jamKirim && typeof jamKirim === 'object' && 'error' in jamKirim) {
+        return err(jamKirim.error, 400);
+      }
+      update.jamKirim = jamKirim || null;
+    }
+    if (spBody.drops !== undefined) {
+      const drops = normalizeServicePointDrops(spBody.drops);
+      if ('error' in drops) return err(drops.error, 400);
+      update.drops = drops;
+    }
     if (spBody.pic !== undefined) update.pic = String(spBody.pic || '').trim() || null;
     if (spBody.picNoTelp !== undefined) {
       update.picNoTelp = normalizePicNoTelp(spBody.picNoTelp) || null;
