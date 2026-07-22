@@ -77,6 +77,7 @@ export type AuditAction =
   | 'ARMADA_DEACTIVATE'
   | 'DIST_CREATE'
   | 'DIST_STATUS'
+  | 'DIST_SCHEDULE'
   | 'DIST_COMPLETE'
   | 'DIST_CANCEL'
   | 'TEMP_LOG_CREATE'

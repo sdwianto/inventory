@@ -27,7 +27,8 @@ export function kategoriPorsiLabel(v: string | undefined | null): string {
   if (!v) return '—';
   const opt = KATEGORI_PORSI_OPTIONS.find((o) => o.value === v);
   if (!opt) return v;
-  return opt.hint ? `${opt.label} (${opt.hint})` : opt.label;
+  // Semua opsi punya hint (as const) — jangan pakai ternary falsy-branch (jadi `never` di tsc).
+  return `${opt.label} (${opt.hint})`;
 }
 
 /** Normalize one or many kategori porsi (checkbox multi-select). Preserves option order. */
