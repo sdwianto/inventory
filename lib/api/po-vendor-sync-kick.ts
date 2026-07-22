@@ -1,4 +1,4 @@
-/** Enqueue PO_VENDOR_SYNC + picu worker (HTTP) dengan fallback proses job di after(). */
+/** Enqueue PO_VENDOR_SYNC + wake/drain worker (VPS job-bus + legacy). */
 
 import { after } from 'next/server';
 import type { Db } from 'mongodb';
@@ -6,6 +6,7 @@ import { connectToMongo } from '@/lib/api/db';
 import {
   enqueueJob,
   processJobById,
+  scheduleJobProcessing,
   JOB_TYPES,
 } from '@/lib/api/bg-jobs';
 import { kickBgWorker } from '@/lib/api/worker-kick';
@@ -19,8 +20,24 @@ function workerBaseUrl(): string {
   return PROD_INVENTORY_URL;
 }
 
-async function triggerWorker(jobId: string): Promise<boolean> {
-  if (!shouldUseLegacyBgPoll()) return true;
+async function triggerWorker(db: Db, jobId: string): Promise<boolean> {
+  // VPS: Redis wake dari enqueue + drain processOneTick (jangan no-op).
+  if (!shouldUseLegacyBgPoll()) {
+    scheduleJobProcessing(db, { limit: 4 });
+    try {
+      const { processExecutionJobs } = await import('@/lib/api/process-execution-jobs');
+      await processExecutionJobs(db, {
+        limit: 3,
+        domain: 'inventory',
+        workerId: 'po-vendor-http-drain',
+        capabilities: ['SYNC', 'CPU_BATCH', 'WEBHOOK'],
+      });
+      return true;
+    } catch (e) {
+      console.warn('[po-vendor-sync] VPS drain failed:', e instanceof Error ? e.message : e);
+      return true; // enqueue + Redis wake tetap jalur utama
+    }
+  }
 
   const kicked = await kickBgWorker({ limit: 2, baseUrl: workerBaseUrl() });
   try {
@@ -59,10 +76,12 @@ export async function enqueueAndKickPoVendorSync(
     payload,
   });
 
-  void triggerWorker(jobId);
+  // Drain segera (termasuk job reused yang tidak re-publish wake).
+  void triggerWorker(db, jobId);
 
   after(async () => {
-    await triggerWorker(jobId);
+    const freshDb = await connectToMongo();
+    await triggerWorker(freshDb, jobId);
   });
 
   return { jobId, reused };

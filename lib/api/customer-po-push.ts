@@ -36,8 +36,27 @@ function isTimeoutError(msg: string) {
   return /timeout|aborted|tidak merespons/i.test(msg);
 }
 
-/** Wake cold Vercel lambda sebelum push berat. */
+/** Wake cold Vercel lambda sebelum push berat. Skip di VPS/docker (Sales selalu hidup). */
+export function shouldWarmUpSalesApp(salesUrl: string): boolean {
+  const mode = String(process.env.DEPLOYMENT_MODE || '').trim().toLowerCase();
+  if (mode === 'vps') return false;
+  const host = (() => {
+    try {
+      return new URL(salesUrl).hostname;
+    } catch {
+      return '';
+    }
+  })();
+  // Compose service name / private docker DNS — jangan buang 8s warm-up.
+  if (!host || host === 'sales' || /\.internal$/i.test(host) || host.endsWith('.local')) {
+    return false;
+  }
+  if (/localhost|127\.0\.0\.1/i.test(host)) return false;
+  return true;
+}
+
 export async function warmUpSalesApp(salesUrl: string): Promise<void> {
+  if (!shouldWarmUpSalesApp(salesUrl)) return;
   try {
     await fetch(`${salesUrl.replace(/\/$/, '')}/api/`, {
       signal: AbortSignal.timeout(8_000),

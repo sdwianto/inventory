@@ -59,12 +59,23 @@ async function main() {
     }
   }
 
+  const salesAppUrl = String(process.env.SALES_APP_URL || '').trim();
+  const pollIntervalMs = Math.max(
+    500,
+    Number(process.env.WORKER_POLL_INTERVAL_MS || 1000) || 1000,
+  );
+
   console.info('[execution:worker] starting', {
     domain: config.workerDomain,
     workerId,
     capabilities,
     schedulerEnabled: config.schedulerEnabled,
+    salesAppUrl: salesAppUrl || '(unset)',
+    pollIntervalMs,
   });
+  if (!salesAppUrl) {
+    console.warn('[execution:worker] SALES_APP_URL unset — PO_VENDOR_SYNC push may fail/timeout');
+  }
 
   try {
     await startWorker({
@@ -72,6 +83,7 @@ async function main() {
       workerId,
       capabilities,
       db,
+      pollIntervalMs,
     });
   } finally {
     schedulerShuttingDown = true;

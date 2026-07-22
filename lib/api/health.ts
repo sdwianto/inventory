@@ -67,11 +67,15 @@ export interface HealthPayload {
   timestamp: string;
 }
 
+const OPEN_QUEUE_STATUSES = ['PENDING', 'DISPATCHED', 'RETRYING'] as const;
+
 export async function buildBgJobsHealth(db: Db): Promise<BgJobsHealth> {
   await ensureBgJobIndexes(db);
-  const pendingCount = await db.collection('bg_jobs').countDocuments({ status: 'PENDING' });
+  const pendingCount = await db.collection('bg_jobs').countDocuments({
+    status: { $in: [...OPEN_QUEUE_STATUSES] },
+  });
   const oldest = await db.collection('bg_jobs').findOne(
-    { status: 'PENDING' },
+    { status: { $in: [...OPEN_QUEUE_STATUSES] } },
     { sort: { createdAt: 1 }, projection: { createdAt: 1 } },
   );
   const oldestPendingAgeSec = oldest?.createdAt

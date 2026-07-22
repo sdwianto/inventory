@@ -251,7 +251,25 @@ export function useCustomerPoPage() {
             const noSo = str(s.vendorNoSO);
             return noSo ? `${noPo} → ${noSo}` : noPo;
           }).filter(Boolean).join(', ');
-          toast.success(`${syncedRows.length} PO terkirim ke vendor`, { description: labels });
+          const firstNoSo = syncedRows.map((s) => str(s.vendorNoSO)).find(Boolean) || '';
+          const salesBase = String(process.env.NEXT_PUBLIC_SALES_APP_URL || '').replace(/\/$/, '');
+          toast.success(`${syncedRows.length} PO terkirim ke vendor`, {
+            description: labels,
+            ...(salesBase && firstNoSo
+              ? {
+                  action: {
+                    label: `Buka ${firstNoSo}`,
+                    onClick: () => {
+                      window.open(
+                        `${salesBase}/penjualan/sales-order`,
+                        '_blank',
+                        'noopener,noreferrer',
+                      );
+                    },
+                  },
+                }
+              : {}),
+          });
         } else {
           void reloadList();
           autoSyncCooldownUntil.current = Date.now() + 60_000;

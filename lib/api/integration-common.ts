@@ -111,8 +111,13 @@ export function salesFetchErrorMessage(err: unknown, salesUrl: string): string {
   if (code === 'ENOTFOUND') {
     return `Alamat sales.app tidak ditemukan: ${salesUrl}`;
   }
-  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
-    return `Sales.app tidak merespons (timeout) — cek ${salesUrl}`;
+  const msg = String(cause?.message || e?.message || '');
+  if (
+    e?.name === 'TimeoutError'
+    || code === 'ABORT_ERR'
+    || /signal timed out|aborted|timeout/i.test(msg)
+  ) {
+    return `Sales.app tidak merespons (timeout) — cek ${salesUrl} dan inventory-worker`;
   }
-  return `Gagal menghubungi sales.app: ${cause?.message || e?.message || 'koneksi gagal'}`;
+  return `Gagal menghubungi sales.app: ${msg || 'koneksi gagal'}`;
 }
