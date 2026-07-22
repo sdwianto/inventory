@@ -151,6 +151,7 @@ export type ExplodeMrpInput = {
     | 'status'
     | 'kategoriPorsiList'
     | 'materialOverrides'
+    | 'recipeBufferPct'
   >;
   menusById: Map<string, MenuDoc>;
   recipesById: Map<string, RecipeDoc>;
