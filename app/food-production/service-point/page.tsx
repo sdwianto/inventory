@@ -16,9 +16,13 @@ import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { MapPinned, Plus, Pencil, RefreshCw, Power, Trash2 } from 'lucide-react';
 import {
+  KATEGORI_PORSI_OPTIONS,
   SERVICE_POINT_JENIS_LABELS,
+  sumPorsiByKategori,
   type ServicePointJenis,
+  type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
+import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
@@ -32,9 +36,35 @@ interface SpRow {
   kitchenNama?: string;
   alamat?: string;
   kapasitasPorsi?: number;
+  porsiByKategori?: ServicePointPorsiByKategori;
   pic?: string;
   picNoTelp?: string;
   aktif: boolean;
+}
+
+type PorsiFormMap = Record<KategoriPorsi, string>;
+
+function emptyPorsiForm(): PorsiFormMap {
+  return Object.fromEntries(KATEGORI_PORSI_OPTIONS.map((o) => [o.value, ''])) as PorsiFormMap;
+}
+
+function porsiFormFromRow(map?: ServicePointPorsiByKategori): PorsiFormMap {
+  const base = emptyPorsiForm();
+  if (!map) return base;
+  for (const opt of KATEGORI_PORSI_OPTIONS) {
+    const n = Number(map[opt.value]);
+    if (Number.isFinite(n) && n > 0) base[opt.value] = String(n);
+  }
+  return base;
+}
+
+function porsiFormToPayload(form: PorsiFormMap): ServicePointPorsiByKategori {
+  const out: ServicePointPorsiByKategori = {};
+  for (const opt of KATEGORI_PORSI_OPTIONS) {
+    const n = Number(String(form[opt.value] || '').replace(',', '.'));
+    if (Number.isFinite(n) && n > 0) out[opt.value] = Math.round(n);
+  }
+  return out;
 }
 
 const emptyForm = {
@@ -43,7 +73,7 @@ const emptyForm = {
   jenis: 'SEKOLAH' as ServicePointJenis,
   kitchenId: '',
   alamat: '',
-  kapasitasPorsi: '',
+  porsiByKategori: emptyPorsiForm(),
   pic: '',
   picNoTelp: '',
 };
@@ -107,7 +137,11 @@ export default function ServicePointPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ ...emptyForm, kode: nextServicePointKode(rows) });
+    setForm({
+      ...emptyForm,
+      kode: nextServicePointKode(rows),
+      porsiByKategori: emptyPorsiForm(),
+    });
     setOpen(true);
   }
 
@@ -119,18 +153,24 @@ export default function ServicePointPage() {
       jenis: row.jenis || 'SEKOLAH',
       kitchenId: row.kitchenId || '',
       alamat: row.alamat || '',
-      kapasitasPorsi: row.kapasitasPorsi != null ? String(row.kapasitasPorsi) : '',
+      porsiByKategori: porsiFormFromRow(row.porsiByKategori),
       pic: row.pic || '',
       picNoTelp: row.picNoTelp || '',
     });
     setOpen(true);
   }
 
+  const penerimaManfaatTotal = useMemo(
+    () => sumPorsiByKategori(porsiFormToPayload(form.porsiByKategori)),
+    [form.porsiByKategori],
+  );
+
   async function save() {
     setSaving(true);
     try {
       const url = editing ? `/api/service-points/${editing.id}` : '/api/service-points';
       const method = editing ? 'PUT' : 'POST';
+      const porsiByKategori = porsiFormToPayload(form.porsiByKategori);
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
@@ -140,7 +180,7 @@ export default function ServicePointPage() {
           jenis: form.jenis,
           kitchenId: form.kitchenId || undefined,
           alamat: form.alamat || undefined,
-          kapasitasPorsi: form.kapasitasPorsi ? Number(form.kapasitasPorsi) : undefined,
+          porsiByKategori,
           pic: form.pic || undefined,
           picNoTelp: form.picNoTelp || undefined,
         }),
@@ -247,7 +287,7 @@ export default function ServicePointPage() {
               <th className="text-left p-3">Nama</th>
               <th className="text-left p-3">Jenis</th>
               <th className="text-left p-3">Dapur</th>
-              <th className="text-right p-3">Kapasitas</th>
+              <th className="text-right p-3">Penerima Manfaat</th>
               <th className="text-left p-3">PIC</th>
               <th className="text-left p-3">No Telp</th>
               <th className="text-left p-3">Status</th>
@@ -325,26 +365,57 @@ export default function ServicePointPage() {
               <Label>Nama</Label>
               <Input value={form.nama} onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))} placeholder="SDN 01" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Dapur penyalur</Label>
-                <select
-                  className="w-full h-10 border rounded-md px-2 text-sm"
-                  value={form.kitchenId}
-                  onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
-                >
-                  <option value="">—</option>
-                  {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-                </select>
+            <div className="space-y-1">
+              <Label>Dapur penyalur</Label>
+              <select
+                className="w-full h-10 border rounded-md px-2 text-sm"
+                value={form.kitchenId}
+                onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
+              >
+                <option value="">—</option>
+                {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2 rounded-md border p-3 bg-muted/20">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-sm font-medium">Kategori porsi</Label>
+                <div className="text-xs text-muted-foreground">
+                  Penerima Manfaat:{' '}
+                  <span className="font-semibold text-foreground tabular-nums">
+                    {penerimaManfaatTotal.toLocaleString('id-ID')}
+                  </span>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label>Kapasitas produksi</Label>
-                <Input
-                  type="number"
-                  value={form.kapasitasPorsi}
-                  onChange={(e) => setForm((f) => ({ ...f, kapasitasPorsi: e.target.value }))}
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {KATEGORI_PORSI_OPTIONS.map((opt) => (
+                  <div key={opt.value} className="space-y-1">
+                    <Label className="text-xs font-normal">
+                      {opt.label}
+                      {opt.hint ? (
+                        <span className="text-muted-foreground"> — {opt.hint}</span>
+                      ) : null}
+                    </Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={form.porsiByKategori[opt.value]}
+                      onChange={(e) => setForm((f) => ({
+                        ...f,
+                        porsiByKategori: {
+                          ...f.porsiByKategori,
+                          [opt.value]: e.target.value,
+                        },
+                      }))}
+                    />
+                  </div>
+                ))}
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                Total kategori otomatis menjadi Penerima Manfaat.
+              </p>
             </div>
             <div className="space-y-1">
               <Label>Alamat</Label>

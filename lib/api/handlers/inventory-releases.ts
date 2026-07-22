@@ -126,7 +126,7 @@ export async function handleInventoryReleases({
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
     const tenantId = tenantIdForWrite(scopeAuth, releaseBody);
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi);
-    if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING atau GBASAH', 400);
+    if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
 
     const lineItems: ReleaseLineItem[] = [];
     const uomsCacheCreate = new Map<string, import('@/lib/uom/types').ProductUom[]>();

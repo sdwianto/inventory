@@ -55,10 +55,7 @@ interface StockTrend {
   totals: Record<string, unknown>;
 }
 
-interface GudangFilter {
-  GKERING: boolean;
-  GBASAH: boolean;
-}
+type GudangFilter = Record<string, boolean>;
 
 interface SummaryCardProps {
   title: string;
@@ -88,7 +85,9 @@ function SummaryCard({
 export default function SaldoGudangPage() {
   const [q, setQ] = useState('');
   const [trendMonths, setTrendMonths] = useState('1');
-  const [gudangFilter, setGudangFilter] = useState<GudangFilter>({ GKERING: true, GBASAH: true });
+  const [gudangFilter, setGudangFilter] = useState<GudangFilter>(() => (
+    Object.fromEntries(WAREHOUSES.map((w) => [w.kode, true]))
+  ));
 
   const rowsUrl = `/api/stok/saldo?part=rows${q ? `&q=${encodeURIComponent(q)}` : ''}`;
   const trendUrl = `/api/stok/saldo?part=trend&trendMonths=${trendMonths}`;
@@ -124,10 +123,10 @@ export default function SaldoGudangPage() {
     void refetchRows();
   };
 
-  const toggleGudang = (kode: keyof GudangFilter, checked: boolean) => {
+  const toggleGudang = (kode: string, checked: boolean) => {
     setGudangFilter((prev) => {
       const next = { ...prev, [kode]: checked };
-      if (!next.GKERING && !next.GBASAH) return prev;
+      if (!WAREHOUSES.some((w) => next[w.kode])) return prev;
       return next;
     });
   };
@@ -135,8 +134,8 @@ export default function SaldoGudangPage() {
   const stockRows = useMemo(() => {
     const withStock = rows.filter((r) => (r.stokTotal || r.stokQty || 0) > 0);
     return withStock.filter((r) => {
-      const g = (r.gudangKode || 'GKERING') as keyof GudangFilter;
-      return gudangFilter[g];
+      const g = r.gudangKode || 'GKERING';
+      return !!gudangFilter[g];
     });
   }, [rows, gudangFilter]);
 
@@ -150,7 +149,7 @@ export default function SaldoGudangPage() {
     return { qty, nilai, sku: stockRows.length };
   }, [stockRows]);
 
-  const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
+  const showAllGudang = WAREHOUSES.every((w) => gudangFilter[w.kode]);
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -159,7 +158,8 @@ export default function SaldoGudangPage() {
             <Boxes className="w-6 h-6" /> Saldo Stok per Gudang
           </h1>
           <p className="text-sm text-slate-500">
-            Setiap produk hanya di satu gudang — {warehouseName('GKERING')} atau {warehouseName('GBASAH')} (tidak dicampur).
+            Setiap produk hanya di satu gudang — {warehouseName('GKERING')}, {warehouseName('GBASAH')},
+            atau {warehouseName('GJANITOR')} (tidak dicampur).
           </p>
         </div>
         <OperationalScopeBar />
@@ -240,17 +240,23 @@ export default function SaldoGudangPage() {
                   <Checkbox
                     id={`gudang-${w.kode}`}
                     checked={!!gudangFilter[w.kode as keyof GudangFilter]}
-                    onCheckedChange={(v) => toggleGudang(w.kode as keyof GudangFilter, v === true)}
+                    onCheckedChange={(v) => toggleGudang(w.kode, v === true)}
                     className={
                       w.kode === 'GBASAH'
                         ? 'border-blue-400 data-[state=checked]:bg-blue-600'
-                        : 'border-amber-500 data-[state=checked]:bg-amber-600'
+                        : w.kode === 'GJANITOR'
+                          ? 'border-emerald-400 data-[state=checked]:bg-emerald-600'
+                          : 'border-amber-500 data-[state=checked]:bg-amber-600'
                     }
                   />
                   <Label
                     htmlFor={`gudang-${w.kode}`}
                     className={`text-sm font-medium cursor-pointer ${
-                      w.kode === 'GBASAH' ? 'text-blue-800' : 'text-amber-800'
+                      w.kode === 'GBASAH'
+                        ? 'text-blue-800'
+                        : w.kode === 'GJANITOR'
+                          ? 'text-emerald-800'
+                          : 'text-amber-800'
                     }`}
                   >
                     {w.nama}
@@ -261,10 +267,10 @@ export default function SaldoGudangPage() {
           </div>
           {!showAllGudang && (
             <p className="text-xs text-slate-500 mb-2">
-              Menampilkan: {[
-                gudangFilter.GKERING && warehouseName('GKERING'),
-                gudangFilter.GBASAH && warehouseName('GBASAH'),
-              ].filter(Boolean).join(' · ')}
+              Menampilkan: {WAREHOUSES
+                .filter((w) => gudangFilter[w.kode])
+                .map((w) => w.nama)
+                .join(' · ')}
             </p>
           )}
 
@@ -293,7 +299,7 @@ export default function SaldoGudangPage() {
                 )}
                 {!loading && !stockRows.length && (
                   <tr><td colSpan={showAllGudang ? 9 : 7} className="text-center py-10 text-slate-400">
-                    {!gudangFilter.GKERING && !gudangFilter.GBASAH
+                    {!WAREHOUSES.some((w) => gudangFilter[w.kode])
                       ? 'Pilih minimal satu gudang'
                       : 'Belum ada stok di gudang yang dipilih'}
                   </td></tr>

@@ -29,6 +29,7 @@ import {
 const WAREHOUSE_LABELS: Record<string, string> = {
   GKERING: 'Gudang Kering',
   GBASAH: 'Gudang Basah',
+  GJANITOR: 'Gudang Janitor',
 };
 
 function warehouseLabel(kode?: string | null): string {

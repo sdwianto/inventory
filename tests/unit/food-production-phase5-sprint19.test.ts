@@ -4,6 +4,8 @@ import {
   normalizeServicePointJenis,
   normalizeServicePointKode,
   normalizeKapasitasPorsi,
+  resolvePenerimaManfaat,
+  sumPorsiByKategori,
 } from '@/lib/food-production/service-point';
 import {
   allocatePorsiAcrossPoints,
@@ -31,6 +33,20 @@ describe('food-production phase 5 sprint 19', () => {
     expect(normalizeServicePointKode(' Ti 01 ')).toBe('Ti-01');
     expect(normalizeKapasitasPorsi('120')).toBe(120);
     expect(normalizeKapasitasPorsi(-1)).toBeUndefined();
+  });
+
+  it('sums kategori porsi into penerima manfaat', () => {
+    const resolved = resolvePenerimaManfaat({
+      porsiByKategori: {
+        PORSI_BESAR: 100,
+        PORSI_KECIL: 50,
+        POSYANDU_BALITA: 10,
+      },
+    });
+    expect('error' in resolved).toBe(false);
+    if ('error' in resolved) return;
+    expect(resolved.kapasitasPorsi).toBe(160);
+    expect(sumPorsiByKategori(resolved.porsiByKategori)).toBe(160);
   });
 
   it('collapses recipe lines to one Food Tray (max porsi = set makanan)', () => {

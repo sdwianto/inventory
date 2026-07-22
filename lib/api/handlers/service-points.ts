@@ -12,8 +12,8 @@ import {
   SERVICE_POINTS_COLLECTION,
   normalizeServicePointJenis,
   normalizeServicePointKode,
-  normalizeKapasitasPorsi,
   normalizePicNoTelp,
+  resolvePenerimaManfaat,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
@@ -29,6 +29,7 @@ interface SpBody extends Record<string, unknown> {
   kitchenId?: string;
   alamat?: string;
   kapasitasPorsi?: number;
+  porsiByKategori?: Record<string, number>;
   pic?: string;
   picNoTelp?: string;
   aktif?: boolean;
@@ -100,6 +101,12 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     );
     if (dup) return err(`Kode titik ${kode} sudah dipakai`, 400);
 
+    const penerima = resolvePenerimaManfaat({
+      porsiByKategori: spBody.porsiByKategori,
+      kapasitasPorsi: spBody.kapasitasPorsi,
+    });
+    if ('error' in penerima) return err(penerima.error, 400);
+
     const now = new Date();
     const doc: ServicePointDoc = {
       id: uuidv4(),
@@ -110,7 +117,8 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       kitchenId,
       kitchenNama,
       alamat: String(spBody.alamat || '').trim() || undefined,
-      kapasitasPorsi: normalizeKapasitasPorsi(spBody.kapasitasPorsi),
+      kapasitasPorsi: penerima.kapasitasPorsi,
+      porsiByKategori: penerima.porsiByKategori,
       pic: String(spBody.pic || '').trim() || undefined,
       picNoTelp: normalizePicNoTelp(spBody.picNoTelp),
       aktif: spBody.aktif !== false,
@@ -171,8 +179,15 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     if (spBody.picNoTelp !== undefined) {
       update.picNoTelp = normalizePicNoTelp(spBody.picNoTelp) || null;
     }
-    if (spBody.kapasitasPorsi !== undefined) {
-      update.kapasitasPorsi = normalizeKapasitasPorsi(spBody.kapasitasPorsi) ?? null;
+    if (spBody.porsiByKategori !== undefined) {
+      const penerima = resolvePenerimaManfaat({ porsiByKategori: spBody.porsiByKategori });
+      if ('error' in penerima) return err(penerima.error, 400);
+      update.porsiByKategori = penerima.porsiByKategori || {};
+      update.kapasitasPorsi = penerima.kapasitasPorsi ?? null;
+    } else if (spBody.kapasitasPorsi !== undefined) {
+      const penerima = resolvePenerimaManfaat({ kapasitasPorsi: spBody.kapasitasPorsi });
+      if ('error' in penerima) return err(penerima.error, 400);
+      update.kapasitasPorsi = penerima.kapasitasPorsi ?? null;
     }
     if (spBody.aktif !== undefined) update.aktif = spBody.aktif !== false;
     if (spBody.kitchenId !== undefined) {

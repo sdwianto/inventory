@@ -85,13 +85,15 @@ async function aggregateOpeningBefore(db: HandlerContext['db'], tid: string, sin
 
   let kering = 0;
   let basah = 0;
+  let janitor = 0;
   for (const r of rows) {
     const net = (parseFloat(r.masuk) || 0) - (parseFloat(r.keluar) || 0);
     const lok = normalizeWarehouseKode(r._id || '');
     if (lok === 'GKERING') kering += net;
     else if (lok === 'GBASAH') basah += net;
+    else if (lok === 'GJANITOR') janitor += net;
   }
-  return { kering, basah, total: kering + basah };
+  return { kering, basah, janitor, total: kering + basah + janitor };
 }
 
 function resolveTrendGranularity(months: number, requested?: string | null): 'day' | 'month' {
@@ -282,13 +284,12 @@ export async function handleStokSaldo({
     if (!ids.length) return ok({ byProductId: {} });
 
     const stockMap = await getStokByWarehouseBatch(db, tid, ids);
-    const byProductId: Record<string, { GKERING: number; GBASAH: number }> = {};
+    const byProductId: Record<string, Record<string, number>> = {};
     for (const id of ids) {
       const wh = stockMap.get(id) || {};
-      byProductId[id] = {
-        GKERING: Number(wh.GKERING) || 0,
-        GBASAH: Number(wh.GBASAH) || 0,
-      };
+      byProductId[id] = Object.fromEntries(
+        WAREHOUSE_CODES.map((k) => [k, Number(wh[k]) || 0]),
+      );
     }
     return ok({ byProductId });
   }
@@ -336,8 +337,10 @@ export async function handleStokSaldo({
   const stokMap = await getStokByWarehouseBatch(db, tid, products.map((p) => p.id));
   let summaryQtyKering = 0;
   let summaryQtyBasah = 0;
+  let summaryQtyJanitor = 0;
   let summaryNilaiKering = 0;
   let summaryNilaiBasah = 0;
+  let summaryNilaiJanitor = 0;
   let skuAktif = 0;
 
   const rows = products.map((p) => {
@@ -345,18 +348,22 @@ export async function handleStokSaldo({
     const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
     const qtyKering = qtyAtWarehouse(byWh, 'GKERING');
     const qtyBasah = qtyAtWarehouse(byWh, 'GBASAH');
+    const qtyJanitor = qtyAtWarehouse(byWh, 'GJANITOR');
     const stokQty = qtyAtWarehouse(byWh, gudangKode);
     const uoms = uomMap.get(String(p.id)) || [];
     const hargaBeli = parseInt(p.hargaBeli || 0, 10);
     const nilaiStok = Math.round(stokQty * hargaBeli);
     const nilaiKering = Math.round(qtyKering * hargaBeli);
     const nilaiBasah = Math.round(qtyBasah * hargaBeli);
+    const nilaiJanitor = Math.round(qtyJanitor * hargaBeli);
 
     if (stokQty > 0) skuAktif += 1;
     summaryQtyKering += qtyKering;
     summaryQtyBasah += qtyBasah;
+    summaryQtyJanitor += qtyJanitor;
     summaryNilaiKering += nilaiKering;
     summaryNilaiBasah += nilaiBasah;
+    summaryNilaiJanitor += nilaiJanitor;
 
     return clean({
       ...p,
@@ -368,24 +375,29 @@ export async function handleStokSaldo({
       nilaiStok,
       stokGudangKering: qtyKering,
       stokGudangBasah: qtyBasah,
+      stokGudangJanitor: qtyJanitor,
       stokByWarehouse: {
         GKERING: qtyKering,
         GBASAH: qtyBasah,
+        GJANITOR: qtyJanitor,
       },
-      stokTotal: qtyKering + qtyBasah,
+      stokTotal: qtyKering + qtyBasah + qtyJanitor,
       nilaiGudangKering: nilaiKering,
       nilaiGudangBasah: nilaiBasah,
-      nilaiTotal: nilaiKering + nilaiBasah,
+      nilaiGudangJanitor: nilaiJanitor,
+      nilaiTotal: nilaiKering + nilaiBasah + nilaiJanitor,
     });
   });
 
   const summary = {
     qtyKering: summaryQtyKering,
     qtyBasah: summaryQtyBasah,
-    qtyTotal: summaryQtyKering + summaryQtyBasah,
+    qtyJanitor: summaryQtyJanitor,
+    qtyTotal: summaryQtyKering + summaryQtyBasah + summaryQtyJanitor,
     nilaiKering: summaryNilaiKering,
     nilaiBasah: summaryNilaiBasah,
-    nilaiTotal: summaryNilaiKering + summaryNilaiBasah,
+    nilaiJanitor: summaryNilaiJanitor,
+    nilaiTotal: summaryNilaiKering + summaryNilaiBasah + summaryNilaiJanitor,
     skuAktif,
     skuTotal: rows.length,
   };

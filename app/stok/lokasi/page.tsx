@@ -100,7 +100,10 @@ export default function LokasiPage() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><MapPin className="w-6 h-6" /> Gudang Operasional</h1>
-            <p className="text-sm text-slate-500">Dua gudang tetap per tenant: <b>Gudang Kering</b> (GKERING) dan <b>Gudang Basah</b> (GBASAH). Penempatan produk diatur di Master Produk.</p>
+            <p className="text-sm text-slate-500">
+              Tiga gudang tetap per tenant: <b>Gudang Kering</b> (GKERING), <b>Gudang Basah</b> (GBASAH),
+              dan <b>Gudang Janitor</b> (GJANITOR — alat kebersihan). Penempatan produk diatur di Master Produk.
+            </p>
           </div>
           <div className="flex gap-2">
             <ListExportMenu onExport={exportData} disabled={list.length === 0} />

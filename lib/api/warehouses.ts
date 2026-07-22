@@ -1,9 +1,9 @@
-// Dua gudang utama operasional — semua stok masuk/keluar harus melalui salah satu.
+// Gudang operasional tetap per tenant — stok masuk/keluar harus melalui salah satu.
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 
-export type WarehouseCode = 'GKERING' | 'GBASAH';
+export type WarehouseCode = 'GKERING' | 'GBASAH' | 'GJANITOR';
 
 function extractKode(lokasiStr: string | null | undefined): string {
   if (!lokasiStr) return '';
@@ -11,7 +11,7 @@ function extractKode(lokasiStr: string | null | undefined): string {
   return m ? m[1].toUpperCase() : String(lokasiStr).trim().toUpperCase();
 }
 
-export const WAREHOUSE_CODES = ['GKERING', 'GBASAH'] as const;
+export const WAREHOUSE_CODES = ['GKERING', 'GBASAH', 'GJANITOR'] as const;
 
 export const WAREHOUSE_META: Record<WarehouseCode, {
   kode: WarehouseCode;
@@ -30,6 +30,12 @@ export const WAREHOUSE_META: Record<WarehouseCode, {
     nama: 'Gudang Basah',
     keterangan: 'Penyimpanan barang basah / perishable',
     tipe: 'BASAH',
+  },
+  GJANITOR: {
+    kode: 'GJANITOR',
+    nama: 'Gudang Janitor',
+    keterangan: 'Penyimpanan alat kebersihan',
+    tipe: 'JANITOR',
   },
 };
 
@@ -77,7 +83,7 @@ interface StokLokasiDoc {
   updatedAt?: Date;
 }
 
-/** Pastikan master lokasi tenant punya GKERING & GBASAH (idempoten, aman dari race). */
+/** Pastikan master lokasi tenant punya semua gudang tetap (idempoten, aman dari race). */
 export async function ensureWarehousesForTenant(db: Db, tenantId: string | null | undefined): Promise<void> {
   const tid = tenantId || 'default';
   const col = db.collection('lokasi');
