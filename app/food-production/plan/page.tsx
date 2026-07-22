@@ -67,28 +67,14 @@ import {
 } from '@/lib/food-production/rencana-kebutuhan';
 import { printDocument } from '@/lib/doc-print';
 import { formatNumber } from '@/lib/format';
+import {
+  parseQtyInput,
+  shouldSnapSpinnerStep,
+  stepQtyFromSpinner,
+} from '@/lib/qty-spinner';
 import { cn } from '@/lib/utils';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
-
-function parseQtyInput(raw: string | number): number {
-  return Number(String(raw ?? '').trim().replace(',', '.'));
-}
-
-function isWholeQty(n: number): boolean {
-  return Number.isFinite(n) && Math.abs(n - Math.round(n)) < 1e-9;
-}
-
-/** Belanja bahan = bilangan bulat. Spinner: pecahan → ceil/floor dulu, lalu ±1. */
-function stepQtyFromSpinner(prevRaw: string | number, direction: 'up' | 'down'): number {
-  const prev = parseQtyInput(prevRaw);
-  if (!Number.isFinite(prev) || prev < 0) return direction === 'up' ? 1 : 0;
-  if (!isWholeQty(prev)) {
-    return direction === 'up' ? Math.ceil(prev) : Math.max(0, Math.floor(prev));
-  }
-  const whole = Math.round(prev);
-  return direction === 'up' ? whole + 1 : Math.max(0, whole - 1);
-}
 
 interface KitchenOpt {
   id: string;
@@ -444,10 +430,11 @@ function FoodProductionPlanPageContent() {
     if (!showAll && selectedDate) {
       list = list.filter((r) => dateKey(r.tanggal) === selectedDate);
     }
+    // Terbaru di atas: tanggal desc, lalu noDokumen desc (RPN…002 di atas …001).
     return [...list].sort((a, b) => {
-      const d = String(a.tanggal).localeCompare(String(b.tanggal));
+      const d = String(b.tanggal).localeCompare(String(a.tanggal));
       if (d !== 0) return d;
-      return String(a.noDokumen).localeCompare(String(b.noDokumen));
+      return String(b.noDokumen).localeCompare(String(a.noDokumen));
     });
   }, [rows, selectedDate, showAll]);
 
@@ -1044,13 +1031,7 @@ function FoodProductionPlanPageContent() {
                 const prev = parseQtyInput(prevText);
                 const next = parseQtyInput(nextText);
                 // Spinner mouse: dari pecahan meloncat ≥0.5 → bulatkan dulu (bukan +1 ke 4,45).
-                if (
-                  nextText !== ''
-                  && Number.isFinite(prev)
-                  && Number.isFinite(next)
-                  && !isWholeQty(prev)
-                  && Math.abs(next - prev) >= 0.5
-                ) {
+                if (nextText !== '' && shouldSnapSpinnerStep(prev, next)) {
                   const snapped = next > prev
                     ? stepQtyFromSpinner(prev, 'up')
                     : stepQtyFromSpinner(prev, 'down');

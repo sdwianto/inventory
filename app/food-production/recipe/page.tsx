@@ -212,8 +212,13 @@ export default function FoodProductionRecipePage() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  /** Bahan resep = master lokal aktif (bukan SKU katalog vendor per-supplier). */
   const filterIngredientProduct = useCallback(
-    (p: { itemRole?: unknown }) => isIngredientRole(p.itemRole),
+    (p: { itemRole?: unknown; syncSource?: unknown; aktif?: unknown }) => {
+      if (p.aktif === false) return false;
+      if (String(p.syncSource || '') === 'sales.app') return false;
+      return isIngredientRole(p.itemRole);
+    },
     [],
   );
 
@@ -752,6 +757,7 @@ export default function FoodProductionRecipePage() {
                       <ProductSearchSelect
                         value={line.productId}
                         withWarehouseStock={false}
+                        syncSource="local"
                         placeholder="Ketik kode / nama bahan…"
                         selectedProduct={
                           line.productId
@@ -764,7 +770,7 @@ export default function FoodProductionRecipePage() {
                           // Clear only — selection + consolidate handled in onProductPick.
                           if (id) return;
                           setLines((prev) => prev.map((l, i) => (
-                            i === idx ? { ...l, productId: '' } : l
+                            i === idx ? { ...l, productId: '', satuan: '' } : l
                           )));
                         }}
                         onProductPick={(p) => {
@@ -842,11 +848,13 @@ export default function FoodProductionRecipePage() {
                     <div>
                       <span className="sm:hidden text-[11px] text-muted-foreground">Satuan</span>
                       <Input
+                        type="text"
+                        readOnly
+                        tabIndex={-1}
+                        className="bg-muted/40 text-muted-foreground"
                         value={line.satuan}
-                        aria-label={`Satuan baris ${idx + 1}`}
-                        onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                          i === idx ? { ...l, satuan: e.target.value } : l
-                        )))}
+                        aria-label={`Satuan baris ${idx + 1} (dari master produk)`}
+                        title="Otomatis dari master produk — tidak bisa diubah manual"
                       />
                     </div>
                     <div className="flex justify-end">

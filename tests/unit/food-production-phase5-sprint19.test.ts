@@ -22,10 +22,17 @@ import {
   buildDistributionLoadings,
   resolveDistLoadings,
   splitStopIntoDrops,
+  planDistCreateBlockedReason,
   FOOD_TRAY_ID,
   FOOD_TRAY_LABEL,
   DIST_UI_STATUS_NEXT,
   DIST_STATUS_TRANSITIONS,
+  DIST_STATUS_LABELS,
+  distDocDisplayNo,
+  hasDistDokumenNo,
+  distEditBlockedReason,
+  canPromoteDistToScheduled,
+  isDistEditable,
 } from '@/lib/food-production/distribution';
 
 describe('food-production phase 5 sprint 19', () => {
@@ -244,6 +251,34 @@ describe('food-production phase 5 sprint 19', () => {
     expect(summarizeDistLines(lines).servicePointCount).toBe(2);
   });
 
+  it('blocks PLAN DST create when HSL exists or open DST remains', () => {
+    expect(planDistCreateBlockedReason({
+      planNo: 'RPN1',
+      hslNo: 'HSL1',
+    })).toMatch(/HSL HSL1/);
+    expect(planDistCreateBlockedReason({
+      planNo: 'RPN1',
+      openDstNo: 'DST1',
+      openDstStatus: 'DRAFT',
+    })).toMatch(/DST DST1/);
+    expect(planDistCreateBlockedReason({ planNo: 'RPN1' })).toBeNull();
+  });
+
+  it('allocates integer porsi when kapasitas does not divide evenly', () => {
+    const lines = allocatePorsiAcrossPoints({
+      items: [{ menuId: 'm1', menuNama: 'Food Tray', qtyPorsi: 900 }],
+      servicePoints: [
+        { id: 'a', nama: 'Posyandu', kapasitasPorsi: 75 },
+        { id: 'b', nama: 'SDN 1', kapasitasPorsi: 140 },
+      ],
+    });
+    expect('error' in (lines as object)).toBe(false);
+    if ('error' in (lines as object)) return;
+    expect(lines.map((l) => l.qtyPorsi)).toEqual([314, 586]);
+    expect(lines.every((l) => Number.isInteger(l.qtyPorsi))).toBe(true);
+    expect(summarizeDistLines(lines).qtyPorsiTotal).toBe(900);
+  });
+
   it('equal-splits when kapasitas missing; keeps all points with remainder', () => {
     const lines = allocatePorsiAcrossPoints({
       items: [{ menuId: 'm1', qtyPorsi: 99 }],
@@ -257,6 +292,7 @@ describe('food-production phase 5 sprint 19', () => {
     if ('error' in (lines as object)) return;
     expect(summarizeDistLines(lines).qtyPorsiTotal).toBe(99);
     expect(summarizeDistLines(lines).servicePointCount).toBe(3);
+    expect(lines.every((l) => Number.isInteger(l.qtyPorsi))).toBe(true);
   });
 
   it('remainingSourceItems subtracts consumed budget', () => {
@@ -321,18 +357,37 @@ describe('food-production phase 5 sprint 19', () => {
     })).toBeNull();
   });
 
-  it('normalizes dist lines; UI moves disiapkan -> dikirim -> selesai', () => {
+  it('normalizes dist lines; UI moves draft -> terjadwal -> dikirim -> selesai', () => {
     const lines = normalizeDistLines([
       { servicePointId: 'sp1', menuId: 'm1', qtyPorsi: 10 },
       { servicePointId: 'sp2', finishedGoodProductId: 'fg', qtyPorsi: 5 },
     ]);
     expect('error' in (lines as object)).toBe(false);
-    expect(DIST_UI_STATUS_NEXT.DRAFT).toBe('PROCESSING');
+    expect(DIST_UI_STATUS_NEXT.DRAFT).toBe('APPROVED');
+    expect(DIST_UI_STATUS_NEXT.APPROVED).toBe('PROCESSING');
     expect(DIST_UI_STATUS_NEXT.PROCESSING).toBe('COMPLETED');
-    expect(DIST_STATUS_TRANSITIONS.DRAFT).toEqual(['PROCESSING', 'CANCELLED']);
+    expect(DIST_STATUS_TRANSITIONS.DRAFT).toEqual(['APPROVED', 'CANCELLED']);
     expect(DIST_STATUS_TRANSITIONS.DRAFT).not.toContain('COMPLETED');
+    expect(DIST_STATUS_TRANSITIONS.APPROVED).toEqual(['PROCESSING', 'CANCELLED']);
     expect(DIST_STATUS_TRANSITIONS.PROCESSING).toEqual(['COMPLETED']);
     expect(DIST_STATUS_TRANSITIONS.COMPLETED).toEqual([]);
+  });
+
+  it('dist schedule helpers: draft display, edit/promote need HSL', () => {
+    expect(DIST_STATUS_LABELS.DRAFT).toBe('Draft');
+    expect(DIST_STATUS_LABELS.APPROVED).toBe('Terjadwal');
+    expect(distDocDisplayNo({})).toBe('Draft');
+    expect(distDocDisplayNo({ noDokumen: 'DST-20260722-0001' })).toBe('DST-20260722-0001');
+    expect(hasDistDokumenNo('')).toBe(false);
+    expect(hasDistDokumenNo('DST-1')).toBe(true);
+    expect(isDistEditable('DRAFT')).toBe(true);
+    expect(isDistEditable('APPROVED')).toBe(false);
+    expect(distEditBlockedReason({ status: 'DRAFT', hasCompletedHsl: false }))
+      .toMatch(/HSL selesai/);
+    expect(distEditBlockedReason({ status: 'DRAFT', hasCompletedHsl: true })).toBeNull();
+    expect(canPromoteDistToScheduled({ status: 'DRAFT', hasCompletedHsl: false }))
+      .toMatch(/HSL selesai/);
+    expect(canPromoteDistToScheduled({ status: 'DRAFT', hasCompletedHsl: true })).toBeNull();
   });
 
   it('stores kapasitas on allocate and settles per titik diterima/kembali', () => {

@@ -18,6 +18,7 @@ import { MapPinned, Plus, Pencil, RefreshCw, Power, Trash2 } from 'lucide-react'
 import {
   KATEGORI_PORSI_OPTIONS,
   SERVICE_POINT_JENIS_LABELS,
+  compareJamKirim,
   formatServicePointDropsJam,
   sumPorsiByKategori,
   type ServicePointDrop,
@@ -29,13 +30,6 @@ import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
 interface KitchenOpt { id: string; nama: string }
-interface DropFormRow {
-  key: string;
-  id: string;
-  label: string;
-  jamKirim: string;
-  qtyHint: string;
-}
 interface SpRow {
   id: string;
   kode?: string;
@@ -78,31 +72,22 @@ function porsiFormToPayload(form: PorsiFormMap): ServicePointPorsiByKategori {
   return out;
 }
 
-function dropsFormFromRow(drops?: ServicePointDrop[]): DropFormRow[] {
-  return (drops || []).map((d, i) => ({
-    key: d.id || `drop-${i}`,
-    id: d.id || '',
-    label: d.label || '',
-    jamKirim: d.jamKirim || '',
-    qtyHint: d.qtyHint != null ? String(d.qtyHint) : '',
-  }));
+/** Ambil jam drop tunggal dari data lama (pakai drop paling awal). */
+function jamDropFromRow(drops?: ServicePointDrop[]): string {
+  const times = (drops || [])
+    .map((d) => String(d.jamKirim || '').trim())
+    .filter(Boolean)
+    .sort(compareJamKirim);
+  return times[0] || '';
 }
 
-function dropsFormToPayload(rows: DropFormRow[]): ServicePointDrop[] {
-  return rows
-    .map((r, i) => {
-      const jamKirim = r.jamKirim.trim();
-      if (!jamKirim) return null;
-      const qty = Number(r.qtyHint);
-      const label = r.label.trim() || undefined;
-      return {
-        id: r.id.trim() || `drop-${jamKirim.replace(':', '') || i + 1}`,
-        jamKirim,
-        label,
-        qtyHint: Number.isFinite(qty) && qty > 0 ? Math.round(qty) : undefined,
-      } as ServicePointDrop;
-    })
-    .filter((x): x is ServicePointDrop => !!x);
+function jamDropToPayload(jamDrop: string, existingId?: string): ServicePointDrop[] {
+  const jam = jamDrop.trim();
+  if (!jam) return [];
+  return [{
+    id: existingId || `drop-${jam.replace(':', '')}`,
+    jamKirim: jam,
+  }];
 }
 
 const emptyForm = {
@@ -112,7 +97,8 @@ const emptyForm = {
   kitchenId: '',
   alamat: '',
   jamKirim: '',
-  drops: [] as DropFormRow[],
+  jamDrop: '',
+  dropId: '',
   porsiByKategori: emptyPorsiForm(),
   pic: '',
   picNoTelp: '',
@@ -181,13 +167,15 @@ export default function ServicePointPage() {
       ...emptyForm,
       kode: nextServicePointKode(rows),
       porsiByKategori: emptyPorsiForm(),
-      drops: [],
     });
     setOpen(true);
   }
 
   function openEdit(row: SpRow) {
     setEditing(row);
+    const earliestDrop = (row.drops || [])
+      .slice()
+      .sort((a, b) => compareJamKirim(a.jamKirim, b.jamKirim))[0];
     setForm({
       kode: row.kode || '',
       nama: row.nama,
@@ -195,7 +183,8 @@ export default function ServicePointPage() {
       kitchenId: row.kitchenId || '',
       alamat: row.alamat || '',
       jamKirim: row.jamKirim || '',
-      drops: dropsFormFromRow(row.drops),
+      jamDrop: jamDropFromRow(row.drops),
+      dropId: earliestDrop?.id || '',
       porsiByKategori: porsiFormFromRow(row.porsiByKategori),
       pic: row.pic || '',
       picNoTelp: row.picNoTelp || '',
@@ -211,10 +200,18 @@ export default function ServicePointPage() {
   async function save() {
     setSaving(true);
     try {
+      const jamMakan = form.jamKirim.trim();
+      const jamDrop = form.jamDrop.trim();
+      if (jamDrop && !jamMakan) {
+        throw new Error('Isi Jam Makan dulu sebelum Jam Kirim/Drop');
+      }
+      if (jamDrop && jamMakan && compareJamKirim(jamDrop, jamMakan) > 0) {
+        throw new Error('Jam Kirim/Drop tidak boleh melebihi Jam Makan');
+      }
       const url = editing ? `/api/service-points/${editing.id}` : '/api/service-points';
       const method = editing ? 'PUT' : 'POST';
       const porsiByKategori = porsiFormToPayload(form.porsiByKategori);
-      const drops = dropsFormToPayload(form.drops);
+      const drops = jamDropToPayload(jamDrop, form.dropId || undefined);
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
@@ -224,7 +221,7 @@ export default function ServicePointPage() {
           jenis: form.jenis,
           kitchenId: form.kitchenId || undefined,
           alamat: form.alamat || undefined,
-          jamKirim: form.jamKirim || undefined,
+          jamKirim: jamMakan || undefined,
           drops,
           porsiByKategori,
           pic: form.pic || undefined,
@@ -385,7 +382,7 @@ export default function ServicePointPage() {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? 'Ubah Titik' : 'Tambah Titik'}</DialogTitle>
           </DialogHeader>
@@ -417,115 +414,59 @@ export default function ServicePointPage() {
               <Label>Nama</Label>
               <Input value={form.nama} onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))} placeholder="SDN 01" />
             </div>
+            <div className="space-y-1">
+              <Label>Dapur penyalur</Label>
+              <select
+                className="w-full h-10 border rounded-md px-2 text-sm"
+                value={form.kitchenId}
+                onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
+              >
+                <option value="">—</option>
+                {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+              </select>
+            </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Dapur penyalur</Label>
-                <select
-                  className="w-full h-10 border rounded-md px-2 text-sm"
-                  value={form.kitchenId}
-                  onChange={(e) => setForm((f) => ({ ...f, kitchenId: e.target.value }))}
-                >
-                  <option value="">—</option>
-                  {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-                </select>
-              </div>
               <div className="space-y-1">
                 <Label>Jam Makan</Label>
                 <Input
                   type="time"
                   value={form.jamKirim}
-                  onChange={(e) => setForm((f) => ({ ...f, jamKirim: e.target.value }))}
+                  onChange={(e) => {
+                    const jamMakan = e.target.value;
+                    setForm((f) => {
+                      const nextDrop = f.jamDrop
+                        && jamMakan
+                        && compareJamKirim(f.jamDrop, jamMakan) > 0
+                        ? ''
+                        : (!jamMakan ? '' : f.jamDrop);
+                      return { ...f, jamKirim: jamMakan, jamDrop: nextDrop };
+                    });
+                  }}
                 />
-                <p className="text-[10px] text-muted-foreground">Fallback urutan rute bila belum ada jam drop</p>
               </div>
-            </div>
-            <div className="space-y-2 rounded-md border p-3 bg-muted/20">
-              <div className="flex items-center justify-between gap-2">
-                <Label className="text-sm font-medium">Jam pengiriman / drop (opsional)</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setForm((f) => ({
-                    ...f,
-                    drops: [
-                      ...f.drops,
-                      {
-                        key: `new-${Date.now()}`,
-                        id: '',
-                        label: '',
-                        jamKirim: '',
-                        qtyHint: '',
-                      },
-                    ],
-                  }))}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Tambah jam
-                </Button>
-              </div>
-              {form.drops.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">
-                  Dipakai untuk urutan rute. Contoh: 08:50, 09:00
+              <div className="space-y-1">
+                <Label>Jam Kirim/Drop</Label>
+                <Input
+                  type="time"
+                  value={form.jamDrop}
+                  disabled={!form.jamKirim}
+                  max={form.jamKirim || undefined}
+                  title={!form.jamKirim ? 'Isi Jam Makan dulu' : 'Tidak boleh melebihi Jam Makan'}
+                  onChange={(e) => {
+                    const jamDrop = e.target.value;
+                    if (jamDrop && form.jamKirim && compareJamKirim(jamDrop, form.jamKirim) > 0) {
+                      toast.message('Jam Kirim/Drop tidak boleh melebihi Jam Makan');
+                      setForm((f) => ({ ...f, jamDrop: f.jamKirim }));
+                      return;
+                    }
+                    setForm((f) => ({ ...f, jamDrop }));
+                  }}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  {form.jamKirim
+                    ? 'Harus ≤ Jam Makan (waktu kedatangan di titik)'
+                    : 'Isi Jam Makan dulu'}
                 </p>
-              )}
-              <div className="space-y-2">
-                {form.drops.map((drop) => (
-                  <div key={drop.key} className="grid grid-cols-[6.5rem_1fr_5rem_auto] gap-2 items-end">
-                    <div className="space-y-1">
-                      <Label className="text-xs font-normal">Jam</Label>
-                      <Input
-                        type="time"
-                        value={drop.jamKirim}
-                        onChange={(e) => setForm((f) => ({
-                          ...f,
-                          drops: f.drops.map((d) => (
-                            d.key === drop.key ? { ...d, jamKirim: e.target.value } : d
-                          )),
-                        }))}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs font-normal">Keterangan</Label>
-                      <Input
-                        value={drop.label}
-                        placeholder="opsional"
-                        onChange={(e) => setForm((f) => ({
-                          ...f,
-                          drops: f.drops.map((d) => (
-                            d.key === drop.key ? { ...d, label: e.target.value } : d
-                          )),
-                        }))}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs font-normal">Qty</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={drop.qtyHint}
-                        placeholder="0"
-                        onChange={(e) => setForm((f) => ({
-                          ...f,
-                          drops: f.drops.map((d) => (
-                            d.key === drop.key ? { ...d, qtyHint: e.target.value } : d
-                          )),
-                        }))}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      onClick={() => setForm((f) => ({
-                        ...f,
-                        drops: f.drops.filter((d) => d.key !== drop.key),
-                      }))}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
               </div>
             </div>
             <div className="space-y-2 rounded-md border p-3 bg-muted/20">
@@ -538,10 +479,13 @@ export default function ServicePointPage() {
                   </span>
                 </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
                 {KATEGORI_PORSI_OPTIONS.map((opt) => (
-                  <div key={opt.value} className="space-y-1">
-                    <Label className="text-xs font-normal">
+                  <div
+                    key={opt.value}
+                    className="flex items-center gap-3 justify-between"
+                  >
+                    <Label className="text-xs font-normal min-w-0 flex-1 leading-snug">
                       {opt.label}
                       {opt.hint ? (
                         <span className="text-muted-foreground"> — {opt.hint}</span>
@@ -553,6 +497,7 @@ export default function ServicePointPage() {
                       step={1}
                       inputMode="numeric"
                       placeholder="0"
+                      className="h-9 w-[5.5rem] shrink-0 text-right tabular-nums"
                       value={form.porsiByKategori[opt.value]}
                       onChange={(e) => setForm((f) => ({
                         ...f,

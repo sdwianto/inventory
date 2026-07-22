@@ -25,6 +25,11 @@ import {
   isIssueEditable,
   type MaterialIssueStatus,
 } from '@/lib/food-production/material-issue';
+import {
+  parseQtyInput,
+  shouldSnapSpinnerStep,
+  stepQtyFromSpinner,
+} from '@/lib/qty-spinner';
 
 const WAREHOUSE_LABELS: Record<string, string> = {
   GKERING: 'Gudang Kering',
@@ -518,13 +523,42 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                           {isIssueEditable(detail.status) && canManage ? (
                             <Input
                               type="number"
-                              className="h-8 w-24 ml-auto text-right"
-                              value={l.qtyIssued}
+                              min={0}
+                              step={1}
+                              inputMode="numeric"
+                              className="h-8 w-24 ml-auto text-right tabular-nums"
+                              title="Qty keluar (bulat) — spinner: pecahan dibulatkan dulu"
+                              value={Number.isFinite(l.qtyIssued) ? l.qtyIssued : ''}
                               onChange={(e) => {
-                                const v = Number(e.target.value);
-                                setEditLines((prev) => prev.map((x, i) =>
-                                  i === idx ? { ...x, qtyIssued: v } : x,
+                                const nextText = e.target.value;
+                                if (nextText === '') {
+                                  setEditLines((prev) => prev.map((x, i) =>
+                                    i === idx ? { ...x, qtyIssued: 0 } : x,
+                                  ));
+                                  return;
+                                }
+                                const prev = Number(l.qtyIssued);
+                                const next = parseQtyInput(nextText);
+                                if (!Number.isFinite(next)) return;
+                                // Spinner mouse: dari pecahan meloncat ≥0.5 → bulatkan dulu.
+                                const snapped = shouldSnapSpinnerStep(prev, next)
+                                  ? stepQtyFromSpinner(prev, next > prev ? 'up' : 'down')
+                                  : next;
+                                setEditLines((prevLines) => prevLines.map((x, i) =>
+                                  i === idx ? { ...x, qtyIssued: snapped } : x,
                                 ));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                                  e.preventDefault();
+                                  const snapped = stepQtyFromSpinner(
+                                    l.qtyIssued,
+                                    e.key === 'ArrowUp' ? 'up' : 'down',
+                                  );
+                                  setEditLines((prev) => prev.map((x, i) =>
+                                    i === idx ? { ...x, qtyIssued: snapped } : x,
+                                  ));
+                                }
                               }}
                             />
                           ) : l.qtyIssued}

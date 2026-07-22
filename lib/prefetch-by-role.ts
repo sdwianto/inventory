@@ -35,7 +35,7 @@ function canPrefetch(role: string, href: string, perms: string[] | '*'): boolean
 const FP_OPS_ROUTES = [
   '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
-  '/food-production/report', '/food-production/calendar', '/food-production/transfer',
+  '/food-production/report', '/food-production/calendar',
   '/food-production/service-point', '/food-production/distribution', '/food-production/cold-chain',
   '/food-production/haccp', '/food-production/batch', '/food-production/qc',
 ] as const;

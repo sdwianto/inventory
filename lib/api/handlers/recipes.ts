@@ -137,7 +137,7 @@ async function enrichLines(
   const ids = [...new Set(lines.map((l) => l.productId))];
   const products = await db.collection('products')
     .find({ ...tenantFilter, id: { $in: ids } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1 })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1, syncSource: 1 })
     .toArray();
   const byId = new Map(products.map((p) => [String(p.id), p]));
   const out: RecipeLine[] = [];
@@ -146,6 +146,11 @@ async function enrichLines(
     if (!p) return { error: `Bahan ${line.productId} tidak ditemukan` };
     if (p.aktif === false) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
+    }
+    if (String(p.syncSource || '') === 'sales.app') {
+      return {
+        error: `Bahan "${String(p.nama || p.kode || line.productId)}" dari katalog vendor — pilih produk master lokal`,
+      };
     }
     if (!isIngredientRole(p.itemRole)) {
       const role = normalizeItemRole(p.itemRole);
@@ -157,7 +162,8 @@ async function enrichLines(
       ...line,
       productKode: line.productKode || (p.kode != null ? String(p.kode) : undefined),
       productNama: line.productNama || (p.nama != null ? String(p.nama) : undefined),
-      satuan: line.satuan || (p.satuan != null ? String(p.satuan) : undefined),
+      // Satuan selalu dari master produk — tidak menerima override manual dari client.
+      satuan: p.satuan != null ? String(p.satuan) : undefined,
     });
   }
   return out;
@@ -213,7 +219,12 @@ async function loadIngredientProducts(
   tenantFilter: Record<string, unknown>,
 ): Promise<RecipeImportProduct[]> {
   const list = await db.collection('products')
-    .find({ ...tenantFilter, aktif: { $ne: false } })
+    .find({
+      ...tenantFilter,
+      aktif: { $ne: false },
+      // Resep memakai master lokal — bukan SKU katalog vendor (bisa 1 nama × N supplier).
+      syncSource: { $ne: 'sales.app' },
+    })
     .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1 })
     .limit(2000)
     .toArray();

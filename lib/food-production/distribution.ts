@@ -1,10 +1,29 @@
 /**
  * Distribution Order / Packing list — ADR-001 Phase 5 / Sprint 19.
- * Packing dari HSL (actual) ke titik layanan.
- * DRAFT = disiapkan; PROCESSING = dikirim; COMPLETED = selesai (semua titik settled).
+ * Packing dari RPN (rencana) atau HSL (actual) ke titik layanan.
+ * DRAFT → APPROVED (Terjadwal, nomor DST) → PROCESSING (Dikirim) → COMPLETED (Selesai).
+ * Nomor DST baru diterbitkan saat jadi Terjadwal (setelah HSL ada).
  * Retur dicatat per titik (qtyDikembalikan), bukan status dokumen global.
  * Tanpa mutasi stok (MBG: porsi langsung distribusi).
  */
+
+/** Alasan blok create DST dari RPN (HSL sudah ada / DST PLAN masih aktif). */
+export function planDistCreateBlockedReason(input: {
+  planNo: string;
+  hslNo?: string | null;
+  openDstNo?: string | null;
+  openDstStatus?: string | null;
+}): string | null {
+  if (input.hslNo) {
+    return `Rencana sudah punya HSL ${input.hslNo} — buat DST dari Hasil Produksi`;
+  }
+  if (input.openDstNo) {
+    const st = input.openDstStatus ? ` (${input.openDstStatus})` : '';
+    const label = String(input.openDstNo).trim() || 'Draft';
+    return `Rencana ${input.planNo} masih punya DST ${label}${st} — selesaikan / batalkan dulu`;
+  }
+  return null;
+}
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import { FP_DEFAULT_TRANSITIONS } from '@/lib/food-production/document';
@@ -112,7 +131,8 @@ export interface DistributionLoading {
 export interface DistributionOrderDoc {
   id: string;
   tenantId: string;
-  noDokumen: string;
+  /** Kosong sampai Terjadwal — nomor DST via nextFpDocNumber. */
+  noDokumen?: string;
   tanggal: string;
   kitchenId: string;
   kitchenNama?: string;
@@ -148,43 +168,87 @@ export interface DistributionOrderDoc {
 }
 
 /**
- * Disiapkan → Dikirim → Selesai.
- * CANCELLED hanya untuk batalkan packing (belum/selama disiapkan), bukan retur per titik.
+ * Draft → Terjadwal → Dikirim → Selesai.
+ * CANCELLED hanya untuk batalkan packing (Draft/Terjadwal), bukan retur per titik.
  */
 export const DIST_STATUS_TRANSITIONS: Record<string, string[]> = {
   ...FP_DEFAULT_TRANSITIONS,
-  DRAFT: ['PROCESSING', 'CANCELLED'],
-  SUBMITTED: ['PROCESSING', 'CANCELLED'],
+  DRAFT: ['APPROVED', 'CANCELLED'],
+  SUBMITTED: ['APPROVED', 'CANCELLED'],
   APPROVED: ['PROCESSING', 'CANCELLED'],
   PROCESSING: ['COMPLETED'],
   COMPLETED: [],
 };
 
 export const DIST_STATUS_LABELS: Record<DistributionStatus, string> = {
-  DRAFT: 'Disiapkan',
-  SUBMITTED: 'Disiapkan',
-  APPROVED: 'Disiapkan',
+  DRAFT: 'Draft',
+  SUBMITTED: 'Draft',
+  APPROVED: 'Terjadwal',
   PROCESSING: 'Dikirim',
   COMPLETED: 'Selesai',
   CANCELLED: 'Dibatalkan',
 };
 
 export const DIST_UI_STATUS_NEXT: Partial<Record<DistributionStatus, DistributionStatus>> = {
-  DRAFT: 'PROCESSING',
-  SUBMITTED: 'PROCESSING',
+  DRAFT: 'APPROVED',
+  SUBMITTED: 'APPROVED',
   APPROVED: 'PROCESSING',
   PROCESSING: 'COMPLETED',
 };
 
 export const DIST_UI_STATUS_NEXT_LABEL: Partial<Record<DistributionStatus, string>> = {
-  DRAFT: 'Dikirim',
-  SUBMITTED: 'Dikirim',
+  DRAFT: 'Jadwalkan',
+  SUBMITTED: 'Jadwalkan',
   APPROVED: 'Dikirim',
   PROCESSING: 'Selesaikan titik',
 };
 
+export const DIST_STATUS_BADGE: Record<DistributionStatus, string> = {
+  DRAFT: 'bg-slate-100 text-slate-700 border-slate-300',
+  SUBMITTED: 'bg-slate-100 text-slate-700 border-slate-300',
+  APPROVED: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  PROCESSING: 'bg-amber-100 text-amber-800 border-amber-300',
+  COMPLETED: 'bg-green-100 text-green-800 border-green-300',
+  CANCELLED: 'bg-red-100 text-red-800 border-red-300',
+};
+
+export function hasDistDokumenNo(noDokumen?: string | null): boolean {
+  return Boolean(String(noDokumen || '').trim());
+}
+
+export function distDocDisplayNo(doc: { noDokumen?: string | null }): string {
+  const no = String(doc.noDokumen || '').trim();
+  return no || 'Draft';
+}
+
 export function isDistEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
+}
+
+/** Packing hanya bisa diubah di Draft setelah HSL COMPLETED tersedia. */
+export function distEditBlockedReason(input: {
+  status: string;
+  hasCompletedHsl: boolean;
+}): string | null {
+  if (!isDistEditable(input.status)) return 'Dokumen tidak dapat diubah';
+  if (!input.hasCompletedHsl) {
+    return 'Packing dapat diedit setelah HSL selesai';
+  }
+  return null;
+}
+
+/** Promosi Draft → Terjadwal (terbitkan nomor DST). */
+export function canPromoteDistToScheduled(input: {
+  status: string;
+  hasCompletedHsl: boolean;
+}): string | null {
+  if (!(input.status === 'DRAFT' || input.status === 'SUBMITTED')) {
+    return 'Hanya Draft yang dapat dijadwalkan';
+  }
+  if (!input.hasCompletedHsl) {
+    return 'Jadwalkan setelah HSL selesai';
+  }
+  return null;
 }
 
 /** Titik sudah diselesaikan bila diterima+kembali menutup qty dikirim. */
@@ -566,11 +630,12 @@ export function buildDistributionArmadas(input: {
   return { armadas: built.armadas, lines: built.lines };
 }
 
+/** Porsi lapangan = bilangan bulat (bukan KG pecahan). */
 function optionalNonNegQty(raw: unknown): number | undefined {
   if (raw == null || raw === '') return undefined;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return undefined;
-  return roundQty(n);
+  return Math.round(n);
 }
 
 export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: string } {
@@ -623,7 +688,7 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
       finishedGoodProductId: fgId,
       finishedGoodKode: row.finishedGoodKode != null ? String(row.finishedGoodKode) : undefined,
       finishedGoodNama: row.finishedGoodNama != null ? String(row.finishedGoodNama) : undefined,
-      qtyPorsi: roundQty(qtyPorsi),
+      qtyPorsi: Math.round(qtyPorsi),
       ...(qtyDikirim != null ? { qtyDikirim } : {}),
       ...(qtyDiterima != null ? { qtyDiterima } : {}),
       ...(qtyDikembalikan != null ? { qtyDikembalikan } : {}),
@@ -813,10 +878,10 @@ export function allocatePorsiAcrossPoints(input: {
   const out: DistributionLine[] = [];
 
   for (const item of input.items) {
-    const total = Number(item.qtyPorsi) || 0;
+    const total = Math.round(Number(item.qtyPorsi) || 0);
     if (!(total > 0)) continue;
     // Weighted by kapasitas when set; else equal split.
-    // Shares are non-negative and sum exactly to total (remainder on last point).
+    // Integer shares; non-negative; sum exactly to total (remainder on last point).
     const weights = points.map((p) => {
       const k = Number(p.kapasitasPorsi);
       return Number.isFinite(k) && k > 0 ? k : 1;
@@ -825,22 +890,22 @@ export function allocatePorsiAcrossPoints(input: {
     const shares: number[] = new Array(points.length).fill(0);
     let allocated = 0;
     for (let i = 0; i < points.length - 1; i++) {
-      const share = Math.max(0, roundQty((total * weights[i]) / weightSum));
+      const share = Math.max(0, Math.round((total * weights[i]) / weightSum));
       shares[i] = share;
-      allocated = roundQty(allocated + share);
+      allocated += share;
     }
-    shares[points.length - 1] = Math.max(0, roundQty(total - allocated));
+    shares[points.length - 1] = Math.max(0, total - allocated);
     // If early rounding overshot, peel from earlier points so last stays ≥ 0 and sum = total.
-    let sum = shares.reduce((s, n) => roundQty(s + n), 0);
-    let drift = roundQty(total - sum);
+    let sum = shares.reduce((s, n) => s + n, 0);
+    let drift = total - sum;
     if (drift !== 0) {
       for (let i = points.length - 1; i >= 0 && drift !== 0; i--) {
-        const next = roundQty(shares[i] + drift);
+        const next = shares[i] + drift;
         if (next >= 0) {
           shares[i] = next;
           drift = 0;
         } else {
-          drift = roundQty(drift + shares[i]);
+          drift += shares[i];
           shares[i] = 0;
         }
       }

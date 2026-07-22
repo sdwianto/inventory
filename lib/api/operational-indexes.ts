@@ -158,7 +158,14 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'armadas', index: { tenantId: 1, kode: 1 }, name: 'uniq_armada_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'armadas', index: { tenantId: 1, kitchenId: 1, aktif: 1 }, name: 'idx_armada_tenant_kitchen_aktif' },
   { collection: 'distribution_orders', index: { tenantId: 1, id: 1 }, name: 'idx_dist_tenant_id' },
-  { collection: 'distribution_orders', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_dist_tenant_no', unique: true },
+  {
+    collection: 'distribution_orders',
+    index: { tenantId: 1, noDokumen: 1 },
+    name: 'uniq_dist_tenant_no',
+    unique: true,
+    /** Draft tanpa nomor DST — partial agar banyak null/kosong tidak bentrok. */
+    partialFilterExpression: { noDokumen: { $type: 'string', $gt: '' } },
+  },
   { collection: 'distribution_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_dist_tenant_tanggal' },
   { collection: 'distribution_orders', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_dist_tenant_kitchen_tanggal' },
   { collection: 'distribution_orders', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_dist_tenant_plan' },
@@ -335,6 +342,8 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   await dropIndexIfExists(db, 'ka_safety_cases', 'uniq_ka_scf_open_source_key');
   // Recreate active-FU-per-case unique (fails until duplicate OPEN/DONE rows dibersihkan).
   await dropIndexIfExists(db, 'ka_follow_ups', 'uniq_ka_kfu_active_per_case');
+  // Draft DST tanpa noDokumen — recreate unique partial.
+  await dropIndexIfExists(db, 'distribution_orders', 'uniq_dist_tenant_no');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

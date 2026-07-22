@@ -58,6 +58,7 @@ const REQUIRED_MODULES = [
   'app/food-production/batch/page.tsx',
   'app/food-production/service-point/page.tsx',
   'app/food-production/distribution/page.tsx',
+  'components/food-production/DistributionScheduleDocument.tsx',
   'app/food-production/cold-chain/page.tsx',
   'app/food-production/haccp/page.tsx',
   'app/food-production/price-book/page.tsx',
@@ -98,7 +99,8 @@ describe('food-production enterprise gate', () => {
   it('AppShell exposes recommendations + Phase 4 routes', () => {
     const src = readFileSync(resolve(ROOT, 'components/AppShell.tsx'), 'utf8');
     expect(src).toContain("/food-production/recommendations");
-    expect(src).toContain("/food-production/transfer");
+    // Transfer Dapur disembunyikan dari nav (route/API tetap); jangan assert di NAV.
+    expect(src).not.toContain("label: 'Transfer Dapur'");
     expect(src).toContain("/food-production/plan");
     expect(src).toContain("/food-production/calendar");
     expect(src).toContain("/food-production/batch");
@@ -138,6 +140,29 @@ describe('food-production enterprise gate', () => {
     expect(src).toContain('FP_OPS_WRITE_ROLES');
     expect(src).toContain('FP_MANAGE_ROLES');
     expect(src).toMatch(/QC_RESULT_RECORD|persistItemEvidence/);
+  });
+
+  it('distribution supports PLAN source and print document', () => {
+    const page = readFileSync(resolve(ROOT, 'app/food-production/distribution/page.tsx'), 'utf8');
+    expect(page).toContain("sourceType: useHsl ? 'RESULT' : 'PLAN'");
+    expect(page).toContain('DistributionScheduleDocument');
+    expect(page).toContain('printDocument');
+    expect(page).toContain('PlanDateStrip');
+    expect(page).toContain('hasDistDokumenNo');
+    expect(page).toContain('Jadwalkan');
+    expect(page).toContain('Simpan Draft');
+    expect(page).not.toContain('Sumber jadwal');
+    expect(page).not.toContain('Rencana produksi (RPN)');
+    expect(page).toContain('Tanpa HSL (simpan sebagai Draft)');
+    const doc = readFileSync(
+      resolve(ROOT, 'components/food-production/DistributionScheduleDocument.tsx'),
+      'utf8',
+    );
+    expect(doc).toContain('JADWAL PENGIRIMAN');
+    expect(doc).toContain('DIST_SCHEDULE_PRINT_ID');
+    const dist = readFileSync(resolve(ROOT, 'lib/food-production/distribution.ts'), 'utf8');
+    expect(dist).toContain("APPROVED: 'Terjadwal'");
+    expect(dist).toContain("DRAFT: ['APPROVED', 'CANCELLED']");
   });
 
   it('doc prefixes cover kitchen loop + XFR + DST + HCP', () => {

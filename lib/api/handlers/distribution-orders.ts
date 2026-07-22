@@ -12,6 +12,9 @@ import {
   DISTRIBUTION_ORDERS_COLLECTION,
   DIST_STATUS_TRANSITIONS,
   isDistEditable,
+  distEditBlockedReason,
+  canPromoteDistToScheduled,
+  hasDistDokumenNo,
   normalizeDistLines,
   summarizeDistLines,
   allocatePorsiAcrossPoints,
@@ -24,6 +27,9 @@ import {
   allDistLinesSettled,
   buildDistributionLoadings,
   scalePorsiByKategoriForQty,
+  planDistCreateBlockedReason,
+  FOOD_TRAY_ID,
+  FOOD_TRAY_LABEL,
   type DistributionOrderDoc,
   type DistributionStatus,
   type DistributionLine,
@@ -40,6 +46,7 @@ import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/food-production/armada
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { FP_DIST_STATUS_ROLES, FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import {
   FP_DOC_TYPES,
@@ -63,6 +70,8 @@ interface DistBody extends Record<string, unknown> {
   sourceType?: string;
   productionPlanId?: string;
   productionResultId?: string;
+  /** Shell draft tanpa HSL — alokasi dari kapasitas titik. */
+  shellDraft?: boolean;
   servicePointIds?: unknown;
   /** Gelombang loading → armada → titik (jadwal lapangan). */
   loadings?: unknown;
@@ -255,6 +264,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     let productionResultId: string | undefined;
     let productionResultNo: string | undefined;
     let sourceItems: DistSourceItem[] = [];
+    let shellDraft = false;
 
     if (sourceType === 'RESULT') {
       const rid = String(distBody.productionResultId || '').trim();
@@ -278,7 +288,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       );
       if (everReceived) {
         return err(
-          `HSL ${result.noDokumen} sudah selesai distribusi (${String(everReceived.noDokumen || '')}) — tidak bisa packing ulang`,
+          `HSL ${result.noDokumen} sudah selesai distribusi (${String(everReceived.noDokumen || 'Draft')}) — tidak bisa packing ulang`,
           400,
         );
       }
@@ -291,7 +301,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       );
       if (openDst) {
         return err(
-          `HSL ${result.noDokumen} masih punya DST aktif ${String(openDst.noDokumen || '')} — selesaikan / kembalikan dulu`,
+          `HSL ${result.noDokumen} masih punya DST aktif ${String(openDst.noDokumen || 'Draft')} — selesaikan / kembalikan dulu`,
           400,
         );
       }
@@ -305,9 +315,8 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       const collapsed = collapseSourceToFoodTray(sourceItemsFromResult(result));
       if ('error' in collapsed) return err(collapsed.error, 400);
       sourceItems = collapsed;
-    } else {
+    } else if (String(distBody.productionPlanId || '').trim()) {
       const pid = String(distBody.productionPlanId || '').trim();
-      if (!pid) return err('productionPlanId wajib untuk sumber rencana', 400);
       plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id: pid }),
       ) as ProductionPlanDoc | null;
@@ -332,12 +341,37 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         }),
         { projection: { id: 1, noDokumen: 1 } },
       );
-      if (hslDone) {
-        return err(
-          `Rencana sudah punya HSL ${String(hslDone.noDokumen || '')} — buat DST dari Hasil Produksi`,
-          400,
-        );
-      }
+      // Satu DST aktif per rencana (mirror guard HSL).
+      const openPlanDst = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: plan.id,
+          sourceType: 'PLAN',
+          status: { $ne: 'CANCELLED' },
+        }),
+        { projection: { id: 1, noDokumen: 1, status: 1 } },
+      );
+      const planBlock = planDistCreateBlockedReason({
+        planNo: plan.noDokumen,
+        hslNo: hslDone?.noDokumen ? String(hslDone.noDokumen) : null,
+        openDstNo: openPlanDst
+          ? (openPlanDst.noDokumen ? String(openPlanDst.noDokumen) : 'Draft')
+          : null,
+        openDstStatus: openPlanDst?.status ? String(openPlanDst.status) : null,
+      });
+      if (planBlock) return err(planBlock, 400);
+    } else {
+      // Draft tanpa HSL/RPN — alokasi dari kapasitas titik yang dipilih.
+      shellDraft = true;
+      kitchenId = String(
+        distBody.kitchenId || resolveKitchenIdFilter(url, request) || '',
+      ).trim();
+      if (!kitchenId) return err('Pilih dapur dulu sebelum menyimpan Draft', 400);
+      const kitchen = await db.collection(KITCHENS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: kitchenId }),
+        { projection: { id: 1, nama: 1 } },
+      ) as { id: string; nama?: string } | null;
+      if (!kitchen) return err('Dapur tidak ditemukan', 404);
+      kitchenNama = kitchen.nama;
     }
 
     let lines: DistributionLine[];
@@ -365,11 +399,31 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         }
       }
       // Allocate only remaining budget (prior non-CANCELLED DST for same source).
-      const priorConsumed = await loadConsumedDistLinesForSource(db, scopeAuth, {
-        productionPlanId,
-        productionResultId,
-      });
-      const remainItems = remainingSourceItems(sourceItems, priorConsumed);
+      // Shell draft: qty = kapasitas tiap titik (belum ada HSL).
+      let itemsForAlloc = sourceItems;
+      if (shellDraft) {
+        const totalKap = points.reduce((s, p) => {
+          const k = Number(p.kapasitasPorsi);
+          return s + (Number.isFinite(k) && k > 0 ? Math.round(k) : 0);
+        }, 0);
+        if (!(totalKap > 0)) {
+          return err('Titik terpilih belum punya kapasitas porsi', 400);
+        }
+        itemsForAlloc = [{
+          recipeId: FOOD_TRAY_ID,
+          recipeNama: FOOD_TRAY_LABEL,
+          menuNama: FOOD_TRAY_LABEL,
+          finishedGoodNama: FOOD_TRAY_LABEL,
+          qtyPorsi: totalKap,
+        }];
+      }
+      const priorConsumed = shellDraft
+        ? []
+        : await loadConsumedDistLinesForSource(db, scopeAuth, {
+          productionPlanId,
+          productionResultId,
+        });
+      const remainItems = remainingSourceItems(itemsForAlloc, priorConsumed);
       if ('error' in remainItems) return err(remainItems.error, 400);
       const allocated = allocatePorsiAcrossPoints({
         items: remainItems,
@@ -529,38 +583,61 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       lines = built.lines;
     }
 
-    // TOCTOU: re-load consumed immediately before insert.
-    const consumed = await loadConsumedDistLinesForSource(db, scopeAuth, {
-      productionPlanId,
-      productionResultId,
-    });
-    const over = assertDistQtyWithinSource({
-      sourceItems,
-      newLines: lines,
-      existingConsumedLines: consumed,
-    });
-    if (over) return err(over, 400);
+    // TOCTOU: re-load consumed immediately before insert (skip for shell draft).
+    if (!shellDraft) {
+      const consumed = await loadConsumedDistLinesForSource(db, scopeAuth, {
+        productionPlanId,
+        productionResultId,
+      });
+      const over = assertDistQtyWithinSource({
+        sourceItems,
+        newLines: lines,
+        existingConsumedLines: consumed,
+      });
+      if (over) return err(over, 400);
+    }
 
     const actor = auditActor(auth);
     const now = new Date();
     const tenantId = tenantIdForWrite(scopeAuth, distBody);
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.DISTRIBUTION_ORDER);
     const createNote = String(distBody.catatan || '').trim();
-    const history: DocHistoryEntry[] = appendDocHistory([], {
+    // Create-from-HSL: satu transaksi Draft → Terjadwal + nomor DST.
+    // Shell / PLAN: Draft tanpa nomor sampai HSL + Jadwalkan.
+    const scheduleOnCreate = sourceType === 'RESULT';
+    let noDokumen: string | undefined;
+    if (scheduleOnCreate) {
+      noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.DISTRIBUTION_ORDER);
+    }
+    const draftNote = sourceType === 'RESULT'
+      ? `Draft dari HSL · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`
+      : shellDraft
+        ? `Draft packing · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`
+        : `Draft dari rencana · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`;
+    let history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
       toStatus: 'DRAFT',
       userId: actor.userId,
       userName: actor.userName,
-      note: sourceType === 'RESULT'
-        ? `Disiapkan dari HSL · ${summarizeDistLines(lines).qtyPorsiTotal} porsi${createNote ? ` · ${createNote}` : ''}`
-        : `Disiapkan dari rencana · ${summarizeDistLines(lines).qtyPorsiTotal} porsi${createNote ? ` · ${createNote}` : ''}`,
+      note: `${draftNote}${createNote ? ` · ${createNote}` : ''}`,
     });
+    let status: DistributionStatus = 'DRAFT';
+    if (scheduleOnCreate && noDokumen) {
+      history = appendDocHistory(history, {
+        at: now,
+        fromStatus: 'DRAFT',
+        toStatus: 'APPROVED',
+        userId: actor.userId,
+        userName: actor.userName,
+        note: `Terjadwal · ${noDokumen}`,
+      });
+      status = 'APPROVED';
+    }
 
     const doc: DistributionOrderDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      ...(noDokumen ? { noDokumen } : {}),
       tanggal: String(distBody.tanggal || plan?.tanggal || result?.tanggal || '').trim()
         || new Date().toISOString().slice(0, 10),
       kitchenId,
@@ -573,7 +650,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       lines,
       ...(loadings?.length ? { loadings } : {}),
       ...(armadas?.length ? { armadas } : {}),
-      status: 'DRAFT',
+      status,
       history,
       summary: summarizeDistLines(lines, { armadas, loadings }),
       catatan: createNote || undefined,
@@ -584,16 +661,18 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     };
 
     // Final re-check then insert (narrow race window).
-    const consumed2 = await loadConsumedDistLinesForSource(db, scopeAuth, {
-      productionPlanId,
-      productionResultId,
-    });
-    const over2 = assertDistQtyWithinSource({
-      sourceItems,
-      newLines: lines,
-      existingConsumedLines: consumed2,
-    });
-    if (over2) return err(over2, 409);
+    if (!shellDraft) {
+      const consumed2 = await loadConsumedDistLinesForSource(db, scopeAuth, {
+        productionPlanId,
+        productionResultId,
+      });
+      const over2 = assertDistQtyWithinSource({
+        sourceItems,
+        newLines: lines,
+        existingConsumedLines: consumed2,
+      });
+      if (over2) return err(over2, 409);
+    }
 
     try {
       await db.collection(DISTRIBUTION_ORDERS_COLLECTION).insertOne(doc);
@@ -609,7 +688,9 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       action: 'DIST_CREATE',
       entityType: 'distribution_order',
       entityId: doc.id,
-      summary: `DST ${doc.noDokumen} dibuat (${sourceType})`,
+      summary: noDokumen
+        ? `DST ${noDokumen} terjadwal (${sourceType})`
+        : `DST Draft dibuat (${sourceType})`,
       ...auditActor(auth),
     });
     return ok(clean(doc as unknown as Record<string, unknown>));
@@ -639,6 +720,23 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     ) as DistributionOrderDoc | null;
     if (!existing) return err('Distribusi tidak ditemukan', 404);
     if (!isDistEditable(existing.status)) return err('Dokumen tidak dapat diubah', 400);
+
+    let hasCompletedHsl = existing.sourceType === 'RESULT' && Boolean(existing.productionResultId);
+    if (!hasCompletedHsl && existing.productionPlanId) {
+      const hsl = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: existing.productionPlanId,
+          status: 'COMPLETED',
+        }),
+        { projection: { id: 1 } },
+      );
+      hasCompletedHsl = Boolean(hsl);
+    }
+    const editBlock = distEditBlockedReason({
+      status: existing.status,
+      hasCompletedHsl,
+    });
+    if (editBlock) return err(editBlock, 400);
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (distBody.lines != null) {
@@ -728,17 +826,85 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     const actor = auditActor(auth);
     const now = new Date();
     const userNote = String(distBody.note || '').trim();
-    const statusNote = toStatus === 'PROCESSING'
-      ? 'Barang dikirim ke titik layanan'
-      : toStatus === 'COMPLETED'
-        ? 'Semua titik diselesaikan (diterima / dikembalikan)'
-        : toStatus === 'CANCELLED'
-          ? 'Packing dibatalkan'
-          : 'Status distribusi diperbarui';
+
+    // Draft → Terjadwal: wajib HSL, terbitkan nomor DST, tautkan RESULT bila masih PLAN.
+    let linkResult: ProductionResultDoc | null = null;
+    let assignedNo = existing.noDokumen;
+    if (toStatus === 'APPROVED') {
+      if (existing.sourceType === 'RESULT' && existing.productionResultId) {
+        linkResult = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: existing.productionResultId }),
+        ) as ProductionResultDoc | null;
+        if (!linkResult || linkResult.status !== 'COMPLETED') {
+          return err('HSL harus COMPLETED sebelum dijadwalkan', 400);
+        }
+      } else if (String(distBody.productionResultId || '').trim()) {
+        const rid = String(distBody.productionResultId || '').trim();
+        linkResult = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: rid }),
+        ) as ProductionResultDoc | null;
+        if (!linkResult || linkResult.status !== 'COMPLETED') {
+          return err('HSL harus COMPLETED sebelum dijadwalkan', 400);
+        }
+      } else if (existing.productionPlanId) {
+        linkResult = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, {
+            productionPlanId: existing.productionPlanId,
+            status: 'COMPLETED',
+          }),
+        ) as ProductionResultDoc | null;
+        if (!linkResult) {
+          return err('Jadwalkan setelah HSL selesai', 400);
+        }
+      } else {
+        return err('Pilih HSL untuk menjadwalkan', 400);
+      }
+      const promoteBlock = canPromoteDistToScheduled({
+        status: existing.status,
+        hasCompletedHsl: true,
+      });
+      if (promoteBlock) return err(promoteBlock, 400);
+
+      // Validasi alokasi terhadap actual HSL (bukan hanya target RPN).
+      {
+        const collapsed = collapseSourceToFoodTray(sourceItemsFromResult(linkResult));
+        if ('error' in collapsed) return err(collapsed.error, 400);
+        const consumed = await loadConsumedDistLinesForSource(db, scopeAuth, {
+          productionPlanId: linkResult.productionPlanId || existing.productionPlanId,
+          productionResultId: linkResult.id,
+        }, id);
+        const over = assertDistQtyWithinSource({
+          sourceItems: collapsed,
+          newLines: existing.lines || [],
+          existingConsumedLines: consumed,
+        });
+        if (over) return err(over, 400);
+      }
+
+      if (!hasDistDokumenNo(assignedNo)) {
+        assignedNo = await nextFpDocNumber(
+          db,
+          existing.tenantId,
+          FP_DOC_TYPES.DISTRIBUTION_ORDER,
+        );
+      }
+    }
+
+    const statusNote = toStatus === 'APPROVED'
+      ? `Terjadwal${assignedNo ? ` · ${assignedNo}` : ''}`
+      : toStatus === 'PROCESSING'
+        ? 'Barang dikirim ke titik layanan'
+        : toStatus === 'COMPLETED'
+          ? 'Semua titik diselesaikan (diterima / dikembalikan)'
+          : toStatus === 'CANCELLED'
+            ? 'Packing dibatalkan'
+            : 'Status distribusi diperbarui';
 
     const rawActuals = Array.isArray(distBody.lineActuals) ? distBody.lineActuals : [];
     let nextLines: DistributionLine[];
-    if (toStatus === 'COMPLETED') {
+    if (toStatus === 'APPROVED' || toStatus === 'CANCELLED') {
+      nextLines = existing.lines || [];
+    } else if (toStatus === 'COMPLETED') {
       const settles = rawActuals.map((a) => {
         const row = (a || {}) as Record<string, unknown>;
         const qtyDiterima = row.qtyDiterima != null ? Number(row.qtyDiterima) : Number(row.qty);
@@ -780,7 +946,10 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       nextLines = applied;
     }
     const movementQty = movementQtyForStatus(nextLines, toStatus);
-    const summary = summarizeDistLines(nextLines);
+    const summary = summarizeDistLines(nextLines, {
+      armadas: existing.armadas,
+      loadings: existing.loadings,
+    });
 
     const photoPayload = distBody.photos ?? distBody.photoUrls ?? [];
     const persisted = await persistStatusPhotos(existing.tenantId, photoPayload);
@@ -815,22 +984,26 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       }`,
       movementQtyPorsi: movementQty,
       movementLineCount: nextLines.length,
-      lineActuals: nextLines.map((l) => (
-        toStatus === 'COMPLETED'
-          ? {
-            servicePointId: l.servicePointId,
-            servicePointNama: l.servicePointNama,
-            qtyDiterima: Number(l.qtyDiterima) || 0,
-            qtyDikembalikan: Number(l.qtyDikembalikan) || 0,
-            ...(l.notes ? { notes: l.notes } : {}),
-          }
-          : {
-            servicePointId: l.servicePointId,
-            servicePointNama: l.servicePointNama,
-            qty: Number(l.qtyDikirim ?? l.qtyPorsi) || 0,
-            ...(l.notes ? { notes: l.notes } : {}),
-          }
-      )),
+      ...(toStatus === 'APPROVED' || toStatus === 'CANCELLED'
+        ? {}
+        : {
+          lineActuals: nextLines.map((l) => (
+            toStatus === 'COMPLETED'
+              ? {
+                servicePointId: l.servicePointId,
+                servicePointNama: l.servicePointNama,
+                qtyDiterima: Number(l.qtyDiterima) || 0,
+                qtyDikembalikan: Number(l.qtyDikembalikan) || 0,
+                ...(l.notes ? { notes: l.notes } : {}),
+              }
+              : {
+                servicePointId: l.servicePointId,
+                servicePointNama: l.servicePointNama,
+                qty: Number(l.qtyDikirim ?? l.qtyPorsi) || 0,
+                ...(l.notes ? { notes: l.notes } : {}),
+              }
+          )),
+        }),
       ...(persisted.urls.length ? { photoUrls: persisted.urls, photoMediaFiles: persisted.files } : {}),
     };
     const history = appendDocHistory(existing.history, historyEntry);
@@ -842,24 +1015,47 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       history,
       updatedAt: now,
     };
+    if (toStatus === 'APPROVED') {
+      if (assignedNo) update.noDokumen = assignedNo;
+      if (linkResult) {
+        update.sourceType = 'RESULT';
+        update.productionResultId = linkResult.id;
+        update.productionResultNo = linkResult.noDokumen;
+        if (linkResult.productionPlanId) {
+          update.productionPlanId = linkResult.productionPlanId;
+        }
+        if (linkResult.productionPlanNo) {
+          update.productionPlanNo = linkResult.productionPlanNo;
+        }
+      }
+    }
     if (persisted.urls.length) {
       update.lastStatusPhotoUrls = persisted.urls;
     }
 
-    await db.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: update },
-    );
+    try {
+      await db.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id }),
+        { $set: update },
+      );
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
+        return err('Nomor dokumen bentrok — coba lagi', 409);
+      }
+      throw e;
+    }
     const saved = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
+    const displayNo = hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft';
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action: toStatus === 'COMPLETED' ? 'DIST_COMPLETE'
-        : toStatus === 'CANCELLED' ? 'DIST_CANCEL' : 'DIST_STATUS',
+        : toStatus === 'CANCELLED' ? 'DIST_CANCEL'
+          : toStatus === 'APPROVED' ? 'DIST_SCHEDULE' : 'DIST_STATUS',
       entityType: 'distribution_order',
       entityId: id,
-      summary: `DST ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+      summary: `DST ${displayNo}: ${existing.status} → ${toStatus}`,
       ...auditActor(auth),
     });
     return ok(clean(saved as Record<string, unknown>));
@@ -903,7 +1099,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       action: 'DIST_CANCEL',
       entityType: 'distribution_order',
       entityId: path[1],
-      summary: `DST ${existing.noDokumen} dibatalkan`,
+      summary: `DST ${existing.noDokumen || 'Draft'} dibatalkan`,
       ...auditActor(auth),
     });
     return ok({ id: path[1], status: 'CANCELLED' });

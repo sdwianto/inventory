@@ -1,6 +1,11 @@
-/** Cetak dokumen A4 via browser — target harus ada di document.body (lihat PrintPortal). */
-
-export function printDocument(elementId = 'vendor-invoice-a4-print', delayMs = 300) {
+/** Cetak dokumen A4 via browser — target harus ada di document.body (lihat PrintPortal).
+ *  `fileName` sementara mengganti document.title (jadi default nama "Save as PDF").
+ */
+export function printDocument(
+  elementId = 'vendor-invoice-a4-print',
+  delayMs = 300,
+  fileName?: string,
+) {
   return new Promise<void>((resolve) => {
     const target = document.getElementById(elementId);
     if (!target) {
@@ -8,9 +13,15 @@ export function printDocument(elementId = 'vendor-invoice-a4-print', delayMs = 3
       return;
     }
 
+    const prevTitle = document.title;
+    if (fileName?.trim()) {
+      document.title = fileName.trim();
+    }
+
     const cleanup = () => {
       document.body.classList.remove('doc-print-active');
       document.documentElement.removeAttribute('data-doc-print');
+      if (fileName?.trim()) document.title = prevTitle;
       resolve();
     };
 

@@ -91,7 +91,7 @@ const NAV: NavEntry[] = [
       { href: '/food-production/plan', label: 'Rencana Produksi', icon: CalendarClock },
       { href: '/food-production/result', label: 'Hasil Produksi', icon: Factory },
       { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
-      { href: '/food-production/transfer', label: 'Transfer Dapur', icon: ArrowLeftRight },
+      // Transfer Dapur disembunyikan — belum dipakai operasional (route/API tetap ada).
       { href: '/food-production/service-point', label: 'Titik Layanan', icon: MapPinned },
       { href: '/food-production/armada', label: 'Armada', icon: Car },
       { href: '/food-production/distribution', label: 'Jadwal Pengiriman', icon: Truck },
@@ -159,7 +159,7 @@ const DEFAULT_EXPANDED: Record<string, boolean> = Object.fromEntries(
 const FP_OPS_ROUTES = [
   '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
-  '/food-production/report', '/food-production/calendar', '/food-production/transfer',
+  '/food-production/report', '/food-production/calendar',
   '/food-production/service-point', '/food-production/armada', '/food-production/distribution', '/food-production/cold-chain',
   '/food-production/haccp', '/food-production/batch', '/food-production/qc',
 ] as const;

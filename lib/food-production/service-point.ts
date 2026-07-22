@@ -173,6 +173,22 @@ export function compareJamKirim(a?: string | null, b?: string | null): number {
   return aa.localeCompare(bb);
 }
 
+/** Drop harus ≤ Jam Makan; tanpa Jam Makan, drop tidak boleh diisi. */
+export function assertDropsWithinJamMakan(
+  jamMakan: string | undefined | null,
+  drops: ServicePointDrop[],
+): { error: string } | null {
+  if (!drops.length) return null;
+  const makan = String(jamMakan || '').trim();
+  if (!makan) return { error: 'Isi Jam Makan dulu sebelum Jam Kirim/Drop' };
+  for (const d of drops) {
+    if (compareJamKirim(d.jamKirim, makan) > 0) {
+      return { error: `Jam Kirim/Drop (${d.jamKirim}) tidak boleh melebihi Jam Makan (${makan})` };
+    }
+  }
+  return null;
+}
+
 /**
  * Jam untuk urutan rute pengiriman:
  * drop terawal (jam pengiriman), fallback Jam Makan.

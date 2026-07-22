@@ -15,6 +15,7 @@ import {
   normalizePicNoTelp,
   normalizeJamKirim,
   normalizeServicePointDrops,
+  assertDropsWithinJamMakan,
   resolvePenerimaManfaat,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
@@ -116,6 +117,11 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
     }
     const drops = normalizeServicePointDrops(spBody.drops);
     if ('error' in drops) return err(drops.error, 400);
+    const dropGuard = assertDropsWithinJamMakan(
+      typeof jamKirim === 'string' ? jamKirim : undefined,
+      drops,
+    );
+    if (dropGuard) return err(dropGuard.error, 400);
 
     const now = new Date();
     const doc: ServicePointDoc = {
@@ -198,6 +204,16 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       const drops = normalizeServicePointDrops(spBody.drops);
       if ('error' in drops) return err(drops.error, 400);
       update.drops = drops;
+    }
+    {
+      const effectiveJam = update.jamKirim !== undefined
+        ? (update.jamKirim as string | null) || undefined
+        : (existing.jamKirim || undefined);
+      const effectiveDrops = update.drops !== undefined
+        ? (update.drops as ServicePointDoc['drops']) || []
+        : (existing.drops || []);
+      const dropGuard = assertDropsWithinJamMakan(effectiveJam, effectiveDrops);
+      if (dropGuard) return err(dropGuard.error, 400);
     }
     if (spBody.pic !== undefined) update.pic = String(spBody.pic || '').trim() || null;
     if (spBody.picNoTelp !== undefined) {
