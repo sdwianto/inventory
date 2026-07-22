@@ -18,6 +18,7 @@ import { MapPinned, Plus, Pencil, RefreshCw, Power, Trash2 } from 'lucide-react'
 import {
   KATEGORI_PORSI_OPTIONS,
   SERVICE_POINT_JENIS_LABELS,
+  formatServicePointDropsJam,
   sumPorsiByKategori,
   type ServicePointDrop,
   type ServicePointJenis,
@@ -90,13 +91,14 @@ function dropsFormFromRow(drops?: ServicePointDrop[]): DropFormRow[] {
 function dropsFormToPayload(rows: DropFormRow[]): ServicePointDrop[] {
   return rows
     .map((r, i) => {
-      const label = r.label.trim();
-      if (!label) return null;
+      const jamKirim = r.jamKirim.trim();
+      if (!jamKirim) return null;
       const qty = Number(r.qtyHint);
+      const label = r.label.trim() || undefined;
       return {
-        id: r.id.trim() || `drop-${i + 1}`,
+        id: r.id.trim() || `drop-${jamKirim.replace(':', '') || i + 1}`,
+        jamKirim,
         label,
-        jamKirim: r.jamKirim || undefined,
         qtyHint: Number.isFinite(qty) && qty > 0 ? Math.round(qty) : undefined,
       } as ServicePointDrop;
     })
@@ -355,7 +357,7 @@ export default function ServicePointPage() {
                 <td className="p-3">{row.kitchenNama || '—'}</td>
                 <td className="p-3 font-mono text-xs tabular-nums">{row.jamKirim || '—'}</td>
                 <td className="p-3 text-xs text-muted-foreground">
-                  {(row.drops || []).length > 0 ? `${row.drops!.length} drop` : '—'}
+                  {formatServicePointDropsJam(row.drops)}
                 </td>
                 <td className="p-3 text-right">{row.kapasitasPorsi ?? '—'}</td>
                 <td className="p-3">{row.pic || '—'}</td>
@@ -439,7 +441,7 @@ export default function ServicePointPage() {
             </div>
             <div className="space-y-2 rounded-md border p-3 bg-muted/20">
               <div className="flex items-center justify-between gap-2">
-                <Label className="text-sm font-medium">Drop points (opsional)</Label>
+                <Label className="text-sm font-medium">Jam pengiriman (opsional)</Label>
                 <Button
                   type="button"
                   variant="outline"
@@ -458,30 +460,17 @@ export default function ServicePointPage() {
                     ],
                   }))}
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Tambah drop
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Tambah jam
                 </Button>
               </div>
               {form.drops.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                  Contoh: SMP Muhammadiyah → Jl. Lawu, Jl. Adi Santoso
+                  Jam tambahan selain Jam Makan. Contoh: 08:50, 09:00
                 </p>
               )}
               <div className="space-y-2">
                 {form.drops.map((drop) => (
-                  <div key={drop.key} className="grid grid-cols-[1fr_6rem_5rem_auto] gap-2 items-end">
-                    <div className="space-y-1">
-                      <Label className="text-xs font-normal">Label</Label>
-                      <Input
-                        value={drop.label}
-                        placeholder="Jl. Lawu"
-                        onChange={(e) => setForm((f) => ({
-                          ...f,
-                          drops: f.drops.map((d) => (
-                            d.key === drop.key ? { ...d, label: e.target.value } : d
-                          )),
-                        }))}
-                      />
-                    </div>
+                  <div key={drop.key} className="grid grid-cols-[6.5rem_1fr_5rem_auto] gap-2 items-end">
                     <div className="space-y-1">
                       <Label className="text-xs font-normal">Jam</Label>
                       <Input
@@ -491,6 +480,19 @@ export default function ServicePointPage() {
                           ...f,
                           drops: f.drops.map((d) => (
                             d.key === drop.key ? { ...d, jamKirim: e.target.value } : d
+                          )),
+                        }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs font-normal">Keterangan</Label>
+                      <Input
+                        value={drop.label}
+                        placeholder="opsional"
+                        onChange={(e) => setForm((f) => ({
+                          ...f,
+                          drops: f.drops.map((d) => (
+                            d.key === drop.key ? { ...d, label: e.target.value } : d
                           )),
                         }))}
                       />

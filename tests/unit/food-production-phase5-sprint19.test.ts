@@ -39,15 +39,17 @@ describe('food-production phase 5 sprint 19', () => {
     expect(normalizeJamKirim('25:00')).toEqual({ error: 'Jam makan tidak valid' });
   });
 
-  it('normalizes service point drops', () => {
+  it('normalizes service point delivery times (drops)', () => {
     const drops = normalizeServicePointDrops([
-      { label: 'Jl. Lawu', jamKirim: '8:50', qtyHint: 30 },
-      { id: 'd2', label: 'Jl. Adi Santoso', jamKirim: '09:00', qtyHint: 46 },
+      { jamKirim: '9:00', qtyHint: 46 },
+      { id: 'd1', jamKirim: '8:50', label: 'gelombang 1', qtyHint: 30 },
     ]);
     expect('error' in (drops as object)).toBe(false);
     if ('error' in (drops as object)) return;
     expect(drops).toHaveLength(2);
     expect(drops[0].jamKirim).toBe('08:50');
+    expect(drops[0].label).toBe('gelombang 1');
+    expect(drops[1].jamKirim).toBe('09:00');
     expect(drops[1].qtyHint).toBe(46);
   });
 
@@ -132,8 +134,8 @@ describe('food-production phase 5 sprint 19', () => {
       lines,
       dropsByServicePointId: {
         b: [
-          { dropId: 'd1', label: 'Jl. Lawu', jamKirim: '08:50', qtyHint: 30 },
-          { dropId: 'd2', label: 'Jl. Adi Santoso', jamKirim: '09:00', qtyHint: 46 },
+          { dropId: 'd1', jamKirim: '08:50', qtyHint: 30 },
+          { dropId: 'd2', jamKirim: '09:00', qtyHint: 46 },
         ],
       },
     });
@@ -154,8 +156,8 @@ describe('food-production phase 5 sprint 19', () => {
       qtyPorsi: 76,
       porsiByKategori: { PORSI_BESAR: 76 },
       drops: [
-        { dropId: 'd1', label: 'Jl. Lawu', jamKirim: '08:50', qtyHint: 30 },
-        { dropId: 'd2', label: 'Jl. Adi', jamKirim: '09:00', qtyHint: 46 },
+        { dropId: 'd1', jamKirim: '08:50', qtyHint: 30 },
+        { dropId: 'd2', jamKirim: '09:00', qtyHint: 46 },
       ],
     });
     expect(drops.map((d) => d.qtyPorsi)).toEqual([30, 46]);

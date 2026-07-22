@@ -60,11 +60,13 @@ export interface DistributionLine {
   notes?: string;
 }
 
-/** Sub-drop dalam satu stop (snapshot dari master titik.drops). */
+/** Jam pengiriman dalam satu stop (snapshot dari master titik.drops). */
 export interface DistributionStopDrop {
   dropId: string;
-  label: string;
+  /** Jam pengiriman (HH:mm). */
   jamKirim?: string;
+  /** Keterangan singkat opsional. */
+  label?: string;
   qtyPorsi: number;
   porsiByKategori?: ServicePointPorsiByKategori;
 }
@@ -259,11 +261,11 @@ export function loadingLabel(urutan: number, label?: string): string {
   return n ? `Loading ${n}` : `Loading ${urutan}`;
 }
 
-/** Split qty/kategori proporsional ke drops (by qtyHint atau equal). */
+/** Split qty/kategori proporsional ke jam pengiriman (by qtyHint atau equal). */
 export function splitStopIntoDrops(input: {
   qtyPorsi: number;
   porsiByKategori?: ServicePointPorsiByKategori;
-  drops: Array<{ dropId: string; label: string; jamKirim?: string; qtyHint?: number }>;
+  drops: Array<{ dropId: string; jamKirim?: string; label?: string; qtyHint?: number }>;
 }): DistributionStopDrop[] {
   const drops = input.drops || [];
   if (!drops.length) return [];
@@ -285,8 +287,8 @@ export function splitStopIntoDrops(input: {
 
   return drops.map((d, i) => ({
     dropId: d.dropId,
-    label: d.label,
     jamKirim: d.jamKirim,
+    label: d.label?.trim() || undefined,
     qtyPorsi: qtys[i],
     porsiByKategori: scalePorsiByKategoriForQty(
       input.porsiByKategori,
@@ -376,12 +378,13 @@ export type DistLoadingInput = {
 export function buildDistributionLoadings(input: {
   loadings: DistLoadingInput[];
   lines: DistributionLine[];
-  /** Master drops per servicePointId (fallback bila stopDrops tidak dikirim). */
+  /** Master jam pengiriman per servicePointId (fallback bila stopDrops tidak dikirim). */
   dropsByServicePointId?: Record<string, Array<{
     dropId: string;
-    label: string;
     jamKirim?: string;
+    label?: string;
     qtyHint?: number;
+    qtyPorsi?: number;
   }>>;
 }): { loadings: DistributionLoading[]; armadas: DistributionArmada[]; lines: DistributionLine[] } | { error: string } {
   const rawLoadings = input.loadings || [];

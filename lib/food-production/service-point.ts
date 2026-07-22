@@ -16,13 +16,17 @@ export type ServicePointJenis = 'SEKOLAH' | 'POSYANDU' | 'LAINNYA';
 /** Qty penerima manfaat per kategori porsi. */
 export type ServicePointPorsiByKategori = Partial<Record<KategoriPorsi, number>>;
 
-/** Sub-lokasi drop dalam satu titik (contoh: Jl. Lawu, Jl. Adi Santoso). */
+/**
+ * Jam pengiriman tambahan per titik (bukan titik lokasi).
+ * Contoh: 08:50, 09:00 — keterangan opsional.
+ */
 export interface ServicePointDrop {
   id: string;
-  label: string;
-  /** Jam makan/kirim drop (HH:mm). */
-  jamKirim?: string;
-  /** Petunjuk qty porsi di drop ini (opsional). */
+  /** Jam pengiriman (HH:mm) — wajib. */
+  jamKirim: string;
+  /** Keterangan singkat opsional (bukan nama titik). */
+  label?: string;
+  /** Petunjuk qty porsi di jam ini (opsional). */
   qtyHint?: number;
   catatan?: string;
 }
@@ -48,7 +52,7 @@ export interface ServicePointDoc {
    * Label UI lapangan: Jam Makan.
    */
   jamKirim?: string;
-  /** Drop points opsional di bawah titik. */
+  /** Jam pengiriman tambahan (opsional), selain Jam Makan. */
   drops?: ServicePointDrop[];
   pic?: string;
   picNoTelp?: string;
@@ -109,43 +113,54 @@ export function normalizeJamKirim(raw: unknown): string | undefined | { error: s
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
-/** Parse drop points titik layanan. */
+/** Parse jam pengiriman tambahan (drops) — field utama = jam, bukan titik lokasi. */
 export function normalizeServicePointDrops(
   raw: unknown,
 ): ServicePointDrop[] | { error: string } {
   if (raw == null) return [];
   if (!Array.isArray(raw)) return { error: 'drops harus array' };
   const out: ServicePointDrop[] = [];
-  const seenLabel = new Set<string>();
+  const seenJam = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
-    const label = String(row?.label || '').trim();
-    if (!label) return { error: `Drop ${i + 1}: label wajib` };
-    const labelKey = label.toLowerCase();
-    if (seenLabel.has(labelKey)) return { error: `Drop duplikat: ${label}` };
-    seenLabel.add(labelKey);
     const jam = normalizeJamKirim(row?.jamKirim);
     if (jam && typeof jam === 'object' && 'error' in jam) {
-      return { error: `Drop "${label}": ${jam.error}` };
+      return { error: `Jam pengiriman ${i + 1}: ${jam.error}` };
     }
+    if (!jam) return { error: `Jam pengiriman ${i + 1}: jam wajib` };
+    if (seenJam.has(jam)) return { error: `Jam pengiriman duplikat: ${jam}` };
+    seenJam.add(jam);
+    const label = String(row?.label || row?.catatan || '').trim() || undefined;
     let qtyHint: number | undefined;
     if (row?.qtyHint != null && row.qtyHint !== '') {
       const n = Number(row.qtyHint);
       if (!Number.isFinite(n) || n < 0) {
-        return { error: `Drop "${label}": qtyHint tidak valid` };
+        return { error: `Jam pengiriman ${jam}: qty tidak valid` };
       }
       qtyHint = Math.round(n) || undefined;
     }
-    const id = String(row?.id || '').trim() || `drop-${i + 1}`;
+    const id = String(row?.id || '').trim() || `drop-${jam.replace(':', '')}`;
     out.push({
       id,
+      jamKirim: jam,
       label,
-      jamKirim: jam || undefined,
       qtyHint,
       catatan: String(row?.catatan || '').trim() || undefined,
     });
   }
+  out.sort((a, b) => compareJamKirim(a.jamKirim, b.jamKirim));
   return out;
+}
+
+/** Tampilkan daftar jam pengiriman untuk UI tabel. */
+export function formatServicePointDropsJam(
+  drops?: ServicePointDrop[] | null,
+): string {
+  const times = (drops || [])
+    .map((d) => d.jamKirim)
+    .filter(Boolean)
+    .sort(compareJamKirim);
+  return times.length ? times.join(', ') : '—';
 }
 
 /** Urutkan titik berdasarkan jamKirim naik; tanpa jam di akhir. */

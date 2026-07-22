@@ -485,16 +485,16 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         : [];
       const dropsByServicePointId: Record<string, Array<{
         dropId: string;
-        label: string;
         jamKirim?: string;
+        label?: string;
         qtyHint?: number;
       }>> = {};
       for (const sp of spDropDocs) {
         if (!sp.drops?.length) continue;
         dropsByServicePointId[sp.id] = sp.drops.map((d) => ({
           dropId: d.id,
-          label: d.label,
           jamKirim: d.jamKirim,
+          label: d.label,
           qtyHint: d.qtyHint,
         }));
       }

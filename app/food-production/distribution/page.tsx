@@ -900,7 +900,8 @@ function DistributionPageContent() {
                                         <ul className="ml-5 mt-0.5 space-y-0.5 list-none text-muted-foreground">
                                           {stop.drops.map((d) => (
                                             <li key={d.dropId}>
-                                              → {(d.jamKirim || '—:—').replace(':', '.')} {d.label}
+                                              → {(d.jamKirim || '—:—').replace(':', '.')}
+                                              {d.label ? ` ${d.label}` : ''}
                                               {' : '}{d.qtyPorsi}
                                             </li>
                                           ))}
@@ -1555,9 +1556,10 @@ function DistributionPageContent() {
                                             </div>
                                             {(p.drops || []).length > 0 && (
                                               <div className="text-[10px] text-muted-foreground">
-                                                {(p.drops || []).map((d) => (
-                                                  `→ ${(d.jamKirim || '—:—').replace(':', '.')} ${d.label}`
-                                                )).join(' · ')}
+                                                {(p.drops || []).map((d) => {
+                                                  const jam = (d.jamKirim || '—:—').replace(':', '.');
+                                                  return d.label ? `→ ${jam} ${d.label}` : `→ ${jam}`;
+                                                }).join(' · ')}
                                               </div>
                                             )}
                                           </td>
