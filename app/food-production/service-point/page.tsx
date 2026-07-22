@@ -436,12 +436,12 @@ export default function ServicePointPage() {
                   value={form.jamKirim}
                   onChange={(e) => setForm((f) => ({ ...f, jamKirim: e.target.value }))}
                 />
-                <p className="text-[10px] text-muted-foreground">Dipakai untuk urutan rute pengiriman</p>
+                <p className="text-[10px] text-muted-foreground">Fallback urutan rute bila belum ada jam drop</p>
               </div>
             </div>
             <div className="space-y-2 rounded-md border p-3 bg-muted/20">
               <div className="flex items-center justify-between gap-2">
-                <Label className="text-sm font-medium">Jam pengiriman (opsional)</Label>
+                <Label className="text-sm font-medium">Jam pengiriman / drop (opsional)</Label>
                 <Button
                   type="button"
                   variant="outline"
@@ -465,7 +465,7 @@ export default function ServicePointPage() {
               </div>
               {form.drops.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                  Jam tambahan selain Jam Makan. Contoh: 08:50, 09:00
+                  Dipakai untuk urutan rute. Contoh: 08:50, 09:00
                 </p>
               )}
               <div className="space-y-2">

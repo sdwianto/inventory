@@ -53,22 +53,26 @@ describe('food-production phase 5 sprint 19', () => {
     expect(drops[1].qtyHint).toBe(46);
   });
 
-  it('builds armada routes ordered by jam makan with kategori totals', () => {
+  it('builds armada routes ordered by drop jam (fallback jam makan)', () => {
     const lines = allocatePorsiAcrossPoints({
       items: [{ menuId: 'm1', menuNama: 'Tray', qtyPorsi: 100 }],
       servicePoints: [
         {
-          id: 'a', nama: 'A', kapasitasPorsi: 60, jamKirim: '08:00',
+          id: 'a', nama: 'A', kapasitasPorsi: 60, jamKirim: '07:00',
+          drops: [{ jamKirim: '09:00' }],
           porsiByKategori: { PORSI_BESAR: 40, PORSI_KECIL: 20 },
         },
         {
-          id: 'b', nama: 'B', kapasitasPorsi: 40, jamKirim: '07:00',
+          id: 'b', nama: 'B', kapasitasPorsi: 40, jamKirim: '08:00',
+          drops: [{ jamKirim: '08:30' }],
           porsiByKategori: { PORSI_BESAR: 10, POSYANDU_BALITA: 30 },
         },
       ],
     });
     expect('error' in (lines as object)).toBe(false);
     if ('error' in (lines as object)) return;
+    expect(lines.find((l) => l.servicePointId === 'a')?.jamKirim).toBe('09:00');
+    expect(lines.find((l) => l.servicePointId === 'b')?.jamKirim).toBe('08:30');
 
     const built = buildDistributionArmadas({
       assignments: [{
@@ -82,8 +86,9 @@ describe('food-production phase 5 sprint 19', () => {
     expect('error' in (built as object)).toBe(false);
     if ('error' in (built as object)) return;
     expect(built.armadas).toHaveLength(1);
+    // B (08:30) sebelum A (09:00), meski Jam Makan A lebih awal
     expect(built.armadas[0].stops.map((s) => s.servicePointId)).toEqual(['b', 'a']);
-    expect(built.armadas[0].stops[0].jamKirim).toBe('07:00');
+    expect(built.armadas[0].stops[0].jamKirim).toBe('08:30');
     expect(built.armadas[0].qtyPorsiTotal).toBe(100);
     expect(built.armadas[0].porsiByKategori.PORSI_BESAR).toBeGreaterThan(0);
     expect(built.lines.every((l) => l.armadaId === 'arm1')).toBe(true);

@@ -13,6 +13,7 @@ import {
   KATEGORI_PORSI_OPTIONS,
   compareJamKirim,
   normalizeJamKirim,
+  routeJamKirim,
   sumPorsiByKategori,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
@@ -71,7 +72,7 @@ export interface DistributionStopDrop {
   porsiByKategori?: ServicePointPorsiByKategori;
 }
 
-/** Satu stop dalam rute armada (urut jam makan). */
+/** Satu stop dalam rute armada (urut jam drop / jam pengiriman). */
 export interface DistributionArmadaStop {
   urutan: number;
   servicePointId: string;
@@ -455,8 +456,8 @@ export function buildDistributionLoadings(input: {
         const drops = dropSrc.length
           ? (() => {
             const withExplicit = dropSrc.every((d) => Number(d.qtyPorsi) > 0);
-            if (withExplicit) {
-              return dropSrc.map((d) => ({
+            const built = withExplicit
+              ? dropSrc.map((d) => ({
                 dropId: d.dropId,
                 label: d.label,
                 jamKirim: d.jamKirim,
@@ -466,23 +467,21 @@ export function buildDistributionLoadings(input: {
                   Math.round(Number(d.qtyPorsi) || 0),
                   qtyPorsi,
                 ),
-              })).filter((d) => d.qtyPorsi > 0);
-            }
-            return splitStopIntoDrops({
-              qtyPorsi,
-              porsiByKategori,
-              drops: dropSrc.map((d) => ({
-                dropId: d.dropId,
-                label: d.label,
-                jamKirim: d.jamKirim,
-                qtyHint: d.qtyHint,
-              })),
-            });
+              })).filter((d) => d.qtyPorsi > 0)
+              : splitStopIntoDrops({
+                qtyPorsi,
+                porsiByKategori,
+                drops: dropSrc.map((d) => ({
+                  dropId: d.dropId,
+                  label: d.label,
+                  jamKirim: d.jamKirim,
+                  qtyHint: d.qtyHint,
+                })),
+              });
+            return [...built].sort((a, b) => compareJamKirim(a.jamKirim, b.jamKirim));
           })()
           : undefined;
-        const jamKirim = drops?.length
-          ? (drops.map((d) => d.jamKirim).filter(Boolean).sort(compareJamKirim)[0] || meta.jamKirim)
-          : meta.jamKirim;
+        const jamKirim = routeJamKirim({ jamKirim: meta.jamKirim, drops });
         return {
           servicePointId: spId,
           servicePointKode: meta.servicePointKode,
@@ -803,6 +802,7 @@ export function allocatePorsiAcrossPoints(input: {
     nama: string;
     kapasitasPorsi?: number;
     jamKirim?: string;
+    drops?: Array<{ jamKirim?: string }>;
     porsiByKategori?: ServicePointPorsiByKategori;
   }>;
 }): DistributionLine[] | { error: string } {
@@ -857,7 +857,7 @@ export function allocatePorsiAcrossPoints(input: {
         servicePointKode: sp.kode,
         servicePointNama: sp.nama,
         kapasitasPorsi,
-        jamKirim: sp.jamKirim,
+        jamKirim: routeJamKirim({ jamKirim: sp.jamKirim, drops: sp.drops }),
         porsiByKategori: scalePorsiByKategoriForQty(sp.porsiByKategori, share, kapasitasPorsi),
         menuId: item.menuId,
         menuKode: item.menuKode,

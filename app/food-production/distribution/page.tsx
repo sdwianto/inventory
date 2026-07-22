@@ -29,7 +29,8 @@ import {
 import {
   KATEGORI_PORSI_OPTIONS,
   KATEGORI_PORSI_SHORT,
-  compareJamKirim,
+  compareServicePointRouteOrder,
+  routeJamKirim,
   type ServicePointDrop,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
@@ -206,13 +207,9 @@ function DistributionPageContent() {
   const pointsById = useMemo(() => new Map(points.map((p) => [p.id, p])), [points]);
   const armadasById = useMemo(() => new Map(armadas.map((a) => [a.id, a])), [armadas]);
 
-  /** Semua titik aktif, urut Jam Makan (untuk checkbox di tiap armada). */
+  /** Semua titik aktif, urut jam drop / jam pengiriman (untuk checkbox di tiap armada). */
   const sortedPoints = useMemo(
-    () => [...points].sort((a, b) => {
-      const byJam = compareJamKirim(a.jamKirim, b.jamKirim);
-      if (byJam !== 0) return byJam;
-      return a.nama.localeCompare(b.nama, 'id');
-    }),
+    () => [...points].sort(compareServicePointRouteOrder),
     [points],
   );
 
@@ -557,8 +554,10 @@ function DistributionPageContent() {
               servicePointIds: [...f.servicePointIds].sort((a, b) => {
                 const pa = pointsById.get(a);
                 const pb = pointsById.get(b);
-                return compareJamKirim(pa?.jamKirim, pb?.jamKirim)
-                  || String(pa?.nama || a).localeCompare(String(pb?.nama || b), 'id');
+                return compareServicePointRouteOrder(
+                  { jamKirim: pa?.jamKirim, drops: pa?.drops, nama: pa?.nama || a },
+                  { jamKirim: pb?.jamKirim, drops: pb?.drops, nama: pb?.nama || b },
+                );
               }),
             })),
           })),
@@ -850,7 +849,7 @@ function DistributionPageContent() {
                             </span>
                           ) : null}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">Berdasarkan urutan Jam Makan</p>
+                        <p className="text-[11px] text-muted-foreground">Berdasarkan urutan jam drop / pengiriman</p>
                         {loadings.map((L) => (
                           <div key={`load-${L.urutan}`} className="space-y-2 border-t pt-2 first:border-t-0 first:pt-0">
                             <div className="font-medium text-sm">
@@ -1365,7 +1364,7 @@ function DistributionPageContent() {
               {' → '}
               <strong>2) Armada</strong>
               {' → '}
-              <strong>3) Titik distribusi</strong> (checkbox, urut Jam Makan)
+              <strong>3) Titik distribusi</strong> (checkbox, urut jam drop)
             </p>
 
             {!armadas.length && (
@@ -1379,7 +1378,7 @@ function DistributionPageContent() {
             )}
             {!sortedPoints.length && (
               <p className="text-xs text-amber-700">
-                Belum ada titik aktif — buat di Titik Layanan (isi Jam Makan).
+                Belum ada titik aktif — buat di Titik Layanan (isi jam pengiriman/drop).
               </p>
             )}
 
@@ -1465,8 +1464,10 @@ function DistributionPageContent() {
                         const routeStops = [...fleet.servicePointIds].sort((a, b) => {
                           const pa = pointsById.get(a);
                           const pb = pointsById.get(b);
-                          return compareJamKirim(pa?.jamKirim, pb?.jamKirim)
-                            || String(pa?.nama || a).localeCompare(String(pb?.nama || b), 'id');
+                          return compareServicePointRouteOrder(
+                            { jamKirim: pa?.jamKirim, drops: pa?.drops, nama: pa?.nama || a },
+                            { jamKirim: pb?.jamKirim, drops: pb?.drops, nama: pb?.nama || b },
+                          );
                         });
                         // Unik armada hanya dalam loading yang sama (boleh dipakai lagi di loading lain).
                         const usedInThisLoading = new Set(
@@ -1506,10 +1507,11 @@ function DistributionPageContent() {
                             {/* 3. Titik distribusi */}
                             <div className="space-y-1">
                               <Label className="text-xs font-semibold">
-                                3. Titik distribusi (urut Jam Makan)
+                                3. Titik distribusi (urut jam drop)
                               </Label>
                               <p className="text-[10px] text-muted-foreground">
                                 Centang satu atau lebih titik untuk armada ini.
+                                Urutan rute mengikuti jam drop (fallback Jam Makan).
                                 Titik yang sudah dipakai armada lain dinonaktifkan.
                               </p>
                               <div className="max-h-40 overflow-y-auto border rounded-md">
@@ -1548,7 +1550,7 @@ function DistributionPageContent() {
                                             />
                                           </td>
                                           <td className="p-1.5 font-mono tabular-nums whitespace-nowrap align-top">
-                                            {p.jamKirim || '—:—'}
+                                            {routeJamKirim(p) || '—:—'}
                                           </td>
                                           <td className="p-1.5 align-top">
                                             <div className="font-medium">
@@ -1587,7 +1589,8 @@ function DistributionPageContent() {
                                 <div className="text-[10px] text-muted-foreground mt-0.5">
                                   Rute: {routeStops.map((id, i) => {
                                     const p = pointsById.get(id);
-                                    return `${i + 1}. ${(p?.jamKirim || '').replace(':', '.') || '—'} ${p?.nama || id}`;
+                                    const jam = (routeJamKirim(p || {}) || '').replace(':', '.') || '—';
+                                    return `${i + 1}. ${jam} ${p?.nama || id}`;
                                   }).join(' → ')}
                                 </div>
                                 {armada?.kapasitasPorsi != null && (

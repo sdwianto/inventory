@@ -31,7 +31,11 @@ import {
   type DistributionLoading,
   type DistLoadingInput,
 } from '@/lib/food-production/distribution';
-import { SERVICE_POINTS_COLLECTION, type ServicePointDoc } from '@/lib/food-production/service-point';
+import {
+  SERVICE_POINTS_COLLECTION,
+  routeJamKirim,
+  type ServicePointDoc,
+} from '@/lib/food-production/service-point';
 import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/food-production/armada';
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
@@ -375,6 +379,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           nama: p.nama,
           kapasitasPorsi: p.kapasitasPorsi,
           jamKirim: p.jamKirim,
+          drops: p.drops,
           porsiByKategori: p.porsiByKategori,
         })),
       });
@@ -390,10 +395,10 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       if (spIds.length) {
         const spDocs = await db.collection(SERVICE_POINTS_COLLECTION)
           .find(withTenantFilter(scopeAuth, { id: { $in: spIds } }))
-          .project({ id: 1, kapasitasPorsi: 1, jamKirim: 1, porsiByKategori: 1 })
+          .project({ id: 1, kapasitasPorsi: 1, jamKirim: 1, drops: 1, porsiByKategori: 1 })
           .toArray() as unknown as Pick<
             ServicePointDoc,
-            'id' | 'kapasitasPorsi' | 'jamKirim' | 'porsiByKategori'
+            'id' | 'kapasitasPorsi' | 'jamKirim' | 'drops' | 'porsiByKategori'
           >[];
         const byId = new Map(spDocs.map((p) => [p.id, p]));
         lines = lines.map((l) => {
@@ -406,7 +411,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           return {
             ...l,
             kapasitasPorsi,
-            jamKirim: l.jamKirim || sp?.jamKirim,
+            jamKirim: l.jamKirim || routeJamKirim({ jamKirim: sp?.jamKirim, drops: sp?.drops }),
             porsiByKategori: l.porsiByKategori || scalePorsiByKategoriForQty(
               sp?.porsiByKategori,
               l.qtyPorsi,

@@ -173,6 +173,33 @@ export function compareJamKirim(a?: string | null, b?: string | null): number {
   return aa.localeCompare(bb);
 }
 
+/**
+ * Jam untuk urutan rute pengiriman:
+ * drop terawal (jam pengiriman), fallback Jam Makan.
+ */
+export function routeJamKirim(input: {
+  jamKirim?: string | null;
+  drops?: Array<{ jamKirim?: string | null }> | null;
+}): string | undefined {
+  const fromDrops = (input.drops || [])
+    .map((d) => String(d?.jamKirim || '').trim())
+    .filter(Boolean)
+    .sort(compareJamKirim)[0];
+  if (fromDrops) return fromDrops;
+  const jam = String(input.jamKirim || '').trim();
+  return jam || undefined;
+}
+
+/** Bandingkan dua titik untuk urutan rute (drop → Jam Makan → nama). */
+export function compareServicePointRouteOrder(
+  a: { jamKirim?: string | null; drops?: Array<{ jamKirim?: string | null }> | null; nama?: string },
+  b: { jamKirim?: string | null; drops?: Array<{ jamKirim?: string | null }> | null; nama?: string },
+): number {
+  const byJam = compareJamKirim(routeJamKirim(a), routeJamKirim(b));
+  if (byJam !== 0) return byJam;
+  return String(a.nama || '').localeCompare(String(b.nama || ''), 'id');
+}
+
 /** Parse map kategori → qty; abaikan kategori kosong / non-positif. */
 export function normalizePorsiByKategori(raw: unknown): ServicePointPorsiByKategori | { error: string } {
   if (raw == null) return {};
