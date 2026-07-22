@@ -353,11 +353,11 @@ export type DistLoadingArmadaInput = {
   platNomor?: string;
   kapasitasPorsi?: number;
   servicePointIds: string[];
-  /** Opsional: override drops per titik. */
+  /** Opsional: override jam pengiriman per titik. */
   stopDrops?: Record<string, Array<{
     dropId: string;
-    label: string;
     jamKirim?: string;
+    label?: string;
     qtyHint?: number;
     qtyPorsi?: number;
   }>>;
