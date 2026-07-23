@@ -61,6 +61,7 @@
         "doctor:integration": "node scripts/integration-doctor.mjs",
         "test:procurement-e2e": "node scripts/procurement-e2e-test.mjs",
         "diag:procurement": "node scripts/diag-procurement-e2e.mjs",
+        "diag:bg-jobs": "node scripts/diagnose-bg-jobs-stale.mjs",
         "migrate:bootstrap": "node --experimental-strip-types scripts/run-bootstrap.ts",
         "migrate:email-normalized": "node scripts/backfill-email-normalized.mjs",
         "worker:bg-jobs": "node scripts/run-bg-worker.mjs",

@@ -15,6 +15,10 @@ export interface BgJobsHealth {
   oldestPendingAgeSec: number | null;
   deadLetterCount: number;
   workerStale: boolean;
+  /** Open jobs tanpa jobSchemaVersion (legacy orphan — worker EE tidak claim). */
+  orphanLegacyCount: number;
+  /** Open jobs status DISPATCHED (sering stuck setelah worker crash). */
+  dispatchedCount: number;
 }
 
 export interface ExecutionPlatformHealth {
@@ -71,22 +75,38 @@ const OPEN_QUEUE_STATUSES = ['PENDING', 'DISPATCHED', 'RETRYING'] as const;
 
 export async function buildBgJobsHealth(db: Db): Promise<BgJobsHealth> {
   await ensureBgJobIndexes(db);
-  const pendingCount = await db.collection('bg_jobs').countDocuments({
-    status: { $in: [...OPEN_QUEUE_STATUSES] },
-  });
-  const oldest = await db.collection('bg_jobs').findOne(
-    { status: { $in: [...OPEN_QUEUE_STATUSES] } },
-    { sort: { createdAt: 1 }, projection: { createdAt: 1 } },
-  );
+  const openFilter = { status: { $in: [...OPEN_QUEUE_STATUSES] } };
+  const [pendingCount, oldest, deadLetterCount, orphanLegacyCount, dispatchedCount] = await Promise.all([
+    db.collection('bg_jobs').countDocuments(openFilter),
+    db.collection('bg_jobs').findOne(openFilter, {
+      sort: { createdAt: 1 },
+      projection: { createdAt: 1 },
+    }),
+    db.collection('bg_jobs').countDocuments({
+      status: 'FAILED',
+      deadLetter: true,
+    }),
+    db.collection('bg_jobs').countDocuments({
+      ...openFilter,
+      $or: [
+        { jobSchemaVersion: { $exists: false } },
+        { jobSchemaVersion: null },
+      ],
+    }),
+    db.collection('bg_jobs').countDocuments({ status: 'DISPATCHED' }),
+  ]);
   const oldestPendingAgeSec = oldest?.createdAt
     ? Math.floor((Date.now() - new Date(oldest.createdAt).getTime()) / 1000)
     : null;
-  const deadLetterCount = await db.collection('bg_jobs').countDocuments({
-    status: 'FAILED',
-    deadLetter: true,
-  });
   const workerStale = oldestPendingAgeSec != null && oldestPendingAgeSec > WORKER_STALE_THRESHOLD_SEC;
-  return { pendingCount, oldestPendingAgeSec, deadLetterCount, workerStale };
+  return {
+    pendingCount,
+    oldestPendingAgeSec,
+    deadLetterCount,
+    workerStale,
+    orphanLegacyCount,
+    dispatchedCount,
+  };
 }
 
 export async function buildHealthResponse(db: Db | null, appName: string): Promise<HealthPayload> {

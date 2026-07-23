@@ -621,6 +621,8 @@ export function scheduleJobProcessing(db: Db, { limit = 3 }: { limit?: number } 
         domain: 'inventory',
         workerId: 'schedule-kick',
         capabilities: ['SYNC', 'CPU_BATCH', 'WEBHOOK'],
+        // Recovery berat dijalankan oleh inventory-worker + safety-net /api/bg-jobs/process.
+        skipRecovery: true,
       }),
     ).catch((e: unknown) => {
       console.warn('[bg-jobs] execution drain error:', e instanceof Error ? e.message : e);

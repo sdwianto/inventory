@@ -20,6 +20,17 @@ async function tick() {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.processed > 0) {
       console.log(`[bg-worker] processed ${data.processed} job(s)`);
+    } else if (res.ok && data.recovery) {
+      const r = data.recovery;
+      const n =
+        (r.legacyNormalized || 0) +
+        (r.visibilityRequeued || 0) +
+        (r.claimTimeoutRequeued || 0) +
+        (r.staleRequeued || 0) +
+        (r.orphanDispatchedRequeued || 0);
+      if (n > 0) console.log(`[bg-worker] recovery patched/requeued ${n}`);
+    } else if (!res.ok) {
+      console.warn(`[bg-worker] HTTP ${res.status}`, data.error || data.message || '');
     }
   } catch (e) {
     console.warn('[bg-worker] error:', e instanceof Error ? e.message : e);

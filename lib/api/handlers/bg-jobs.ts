@@ -72,6 +72,7 @@ export async function handleBgJobs({
       return ok({
         legacyPollDisabled: true,
         processed: execution.processed,
+        recovery: execution.recovery,
         execution,
         at: new Date().toISOString(),
       });

@@ -50,6 +50,8 @@ describe('buildHealthResponse', () => {
     const health = await buildHealthResponse(db as never, 'inventory');
     expect(health.checks.worker?.pendingCount).toBe(2);
     expect(health.checks.worker?.workerStale).toBe(true);
+    expect(health.checks.worker?.orphanLegacyCount).toBe(2);
+    expect(health.checks.worker?.dispatchedCount).toBe(2);
     expect(health.checks.slo?.workerPendingAge?.ok).toBe(false);
     expect(health.status).toBe('degraded');
   });
