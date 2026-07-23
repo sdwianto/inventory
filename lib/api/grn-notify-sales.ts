@@ -165,7 +165,12 @@ function hasDeliverySnapshot(grn: Record<string, unknown>): boolean {
   );
 }
 
-export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Record<string, unknown>) {
+export async function notifyGrnPostedToSales(
+  db: Db,
+  tenantId: string,
+  grn: Record<string, unknown>,
+  opts: { preferSync?: boolean } = {},
+) {
   const tid = normalizeTenantId(String(grn?.tenantId || tenantId));
   const vendorId = grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined;
   const salesApiKey = await getSalesApiKeyForVendor(db, tid, vendorId);
@@ -216,6 +221,8 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   const bodyJson = JSON.stringify(payload);
   const baseUrl = `${config.salesAppUrl}/api/integrations/grn-posted`;
   const holdStarted = Date.now();
+  // Replay / stuck recover: tunggu sync lebih lama — async 202 sering meninggalkan UI "Menunggu faktur".
+  const syncTimeoutMs = opts.preferSync ? 25_000 : 10_000;
 
   // Fast path: sync create+post+push invoice (biasanya <3s). Fallback async bila timeout/5xx.
   let res: Response;
@@ -224,9 +231,16 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
       method: 'POST',
       headers,
       body: bodyJson,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(syncTimeoutMs),
     });
   } catch (e) {
+    if (opts.preferSync) {
+      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
+      return {
+        error: `${salesFetchErrorMessage(e, config.salesAppUrl)} — sync timeout; pastikan sales.app & worker sehat lalu klik Buat faktur lagi`,
+        offline: true,
+      };
+    }
     // Timeout / offline → async enqueue (202) agar tidak gagal keras; hutang via invoice.posted.
     try {
       res = await fetch(`${baseUrl}?async=1`, {
@@ -249,8 +263,8 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
     return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
   }
 
-  // Sync gagal dengan 5xx → satu kali fallback async.
-  if (!res.ok && res.status >= 500) {
+  // Sync gagal dengan 5xx → satu kali fallback async (kecuali preferSync / replay).
+  if (!opts.preferSync && !res.ok && res.status >= 500) {
     try {
       const asyncRes = await fetch(`${baseUrl}?async=1`, {
         method: 'POST',
@@ -276,6 +290,13 @@ export async function notifyGrnPostedToSales(db: Db, tenantId: string, grn: Reco
   }
 
   if (res.status === 202 && data.jobId) {
+    if (opts.preferSync) {
+      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
+      return {
+        error: `Sales.app mengantri faktur (job ${data.jobId}) — worker sales mungkin lambat. Coba Buat faktur lagi sebentar.`,
+        salesJobId: data.jobId,
+      };
+    }
     recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
     return {
       async: true,

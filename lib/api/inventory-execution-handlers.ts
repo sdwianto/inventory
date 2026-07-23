@@ -163,6 +163,12 @@ export async function executeIntegrationReconcileJob(
   tenantId: string,
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Frequent sweeper: only unstick GRN invoice PENDING (permanent async completion).
+  if (payload.grnInvoiceSweepOnly === true) {
+    const { sweepAllStuckGrnInvoiceSyncs } = await import('@/lib/api/grn-invoice-sync-recover');
+    return { ...(await sweepAllStuckGrnInvoiceSyncs(db, { limit: Number(payload.limit) || 40 })) };
+  }
+
   const allTenants = payload.allTenants === true;
   if (allTenants) {
     const tenants = await db.collection('tenants').find({}).project({ id: 1 }).toArray();

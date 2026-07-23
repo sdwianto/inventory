@@ -23,4 +23,17 @@ export const DEFAULT_INVENTORY_SCHEDULED_TASKS: ScheduledTaskInput[] = [
     payload: { allTenants: true },
     dedupeKey: 'integration-reconcile:daily',
   },
+  /**
+   * Permanent fix for "Menunggu faktur" stuck after Fase A (no Sales job poll):
+   * every 2 minutes, sweep PENDING/SYNCING GRNs → pull-reconcile / preferSync notify.
+   */
+  {
+    id: 'grn-invoice-sweep:2m',
+    cronExpr: '*/2 * * * *',
+    jobType: JOB_TYPES.INTEGRATION_RECONCILE,
+    domain: 'inventory',
+    tenantId: 'system',
+    payload: { grnInvoiceSweepOnly: true, limit: 40 },
+    dedupeKey: 'grn-invoice-sweep:2m',
+  },
 ];

@@ -14,6 +14,7 @@ export async function fetchPostedInvoicesFromSalesVendor(
   salesApiKey: string,
   customerTenantId: string,
   vendorTenantId?: string,
+  opts: { noDO?: string } = {},
 ): Promise<InvoiceSyncFetchResult> {
   const headers = { 'X-Api-Key': salesApiKey };
   const invoices: JsonObject[] = [];
@@ -22,11 +23,15 @@ export async function fetchPostedInvoicesFromSalesVendor(
   let pagesFetched = 0;
   let fetchIncomplete = false;
   let lastError: string | undefined;
+  const noDO = String(opts.noDO || '').trim();
 
   while (hasMore) {
     let fetchUrl = `${salesAppUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(customerTenantId)}&pageMode=cursor&limit=100`;
     if (vendorTenantId) {
       fetchUrl += `&vendorTenantId=${encodeURIComponent(vendorTenantId)}`;
+    }
+    if (noDO) {
+      fetchUrl += `&noDO=${encodeURIComponent(noDO)}`;
     }
     if (cursor) fetchUrl += `&cursor=${encodeURIComponent(cursor)}`;
 

@@ -1,6 +1,8 @@
 /**
  * Recover GRN stuck in PENDING/SYNCING invoice sync (awaiting sales invoice.posted).
- * Does not poll Sales jobs — re-notifies via GRN_INVOICE_SYNC (deduped).
+ * Does not poll Sales jobs — re-enqueues GRN_INVOICE_SYNC which:
+ *   1) pull-reconcile invoice by noDO from Sales
+ *   2) preferSync notify if still missing
  */
 
 import type { Db } from 'mongodb';
@@ -99,4 +101,57 @@ export async function recoverStuckGrnInvoiceSyncs(
     scheduleJobProcessing(db, { limit: Math.min(20, enqueued) });
   }
   return enqueued;
+}
+
+/**
+ * Background sweeper (scheduler) — tidak bergantung buka halaman Penerimaan.
+ * Cari GRN POSTED yang PENDING/SYNCING tanpa noInvoice, lalu recover (pull + preferSync).
+ */
+export async function sweepAllStuckGrnInvoiceSyncs(
+  db: Db,
+  opts: { limit?: number } = {},
+): Promise<{ scanned: number; enqueued: number; cancelledMisrouted: number }> {
+  const limit = opts.limit ?? 40;
+  const now = Date.now();
+  const cancelledMisrouted = await cancelMisroutedGrnInvoiceSyncJobs(db).catch(() => 0);
+  const rows = await db.collection('goods_receipts').find({
+    status: 'POSTED',
+    invoiceSyncStatus: { $in: ['PENDING', 'SYNCING'] },
+    $or: [
+      { noInvoice: null },
+      { noInvoice: { $exists: false } },
+      { noInvoice: '' },
+    ],
+  }).project({
+    id: 1,
+    tenantId: 1,
+    noInvoice: 1,
+    invoiceSyncStatus: 1,
+    invoiceSyncAt: 1,
+    postedAt: 1,
+    updatedAt: 1,
+  }).sort({ invoiceSyncAt: 1, postedAt: 1 }).limit(limit * 2).toArray() as GrnInvoiceSyncRow[];
+
+  let enqueued = 0;
+  for (const row of rows) {
+    if (enqueued >= limit) break;
+    const id = String(row.id || '').trim();
+    if (!id || !isGrnInvoiceSyncStale(row, now)) continue;
+    const tenantId = normalizeTenantId(String(row.tenantId || 'default'));
+    await enqueueJob(db, {
+      type: JOB_TYPES.GRN_INVOICE_SYNC,
+      tenantId,
+      grnId: id,
+      payload: {
+        grnId: id,
+        recoverStuck: true,
+        dedupeKey: `invoice-sweep:${id}:${Math.floor(now / GRN_INVOICE_PENDING_STALE_MS)}`,
+      },
+    });
+    enqueued += 1;
+  }
+  if (enqueued > 0) {
+    scheduleJobProcessing(db, { limit: Math.min(20, enqueued) });
+  }
+  return { scanned: rows.length, enqueued, cancelledMisrouted };
 }

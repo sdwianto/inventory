@@ -69,15 +69,24 @@ function invoiceSyncWaitLabel(row: JsonObject): string {
 function invoiceSyncLabel(row: JsonObject) {
   if (row?.invoiceSyncStatus === 'PENDING' || row?.invoiceSyncStatus === 'SYNCING') {
     const age = invoiceSyncWaitLabel(row);
-    const title = age
-      ? `Menunggu faktur dari sales.app (±${age}). Hutang masuk lewat invoice.posted — bukan sync lokal.`
-      : 'Menunggu faktur dari sales.app. Hutang masuk lewat invoice.posted — bukan sync lokal.';
+    const ageSec = (() => {
+      const raw = row.invoiceSyncAt || row.postedAt || row.updatedAt;
+      if (!raw) return 0;
+      const ms = Date.now() - new Date(String(raw)).getTime();
+      return ms >= 0 ? Math.floor(ms / 1000) : 0;
+    })();
+    const stale = ageSec >= 120;
+    const title = stale
+      ? `Faktur dari sales.app belum selesai (±${age}). Klik Buat faktur — sering karena worker sales lambat / webhook terlewat.`
+      : age
+        ? `Menunggu faktur dari sales.app (±${age}).`
+        : 'Menunggu faktur dari sales.app.';
     return (
-      <span className="inline-flex items-center gap-1 text-blue-600 text-xs" title={title}>
-        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+      <span className={`inline-flex items-center gap-1 text-xs ${stale ? 'text-amber-700' : 'text-blue-600'}`} title={title}>
+        <Loader2 className={`w-3 h-3 shrink-0 ${stale ? '' : 'animate-spin'}`} />
         <span className="leading-tight">
-          Menunggu faktur…
-          {age ? <span className="text-blue-500/80"> ({age})</span> : null}
+          {stale ? 'Faktur tertunda' : 'Menunggu faktur…'}
+          {age ? <span className="opacity-80"> ({age})</span> : null}
         </span>
       </span>
     );

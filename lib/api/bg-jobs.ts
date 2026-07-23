@@ -182,19 +182,74 @@ async function setGrnInvoiceSync(db: Db, grnId: string | null | undefined, patch
   );
 }
 
+/** Soft-async PENDING retries before surfacing FAILED (sweeper / recover use preferSync). */
+const GRN_INVOICE_MAX_SOFT_ATTEMPTS = 6;
+
 export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   const grn = await db.collection('goods_receipts').findOne({ id: job.grnId }) as GrnDoc | null;
   if (!grn) return { error: 'GRN tidak ditemukan' };
   if (grn.status !== 'POSTED') return { error: 'GRN belum POSTED' };
+
+  // Heal: hutang sudah ada (webhook sempat jalan / sync lain) tapi status GRN masih PENDING.
+  if (grn.noDO && !grn.noInvoice) {
+    const hutangFilter: Record<string, unknown> = {
+      tenantId: grn.tenantId,
+      noDO: grn.noDO,
+    };
+    if (grn.vendorTenantId) hutangFilter.vendorTenantId = grn.vendorTenantId;
+    const existingHutang = await db.collection('hutang').findOne(hutangFilter) as {
+      id?: string;
+      noInvoice?: string;
+      vendorInvoiceId?: string;
+    } | null;
+    if (existingHutang?.noInvoice) {
+      await setGrnInvoiceSync(db, grn.id, {
+        invoiceSyncStatus: 'DONE',
+        invoiceSyncError: null,
+        noInvoice: existingHutang.noInvoice,
+        hutangId: existingHutang.id || null,
+        vendorInvoiceId: existingHutang.vendorInvoiceId || null,
+        invoiceSyncAt: new Date(),
+      });
+      return { ok: true, healed: true, noInvoice: existingHutang.noInvoice };
+    }
+  }
+
+  // Permanent path (no job poll): pull POSTED invoice from Sales by noDO → hutang → DONE.
+  if (grn.noDO && !grn.noInvoice) {
+    const { reconcileGrnInvoiceFromSales } = await import('@/lib/api/grn-invoice-reconcile');
+    const pulled = await reconcileGrnInvoiceFromSales(db, grn);
+    if (pulled.ok) {
+      await setGrnInvoiceSync(db, grn.id, {
+        invoiceSyncStatus: 'DONE',
+        invoiceSyncError: null,
+        noInvoice: pulled.noInvoice,
+        hutangId: pulled.hutangId || null,
+        vendorInvoiceId: pulled.invoiceId || null,
+        invoiceSyncAt: new Date(),
+      });
+      return { ok: true, reconciled: true, noInvoice: pulled.noInvoice, source: pulled.source };
+    }
+  }
 
   await setGrnInvoiceSync(db, grn.id, {
     invoiceSyncStatus: 'SYNCING',
     invoiceSyncError: null,
   });
 
+  const dedupe = String(job.payload?.dedupeKey || '');
+  const preferSync = Boolean(
+    job.payload?.replay
+    || job.payload?.retryAfterInline
+    || job.payload?.recoverStuck
+    || dedupe.startsWith('stuck-recover:')
+    || dedupe.startsWith('reconcile-grn:')
+    || dedupe.startsWith('invoice-sweep:'),
+  );
+
   let result: Record<string, unknown>;
   try {
-    result = await notifyGrnPostedToSales(db, job.tenantId, grn) as Record<string, unknown>;
+    result = await notifyGrnPostedToSales(db, job.tenantId, grn, { preferSync }) as Record<string, unknown>;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await setGrnInvoiceSync(db, grn.id, {
@@ -223,22 +278,36 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
     return { skipped: true, result };
   }
 
-  // 202 dari Sales: invoice dikerjakan async; hutang via webhook invoice.posted.
+  // 202 dari Sales: tunggu webhook — sweeper/recover akan pull-reconcile atau preferSync.
   if (result.pending || (result.async && result.salesJobId)) {
+    const attempts = (Number((grn as { invoiceSyncAttempts?: number }).invoiceSyncAttempts) || 0) + 1;
+    if (preferSync || attempts >= GRN_INVOICE_MAX_SOFT_ATTEMPTS) {
+      await setGrnInvoiceSync(db, grn.id, {
+        invoiceSyncStatus: 'FAILED',
+        invoiceSyncError: preferSync
+          ? `Sales masih mengantri faktur (job ${result.salesJobId || '—'}). Cek integration-worker sales, lalu Buat faktur.`
+          : `Faktur belum selesai setelah ${attempts} percobaan — klik Buat faktur atau cek sales.app worker/webhook`,
+        salesJobId: result.salesJobId || null,
+        invoiceSyncAttempts: attempts,
+        invoiceSyncAt: new Date(),
+      });
+      return { ok: false, pending: true, failed: true, attempts, result };
+    }
     await setGrnInvoiceSync(db, grn.id, {
       invoiceSyncStatus: 'PENDING',
       invoiceSyncError: null,
       salesJobId: result.salesJobId || null,
-      // Anchor wait age for UI + stuck recovery (not postedAt).
+      invoiceSyncAttempts: attempts,
       invoiceSyncAt: new Date(),
     });
-    return { ok: true, pending: true, result };
+    return { ok: true, pending: true, attempts, result };
   }
 
   const patch: Record<string, unknown> = {
     invoiceSyncStatus: 'DONE',
     invoiceSyncError: null,
     invoiceSyncAt: new Date(),
+    invoiceSyncAttempts: 0,
   };
   if (result.noInvoice) patch.noInvoice = result.noInvoice;
   if (result.invoiceId) patch.vendorInvoiceId = result.invoiceId;
