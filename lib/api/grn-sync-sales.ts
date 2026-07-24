@@ -41,29 +41,40 @@ async function flushBulkOps(
 }
 
 async function fetchShipmentsForVendor(
+  db: Db,
   salesAppUrl: string,
   salesApiKey: string,
   customerTenantId: string,
   vendorTenantId: string,
 ): Promise<{ deliveries: JsonObject[]; error?: string }> {
-  const res = await fetch(
-    `${salesAppUrl}/api/integrations/customer-shipments?customerTenantId=${encodeURIComponent(customerTenantId)}`,
-    { headers: { 'X-Api-Key': salesApiKey }, signal: AbortSignal.timeout(30000) },
-  );
-  const data = await res.json() as JsonObject;
-  if (!res.ok) {
+  try {
+    const { createIntegrationClient } = await import('@/lib/integration/client');
+    const { randomUUID } = await import('node:crypto');
+    const client = createIntegrationClient(db);
+    const data = await client.listCustomerShipments({
+      salesAppUrl,
+      apiKey: salesApiKey,
+      correlationId: randomUUID(),
+      query: {
+        customerTenantId,
+        ...(vendorTenantId ? { vendorTenantId } : {}),
+      },
+      timeoutMs: 30_000,
+    });
+    const deliveries = Array.isArray(data.deliveries) ? data.deliveries as JsonObject[] : [];
     return {
-      deliveries: [],
-      error: String(data.error || `Sales.app ${res.status}`),
+      deliveries: deliveries.map((row) => ({
+        ...row,
+        vendorTenantId: row.vendorTenantId || vendorTenantId,
+      })),
     };
+  } catch (e) {
+    const { IntegrationError } = await import('@/lib/integration/errors');
+    if (e instanceof IntegrationError) {
+      return { deliveries: [], error: e.message };
+    }
+    return { deliveries: [], error: e instanceof Error ? e.message : String(e) };
   }
-  const deliveries = Array.isArray(data.deliveries) ? data.deliveries as JsonObject[] : [];
-  return {
-    deliveries: deliveries.map((row) => ({
-      ...row,
-      vendorTenantId: row.vendorTenantId || vendorTenantId,
-    })),
-  };
 }
 
 export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: string) {
@@ -109,6 +120,7 @@ export async function syncShippedDeliveriesFromSales(db: Db, customerTenantId: s
 
   for (const vendor of vendorsToSync) {
     const fetched = await fetchShipmentsForVendor(
+      db,
       vendor.salesAppUrl,
       vendor.salesApiKey,
       tid,

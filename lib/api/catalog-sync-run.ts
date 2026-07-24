@@ -1,4 +1,4 @@
-/** Sinkron katalog sales.app → produk inventory (paginated + batch upsert). */
+/** Sinkron katalog sales.app → produk inventory (paginated + batch upsert). H2: SDK. */
 
 import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
@@ -17,52 +17,44 @@ import { syncVendorTiersFromSales } from '@/lib/api/vendor-tier-sync';
 import { refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
 import { updateJobProgress } from '@/lib/api/bg-jobs';
 import { salesFetchErrorMessage } from '@/lib/api/integration-common';
-import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
 import type { JsonObject } from '@/types/json';
+import { randomUUID } from 'node:crypto';
 
 const CATALOG_PAGE_SIZE = 500;
 const CATALOG_FETCH_TIMEOUT_MS = 60_000;
 
-function buildCatalogUrl(
-  baseUrl: string,
-  { cursor, updatedSince }: { cursor?: string; updatedSince?: Date | null },
-): string {
-  const u = new URL(`${baseUrl.replace(/\/$/, '')}/api/integrations/catalog`);
-  u.searchParams.set('allTenants', 'true');
-  u.searchParams.set('limit', String(CATALOG_PAGE_SIZE));
-  if (cursor) u.searchParams.set('cursor', cursor);
-  if (updatedSince) u.searchParams.set('updatedSince', updatedSince.toISOString());
-  return u.toString();
-}
-
 async function fetchCatalogPage(
+  db: Db,
   salesAppUrl: string,
-  headers: Record<string, string>,
-  opts: { cursor?: string; updatedSince?: Date | null },
+  apiKey: string,
+  opts: { cursor?: string; updatedSince?: Date | null; correlationId?: string },
 ): Promise<{ ok: true; data: JsonObject } | { ok: false; error: string; offline?: boolean }> {
-  let res: Response;
   try {
-    const { withBulkhead } = await import('@/lib/integration/bulkhead');
-    res = await withBulkhead('catalog', () => fetch(buildCatalogUrl(salesAppUrl, opts), {
-      headers,
-      signal: AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS),
-    }));
+    const client = createIntegrationClient(db);
+    const data = await client.pullCatalogPage({
+      salesAppUrl,
+      apiKey,
+      correlationId: opts.correlationId || randomUUID(),
+      query: {
+        cursor: opts.cursor,
+        updatedSince: opts.updatedSince ? opts.updatedSince.toISOString() : null,
+        limit: CATALOG_PAGE_SIZE,
+      },
+      timeoutMs: CATALOG_FETCH_TIMEOUT_MS,
+    });
+    return { ok: true, data: data as JsonObject };
   } catch (e) {
-    const code = e && typeof e === 'object' ? String((e as { code?: string }).code || '') : '';
-    if (code === 'BULKHEAD_SATURATED') {
-      return { ok: false, error: 'Bulkhead catalog saturated — coba lagi nanti' };
+    if (e instanceof IntegrationError) {
+      if (e.errorClass === 'bulkhead') {
+        return { ok: false, error: 'Bulkhead catalog saturated — coba lagi nanti' };
+      }
+      const offline = e.errorClass === 'network' || e.errorClass === 'timeout' || e.errorClass === 'circuit_open';
+      return { ok: false, error: e.message, offline };
     }
     return { ok: false, error: salesFetchErrorMessage(e, salesAppUrl), offline: true };
   }
-
-  let data: JsonObject;
-  try {
-    data = await res.json() as JsonObject;
-  } catch {
-    return { ok: false, error: `Sales.app merespons HTTP ${res.status} tanpa data JSON valid` };
-  }
-  if (!res.ok) return { ok: false, error: String(data.error || `Sales.app ${res.status}`) };
-  return { ok: true, data };
 }
 
 /** Legacy monolithic response (sales lama tanpa pagination). */
@@ -90,17 +82,23 @@ function shouldRunFullCatalogReconcile(
 }
 
 async function fetchAllCatalogVendorKeys(
+  db: Db,
   salesAppUrl: string,
-  headers: Record<string, string>,
+  apiKey: string,
   onProgress?: (page: number, keyCount: number) => Promise<void>,
 ): Promise<{ keys: Set<string>; ok: boolean }> {
   const keys = new Set<string>();
   let cursor: string | undefined;
   let page = 0;
+  const correlationId = randomUUID();
 
   for (;;) {
     page += 1;
-    const pageRes = await fetchCatalogPage(salesAppUrl, headers, { cursor, updatedSince: null });
+    const pageRes = await fetchCatalogPage(db, salesAppUrl, apiKey, {
+      cursor,
+      updatedSince: null,
+      correlationId,
+    });
     if (!pageRes.ok) {
       return { keys, ok: keys.size > 0 };
     }
@@ -130,14 +128,14 @@ async function runCatalogReconcile(
   db: Db,
   tenantId: string,
   salesAppUrl: string,
-  headers: Record<string, string>,
+  apiKey: string,
   jobId?: string,
 ) {
   await updateJobProgress(db, jobId, {
     phase: 'reconcile',
     message: 'Rekonsiliasi produk yang tidak ada di sales…',
   });
-  const scan = await fetchAllCatalogVendorKeys(salesAppUrl, headers, async (page, keyCount) => {
+  const scan = await fetchAllCatalogVendorKeys(db, salesAppUrl, apiKey, async (page, keyCount) => {
     await updateJobProgress(db, jobId, {
       phase: 'reconcile',
       page,
@@ -159,15 +157,17 @@ export async function runCatalogSync(
   opts: { jobId?: string; forceReconcile?: boolean } = {},
 ) {
   const salesAppUrl = config.salesAppUrl || '';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...buildTraceHttpHeaders(),
-  };
   const apiKey = await getSalesApiKeyForVendor(db, tenantId);
-  if (apiKey) headers['X-Api-Key'] = apiKey;
+  if (!apiKey) {
+    return { error: 'Belum di-pair dengan sales.app' };
+  }
+  if (!salesAppUrl) {
+    return { error: 'salesAppUrl belum di-set' };
+  }
 
   const settingsRow = await db.collection('integration_settings').findOne({ tenantId });
   const lastSync = settingsRow?.lastCatalogSyncAt ? new Date(settingsRow.lastCatalogSyncAt) : null;
+  const correlationId = randomUUID();
 
   const results: {
     created: number;
@@ -191,9 +191,10 @@ export async function runCatalogSync(
       message: page === 1 ? 'Mengambil katalog dari sales.app…' : `Sync halaman ${page}…`,
     });
 
-    const pageRes = await fetchCatalogPage(salesAppUrl, headers, {
+    const pageRes = await fetchCatalogPage(db, salesAppUrl, apiKey, {
       cursor,
       updatedSince: lastSync,
+      correlationId,
     });
     if (!pageRes.ok) {
       if (totalFetched > 0) break;
@@ -217,7 +218,7 @@ export async function runCatalogSync(
       let sample: unknown[] = [];
       const now = new Date();
       if (shouldRunFullCatalogReconcile(settingsRow, lastSync, opts.forceReconcile)) {
-        const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+        const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, apiKey, opts.jobId);
         deactivated = reconcile.deactivated;
         sample = reconcile.sample;
         await db.collection('integration_settings').updateOne(
@@ -283,7 +284,7 @@ export async function runCatalogSync(
   let reconciledSample: unknown[] = [];
   const doReconcile = shouldRunFullCatalogReconcile(settingsRow, lastSync, opts.forceReconcile);
   if (doReconcile) {
-    const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, headers, opts.jobId);
+    const reconcile = await runCatalogReconcile(db, tenantId, salesAppUrl, apiKey, opts.jobId);
     reconciled = reconcile.deactivated;
     reconciledSample = reconcile.sample;
   }

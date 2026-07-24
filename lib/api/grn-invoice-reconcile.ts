@@ -43,7 +43,7 @@ export async function reconcileGrnInvoiceFromSales(
     access.salesApiKey,
     tid,
     vendorId,
-    { noDO },
+    { noDO, db },
   );
 
   if (fetched.lastError && !fetched.invoices.length) {

@@ -23,12 +23,15 @@ import {
 } from '@/lib/api/bg-jobs';
 import { requireMaster } from '@/lib/api/require-auth';
 import { handleIntegrationInbound } from '@/lib/api/handlers/integration-inbound';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
+import { randomUUID } from 'node:crypto';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
 const PROBE_REFRESH_MS = 60 * 1000;
 const PROBE_RUN_TIMEOUT_MS = 60 * 1000;
 
-/** Probe katalog berjalan di background — hasil disimpan untuk stale-while-revalidate. */
+/** Probe katalog berjalan di background — hasil disimpan untuk stale-while-revalidate. H2: SDK. */
 async function refreshCatalogProbe(
   db: Db,
   tenantId: string,
@@ -37,22 +40,27 @@ async function refreshCatalogProbe(
   const coll = db.collection('integration_probe_status');
   try {
     const apiKey = await getSalesApiKeyForVendor(db, tenantId);
-    const headers: Record<string, string> = {};
-    if (apiKey) headers['X-Api-Key'] = apiKey;
-    const res = await fetch(
-      `${config.salesAppUrl}/api/integrations/catalog?allTenants=true`,
-      { headers, signal: AbortSignal.timeout(15000) },
-    );
-    const data = await res.json();
+    if (!apiKey || !config.salesAppUrl) throw new Error('not_paired');
+    const client = createIntegrationClient(db);
+    const data = await client.pullCatalogPage({
+      salesAppUrl: config.salesAppUrl,
+      apiKey,
+      correlationId: randomUUID(),
+      query: { limit: 500 },
+      timeoutMs: 15_000,
+    });
+    const count = Number(data.count || 0);
+    const tenants = Array.isArray(data.availableTenants)
+      ? (data.availableTenants as Array<{ count?: number }>)
+      : [];
     await coll.updateOne(
       { tenantId },
       {
         $set: {
           tenantId,
-          catalogOk: res.ok && (data.count || 0) > 0,
-          catalogCount: data.count || 0,
-          vendorTenantCount: (data.availableTenants || [])
-            .filter((t: { count?: number }) => (t.count || 0) > 0).length,
+          catalogOk: count > 0,
+          catalogCount: count,
+          vendorTenantCount: tenants.filter((t) => (t.count || 0) > 0).length,
           probedAt: new Date(),
           running: false,
         },
@@ -79,7 +87,7 @@ async function refreshCatalogProbe(
 
 /**
  * Fail-fast gate: do not enqueue CATALOG_SYNC when unpaired or Sales rejects auth.
- * Prevents AUTH poison jobs that land in DLQ on attempt 1.
+ * Prevents AUTH poison jobs that land in DLQ on attempt 1. H2: SDK.
  */
 async function probeCatalogAuth(
   db: Db,
@@ -94,23 +102,23 @@ async function probeCatalogAuth(
     return { ok: false, reason: 'not_paired', error: 'Belum di-pair dengan sales.app' };
   }
   try {
-    const url = new URL(`${config.salesAppUrl.replace(/\/$/, '')}/api/integrations/catalog`);
-    url.searchParams.set('allTenants', 'true');
-    url.searchParams.set('limit', '1');
-    const res = await fetch(url.toString(), {
-      headers: { 'X-Api-Key': apiKey },
-      signal: AbortSignal.timeout(10_000),
+    const client = createIntegrationClient(db);
+    await client.pullCatalogPage({
+      salesAppUrl: config.salesAppUrl,
+      apiKey,
+      correlationId: randomUUID(),
+      query: { limit: 1 },
+      timeoutMs: 10_000,
     });
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, reason: 'unauthorized', error: `Sales.app HTTP ${res.status}` };
-    }
-    if (!res.ok) {
-      // Non-auth errors: still enqueue so worker can retry (TRANSIENT).
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof IntegrationError) {
+      if (e.httpStatus === 401 || e.httpStatus === 403) {
+        return { ok: false, reason: 'unauthorized', error: `Sales.app HTTP ${e.httpStatus}` };
+      }
+      // Non-auth / network: still enqueue so worker can retry (TRANSIENT).
       return { ok: true };
     }
-    return { ok: true };
-  } catch {
-    // Network blip — allow enqueue; worker classifies TRANSIENT.
     return { ok: true };
   }
 }

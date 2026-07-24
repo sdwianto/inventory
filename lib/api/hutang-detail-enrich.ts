@@ -5,8 +5,10 @@ import { resolveSalesApiAccess, findLinkForVendorCustomer } from '@/lib/api/inte
 import { loadStoreSnapshot } from '@/lib/api/store-snapshot';
 import { logoUrlFromSettings, storeBase64Image } from '@/lib/api/media-storage';
 import { sanitizeStoreSettings } from '@/lib/receipt-doc';
+import { createIntegrationClient } from '@/lib/integration/client';
 import { asArray, str, num, type JsonObject } from '@/types/json';
 import type { HutangDoc } from '@/types/documents';
+import { randomUUID } from 'node:crypto';
 
 export type VendorBillingSnapshot = {
   vendorTenantId: string | null;
@@ -80,24 +82,28 @@ export async function resolveVendorBillingForStorage(
   });
 }
 
-async function fetchVendorProfileFromSales(salesAppUrl: string, salesApiKey: string, vendorTenantId: string) {
+/** H2: Category B via IntegrationClient (profile → store fallback di SDK). */
+async function fetchVendorProfileFromSales(
+  db: Db,
+  salesAppUrl: string,
+  salesApiKey: string,
+  vendorTenantId: string,
+) {
   if (!salesApiKey || !salesAppUrl || !vendorTenantId) return null;
-  const headers = { 'X-Api-Key': salesApiKey };
-  const urls = [
-    `${salesAppUrl}/api/integrations/vendor-profile?tenantId=${encodeURIComponent(vendorTenantId)}`,
-    `${salesAppUrl}/api/integrations/vendor-store?tenantId=${encodeURIComponent(vendorTenantId)}`,
-  ];
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const raw = data.profile || data.store || data.settings || data;
-      const picked = pickStoreFields(raw as Record<string, unknown>);
-      if (picked && (picked.companyName || picked.logoBase64)) return picked;
-    } catch {
-      /* try next */
-    }
+  try {
+    const client = createIntegrationClient(db);
+    const data = await client.getVendorProfile({
+      salesAppUrl,
+      apiKey: salesApiKey,
+      correlationId: randomUUID(),
+      vendorTenantId,
+      timeoutMs: 8_000,
+    });
+    const raw = (data.profile || data.store || data.settings || data) as Record<string, unknown>;
+    const picked = pickStoreFields(raw);
+    if (picked && (picked.companyName || picked.logoBase64 || picked.logoUrl)) return picked;
+  } catch {
+    /* cache/local fallback */
   }
   return null;
 }
@@ -136,7 +142,7 @@ export async function loadVendorBillingProfile(
   const access = cacheFresh ? null : await resolveSalesApiAccess(db, tid, vid !== 'default' ? vid : undefined);
   const remote = cacheFresh || !access
     ? null
-    : await fetchVendorProfileFromSales(access.salesAppUrl, access.salesApiKey, vid);
+    : await fetchVendorProfileFromSales(db, access.salesAppUrl, access.salesApiKey, vid);
   if (remote) {
     const normalized = await resolveVendorBillingForStorage(db, tid, vid, remote as Record<string, unknown>);
     profile = { ...profile, ...normalized, vendorTenantId: vid };

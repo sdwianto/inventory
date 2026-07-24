@@ -548,6 +548,232 @@ export class IntegrationClient {
       throw err;
     }
   }
+
+  /** Category B GET helper — Correlation + Api-Key; no Idempotency-Key. */
+  private async categoryBGet(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    pathAndQuery: string;
+    commandType: string;
+    pool: 'po' | 'catalog' | 'notification' | 'invoice';
+    correlationId?: string;
+    timeoutMs?: number;
+    maxAttempts?: number;
+    grnId?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const url = `${base}${input.pathAndQuery.startsWith('/') ? '' : '/'}${input.pathAndQuery}`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: input.commandType,
+      grnId: input.grnId ?? null,
+    });
+    try {
+      const res = await this.transport.request({
+        method: 'GET',
+        url,
+        pool: input.pool,
+        timeoutMs: input.timeoutMs ?? 30_000,
+        maxAttempts: input.maxAttempts ?? 2,
+        correlationId,
+        headers: {
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+      });
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+      throwIfHttpFailed(res, data, correlationId);
+      await finishIntegrationCommand(this.db, commandId, { status: 'SUCCEEDED' });
+      return data;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), {
+          correlationId,
+          cause: e,
+        });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+      });
+      throw err;
+    }
+  }
+
+  /** Category B: delivery lookup sebelum CreateInvoice. */
+  async lookupDeliveryFromSales(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    query: {
+      customerTenantId: string;
+      deliveryId?: string;
+      noDO?: string;
+      vendorTenantId?: string;
+    };
+    timeoutMs?: number;
+    grnId?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({ customerTenantId: input.query.customerTenantId });
+    if (input.query.deliveryId) qs.set('deliveryId', input.query.deliveryId);
+    if (input.query.noDO) qs.set('noDO', input.query.noDO);
+    if (input.query.vendorTenantId) qs.set('vendorTenantId', input.query.vendorTenantId);
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/delivery-lookup?${qs}`,
+      commandType: 'LookupDeliveryFromSales',
+      pool: 'notification',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 30_000,
+      grnId: input.grnId,
+    });
+  }
+
+  /** Category B: pull posted invoices (satu halaman cursor). */
+  async pullPostedInvoicesPage(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    query: {
+      customerTenantId: string;
+      vendorTenantId?: string;
+      noDO?: string;
+      cursor?: string | null;
+      limit?: number;
+    };
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({
+      customerTenantId: input.query.customerTenantId,
+      pageMode: 'cursor',
+      limit: String(input.query.limit ?? 100),
+    });
+    if (input.query.vendorTenantId) qs.set('vendorTenantId', input.query.vendorTenantId);
+    if (input.query.noDO) qs.set('noDO', input.query.noDO);
+    if (input.query.cursor) qs.set('cursor', input.query.cursor);
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/customer-invoices?${qs}`,
+      commandType: 'PullPostedInvoices',
+      pool: 'invoice',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 60_000,
+    });
+  }
+
+  /** Category B: list customer shipments (DO shipped). */
+  async listCustomerShipments(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    query: { customerTenantId: string; vendorTenantId?: string };
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({ customerTenantId: input.query.customerTenantId });
+    if (input.query.vendorTenantId) qs.set('vendorTenantId', input.query.vendorTenantId);
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/customer-shipments?${qs}`,
+      commandType: 'ListCustomerShipments',
+      pool: 'notification',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 30_000,
+    });
+  }
+
+  /** Category B: catalog page (allTenants). */
+  async pullCatalogPage(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    query?: { cursor?: string; updatedSince?: string | null; limit?: number };
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({
+      allTenants: 'true',
+      limit: String(input.query?.limit ?? 500),
+    });
+    if (input.query?.cursor) qs.set('cursor', input.query.cursor);
+    if (input.query?.updatedSince) qs.set('updatedSince', input.query.updatedSince);
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/catalog?${qs}`,
+      commandType: 'PullCatalog',
+      pool: 'catalog',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 60_000,
+      maxAttempts: 1,
+    });
+  }
+
+  /** Category B: customer profile (vendor tiers). */
+  async getCustomerProfile(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    customerTenantId: string;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({ customerTenantId: input.customerTenantId });
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/customer-profile?${qs}`,
+      commandType: 'GetCustomerProfile',
+      pool: 'notification',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 20_000,
+    });
+  }
+
+  /** Category B: vendor profile / store (hutang enrich). Tries profile then store. */
+  async getVendorProfile(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    vendorTenantId: string;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({ tenantId: input.vendorTenantId });
+    try {
+      return await this.categoryBGet({
+        salesAppUrl: input.salesAppUrl,
+        apiKey: input.apiKey,
+        pathAndQuery: `/api/v1/integrations/vendor-profile?${qs}`,
+        commandType: 'GetVendorProfile',
+        pool: 'notification',
+        correlationId: input.correlationId,
+        timeoutMs: input.timeoutMs ?? 8_000,
+        maxAttempts: 1,
+      });
+    } catch (e) {
+      if (e instanceof IntegrationError && e.httpStatus === 404) {
+        return this.categoryBGet({
+          salesAppUrl: input.salesAppUrl,
+          apiKey: input.apiKey,
+          pathAndQuery: `/api/v1/integrations/vendor-store?${qs}`,
+          commandType: 'GetVendorStore',
+          pool: 'notification',
+          correlationId: input.correlationId,
+          timeoutMs: input.timeoutMs ?? 8_000,
+          maxAttempts: 1,
+        });
+      }
+      throw e;
+    }
+  }
 }
 
 /** Inject FakeTransport or HttpTransport — Gateway wraps without changing domain methods. */

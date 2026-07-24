@@ -58,6 +58,7 @@ export async function syncPostedInvoicesFromSales(
       vendor.salesApiKey,
       tid,
       vendor.vendorTenantId || undefined,
+      { db },
     );
     if (fetched.lastError && !fetched.invoices.length && !invoices.length && vendorsToSync.length === 1) {
       if (fetched.lastError.includes('belum tersedia')) {

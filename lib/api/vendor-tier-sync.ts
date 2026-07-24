@@ -1,8 +1,11 @@
 import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
-// Sinkron tier harga pelanggan per vendor dari sales.app.
+// Sinkron tier harga pelanggan per vendor dari sales.app. H2: SDK.
 
 import { upsertVendorTenant } from '@/lib/api/vendor-tenants';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
+import { randomUUID } from 'node:crypto';
 
 export async function syncVendorTiersFromSales(
   db: Db,
@@ -14,24 +17,35 @@ export async function syncVendorTiersFromSales(
 
   const salesApiKey = await getSalesApiKeyForVendor(db, ctid);
   if (!salesApiKey) return { error: 'API key tidak ada' };
+  const salesAppUrl = String(config.salesAppUrl || '').trim();
+  if (!salesAppUrl) return { error: 'salesAppUrl tidak ada' };
 
-  const headers = { 'X-Api-Key': salesApiKey };
-  const url = `${config.salesAppUrl}/api/integrations/customer-profile?customerTenantId=${encodeURIComponent(ctid)}`;
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
-  const data = await res.json();
-  if (!res.ok) return { error: data.error || `Sales.app ${res.status}` };
+  let data: Record<string, unknown>;
+  try {
+    const client = createIntegrationClient(db);
+    data = await client.getCustomerProfile({
+      salesAppUrl,
+      apiKey: salesApiKey,
+      correlationId: randomUUID(),
+      customerTenantId: ctid,
+      timeoutMs: 20_000,
+    });
+  } catch (e) {
+    if (e instanceof IntegrationError) return { error: e.message };
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 
-  const vendors = data.vendors || [];
+  const vendors = Array.isArray(data.vendors) ? (data.vendors as Array<Record<string, unknown>>) : [];
   const tierMap: Record<string, unknown> = {};
   for (const v of vendors) {
     if (!v?.vendorTenantId) continue;
     const tier = String(v.tierHargaDefault || 'ECER').toUpperCase();
-    tierMap[v.vendorTenantId] = tier;
+    tierMap[String(v.vendorTenantId)] = tier;
     await upsertVendorTenant(
       db,
       customerTenantId,
-      v.vendorTenantId,
-      v.vendorTenantName || v.vendorTenantId,
+      String(v.vendorTenantId),
+      String(v.vendorTenantName || v.vendorTenantId),
       tier,
     );
   }

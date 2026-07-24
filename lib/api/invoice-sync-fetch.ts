@@ -1,6 +1,10 @@
-/** Fetch invoice posted dari sales.app — satu vendor, dengan deteksi partial fetch. */
+/** Fetch invoice posted dari sales.app — satu vendor, dengan deteksi partial fetch. H2: SDK. */
 
+import type { Db } from 'mongodb';
 import type { JsonObject } from '@/types/json';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
+import { randomUUID } from 'node:crypto';
 
 export interface InvoiceSyncFetchResult {
   invoices: JsonObject[];
@@ -14,9 +18,8 @@ export async function fetchPostedInvoicesFromSalesVendor(
   salesApiKey: string,
   customerTenantId: string,
   vendorTenantId?: string,
-  opts: { noDO?: string } = {},
+  opts: { noDO?: string; db?: Db } = {},
 ): Promise<InvoiceSyncFetchResult> {
-  const headers = { 'X-Api-Key': salesApiKey };
   const invoices: JsonObject[] = [];
   let cursor: string | null = null;
   let hasMore = true;
@@ -24,66 +27,56 @@ export async function fetchPostedInvoicesFromSalesVendor(
   let fetchIncomplete = false;
   let lastError: string | undefined;
   const noDO = String(opts.noDO || '').trim();
+  const db = opts.db;
+  if (!db) {
+    // Backward-compatible: callers must pass db for SDK; keep soft error if missing.
+    return {
+      invoices: [],
+      fetchIncomplete: false,
+      lastError: 'db required for IntegrationClient pullPostedInvoices',
+      pagesFetched: 0,
+    };
+  }
+  const client = createIntegrationClient(db);
+  const correlationId = randomUUID();
 
   while (hasMore) {
-    let fetchUrl = `${salesAppUrl}/api/integrations/customer-invoices?customerTenantId=${encodeURIComponent(customerTenantId)}&pageMode=cursor&limit=100`;
-    if (vendorTenantId) {
-      fetchUrl += `&vendorTenantId=${encodeURIComponent(vendorTenantId)}`;
-    }
-    if (noDO) {
-      fetchUrl += `&noDO=${encodeURIComponent(noDO)}`;
-    }
-    if (cursor) fetchUrl += `&cursor=${encodeURIComponent(cursor)}`;
-
-    let res: Response;
+    let data: Record<string, unknown>;
     try {
-      res = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(60000) });
+      data = await client.pullPostedInvoicesPage({
+        salesAppUrl,
+        apiKey: salesApiKey,
+        correlationId,
+        query: {
+          customerTenantId,
+          vendorTenantId,
+          noDO: noDO || undefined,
+          cursor,
+          limit: 100,
+        },
+        timeoutMs: 60_000,
+      });
     } catch (e) {
-      const err = e as { cause?: { code?: string }; code?: string; message?: string };
-      const code = err?.cause?.code || err?.code;
-      lastError = code === 'ECONNREFUSED'
-        ? `Sales.app tidak dapat dihubungi di ${salesAppUrl}`
-        : (err.message || 'Gagal menghubungi sales.app');
+      if (e instanceof IntegrationError) {
+        lastError = e.message;
+        if (e.httpStatus === 404) {
+          return {
+            invoices: [],
+            fetchIncomplete: false,
+            lastError: 'Endpoint customer-invoices belum tersedia di sales.app',
+            pagesFetched,
+          };
+        }
+      } else {
+        const err = e as { cause?: { code?: string }; code?: string; message?: string };
+        const code = err?.cause?.code || err?.code;
+        lastError = code === 'ECONNREFUSED'
+          ? `Sales.app tidak dapat dihubungi di ${salesAppUrl}`
+          : (err.message || 'Gagal menghubungi sales.app');
+      }
       if (invoices.length > 0) {
         fetchIncomplete = true;
         break;
-      }
-      return { invoices: [], fetchIncomplete: false, lastError, pagesFetched };
-    }
-
-    let data: JsonObject;
-    try {
-      data = await res.json() as JsonObject;
-    } catch {
-      lastError = `Sales.app merespons HTTP ${res.status} tanpa JSON valid`;
-      if (invoices.length > 0) {
-        fetchIncomplete = true;
-        break;
-      }
-      if (res.status === 404) {
-        return {
-          invoices: [],
-          fetchIncomplete: false,
-          lastError: 'Endpoint customer-invoices belum tersedia di sales.app',
-          pagesFetched,
-        };
-      }
-      return { invoices: [], fetchIncomplete: false, lastError, pagesFetched };
-    }
-
-    if (!res.ok) {
-      lastError = String(data.error || `Sales.app ${res.status}`);
-      if (invoices.length > 0) {
-        fetchIncomplete = true;
-        break;
-      }
-      if (res.status === 404) {
-        return {
-          invoices: [],
-          fetchIncomplete: false,
-          lastError: 'Endpoint customer-invoices belum tersedia di sales.app',
-          pagesFetched,
-        };
       }
       return { invoices: [], fetchIncomplete: false, lastError, pagesFetched };
     }
