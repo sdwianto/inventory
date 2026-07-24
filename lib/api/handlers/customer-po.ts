@@ -276,53 +276,135 @@ async function markPoApproved(db: Db, po, approverSnap, syncError) {
   return db.collection('customer_purchase_orders').findOne({ id: po.id });
 }
 
-/** Validasi lokal → setujui → enqueue PO_VENDOR_SYNC (tidak blok request UI). */
-async function approvePoAndEnqueueVendorSync(db: Db, po: Record<string, unknown>, approverSnap: unknown) {
+/**
+ * P1 Category A: validasi → approve → sync CreateSO via IntegrationClient.
+ * PO_VENDOR_SYNC hanya recovery jika sync gagal.
+ */
+async function approvePoAndSyncVendor(db: Db, po: Record<string, unknown>, approverSnap: unknown) {
   const validation = await validatePoForApproval(db, String(po.tenantId || 'default'), po.items as JsonObject[]);
   if (validation.error) return { error: validation.error, status: 400 };
 
   const approved = await markPoApproved(db, po, approverSnap, null);
   const tenantId = String(approved?.tenantId || po.tenantId || 'default');
-  const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, {
-    poId: String(approved?.id || po.id),
-  });
+  const { pushPoToVendor, finalizePoSubmission } = await import('@/lib/api/customer-po-push');
+
+  const pushed = await pushPoToVendor(db, (approved || po) as Record<string, unknown>, tenantId);
+  if ('error' in pushed && pushed.error && !(pushed as { submissions?: unknown[] }).submissions?.length) {
+    // P1: sync FAILED — bukan PENDING happy path. PO_VENDOR_SYNC = recovery only.
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: po.id },
+      {
+        $set: {
+          vendorSyncPending: false,
+          vendorSyncError: pushed.error,
+          vendorSyncAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+    );
+    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, {
+      poId: String(approved?.id || po.id),
+    });
+    const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    return {
+      po: row || approved,
+      vendorSynced: false,
+      vendorSyncPending: false,
+      vendorSyncError: pushed.error,
+      vendorSyncJobId: jobId,
+      async: false,
+      reused,
+      error: pushed.error,
+    };
+  }
+
+  const submissions = (pushed as { submissions: JsonObject[] }).submissions || [];
+  const partialFailures = (pushed as { partialFailures?: JsonObject[] }).partialFailures || [];
+  const updated = await finalizePoSubmission(
+    db,
+    (approved || po) as Record<string, unknown>,
+    submissions,
+    approverSnap as Record<string, unknown> | null,
+    { partialFailures },
+  );
+
+  if (partialFailures.length) {
+    const { jobId } = await enqueueAndKickPoVendorSync(db, tenantId, {
+      poId: String(updated?.id || po.id),
+    });
+    return {
+      po: updated,
+      vendorSynced: submissions.length > 0,
+      vendorSyncPending: true,
+      vendorNoSO: updated?.vendorNoSO,
+      vendorSyncJobId: jobId,
+      async: false,
+      partialFailures,
+    };
+  }
+
   return {
-    po: approved,
-    vendorSynced: false,
-    vendorSyncPending: true,
-    vendorSyncJobId: jobId,
-    async: true,
-    reused,
+    po: updated,
+    vendorSynced: true,
+    vendorSyncPending: false,
+    vendorNoSO: updated?.vendorNoSO,
+    vendorSoId: updated?.vendorSoId,
+    async: false,
   };
 }
 
-/** Retry kirim vendor via job — response cepat + UI poll useBgJob. */
-async function enqueueApprovedVendorSync(db: Db, po: Record<string, unknown>) {
+/**
+ * Retry CreateSO sync (P1). Happy path = sync; job hanya jika sync gagal (recovery).
+ */
+async function syncApprovedPoToVendor(db: Db, po: Record<string, unknown>) {
   const tenantId = String(po.tenantId || 'default');
-  const now = new Date();
-  await db.collection('customer_purchase_orders').updateOne(
-    { id: po.id },
-    {
-      $set: {
-        vendorSyncPending: true,
-        vendorSyncError: null,
-        vendorSyncAt: now,
-        updatedAt: now,
+  const { pushPoToVendor, finalizePoSubmission } = await import('@/lib/api/customer-po-push');
+  const pushed = await pushPoToVendor(db, po, tenantId);
+
+  if ('error' in pushed && pushed.error && !(pushed as { submissions?: unknown[] }).submissions?.length) {
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: po.id },
+      {
+        $set: {
+          vendorSyncPending: false,
+          vendorSyncError: pushed.error,
+          vendorSyncAt: new Date(),
+          updatedAt: new Date(),
+        },
       },
-    },
-  );
-  const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-  const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, {
-    poId: String(po.id),
-  });
-  const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
+    );
+    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
+    const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
+    return {
+      ...enriched,
+      vendorSynced: false,
+      vendorSyncPending: false,
+      vendorSyncError: pushed.error,
+      vendorSyncJobId: jobId,
+      async: false,
+      reused,
+    };
+  }
+
+  const submissions = (pushed as { submissions: JsonObject[] }).submissions || [];
+  const partialFailures = (pushed as { partialFailures?: JsonObject[] }).partialFailures || [];
+  const updated = await finalizePoSubmission(db, po, submissions, null, { partialFailures });
+  let jobId: string | null = null;
+  if (partialFailures.length) {
+    ({ jobId } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) }));
+  }
+  const enriched = await enrichOnePo(db, updated, { skipSalesBackfill: true });
   return {
     ...enriched,
-    vendorSynced: false,
-    vendorSyncPending: true,
+    vendorSynced: submissions.length > 0 && !partialFailures.length,
+    vendorSyncPending: partialFailures.length > 0,
+    vendorSyncError: partialFailures.length
+      ? partialFailures.map((f) => `${f.vendorTenantId}: ${f.error}`).join('; ')
+      : null,
     vendorSyncJobId: jobId,
-    async: true,
-    reused,
+    vendorNoSO: updated?.vendorNoSO,
+    async: false,
   };
 }
 
@@ -389,13 +471,14 @@ export async function handleCustomerPo({
       return ok(result);
     }
 
+    // Ops recovery bulk — bukan happy path approve/submit (P1).
     const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId);
     return ok({
       jobId,
       async: true,
       status: reused ? 'RUNNING' : 'PENDING',
       reused,
-      message: 'Kirim PO ke vendor berjalan di background',
+      message: 'Recovery: mengulang kirim PO yang gagal/pending',
     }, 202);
   }
 
@@ -558,7 +641,7 @@ export async function handleCustomerPo({
     return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
-  // POST /customer-purchase-orders/:id/approve — Admin setujui (sync vendor opsional / ditunda)
+  // POST /customer-purchase-orders/:id/approve — Admin setujui + sync CreateSO (P1 Category A)
   if (path[0] === 'customer-purchase-orders' && path[2] === 'approve' && method === 'POST') {
     const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
@@ -569,25 +652,30 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (po.status === 'APPROVED' && po.vendorSyncPending !== false) {
-      const retried = await enqueueApprovedVendorSync(db, po as Record<string, unknown>);
+    if (po.status === 'APPROVED' && (po.vendorSyncPending || po.vendorSyncError || !poHasVendorSoNumbers(po as JsonObject))) {
+      const retried = await syncApprovedPoToVendor(db, po as Record<string, unknown>);
       return ok({ ...retried, retried: true });
     }
     if (po.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
 
     const approverSnap = await actorSnapshot(db, auth);
-    const result = await approvePoAndEnqueueVendorSync(db, po as Record<string, unknown>, approverSnap);
-    if ('error' in result && result.error) return err(result.error, result.status || 400);
+    const result = await approvePoAndSyncVendor(db, po as Record<string, unknown>, approverSnap);
+    if ('error' in result && result.error && !('po' in result && result.po)) {
+      return err(result.error, result.status || 400);
+    }
 
     const enriched = await enrichOnePo(db, result.po, { skipSalesBackfill: true });
     await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
+    // P1: sync CreateSO — 200 + SUCCESS|FAILED flags (bukan PENDING happy path).
     return ok({
       ...enriched,
       vendorSynced: result.vendorSynced,
       vendorSyncPending: result.vendorSyncPending,
-      vendorSyncJobId: result.vendorSyncJobId,
-      vendorSyncError: null,
-      async: true,
+      vendorSyncJobId: 'vendorSyncJobId' in result ? result.vendorSyncJobId : null,
+      vendorSyncError: ('vendorSyncError' in result ? result.vendorSyncError : null)
+        || ('error' in result && result.vendorSynced === false ? result.error : null),
+      vendorNoSO: 'vendorNoSO' in result ? result.vendorNoSO : enriched?.vendorNoSO,
+      async: false,
     });
   }
 
@@ -624,7 +712,7 @@ export async function handleCustomerPo({
     });
   }
 
-  // POST /customer-purchase-orders/:id/sync-vendor — antrian kirim ulang ke sales.app
+  // POST /customer-purchase-orders/:id/sync-vendor — sync ulang CreateSO (recovery manual)
   if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && path.length === 3 && method === 'POST') {
     const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
@@ -637,14 +725,16 @@ export async function handleCustomerPo({
       return err('Hanya PO berstatus APPROVED/SUBMITTED yang bisa dikirim ulang ke vendor', 400);
     }
 
-    const queued = await enqueueApprovedVendorSync(db, po as Record<string, unknown>);
+    const synced = await syncApprovedPoToVendor(db, po as Record<string, unknown>);
     return ok({
-      ...queued,
-      message: 'Kirim ke vendor berjalan di background',
+      ...synced,
+      message: synced.vendorSynced
+        ? 'Berhasil kirim ke vendor'
+        : (synced.vendorSyncError || 'Kirim ke vendor gagal — coba lagi'),
     });
   }
 
-  // POST /customer-purchase-orders/:id/sync-vendor/:vendorTenantId — enqueue retry satu vendor
+  // POST /customer-purchase-orders/:id/sync-vendor/:vendorTenantId — sync retry satu vendor (P1)
   if (path[0] === 'customer-purchase-orders' && path[2] === 'sync-vendor' && path.length === 4 && method === 'POST') {
     const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
@@ -660,33 +750,42 @@ export async function handleCustomerPo({
     const vendorTenantId = String(path[3] || '').trim();
     if (!vendorTenantId) return err('vendorTenantId wajib', 400);
 
-    const tenantId = String(po.tenantId || 'default');
-    const now = new Date();
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
-      {
-        $set: {
-          vendorSyncPending: true,
-          vendorSyncError: null,
-          vendorSyncAt: now,
-          updatedAt: now,
-        },
-      },
-    );
-    const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, {
-      poId: String(po.id),
+    const { retryVendorSyncForSingleVendor } = await import('@/lib/api/customer-po-vendor-retry');
+    const retried = await retryVendorSyncForSingleVendor(
+      db,
+      po as Record<string, unknown>,
       vendorTenantId,
-    });
-    const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
+    );
+    if (retried.error && !retried.po) {
+      const tenantId = String(po.tenantId || 'default');
+      const { jobId } = await enqueueAndKickPoVendorSync(db, tenantId, {
+        poId: String(po.id),
+        vendorTenantId,
+      });
+      const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+      const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
+      return ok({
+        ...enriched,
+        vendorSynced: false,
+        vendorSyncPending: false,
+        vendorSyncError: retried.error,
+        vendorSyncJobId: jobId,
+        async: false,
+        message: `Gagal kirim ke vendor ${vendorTenantId}`,
+      });
+    }
+
+    const enriched = await enrichOnePo(db, retried.po || po, { skipSalesBackfill: true });
     return ok({
       ...enriched,
-      vendorSynced: false,
-      vendorSyncPending: true,
-      vendorSyncJobId: jobId,
-      async: true,
-      reused,
-      message: `Retry vendor ${vendorTenantId} berjalan di background`,
+      vendorSynced: !!retried.vendorSynced,
+      vendorSyncPending: false,
+      vendorSyncError: retried.vendorSynced ? null : (retried.error || null),
+      vendorNoSO: enriched?.vendorNoSO,
+      async: false,
+      message: retried.vendorSynced
+        ? `Vendor ${vendorTenantId} tersinkron`
+        : 'Masih ada vendor lain yang gagal',
     });
   }
 
@@ -769,12 +868,14 @@ export async function handleCustomerPo({
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
 
-    if (po.status === 'APPROVED' && po.vendorSyncPending !== false) {
-      const retried = await enqueueApprovedVendorSync(db, po as Record<string, unknown>);
+    if (po.status === 'APPROVED' && (po.vendorSyncPending || po.vendorSyncError || !poHasVendorSoNumbers(po as JsonObject))) {
+      const retried = await syncApprovedPoToVendor(db, po as Record<string, unknown>);
       return ok({
         ...retried,
         retried: true,
-        message: 'Kirim ke vendor berjalan di background',
+        message: retried.vendorSynced
+          ? 'Berhasil kirim ke vendor'
+          : (retried.vendorSyncError || 'Kirim ke vendor gagal — coba lagi'),
       });
     }
 
@@ -783,21 +884,25 @@ export async function handleCustomerPo({
     const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
     if (locked) return locked;
 
-    const result = await approvePoAndEnqueueVendorSync(
+    const result = await approvePoAndSyncVendor(
       db,
       po as Record<string, unknown>,
       await actorSnapshot(db, auth),
     );
-    if ('error' in result && result.error) return err(result.error, result.status || 400);
+    if ('error' in result && result.error && !('po' in result && result.po)) {
+      return err(result.error, result.status || 400);
+    }
 
     const enriched = await enrichOnePo(db, result.po, { skipSalesBackfill: true });
     return ok({
       ...enriched,
-      vendorSynced: false,
-      vendorSyncPending: true,
-      vendorSyncJobId: result.vendorSyncJobId,
-      vendorSyncError: null,
-      async: true,
+      vendorSynced: result.vendorSynced,
+      vendorSyncPending: result.vendorSyncPending,
+      vendorSyncJobId: 'vendorSyncJobId' in result ? result.vendorSyncJobId : null,
+      vendorSyncError: ('vendorSyncError' in result ? result.vendorSyncError : null)
+        || ('error' in result && result.vendorSynced === false ? result.error : null),
+      vendorNoSO: 'vendorNoSO' in result ? result.vendorNoSO : enriched?.vendorNoSO,
+      async: false,
     });
   }
 

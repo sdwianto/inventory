@@ -13,11 +13,12 @@ import {
 } from '@/lib/api/customer-po-so-extract';
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import { recordIntegrationHold } from '@/lib/api/erp-hotpath-metrics';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
 import type { JsonObject } from '@/types/json';
 
-const VENDOR_PUSH_RETRIES = 1;
-/** Default hold per vendor — selaras Performance Budget PO_VENDOR_SYNC (P95 < 15s). */
-const VENDOR_PUSH_TIMEOUT_MS = 15_000;
+/** Default timeout CreateSO — Transport-owned (Category A). */
+const VENDOR_PUSH_TIMEOUT_MS = 25_000;
 
 export type PushPoToVendorResult =
   | { error: string; partialFailures?: JsonObject[] }
@@ -27,14 +28,6 @@ export type PushPoToVendorOptions = {
   /** Timeout per vendor per attempt (ms). */
   timeoutMs?: number;
 };
-
-function sleep(ms: number) {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
-function isTimeoutError(msg: string) {
-  return /timeout|aborted|tidak merespons/i.test(msg);
-}
 
 /** Wake cold Vercel lambda sebelum push berat. Skip di VPS/docker (Sales selalu hidup). */
 export function shouldWarmUpSalesApp(salesUrl: string): boolean {
@@ -79,43 +72,51 @@ async function pushPoGroupOnce(
 ) {
   const salesUrl = config.salesAppUrl.replace(/\/$/, '');
   const apiKey = await getSalesApiKeyForVendor(db, tenantId, vendorTenantId);
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiKey) headers['X-Api-Key'] = apiKey;
-  headers['Idempotency-Key'] = `cpo-push:${String(po.id)}:${vendorTenantId}`;
+  if (!apiKey) {
+    return { error: 'Belum terhubung ke sales.app (API key vendor)', vendorTenantId };
+  }
 
-  let res: Response;
+  const correlationId = integrationCorrelationId(String(po.id || ''), String(po.noPO || ''));
+  const client = createIntegrationClient(db);
   try {
-    res = await fetch(`${salesUrl}/api/integrations/customer-po`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
+    const created = await client.createSalesOrderFromCustomerPo({
+      salesAppUrl: salesUrl,
+      apiKey,
+      correlationId,
+      idempotencyKey: `cpo-push:${String(po.id)}:${vendorTenantId}`,
+      customerPoId: po.id ? String(po.id) : null,
+      timeoutMs,
+      body: {
         customerTenantId: tenantId,
         vendorTenantId,
         noPO: po.noPO,
         customerPoId: po.id,
-        correlationId: integrationCorrelationId(String(po.id || ''), String(po.noPO || '')),
         tanggalKedatangan: po.tanggalKedatangan || po.tanggal || null,
         items,
         catatan: po.catatan || '',
         paymentTerms: po.paymentTerms || 'KREDIT',
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
+      },
     });
-  } catch (e) {
-    return { error: salesFetchErrorMessage(e, salesUrl), vendorTenantId };
-  }
-
-  let data: JsonObject;
-  try {
-    data = await res.json() as JsonObject;
-  } catch {
     return {
-      error: `Sales.app merespons HTTP ${res.status} tanpa data JSON valid`,
+      vendorSo: {
+        ...created.raw,
+        id: created.salesOrderId,
+        salesOrderId: created.salesOrderId,
+        noSO: created.noSO,
+        noPO: created.noPO,
+        status: created.status,
+        created: created.created,
+        existing: created.existing,
+        vendorTenantId: created.vendorTenantId,
+      } as JsonObject,
       vendorTenantId,
     };
+  } catch (e) {
+    if (e instanceof IntegrationError) {
+      return { error: e.message, vendorTenantId, code: e.code, errorClass: e.errorClass };
+    }
+    return { error: salesFetchErrorMessage(e, salesUrl), vendorTenantId };
   }
-  if (!res.ok) return { error: String(data.error || `Sales.app ${res.status}`), vendorTenantId };
-  return { vendorSo: data, vendorTenantId };
 }
 
 export async function pushPoGroupToVendor(
@@ -131,11 +132,8 @@ export async function pushPoGroupToVendor(
 ) {
   const timeoutMs = args.timeoutMs ?? VENDOR_PUSH_TIMEOUT_MS;
   const holdStarted = Date.now();
-  let last = await pushPoGroupOnce(db, { ...args, timeoutMs });
-  for (let attempt = 1; attempt < VENDOR_PUSH_RETRIES && last.error && isTimeoutError(last.error); attempt += 1) {
-    await sleep(1_500 * attempt);
-    last = await pushPoGroupOnce(db, { ...args, timeoutMs });
-  }
+  // Retry ownership = Transport; Category A = satu attempt sync.
+  const last = await pushPoGroupOnce(db, { ...args, timeoutMs });
   recordIntegrationHold(
     'inventory',
     'po_vendor_push',

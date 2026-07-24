@@ -50,21 +50,23 @@ export async function retryVendorSyncForSingleVendor(
       {
         $set: {
           vendorSubmissions: allSubs,
-          vendorSyncPending: true,
+          // P1: Failed jelas — bukan PENDING happy path.
+          vendorSyncPending: false,
           vendorSyncError: String(pushed.error),
           vendorSyncAt: now,
           updatedAt: now,
         },
       },
     );
-    return { error: pushed.error, status: 502 };
+    return { error: pushed.error, status: 502, vendorSynced: false };
   }
 
+  const so = (pushed.vendorSo || {}) as JsonObject;
   const syncedSub = {
     vendorTenantId,
     status: 'SYNCED',
-    vendorSoId: (pushed.vendorSo as JsonObject | undefined)?.id,
-    vendorNoSO: (pushed.vendorSo as JsonObject | undefined)?.noSO,
+    vendorSoId: so.id || so.salesOrderId,
+    vendorNoSO: so.noSO,
     vendorSo: pushed.vendorSo || null,
     itemCount: group.items.length,
     syncedAt: now,

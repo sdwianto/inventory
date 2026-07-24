@@ -36,6 +36,28 @@ export type CreateInvoiceFromGrnResult = {
   raw: Record<string, unknown>;
 };
 
+export type CreateSalesOrderFromPoInput = {
+  salesAppUrl: string;
+  apiKey: string;
+  correlationId?: string;
+  idempotencyKey: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+  customerPoId?: string | null;
+};
+
+export type CreateSalesOrderFromPoResult = {
+  salesOrderId: string;
+  noSO: string;
+  noPO: string;
+  status: string;
+  created?: boolean;
+  existing?: boolean;
+  vendorTenantId: string;
+  customerPoId?: string;
+  raw: Record<string, unknown>;
+};
+
 function normalizeBaseUrl(url: string): string {
   return String(url || '').replace(/\/$/, '');
 }
@@ -153,6 +175,108 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'SUCCEEDED',
         invoiceId: normalized.invoiceId,
+      });
+      return normalized;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), {
+          correlationId,
+          cause: e,
+        });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+      });
+      throw err;
+    }
+  }
+
+  /** Category A: CreateSO from Customer PO — sync SUCCESS|FAILED only. */
+  async createSalesOrderFromCustomerPo(
+    input: CreateSalesOrderFromPoInput,
+  ): Promise<CreateSalesOrderFromPoResult> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const url = `${base}/api/v1/integrations/customer-po`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'CreateSalesOrderFromPo',
+      grnId: null,
+    });
+
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url,
+        pool: 'po',
+        timeoutMs: input.timeoutMs ?? 25_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify({
+          ...input.body,
+          correlationId,
+        }),
+      });
+
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+
+      if (res.status === 202) {
+        throw new IntegrationError(
+          'Sales mengembalikan 202 Pending — jalur happy path Category A tidak diizinkan',
+          {
+            code: 'ASYNC_NOT_ALLOWED',
+            errorClass: 'server',
+            httpStatus: 202,
+            retryable: false,
+            correlationId,
+          },
+        );
+      }
+
+      throwIfHttpFailed(res, data, correlationId);
+
+      const nested = (data.result && typeof data.result === 'object')
+        ? data.result as Record<string, unknown>
+        : data;
+      const salesOrderId = String(nested.salesOrderId || nested.id || '').trim();
+      const noSO = String(nested.noSO || '').trim();
+      if (!salesOrderId || !noSO) {
+        throw new IntegrationError('Sales.app tidak mengembalikan salesOrderId/noSO', {
+          code: 'VALIDATION',
+          errorClass: 'validation',
+          retryable: false,
+          correlationId,
+        });
+      }
+
+      const normalized: CreateSalesOrderFromPoResult = {
+        salesOrderId,
+        noSO,
+        noPO: String(nested.noPO || input.body.noPO || ''),
+        status: String(nested.status || 'DRAFT'),
+        created: nested.created as boolean | undefined,
+        existing: nested.existing as boolean | undefined,
+        vendorTenantId: String(nested.vendorTenantId || nested.tenantId || input.body.vendorTenantId || ''),
+        customerPoId: String(nested.customerPoId || input.customerPoId || input.body.customerPoId || ''),
+        raw: nested,
+      };
+
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'SUCCEEDED',
       });
       return normalized;
     } catch (e) {

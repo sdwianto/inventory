@@ -257,17 +257,9 @@ export async function notifyGrnPostedToSales(
 
     const hutang = await upsertHutangFromSalesPayload(db, tid, data, currentGrn, config);
 
-    if ('error' in hutang && hutang.error) {
-      return {
-        error: hutang.error,
-        invoiceId: data.invoiceId,
-        noInvoice: data.noInvoice,
-        draftNoInvoice: data.noInvoice,
-        hutang,
-      };
-    }
-
-    if (!('skipped' in hutang && hutang.skipped) && data.noInvoice && grn.noPO) {
+    // P0: CreateInvoice SUCCESS = noInvoice dari Sales. AP lokal gagal ≠ batalkan invoice.
+    if (!('error' in hutang && hutang.error) && !('skipped' in hutang && hutang.skipped)
+      && data.noInvoice && grn.noPO) {
       const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
       await syncCpoFromVendorEvent(db, tid, 'invoice.posted', {
         noPO: grn.noPO,
@@ -279,15 +271,14 @@ export async function notifyGrnPostedToSales(
     }
 
     return {
-      noInvoice: ('skipped' in hutang && hutang.skipped) || ('error' in hutang && hutang.error)
-        ? null
-        : (data.noInvoice || hutang.noInvoice),
+      noInvoice: data.noInvoice || ('noInvoice' in hutang ? hutang.noInvoice : null) || null,
       invoiceId: data.invoiceId,
       webhookSent: data.webhookSent,
       created: data.created,
       posted: data.posted,
       hutangPushed: data.hutangPushed,
       hutangPushError: data.hutangPushError,
+      hutangLocalError: ('error' in hutang && hutang.error) ? hutang.error : null,
       hutang,
     };
   } catch (e) {

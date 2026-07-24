@@ -1364,7 +1364,7 @@ function FoodProductionPlanPageContent() {
     }
   }
 
-  /** Kekurangan stok → satu API (explode sekali → MRP → PR → submit). Sync vendor di background. */
+  /** Kekurangan stok → satu API (explode sekali → MRP → PR → submit sync CreateSO). */
   async function procureShortage(row: PlanRow) {
     setProcuringId(row.id);
     try {
@@ -1384,6 +1384,9 @@ function FoodProductionPlanPageContent() {
         draftCpoNo?: string;
         noPO?: string;
         poStatus?: string;
+        vendorSynced?: boolean;
+        vendorNoSO?: string;
+        vendorSyncError?: string;
         submitError?: string;
         message?: string;
       };
@@ -1412,7 +1415,18 @@ function FoodProductionPlanPageContent() {
         return;
       }
 
-      toast.success(data.message || `PO ${data.noPO || data.draftCpoNo || ''} → ${data.poStatus || 'APPROVED'}`);
+      if (data.vendorSynced) {
+        toast.success(
+          data.message
+            || `PO ${data.noPO || data.draftCpoNo || ''} → SO ${data.vendorNoSO || 'vendor'}`,
+        );
+      } else if (data.vendorSyncError) {
+        toast.error('PO dibuat, gagal kirim ke vendor', {
+          description: String(data.vendorSyncError),
+        });
+      } else {
+        toast.success(data.message || `PO ${data.noPO || data.draftCpoNo || ''} → ${data.poStatus || 'APPROVED'}`);
+      }
       router.push(`/pembelian-po?highlight=${cpoId}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal buat PO ke Vendor');

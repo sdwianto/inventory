@@ -54,7 +54,8 @@ export function useGrnMutations(
     const previous = qc.getQueryData<GrnPages>(listKey);
     qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, grnId, {
       status: 'POSTED',
-      invoiceSyncStatus: 'PENDING',
+      // P0: in-flight = SYNCING (bukan PENDING legacy).
+      invoiceSyncStatus: 'SYNCING',
     }));
 
     try {
@@ -79,7 +80,7 @@ export function useGrnMutations(
   const replayInvoice = useCallback(async (id: string) => {
     const previous = qc.getQueryData<GrnPages>(listKey);
     qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, id, {
-      invoiceSyncStatus: 'PENDING',
+      invoiceSyncStatus: 'SYNCING',
     }));
 
     try {

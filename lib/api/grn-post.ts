@@ -206,9 +206,15 @@ export async function postGoodsReceipt(
 
     const patch: Record<string, unknown> = { invoiceSyncAt: new Date() };
     if ('error' in invoiceSync && invoiceSync.error) {
-      patch.invoiceSyncStatus = 'FAILED';
-      patch.invoiceSyncError = invoiceSync.error;
-      // Recovery after commit — tidak menentukan SUCCESS bisnis (status tetap FAILED sampai sync OK).
+      // Sales mungkin sudah create invoice (200) — simpan noInvoice walau AP lokal gagal.
+      if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;
+      if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
+      const hasInvoice = Boolean(invoiceSync.noInvoice || invoiceSync.invoiceId);
+      patch.invoiceSyncStatus = hasInvoice ? 'DONE' : 'FAILED';
+      patch.invoiceSyncError = hasInvoice
+        ? `Faktur ${invoiceSync.noInvoice} ada di Sales; hutang lokal: ${invoiceSync.error}`
+        : invoiceSync.error;
+      // Recovery after commit — tidak menentukan SUCCESS bisnis bila faktur belum ada.
       const enq = await enqueueJob(db, {
         type: JOB_TYPES.GRN_INVOICE_SYNC,
         tenantId,
@@ -221,7 +227,7 @@ export async function postGoodsReceipt(
         ...invoiceSync,
         async: false,
         jobId: enq.jobId,
-        status: 'FAILED',
+        status: hasInvoice ? 'DONE' : 'FAILED',
       };
     } else if (invoiceSync.skipped) {
       patch.invoiceSyncStatus = 'SKIPPED';
@@ -237,6 +243,21 @@ export async function postGoodsReceipt(
       if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
       const hutang = invoiceSync.hutang as Record<string, unknown> | undefined;
       if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
+      // Faktur Sales OK; AP lokal gagal → catat error + recovery, jangan hapus noInvoice.
+      if (invoiceSync.hutangLocalError) {
+        patch.invoiceSyncError = `Faktur ${invoiceSync.noInvoice || ''} ada; hutang lokal: ${invoiceSync.hutangLocalError}`;
+        const enq = await enqueueJob(db, {
+          type: JOB_TYPES.GRN_INVOICE_SYNC,
+          tenantId,
+          grnId: grn.id,
+          payload: { noGRN: grn.noGRN, noDO: grn.noDO, retryHutangOnly: true },
+        });
+        jobId = enq.jobId;
+        scheduleJobProcessing(db);
+        invoiceSync = { ...invoiceSync, jobId: enq.jobId };
+      } else {
+        patch.invoiceSyncError = null;
+      }
     }
     await db.collection('goods_receipts').updateOne({ id: grn.id }, { $set: patch });
     posted.invoiceSyncStatus = String(patch.invoiceSyncStatus);
@@ -277,8 +298,13 @@ export async function replayGrnInvoiceAsync(
 
   const patch: Record<string, unknown> = { invoiceSyncAt: new Date() };
   if ('error' in invoiceSync && invoiceSync.error) {
-    patch.invoiceSyncStatus = 'FAILED';
-    patch.invoiceSyncError = invoiceSync.error;
+    if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;
+    if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
+    const hasInvoice = Boolean(invoiceSync.noInvoice || invoiceSync.invoiceId);
+    patch.invoiceSyncStatus = hasInvoice ? 'DONE' : 'FAILED';
+    patch.invoiceSyncError = hasInvoice
+      ? `Faktur ${invoiceSync.noInvoice} ada di Sales; hutang lokal: ${invoiceSync.error}`
+      : invoiceSync.error;
     const enq = await enqueueJob(db, {
       type: JOB_TYPES.GRN_INVOICE_SYNC,
       tenantId,
@@ -286,17 +312,34 @@ export async function replayGrnInvoiceAsync(
       payload: { replay: true, retryAfterInline: true },
     });
     scheduleJobProcessing(db);
-    invoiceSync = { ...invoiceSync, async: false, jobId: enq.jobId, status: 'FAILED' };
+    invoiceSync = {
+      ...invoiceSync,
+      async: false,
+      jobId: enq.jobId,
+      status: hasInvoice ? 'DONE' : 'FAILED',
+    };
   } else if (invoiceSync.skipped) {
     patch.invoiceSyncStatus = 'SKIPPED';
     patch.invoiceSyncError = invoiceSync.reason || null;
   } else {
     patch.invoiceSyncStatus = 'DONE';
-    patch.invoiceSyncError = null;
     if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;
     if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
     const hutang = invoiceSync.hutang as Record<string, unknown> | undefined;
     if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
+    if (invoiceSync.hutangLocalError) {
+      patch.invoiceSyncError = `Faktur ${invoiceSync.noInvoice || ''} ada; hutang lokal: ${invoiceSync.hutangLocalError}`;
+      const enq = await enqueueJob(db, {
+        type: JOB_TYPES.GRN_INVOICE_SYNC,
+        tenantId,
+        grnId: grn.id,
+        payload: { replay: true, retryHutangOnly: true },
+      });
+      scheduleJobProcessing(db);
+      invoiceSync = { ...invoiceSync, jobId: enq.jobId };
+    } else {
+      patch.invoiceSyncError = null;
+    }
   }
 
   await db.collection('goods_receipts').updateOne({ id: grn.id }, { $set: patch });

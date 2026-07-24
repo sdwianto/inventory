@@ -1,5 +1,5 @@
 /**
- * Satu request: explode MRP sekali → APPROVED → PR + Draft CPO → submit vendor (enqueue).
+ * Satu request: explode MRP sekali → APPROVED → PR + Draft CPO → submit vendor (P1 sync CreateSO).
  * Mengganti waterfall 7 HTTP dari UI "Menyiapkan PO…".
  */
 
@@ -40,6 +40,9 @@ export type ProcureShortageResult =
       draftCpoNo?: string;
       poStatus?: string;
       noPO?: string;
+      vendorSynced?: boolean;
+      vendorNoSO?: string;
+      vendorSyncError?: string;
       vendorSyncJobId?: string;
       submitError?: string;
       message?: string;
@@ -249,6 +252,11 @@ export async function runProcureShortageFromPlan(
     };
   }
 
+  const vendorSynced = submitData.vendorSynced === true;
+  const vendorNoSO = submitData.vendorNoSO ? String(submitData.vendorNoSO) : undefined;
+  const vendorSyncError = submitData.vendorSyncError
+    ? String(submitData.vendorSyncError)
+    : undefined;
   return {
     ok: true,
     mrpId: mrp.id,
@@ -258,9 +266,16 @@ export async function runProcureShortageFromPlan(
     draftCpoNo,
     poStatus: String(submitData.status || 'APPROVED'),
     noPO: String(submitData.noPO || draftCpoNo),
+    vendorSynced,
+    vendorNoSO,
+    vendorSyncError,
     vendorSyncJobId: submitData.vendorSyncJobId
       ? String(submitData.vendorSyncJobId)
       : undefined,
-    message: `PO ${submitData.noPO || draftCpoNo} → ${submitData.status || 'APPROVED'}`,
+    message: vendorSynced
+      ? `PO ${submitData.noPO || draftCpoNo} → SO ${vendorNoSO || 'vendor'}`
+      : (vendorSyncError
+        ? `PO ${submitData.noPO || draftCpoNo} disetujui, gagal kirim vendor: ${vendorSyncError}`
+        : `PO ${submitData.noPO || draftCpoNo} → ${submitData.status || 'APPROVED'}`),
   };
 }

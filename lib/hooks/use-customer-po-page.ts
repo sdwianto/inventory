@@ -310,8 +310,9 @@ export function useCustomerPoPage() {
         return;
       }
       if (data.jobId) {
+        // Recovery/ops (sync-pending) — bukan happy path approve/submit.
         if (!data.reused) {
-          toast.info('Mengirim PO ke vendor di background…');
+          toast.info('Recovery: mengulang kirim PO yang gagal…');
         }
         setVendorSyncJobId(String(data.jobId));
         startedAsyncJob = true;
@@ -621,26 +622,22 @@ export function useCustomerPoPage() {
     try {
       const data = await poMutations.approve(id);
       trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
-      if (data.retried) {
-        if (data.vendorSynced) {
-          toast.success(`Terkirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
-        } else if (data.vendorSyncError) {
-          toast.error(String(data.vendorSyncError));
+      if (data.vendorSynced) {
+        if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
+          toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
         } else {
-          toast.warning('Kirim vendor belum selesai — coba Kirim ke vendor lagi');
+          toast.success(`Disetujui & dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorNoSO || data.vendorSoId || ''}`);
         }
+      } else if (data.vendorSyncError) {
+        toast.error('PO disetujui, gagal kirim ke vendor', {
+          description: String(data.vendorSyncError),
+        });
       } else if (data.vendorSyncPending && !data.vendorSynced) {
         toast.warning('PO disetujui, kirim vendor gagal sebagian', {
-          description: data.vendorSyncError ? String(data.vendorSyncError) : 'Ulangi Kirim ke vendor',
+          description: 'Ulangi Kirim ke vendor',
         });
-      } else if (data.vendorSyncPending || data.async) {
-        toast.success('PO disetujui', {
-          description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
-        });
-      } else if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
-        toast.success(`Disetujui → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
       } else {
-        toast.success(`Disetujui & dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
+        toast.warning('PO disetujui — nomor SO belum ada; coba Kirim ke vendor');
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
@@ -659,11 +656,11 @@ export function useCustomerPoPage() {
     try {
       const data = await poMutations.syncVendor(id);
       trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
-      if (data.async || (data.vendorSyncPending && !data.vendorSynced)) {
-        toast.warning(data.vendorSyncError ? String(data.vendorSyncError) : 'Kirim vendor belum selesai');
-      } else {
+      if (data.vendorSynced) {
         invalidatePoCaches(queryClient);
-        toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
+        toast.success(`Dikirim ke vendor → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorNoSO || data.vendorSoId || ''}`);
+      } else {
+        toast.error(data.vendorSyncError ? String(data.vendorSyncError) : 'Kirim vendor gagal');
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
@@ -683,12 +680,16 @@ export function useCustomerPoPage() {
     try {
       const data = await poMutations.syncVendorForVendor(id, vendorTenantId);
       trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
-      if (data.async || data.vendorSyncPending) {
-        toast.success(`Retry ${vendorNameById[vendorTenantId] || vendorTenantId} di background`, {
-          description: 'Nomor SO muncul otomatis setelah sync selesai',
+      if (data.vendorSynced) {
+        invalidatePoCaches(queryClient);
+        toast.success(
+          `Vendor ${vendorNameById[vendorTenantId] || vendorTenantId} tersinkron`
+          + (data.vendorNoSO ? ` → ${data.vendorNoSO}` : ''),
+        );
+      } else if (data.vendorSyncError) {
+        toast.error(`Gagal kirim ke ${vendorNameById[vendorTenantId] || vendorTenantId}`, {
+          description: String(data.vendorSyncError),
         });
-      } else if (data.vendorSynced) {
-        toast.success(`Vendor ${vendorNameById[vendorTenantId] || vendorTenantId} tersinkron`);
       } else {
         toast.warning('Masih ada vendor lain yang gagal — ulangi untuk vendor tersebut');
       }
@@ -732,26 +733,22 @@ export function useCustomerPoPage() {
     try {
       const data = await poMutations.submit(id);
       trackVendorSyncJob(data.vendorSyncJobId != null ? String(data.vendorSyncJobId) : null);
-      if (data.retried) {
-        if (data.vendorSynced) {
-          toast.success(`Terkirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
-        } else if (data.vendorSyncError) {
-          toast.error(String(data.vendorSyncError));
+      if (data.vendorSynced) {
+        if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
+          toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
         } else {
-          toast.warning(typeof data.message === 'string' ? data.message : 'Kirim vendor belum selesai');
+          toast.success(`Dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorNoSO || data.vendorSoId || ''}`);
         }
+      } else if (data.vendorSyncError) {
+        toast.error('PO disetujui, gagal kirim ke vendor', {
+          description: String(data.vendorSyncError),
+        });
       } else if (data.vendorSyncPending && !data.vendorSynced) {
-        toast.warning('PO dikirim, sync vendor gagal', {
-          description: data.vendorSyncError ? String(data.vendorSyncError) : 'Ulangi Kirim ke vendor',
+        toast.warning('PO dikirim, sync vendor gagal sebagian', {
+          description: 'Ulangi Kirim ke vendor',
         });
-      } else if (data.vendorSyncPending || data.async) {
-        toast.success('PO dikirim (disetujui)', {
-          description: 'Mengirim ke vendor di background — nomor SO muncul otomatis',
-        });
-      } else if (Array.isArray(data.vendorSubmissions) && data.vendorSubmissions.length > 1) {
-        toast.success(`Dikirim → ${data.vendorSubmissions.length} SO vendor: ${formatPoVendorSoDisplay(data, vendorNameById)}`);
       } else {
-        toast.success(`Dikirim → ${formatPoVendorSoDisplay(data, vendorNameById) || data.vendorSoId || ''}`);
+        toast.warning('PO dikirim — nomor SO belum ada; coba Kirim ke vendor');
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);

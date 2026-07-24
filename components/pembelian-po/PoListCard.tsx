@@ -126,7 +126,12 @@ export default function PoListCard({
                   SO vendor: {vendorSoLabel}
                 </span>
               )}
-              {!vendorSoLabel && poStatus === 'APPROVED' && !!po.vendorSyncPending && !isOptimistic && (
+              {!vendorSoLabel && poStatus === 'APPROVED' && !!po.vendorSyncError && !isOptimistic && (
+                <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0 text-red-700">
+                  Gagal kirim ke vendor
+                </span>
+              )}
+              {!vendorSoLabel && poStatus === 'APPROVED' && !!po.vendorSyncPending && !po.vendorSyncError && isOptimistic && (
                 <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0 text-blue-700">
                   Mengirim ke vendor…
                 </span>
@@ -178,7 +183,7 @@ export default function PoListCard({
             {isSubmitting ? '...' : 'Kirim'}
           </Button>
         )}
-        {poStatus === 'APPROVED' && canApprove && !!po.vendorSyncPending && (
+        {poStatus === 'APPROVED' && canApprove && !vendorSoLabel && (!!po.vendorSyncError || !!po.vendorSyncPending) && (
           <Button
             size="sm"
             variant="outline"
@@ -251,11 +256,11 @@ export default function PoListCard({
               </span>
             )}
           </div>
-          {!!po.vendorSyncError && poStatus === 'APPROVED' && (
-            <p className="text-xs text-amber-700 mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
-              <span className="font-medium">Antrian kirim ke vendor:</span> {str(po.vendorSyncError)}
-              <span className="block text-[10px] text-amber-600 mt-0.5">
-                Akan dikirim otomatis saat sales.app online (atau klik Kirim ke vendor)
+          {!!po.vendorSyncError && poStatus === 'APPROVED' && !vendorSoLabel && (
+            <p className="text-xs text-red-700 mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5">
+              <span className="font-medium">Gagal sync CreateSO:</span> {str(po.vendorSyncError)}
+              <span className="block text-[10px] text-red-600 mt-0.5">
+                Klik Kirim ke vendor untuk coba lagi (recovery)
               </span>
             </p>
           )}
