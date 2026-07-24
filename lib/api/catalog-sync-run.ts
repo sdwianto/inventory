@@ -42,11 +42,16 @@ async function fetchCatalogPage(
 ): Promise<{ ok: true; data: JsonObject } | { ok: false; error: string; offline?: boolean }> {
   let res: Response;
   try {
-    res = await fetch(buildCatalogUrl(salesAppUrl, opts), {
+    const { withBulkhead } = await import('@/lib/integration/bulkhead');
+    res = await withBulkhead('catalog', () => fetch(buildCatalogUrl(salesAppUrl, opts), {
       headers,
       signal: AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS),
-    });
+    }));
   } catch (e) {
+    const code = e && typeof e === 'object' ? String((e as { code?: string }).code || '') : '';
+    if (code === 'BULKHEAD_SATURATED') {
+      return { ok: false, error: 'Bulkhead catalog saturated — coba lagi nanti' };
+    }
     return { ok: false, error: salesFetchErrorMessage(e, salesAppUrl), offline: true };
   }
 

@@ -18,6 +18,14 @@ import { runIntegrationReconcile } from '@/lib/api/integration-reconcile-run';
 import { runAuditLogPurgeJob } from '@/lib/api/audit-purge-run';
 import { runSandboxResetJob } from '@/lib/api/sandbox-purge';
 import { getWorkerSandboxBlockReason } from '@/lib/api/sandbox-config';
+import { AuthError, ValidationError } from '@/lib/execution/contracts/errors';
+
+function catalogSyncFailureError(message: string): Error {
+  const msg = String(message);
+  if (/\b(401|403)\b/.test(msg) || /unauthorized/i.test(msg)) return new AuthError(msg);
+  if (/belum di-pair/i.test(msg)) return new ValidationError(msg);
+  return new Error(msg);
+}
 
 export async function executeWebhookInboxJob(
   db: Db,
@@ -69,10 +77,16 @@ export async function executeCatalogSyncJob(
   jobId?: string,
 ): Promise<Record<string, unknown>> {
   const config = await getIntegrationConfig(db, tenantId);
-  if (!config.salesApiKey) return { error: 'Belum di-pair dengan sales.app' };
+  if (!config.salesApiKey) {
+    throw new ValidationError('Belum di-pair dengan sales.app');
+  }
   const result = await runCatalogSync(db, tenantId, config, { jobId });
   if ('error' in result && result.error) {
-    return { error: result.error, offline: Boolean(result.offline) };
+    // Offline/network stays as plain Error → TRANSIENT retry; auth → PERMANENT DLQ once.
+    if (result.offline) {
+      throw new Error(String(result.error));
+    }
+    throw catalogSyncFailureError(String(result.error));
   }
   return result as Record<string, unknown>;
 }

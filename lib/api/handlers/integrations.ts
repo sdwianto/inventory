@@ -77,16 +77,63 @@ async function refreshCatalogProbe(
   }
 }
 
+/**
+ * Fail-fast gate: do not enqueue CATALOG_SYNC when unpaired or Sales rejects auth.
+ * Prevents AUTH poison jobs that land in DLQ on attempt 1.
+ */
+async function probeCatalogAuth(
+  db: Db,
+  tenantId: string,
+  config: { salesAppUrl?: string },
+): Promise<{ ok: true } | { ok: false; reason: 'not_paired' | 'unauthorized' | 'unreachable'; error?: string }> {
+  if (!config.salesAppUrl) {
+    return { ok: false, reason: 'not_paired', error: 'salesAppUrl belum di-set' };
+  }
+  const apiKey = await getSalesApiKeyForVendor(db, tenantId);
+  if (!apiKey) {
+    return { ok: false, reason: 'not_paired', error: 'Belum di-pair dengan sales.app' };
+  }
+  try {
+    const url = new URL(`${config.salesAppUrl.replace(/\/$/, '')}/api/integrations/catalog`);
+    url.searchParams.set('allTenants', 'true');
+    url.searchParams.set('limit', '1');
+    const res = await fetch(url.toString(), {
+      headers: { 'X-Api-Key': apiKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, reason: 'unauthorized', error: `Sales.app HTTP ${res.status}` };
+    }
+    if (!res.ok) {
+      // Non-auth errors: still enqueue so worker can retry (TRANSIENT).
+      return { ok: true };
+    }
+    return { ok: true };
+  } catch {
+    // Network blip — allow enqueue; worker classifies TRANSIENT.
+    return { ok: true };
+  }
+}
+
 async function enqueueCatalogSync(db: Db, tenantId: string) {
+  const config = await getIntegrationConfig(db, tenantId);
+  if (!config.salesApiKey) {
+    return { skipped: true as const, reason: 'not_paired' as const, error: 'Belum di-pair dengan sales.app' };
+  }
+  const probe = await probeCatalogAuth(db, tenantId, config);
+  if (!probe.ok && (probe.reason === 'not_paired' || probe.reason === 'unauthorized')) {
+    return { skipped: true as const, reason: probe.reason, error: probe.error };
+  }
+
   const existing = await db.collection('bg_jobs').findOne({
     tenantId,
     type: JOB_TYPES.CATALOG_SYNC,
     status: { $in: ['PENDING', 'RUNNING'] },
   });
-  if (existing) return { jobId: String(existing.id), reused: true };
+  if (existing) return { jobId: String(existing.id), reused: true as const };
   const { jobId } = await enqueueJob(db, { type: JOB_TYPES.CATALOG_SYNC, tenantId, payload: {} });
   scheduleJobProcessing(db, { limit: 1 });
-  return { jobId, reused: false };
+  return { jobId, reused: false as const };
 }
 
 export async function handleIntegrations({
@@ -216,15 +263,18 @@ export async function handleIntegrations({
       );
     }
 
-    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
+    const enqueued = await enqueueCatalogSync(db, tenantId);
+    if ('skipped' in enqueued && enqueued.skipped) {
+      return err(String(enqueued.error || 'Catalog sync ditolak'), 400);
+    }
     scheduleJobProcessing(db, { limit: 1 });
     return ok({
       message: 'Terhubung ke sales.app — sync katalog dimulai',
-      jobId,
+      jobId: enqueued.jobId,
       async: true,
-      reused,
+      reused: enqueued.reused,
       vendorLinkCount: links.length,
-      status: reused ? 'RUNNING' : 'PENDING',
+      status: enqueued.reused ? 'RUNNING' : 'PENDING',
     }, 202);
   }
 
@@ -265,9 +315,18 @@ export async function handleIntegrations({
         link.vendorName || vendorTenantId,
         link.tierHargaDefault,
       );
-      const { jobId, reused } = await enqueueCatalogSync(db, customerTenantId);
-      catalogSync = { jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused };
-      scheduleJobProcessing(db, { limit: 1 });
+      const enqueued = await enqueueCatalogSync(db, customerTenantId);
+      if ('skipped' in enqueued && enqueued.skipped) {
+        catalogSync = { skipped: true, reason: enqueued.reason, error: enqueued.error };
+      } else {
+        catalogSync = {
+          jobId: enqueued.jobId,
+          async: true,
+          status: enqueued.reused ? 'RUNNING' : 'PENDING',
+          reused: enqueued.reused,
+        };
+        scheduleJobProcessing(db, { limit: 1 });
+      }
     }
 
     return ok({
@@ -310,8 +369,16 @@ export async function handleIntegrations({
       if ('error' in result && result.error) return err(String(result.error), 400);
       return ok(result);
     }
-    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
-    return ok({ jobId, async: true, status: reused ? 'RUNNING' : 'PENDING', reused }, 202);
+    const enqueued = await enqueueCatalogSync(db, tenantId);
+    if ('skipped' in enqueued && enqueued.skipped) {
+      return err(String(enqueued.error || 'Catalog sync ditolak'), 400);
+    }
+    return ok({
+      jobId: enqueued.jobId,
+      async: true,
+      status: enqueued.reused ? 'RUNNING' : 'PENDING',
+      reused: enqueued.reused,
+    }, 202);
   }
 
   if (path[0] === 'integrations' && path[1] === 'jobs' && path[2] && path[3] === 'stream' && method === 'GET') {
@@ -349,8 +416,17 @@ export async function handleIntegrations({
       return ok({ skipped: true, reason: 'recent', lastCatalogSyncAt: dbRow?.lastCatalogSyncAt ?? null });
     }
 
-    const { jobId, reused } = await enqueueCatalogSync(db, tenantId);
-    return ok({ jobId, async: true, auto: true, reused, status: reused ? 'RUNNING' : 'PENDING' }, 202);
+    const enqueued = await enqueueCatalogSync(db, tenantId);
+    if ('skipped' in enqueued && enqueued.skipped) {
+      return ok({ skipped: true, reason: enqueued.reason, error: enqueued.error });
+    }
+    return ok({
+      jobId: enqueued.jobId,
+      async: true,
+      auto: true,
+      reused: enqueued.reused,
+      status: enqueued.reused ? 'RUNNING' : 'PENDING',
+    }, 202);
   }
 
   if (route === '/integrations/vendor-tiers' && method === 'GET') {

@@ -2,9 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-describe('grn-notify-sales async contract (Fase A + permanent reconcile)', () => {
+describe('grn-notify-sales P0 sync contract (no soft-async happy path)', () => {
   const src = readFileSync(
     join(process.cwd(), 'lib/api/grn-notify-sales.ts'),
+    'utf8',
+  );
+  const clientSrc = readFileSync(
+    join(process.cwd(), 'lib/integration/client.ts'),
     'utf8',
   );
   const jobSrc = readFileSync(
@@ -24,29 +28,21 @@ describe('grn-notify-sales async contract (Fase A + permanent reconcile)', () =>
     'utf8',
   );
 
-  it('posts to sales with ?async=1 (not inline)', () => {
-    expect(src).toMatch(/\?async=1/);
-    expect(src).toMatch(/grn-posted/);
-    expect(src).not.toMatch(/\?inline=1/);
+  it('uses IntegrationClient + v1 grn-posted (no ?async=1)', () => {
+    expect(src).toMatch(/createIntegrationClient|IntegrationClient/);
+    expect(src).not.toMatch(/\?async=1/);
+    expect(clientSrc).toMatch(/\/api\/v1\/integrations\/grn-posted/);
+    expect(clientSrc).not.toMatch(/\?async=1/);
   });
 
-  it('does not poll sales bg-jobs on HTTP 202 (hutang via webhook / pull-reconcile)', () => {
+  it('does not poll sales bg-jobs', () => {
     expect(src).not.toMatch(/pollSalesGrnJob/);
     expect(src).not.toMatch(/\/api\/bg-jobs\//);
-    expect(src).toMatch(/pending:\s*true/);
-    expect(src).toMatch(/salesJobId/);
   });
 
-  it('caps default sync timeout under 15s; preferSync may use 25s', () => {
-    expect(src).toMatch(/AbortSignal\.timeout\(10_000\)|AbortSignal\.timeout\(syncTimeoutMs\)/);
-    expect(src).toMatch(/preferSync \? 25_000 : 10_000/);
-    expect(src).not.toMatch(/AbortSignal\.timeout\(30_000\)/);
-    expect(src).not.toMatch(/AbortSignal\.timeout\(45_000\)/);
-  });
-
-  it('preferSync skips async fallback that leaves Menunggu faktur', () => {
-    expect(src).toMatch(/opts\.preferSync/);
-    expect(src).toMatch(/if \(opts\.preferSync\)/);
+  it('Category A timeout owned by Transport (35s)', () => {
+    expect(src).toMatch(/timeoutMs:\s*35_000/);
+    expect(clientSrc).toMatch(/35_000/);
   });
 
   it('job path pull-reconciles from Sales before re-notify', () => {
@@ -55,7 +51,20 @@ describe('grn-notify-sales async contract (Fase A + permanent reconcile)', () =>
     expect(reconcileSrc).toMatch(/noDO/);
   });
 
-  it('has background sweeper every 2 minutes', () => {
+  it('treats legacy pending/async as FAILED (no soft PENDING happy path)', () => {
+    expect(jobSrc).toMatch(/tidak diizinkan Category A/);
+    expect(jobSrc).not.toMatch(/GRN_INVOICE_MAX_SOFT_ATTEMPTS/);
+  });
+
+  it('grn-post always syncs invoice inline (no PENDING enqueue happy path)', () => {
+    const postSrc = readFileSync(join(process.cwd(), 'lib/api/grn-post.ts'), 'utf8');
+    expect(postSrc).toMatch(/syncInvoiceInline = canSyncInvoice/);
+    expect(postSrc).toMatch(/asyncInvoice diabaikan/);
+    expect(postSrc).toMatch(/Buat faktur — sync Category A/);
+    expect(postSrc).not.toMatch(/forceVpsInline/);
+  });
+
+  it('has background sweeper every 2 minutes (recovery)', () => {
     expect(recoverSrc).toMatch(/sweepAllStuckGrnInvoiceSyncs/);
     expect(tasksSrc).toMatch(/grn-invoice-sweep:2m/);
     expect(tasksSrc).toMatch(/grnInvoiceSweepOnly:\s*true/);

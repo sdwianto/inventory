@@ -54,40 +54,23 @@ function itemRowKey(it: JsonObject | undefined, idx: number) {
   return `${it?.lineId || 'line'}-${idx}`;
 }
 
-function invoiceSyncWaitLabel(row: JsonObject): string {
-  const raw = row.invoiceSyncAt || row.postedAt || row.updatedAt;
-  if (!raw) return '';
-  const ms = Date.now() - new Date(String(raw)).getTime();
-  if (!(ms >= 0)) return '';
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec} dtk`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} mnt`;
-  return `${Math.floor(min / 60)} jam`;
-}
-
 function invoiceSyncLabel(row: JsonObject) {
-  if (row?.invoiceSyncStatus === 'PENDING' || row?.invoiceSyncStatus === 'SYNCING') {
-    const age = invoiceSyncWaitLabel(row);
-    const ageSec = (() => {
-      const raw = row.invoiceSyncAt || row.postedAt || row.updatedAt;
-      if (!raw) return 0;
-      const ms = Date.now() - new Date(String(raw)).getTime();
-      return ms >= 0 ? Math.floor(ms / 1000) : 0;
-    })();
-    const stale = ageSec >= 120;
-    const title = stale
-      ? `Faktur dari sales.app belum selesai (±${age}). Klik Buat faktur — sering karena worker sales lambat / webhook terlewat.`
-      : age
-        ? `Menunggu faktur dari sales.app (±${age}).`
-        : 'Menunggu faktur dari sales.app.';
+  if (row?.invoiceSyncStatus === 'SYNCING') {
     return (
-      <span className={`inline-flex items-center gap-1 text-xs ${stale ? 'text-amber-700' : 'text-blue-600'}`} title={title}>
-        <Loader2 className={`w-3 h-3 shrink-0 ${stale ? '' : 'animate-spin'}`} />
-        <span className="leading-tight">
-          {stale ? 'Faktur tertunda' : 'Menunggu faktur…'}
-          {age ? <span className="opacity-80"> ({age})</span> : null}
-        </span>
+      <span className="inline-flex items-center gap-1 text-xs text-blue-600" title="Sedang sync CreateInvoice ke sales.app">
+        <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+        Menyinkronkan…
+      </span>
+    );
+  }
+  // Legacy PENDING (pre-P0) = belum sukses — jangan tampilkan "Menunggu" tanpa batas.
+  if (row?.invoiceSyncStatus === 'PENDING') {
+    return (
+      <span
+        className="text-amber-700 text-xs"
+        title="Faktur belum terbentuk. Klik Buat faktur untuk sync ulang ke sales.app."
+      >
+        Belum ada faktur
       </span>
     );
   }
@@ -212,22 +195,23 @@ export default function PenerimaanPage() {
     setReplayingInvoice(id);
     try {
       const data = await replayInvoiceMutation(id);
-      if (data.invoiceSyncStatus === 'PENDING' || data.invoiceSync?.async) {
-        toast.info(`Faktur ${noGRN} — masih diproses…`);
-        setPollInvoiceGrnId(id);
-      } else if (data.noInvoice) {
-        toast.success(`Faktur ${data.noInvoice} siap`);
+      if (data.noInvoice || data.invoiceSyncStatus === 'DONE') {
+        toast.success(`Faktur ${data.noInvoice || noGRN} siap`);
         invalidateHutangBadges();
-      } else if (data.invoiceSyncStatus === 'FAILED') {
-        toast.warning(`Faktur gagal: ${data.invoiceSyncError || 'cek sales.app'}`);
+      } else if (data.invoiceSyncStatus === 'FAILED' || data.invoiceSync?.error) {
+        toast.warning(`Faktur gagal: ${data.invoiceSyncError || data.invoiceSync?.error || 'cek sales.app'}`);
       } else {
-        toast.success(`Faktur ${noGRN} — selesai`);
+        toast.warning(`Faktur ${noGRN} belum terbentuk — coba lagi`);
       }
     } catch (e) {
       if (e instanceof OfflineQueuedError) {
         toast.info('Replay faktur disimpan offline — akan disinkron saat online');
       } else {
-        toast.error(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        const timedOut = /abort|timeout|timed out/i.test(msg);
+        toast.error(timedOut
+          ? 'Permintaan faktur ke sales.app timeout — coba Buat faktur lagi. Jika Sales down, status akan Gagal (bukan menunggu tanpa batas).'
+          : msg);
       }
     }
     setReplayingInvoice('');
@@ -326,14 +310,14 @@ export default function PenerimaanPage() {
       const data = await postGrnMutation(grnId, items);
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
-      if (data.invoiceSync?.async || data.invoiceSyncStatus === 'PENDING') {
-        toast.info('Faktur vendor diproses di background…');
-        setPollInvoiceGrnId(grnId);
-      } else if (data.noInvoice) {
-        toast.success(`Faktur ${data.noInvoice} siap`);
+      if (data.noInvoice || data.invoiceSyncStatus === 'DONE') {
+        toast.success(data.noInvoice ? `Faktur ${data.noInvoice} siap` : 'Faktur siap');
         invalidateHutangBadges();
       } else if (data.invoiceSync?.error || data.invoiceSyncStatus === 'FAILED') {
         toast.warning(`Faktur gagal: ${data.invoiceSync?.error || data.invoiceSyncError || 'cek sales.app'}`);
+      } else if (data.invoiceSyncStatus === 'PENDING' || data.invoiceSync?.async) {
+        // Legacy residual — jangan anggap sukses background.
+        toast.warning('Faktur belum terbentuk — klik Buat faktur untuk sync ulang');
       }
       setDetail(null);
     } catch (e) {

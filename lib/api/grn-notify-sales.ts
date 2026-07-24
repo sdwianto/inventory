@@ -1,5 +1,6 @@
 import type { Db } from 'mongodb';
 // Beritahu sales.app bahwa GRN sudah POSTED → auto-create & post invoice B2B + record hutang lokal.
+// P0: hanya via IntegrationClient (sync SUCCESS|FAILED). Tidak ada soft-async happy path.
 
 import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
@@ -7,9 +8,10 @@ import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { syncGrnDeliveryFromSales } from '@/lib/api/grn-delivery-sync';
-import { salesFetchErrorMessage, integrationCorrelationId } from '@/lib/api/integration-common';
-import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
+import { integrationCorrelationId } from '@/lib/api/integration-common';
 import { recordIntegrationHold } from '@/lib/api/erp-hotpath-metrics';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
 
 function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record<string, unknown>) {
   if ((data.invoicePayload as Record<string, unknown> | undefined)?.invoiceId) {
@@ -20,12 +22,12 @@ function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record
   if (!invoiceId) return null;
 
   const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
-  const total = parseInt(String(invPayload.total || data.total || grn.receivedTotal || 0), 10);
+  const total = parseInt(String(invPayload.total || data.amount || data.total || grn.receivedTotal || 0), 10);
   const items = (grn.items as Array<Record<string, unknown>> | undefined) || [];
   return {
     invoiceId,
-    noInvoice: data.noInvoice || invPayload.noInvoice,
-    noDO: invPayload.noDO || grn.noDO,
+    noInvoice: data.noInvoice || data.invoiceNo || invPayload.noInvoice,
+    noDO: invPayload.noDO || data.noDO || grn.noDO,
     noPO: invPayload.noPO || grn.noPO || null,
     noSO: invPayload.noSO || grn.noSO || null,
     deliveryId: invPayload.deliveryId || null,
@@ -47,7 +49,7 @@ function buildInvoicePayloadFromSales(data: Record<string, unknown>, grn: Record
       satuan: it.satuan,
       qtyBase: it.qtyReceivedBase ?? it.qtyBase,
     })),
-    postedAt: invPayload.postedAt || grn.postedAt || new Date(),
+    postedAt: invPayload.postedAt || data.createdAt || grn.postedAt || new Date(),
     pelangganName: invPayload.pelangganName || null,
     vendorTenantId: invPayload.vendorTenantId || data.vendorTenantId || null,
     vendorName: invPayload.vendorName || null,
@@ -143,18 +145,6 @@ function buildFallbackDeliverySnapshot(grn: Record<string, unknown>) {
   };
 }
 
-function normalizeSalesGrnResponse(data: Record<string, unknown>) {
-  if (data.invoiceId) return data;
-  const result = (data.result || data) as Record<string, unknown>;
-  if (result?.invoiceId) {
-    return {
-      ...result,
-      invoicePayload: result.invoicePayload || result,
-    };
-  }
-  return data;
-}
-
 function hasDeliverySnapshot(grn: Record<string, unknown>): boolean {
   const snap = grn.vendorDeliverySnapshot as Record<string, unknown> | undefined;
   const items = snap?.items;
@@ -165,12 +155,17 @@ function hasDeliverySnapshot(grn: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Sync CreateInvoice from GRN (Category A).
+ * `preferSync` dipertahankan untuk kompatibilitas caller; selalu sync (tidak ada async fallback).
+ */
 export async function notifyGrnPostedToSales(
   db: Db,
   tenantId: string,
   grn: Record<string, unknown>,
-  opts: { preferSync?: boolean } = {},
+  _opts: { preferSync?: boolean } = {},
 ) {
+  void _opts;
   const tid = normalizeTenantId(String(grn?.tenantId || tenantId));
   const vendorId = grn?.vendorTenantId ? String(grn.vendorTenantId) : undefined;
   const salesApiKey = await getSalesApiKeyForVendor(db, tid, vendorId);
@@ -188,10 +183,22 @@ export async function notifyGrnPostedToSales(
     currentGrn = (synced.grn || grn) as Record<string, unknown>;
   }
 
-  const payload = {
+  const correlationId = String(
+    currentGrn.correlationId
+    || integrationCorrelationId(null, String(currentGrn.noPO || ''))
+    || currentGrn.id
+    || '',
+  ).trim() || undefined;
+
+  const idempotencyKey = String(currentGrn.id || currentGrn.noGRN || '').trim();
+  if (!idempotencyKey) {
+    return { error: 'grnId/noGRN wajib untuk Idempotency-Key' };
+  }
+
+  const body = {
     customerTenantId: tid,
     vendorTenantId: currentGrn.vendorTenantId || config.vendorTenantId,
-    correlationId: integrationCorrelationId(null, String(currentGrn.noPO || '')),
+    correlationId,
     noDO: currentGrn.noDO,
     noSO: currentGrn.noSO || null,
     noGRN: currentGrn.noGRN,
@@ -213,144 +220,94 @@ export async function notifyGrnPostedToSales(
     })),
   };
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Api-Key': salesApiKey,
-    ...buildTraceHttpHeaders(),
-  };
-  const bodyJson = JSON.stringify(payload);
-  const baseUrl = `${config.salesAppUrl}/api/integrations/grn-posted`;
   const holdStarted = Date.now();
-  // Replay / stuck recover: tunggu sync lebih lama — async 202 sering meninggalkan UI "Menunggu faktur".
-  const syncTimeoutMs = opts.preferSync ? 25_000 : 10_000;
+  const client = createIntegrationClient(db);
 
-  // Fast path: sync create+post+push invoice (biasanya <3s). Fallback async bila timeout/5xx.
-  let res: Response;
   try {
-    res = await fetch(baseUrl, {
-      method: 'POST',
-      headers,
-      body: bodyJson,
-      signal: AbortSignal.timeout(syncTimeoutMs),
+    const created = await client.createInvoiceFromGrn({
+      salesAppUrl: config.salesAppUrl,
+      apiKey: salesApiKey,
+      correlationId,
+      idempotencyKey,
+      body,
+      grnId: currentGrn.id ? String(currentGrn.id) : null,
+      timeoutMs: 35_000,
     });
-  } catch (e) {
-    if (opts.preferSync) {
-      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-      return {
-        error: `${salesFetchErrorMessage(e, config.salesAppUrl)} — sync timeout; pastikan sales.app & worker sehat lalu klik Buat faktur lagi`,
-        offline: true,
-      };
-    }
-    // Timeout / offline → async enqueue (202) agar tidak gagal keras; hutang via invoice.posted.
-    try {
-      res = await fetch(`${baseUrl}?async=1`, {
-        method: 'POST',
-        headers,
-        body: bodyJson,
-        signal: AbortSignal.timeout(8_000),
-      });
-    } catch (e2) {
-      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-      return { error: salesFetchErrorMessage(e2, config.salesAppUrl), offline: true };
-    }
-  }
 
-  let data: Record<string, unknown>;
-  try {
-    data = await res.json() as Record<string, unknown>;
-  } catch {
-    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-    return { error: `Sales.app merespons HTTP ${res.status} tanpa JSON valid` };
-  }
-
-  // Sync gagal dengan 5xx → satu kali fallback async (kecuali preferSync / replay).
-  if (!opts.preferSync && !res.ok && res.status >= 500) {
-    try {
-      const asyncRes = await fetch(`${baseUrl}?async=1`, {
-        method: 'POST',
-        headers,
-        body: bodyJson,
-        signal: AbortSignal.timeout(8_000),
-      });
-      let asyncData: Record<string, unknown> = {};
-      try {
-        asyncData = await asyncRes.json() as Record<string, unknown>;
-      } catch {
-        asyncData = {};
-      }
-      if (asyncRes.status === 202 && asyncData.jobId) {
-        recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
-        return { async: true, pending: true, salesJobId: asyncData.jobId };
-      }
-      res = asyncRes;
-      data = asyncData;
-    } catch {
-      /* keep original error below */
-    }
-  }
-
-  if (res.status === 202 && data.jobId) {
-    if (opts.preferSync) {
-      recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-      return {
-        error: `Sales.app mengantri faktur (job ${data.jobId}) — worker sales mungkin lambat. Coba Buat faktur lagi sebentar.`,
-        salesJobId: data.jobId,
-      };
-    }
     recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
-    return {
-      async: true,
-      pending: true,
-      salesJobId: data.jobId,
+
+    const data: Record<string, unknown> = {
+      ...created.raw,
+      invoiceId: created.invoiceId,
+      noInvoice: created.noInvoice,
+      invoiceNo: created.invoiceNo,
+      amount: created.amount,
+      currency: created.currency,
+      status: created.status,
+      createdAt: created.createdAt,
+      noDO: created.noDO,
+      vendorTenantId: created.vendorTenantId,
+      hutangPushed: created.hutangPushed,
+      hutangPushError: created.hutangPushError,
+      webhookSent: created.webhookSent,
+      created: created.created,
+      posted: created.posted,
+      invoicePayload: created.invoicePayload,
     };
-  }
 
-  if (!res.ok) {
-    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
-    const hint = data.draftNoInvoice
-      ? ` — DRAFT ${data.draftNoInvoice} ada di sales.app, post manual jika perlu`
-      : '';
-    return { error: `${data.error || `Sales.app ${res.status}`}${hint}`, draftNoInvoice: data.draftNoInvoice };
-  }
+    const hutang = await upsertHutangFromSalesPayload(db, tid, data, currentGrn, config);
 
-  recordIntegrationHold('inventory', 'grn_notify_sales', true, Date.now() - holdStarted);
+    if ('error' in hutang && hutang.error) {
+      return {
+        error: hutang.error,
+        invoiceId: data.invoiceId,
+        noInvoice: data.noInvoice,
+        draftNoInvoice: data.noInvoice,
+        hutang,
+      };
+    }
 
-  data = normalizeSalesGrnResponse(data);
+    if (!('skipped' in hutang && hutang.skipped) && data.noInvoice && grn.noPO) {
+      const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
+      await syncCpoFromVendorEvent(db, tid, 'invoice.posted', {
+        noPO: grn.noPO,
+        noInvoice: data.noInvoice,
+        invoiceId: data.invoiceId,
+        total: invPayload.total || data.amount || grn.receivedTotal,
+        postedAt: invPayload.postedAt || grn.postedAt || new Date(),
+      });
+    }
 
-  if (!data.invoiceId) {
-    return { error: 'Sales.app tidak mengembalikan invoiceId — faktur tidak dibuat' };
-  }
-
-  const hutang = await upsertHutangFromSalesPayload(db, tid, data, currentGrn, config);
-
-  if ('error' in hutang && hutang.error) {
     return {
-      error: hutang.error,
+      noInvoice: ('skipped' in hutang && hutang.skipped) || ('error' in hutang && hutang.error)
+        ? null
+        : (data.noInvoice || hutang.noInvoice),
       invoiceId: data.invoiceId,
-      draftNoInvoice: data.draftNoInvoice,
+      webhookSent: data.webhookSent,
+      created: data.created,
+      posted: data.posted,
+      hutangPushed: data.hutangPushed,
+      hutangPushError: data.hutangPushError,
       hutang,
     };
+  } catch (e) {
+    recordIntegrationHold('inventory', 'grn_notify_sales', false, Date.now() - holdStarted);
+    if (e instanceof IntegrationError) {
+      const offline = e.errorClass === 'network'
+        || e.errorClass === 'timeout'
+        || e.errorClass === 'circuit_open'
+        || e.httpStatus === 503;
+      const hint = e.httpStatus === 503 || e.errorClass === 'circuit_open'
+        ? ' — Sales unavailable; coba lagi nanti (bukan Menunggu Faktur)'
+        : '';
+      return {
+        error: `${e.message}${hint}`,
+        offline: offline || undefined,
+        code: e.code,
+        errorClass: e.errorClass,
+        correlationId: e.correlationId,
+      };
+    }
+    return { error: e instanceof Error ? e.message : String(e) };
   }
-
-  if (!('skipped' in hutang && hutang.skipped) && data.noInvoice && grn.noPO) {
-    const invPayload = (data.invoicePayload || {}) as Record<string, unknown>;
-    await syncCpoFromVendorEvent(db, tid, 'invoice.posted', {
-      noPO: grn.noPO,
-      noInvoice: data.noInvoice,
-      invoiceId: data.invoiceId,
-      total: invPayload.total || data.total || grn.receivedTotal,
-      postedAt: invPayload.postedAt || grn.postedAt || new Date(),
-    });
-  }
-
-  return {
-    noInvoice: ('skipped' in hutang && hutang.skipped) || ('error' in hutang && hutang.error)
-      ? null
-      : (data.noInvoice || hutang.noInvoice),
-    invoiceId: data.invoiceId,
-    webhookSent: data.webhookSent,
-    created: data.created,
-    posted: data.posted,
-    hutang,
-  };
 }

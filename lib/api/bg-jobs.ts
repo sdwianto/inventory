@@ -182,8 +182,7 @@ async function setGrnInvoiceSync(db: Db, grnId: string | null | undefined, patch
   );
 }
 
-/** Soft-async PENDING retries before surfacing FAILED (sweeper / recover use preferSync). */
-const GRN_INVOICE_MAX_SOFT_ATTEMPTS = 6;
+/** P0: GRN_INVOICE_SYNC = recovery only (pull-reconcile + sync CreateInvoice). No soft-async PENDING happy path. */
 
 export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   const grn = await db.collection('goods_receipts').findOne({ id: job.grnId }) as GrnDoc | null;
@@ -237,19 +236,10 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
     invoiceSyncError: null,
   });
 
-  const dedupe = String(job.payload?.dedupeKey || '');
-  const preferSync = Boolean(
-    job.payload?.replay
-    || job.payload?.retryAfterInline
-    || job.payload?.recoverStuck
-    || dedupe.startsWith('stuck-recover:')
-    || dedupe.startsWith('reconcile-grn:')
-    || dedupe.startsWith('invoice-sweep:'),
-  );
-
   let result: Record<string, unknown>;
   try {
-    result = await notifyGrnPostedToSales(db, job.tenantId, grn, { preferSync }) as Record<string, unknown>;
+    // Always sync Category A via IntegrationClient (preferSync kept for API compat).
+    result = await notifyGrnPostedToSales(db, job.tenantId, grn, { preferSync: true }) as Record<string, unknown>;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await setGrnInvoiceSync(db, grn.id, {
@@ -278,29 +268,15 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
     return { skipped: true, result };
   }
 
-  // 202 dari Sales: tunggu webhook — sweeper/recover akan pull-reconcile atau preferSync.
+  // Legacy 202 / pending — treat as FAILED (P0: no PENDING happy path).
   if (result.pending || (result.async && result.salesJobId)) {
-    const attempts = (Number((grn as { invoiceSyncAttempts?: number }).invoiceSyncAttempts) || 0) + 1;
-    if (preferSync || attempts >= GRN_INVOICE_MAX_SOFT_ATTEMPTS) {
-      await setGrnInvoiceSync(db, grn.id, {
-        invoiceSyncStatus: 'FAILED',
-        invoiceSyncError: preferSync
-          ? `Sales masih mengantri faktur (job ${result.salesJobId || '—'}). Cek integration-worker sales, lalu Buat faktur.`
-          : `Faktur belum selesai setelah ${attempts} percobaan — klik Buat faktur atau cek sales.app worker/webhook`,
-        salesJobId: result.salesJobId || null,
-        invoiceSyncAttempts: attempts,
-        invoiceSyncAt: new Date(),
-      });
-      return { ok: false, pending: true, failed: true, attempts, result };
-    }
     await setGrnInvoiceSync(db, grn.id, {
-      invoiceSyncStatus: 'PENDING',
-      invoiceSyncError: null,
+      invoiceSyncStatus: 'FAILED',
+      invoiceSyncError: `Sales mengembalikan async/pending (tidak diizinkan Category A). Job ${result.salesJobId || '—'}. Klik Buat faktur.`,
       salesJobId: result.salesJobId || null,
-      invoiceSyncAttempts: attempts,
       invoiceSyncAt: new Date(),
     });
-    return { ok: true, pending: true, attempts, result };
+    return { ok: false, pending: true, failed: true, result };
   }
 
   const patch: Record<string, unknown> = {

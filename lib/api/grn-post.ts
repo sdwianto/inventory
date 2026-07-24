@@ -1,12 +1,11 @@
-// Orkestrasi posting GRN — stok sync, CPO sync, invoice async.
+// Orkestrasi posting GRN — stok sync; faktur Category A sync via IntegrationClient.
 
 import type { Db } from 'mongodb';
 import { applyGrnStockPosting } from '@/lib/api/grn-post-stock';
 import type { GrnDoc as StockGrnDoc } from '@/types/documents';
 import { enrichGrnDoc } from '@/lib/api/grn-enrich';
 import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
-import { enqueueJob, JOB_TYPES, scheduleJobProcessing, processJobById } from '@/lib/api/bg-jobs';
-import { shouldProcessGrnJobInline } from '@/lib/api/execution-inline-grn';
+import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
 import { shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { warehouseLabel } from '@/lib/api/warehouses';
@@ -41,18 +40,16 @@ export async function postGoodsReceipt(
   db: Db,
   { grn, tenantId, body, asyncInvoice = true }: PostGoodsReceiptParams,
 ): Promise<Record<string, unknown> & { error?: string }> {
+  // P0: asyncInvoice diabaikan — Category A selalu sync SUCCESS|FAILED (bukan PENDING).
+  void asyncInvoice;
   const salesApiKey = await getSalesApiKeyForVendor(
     db,
     tenantId,
     grn.vendorTenantId ? String(grn.vendorTenantId) : undefined,
   );
   const canSyncInvoice = !!(salesApiKey && (grn.noDO || grn.vendorDeliveryId));
-  // VPS: sync faktur in-request (Sales sync-first) agar DONE sebelum response POST.
-  // Opt-out: GRN_INVOICE_ASYNC=1. Vercel: jangan block lambda kecuali asyncInvoice=false.
-  const forceVpsInline = !shouldUseLegacyBgPoll()
-    && process.env.GRN_INVOICE_ASYNC !== '1'
-    && !process.env.VERCEL;
-  const syncInvoiceInline = (asyncInvoice === false || forceVpsInline) && !process.env.VERCEL;
+  // P0: selalu inline CreateInvoice via IntegrationClient. Job hanya recovery setelah FAILED.
+  const syncInvoiceInline = canSyncInvoice;
 
   const priorStatus = String(grn.status || 'DRAFT');
   let txResult: { lokasiSet: Set<string>; invoicePatch: Record<string, unknown> } | { error: string };
@@ -90,7 +87,7 @@ export async function postGoodsReceipt(
     };
 
     if (canSyncInvoice) {
-      invoicePatch.invoiceSyncStatus = syncInvoiceInline ? 'SYNCING' : 'PENDING';
+      invoicePatch.invoiceSyncStatus = 'SYNCING';
     } else if (!salesApiKey) {
       invoicePatch.invoiceSyncStatus = 'SKIPPED';
       invoicePatch.invoiceSyncError = 'not_paired';
@@ -173,9 +170,10 @@ export async function postGoodsReceipt(
   const posted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
   if (!posted) return { error: 'GRN tidak ditemukan setelah posting' };
 
-  // Inline = jalankan sekali sekarang; async = enqueue job. Jangan keduanya (double qtyReceived).
+  // Side-effects stok/CPO: inline di VPS; enqueue di legacy/Vercel. Terpisah dari CreateInvoice.
   let sideEffectsJobId: string | null = null;
-  if (syncInvoiceInline) {
+  const runSideEffectsInline = !shouldUseLegacyBgPoll() && !process.env.VERCEL;
+  if (runSideEffectsInline) {
     try {
       await runGrnPostSideEffects(db, tenantId, grn.id);
     } catch (e) {
@@ -196,66 +194,7 @@ export async function postGoodsReceipt(
   let invoiceSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;
 
-  if (canSyncInvoice && !syncInvoiceInline) {
-    const enq = await enqueueJob(db, {
-      type: JOB_TYPES.GRN_INVOICE_SYNC,
-      tenantId,
-      grnId: grn.id,
-      payload: { noGRN: grn.noGRN, noDO: grn.noDO },
-    });
-    jobId = enq.jobId;
-    scheduleJobProcessing(db);
-
-    if (shouldProcessGrnJobInline()) {
-      const jobOutcome = await processJobById(db, enq.jobId);
-      scheduleJobProcessing(db);
-      const refreshedPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
-      if (refreshedPosted) Object.assign(posted, refreshedPosted);
-      const finalStatus = posted.invoiceSyncStatus || 'PENDING';
-      if (jobOutcome && 'error' in jobOutcome && jobOutcome.error) {
-        invoiceSync = {
-          async: false,
-          jobId,
-          status: finalStatus,
-          error: jobOutcome.error,
-        };
-      } else {
-        invoiceSync = {
-          async: false,
-          jobId,
-          status: finalStatus,
-          noInvoice: posted.noInvoice,
-        };
-      }
-    } else if (!shouldUseLegacyBgPoll()) {
-      // VPS fallback: drain inventory tick in-request (asyncInvoice opt-out path).
-      try {
-        const { processExecutionJobs } = await import('@/lib/api/process-execution-jobs');
-        await processExecutionJobs(db, {
-          limit: 4,
-          domain: 'inventory',
-          workerId: 'grn-post-invoice-drain',
-          capabilities: ['SYNC', 'CPU_BATCH'],
-        });
-        const refreshedPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
-        if (refreshedPosted) Object.assign(posted, refreshedPosted);
-      } catch {
-        /* worker Redis tetap jalur cadangan */
-      }
-      invoiceSync = {
-        async: posted.invoiceSyncStatus !== 'DONE',
-        jobId,
-        status: posted.invoiceSyncStatus || 'PENDING',
-        noInvoice: posted.noInvoice,
-      };
-    } else {
-      invoiceSync = {
-        async: true,
-        jobId,
-        status: posted.invoiceSyncStatus || 'PENDING',
-      };
-    }
-  } else if (canSyncInvoice && syncInvoiceInline) {
+  if (canSyncInvoice && syncInvoiceInline) {
     const { notifyGrnPostedToSales } = await import('@/lib/api/grn-notify-sales');
     try {
       invoiceSync = await notifyGrnPostedToSales(db, tenantId, posted) as Record<string, unknown>;
@@ -269,6 +208,7 @@ export async function postGoodsReceipt(
     if ('error' in invoiceSync && invoiceSync.error) {
       patch.invoiceSyncStatus = 'FAILED';
       patch.invoiceSyncError = invoiceSync.error;
+      // Recovery after commit — tidak menentukan SUCCESS bisnis (status tetap FAILED sampai sync OK).
       const enq = await enqueueJob(db, {
         type: JOB_TYPES.GRN_INVOICE_SYNC,
         tenantId,
@@ -277,32 +217,18 @@ export async function postGoodsReceipt(
       });
       jobId = enq.jobId;
       scheduleJobProcessing(db);
-      if (shouldProcessGrnJobInline()) {
-        const retryOutcome = await processJobById(db, enq.jobId);
-        scheduleJobProcessing(db);
-        const retryPosted = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
-        if (retryPosted) Object.assign(posted, retryPosted);
-        invoiceSync = {
-          ...invoiceSync,
-          async: false,
-          jobId: enq.jobId,
-          status: posted.invoiceSyncStatus || (retryOutcome && 'error' in retryOutcome ? 'FAILED' : 'PENDING'),
-          error: retryOutcome && 'error' in retryOutcome ? retryOutcome.error : invoiceSync.error,
-        };
-      } else {
-        invoiceSync = {
-          ...invoiceSync,
-          async: true,
-          jobId: enq.jobId,
-          status: 'PENDING',
-        };
-      }
+      invoiceSync = {
+        ...invoiceSync,
+        async: false,
+        jobId: enq.jobId,
+        status: 'FAILED',
+      };
     } else if (invoiceSync.skipped) {
       patch.invoiceSyncStatus = 'SKIPPED';
       patch.invoiceSyncError = invoiceSync.reason || null;
     } else if (invoiceSync.pending || (invoiceSync.async && invoiceSync.salesJobId)) {
-      patch.invoiceSyncStatus = 'PENDING';
-      patch.invoiceSyncError = null;
+      patch.invoiceSyncStatus = 'FAILED';
+      patch.invoiceSyncError = `Sales mengantri faktur (async) — tidak diizinkan Category A. Job ${invoiceSync.salesJobId || '—'}`;
       patch.invoiceSyncAt = new Date();
       if (invoiceSync.salesJobId) patch.salesJobId = invoiceSync.salesJobId;
     } else {
@@ -329,37 +255,61 @@ export async function postGoodsReceipt(
   };
 }
 
+/** Buat faktur — sync Category A (IntegrationClient). SUCCESS|FAILED ke user, bukan PENDING. */
 export async function replayGrnInvoiceAsync(
   db: Db,
   { grn, tenantId }: ReplayGrnInvoiceParams,
 ): Promise<Record<string, unknown>> {
   await db.collection('goods_receipts').updateOne(
     { id: grn.id },
-    { $set: { invoiceSyncStatus: 'PENDING', invoiceSyncError: null } },
+    { $set: { invoiceSyncStatus: 'SYNCING', invoiceSyncError: null } },
   );
-  const enq = await enqueueJob(db, {
-    type: JOB_TYPES.GRN_INVOICE_SYNC,
-    tenantId,
-    grnId: grn.id,
-    payload: { replay: true },
-  });
-  scheduleJobProcessing(db);
 
-  if (shouldProcessGrnJobInline()) {
-    await processJobById(db, enq.jobId);
-    scheduleJobProcessing(db);
+  const { notifyGrnPostedToSales } = await import('@/lib/api/grn-notify-sales');
+  let invoiceSync: Record<string, unknown>;
+  try {
+    invoiceSync = await notifyGrnPostedToSales(db, tenantId, grn as Record<string, unknown>, {
+      preferSync: true,
+    }) as Record<string, unknown>;
+  } catch (e) {
+    invoiceSync = { error: e instanceof Error ? e.message : String(e) };
   }
 
+  const patch: Record<string, unknown> = { invoiceSyncAt: new Date() };
+  if ('error' in invoiceSync && invoiceSync.error) {
+    patch.invoiceSyncStatus = 'FAILED';
+    patch.invoiceSyncError = invoiceSync.error;
+    const enq = await enqueueJob(db, {
+      type: JOB_TYPES.GRN_INVOICE_SYNC,
+      tenantId,
+      grnId: grn.id,
+      payload: { replay: true, retryAfterInline: true },
+    });
+    scheduleJobProcessing(db);
+    invoiceSync = { ...invoiceSync, async: false, jobId: enq.jobId, status: 'FAILED' };
+  } else if (invoiceSync.skipped) {
+    patch.invoiceSyncStatus = 'SKIPPED';
+    patch.invoiceSyncError = invoiceSync.reason || null;
+  } else {
+    patch.invoiceSyncStatus = 'DONE';
+    patch.invoiceSyncError = null;
+    if (invoiceSync.noInvoice) patch.noInvoice = invoiceSync.noInvoice;
+    if (invoiceSync.invoiceId) patch.vendorInvoiceId = invoiceSync.invoiceId;
+    const hutang = invoiceSync.hutang as Record<string, unknown> | undefined;
+    if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
+  }
+
+  await db.collection('goods_receipts').updateOne({ id: grn.id }, { $set: patch });
   const refreshed = await db.collection('goods_receipts').findOne({ id: grn.id }) as GrnDoc | null;
   const enriched = await enrichGrnDoc(db, refreshed);
   return {
     ...enriched,
     invoiceSync: {
-      async: !shouldProcessGrnJobInline(),
-      jobId: enq.jobId,
-      status: refreshed?.invoiceSyncStatus || 'PENDING',
-      noInvoice: refreshed?.noInvoice,
-      error: refreshed?.invoiceSyncError,
+      async: false,
+      status: refreshed?.invoiceSyncStatus || patch.invoiceSyncStatus,
+      noInvoice: refreshed?.noInvoice || patch.noInvoice,
+      error: refreshed?.invoiceSyncError || patch.invoiceSyncError,
+      ...(typeof invoiceSync.jobId === 'string' ? { jobId: invoiceSync.jobId } : {}),
     },
   };
 }
