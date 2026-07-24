@@ -9,6 +9,11 @@ const PUBLIC = [
   { method: 'POST', route: '/webhooks/sales' },
   { method: 'POST', route: '/integrations/pair' },
   { method: 'POST', route: '/integrations/platform-pair' },
+  // Category A inbound dari Sales — auth via X-Webhook-Secret di handler.
+  { method: 'POST', route: '/integrations/delivery-shipped' },
+  { method: 'POST', route: '/integrations/invoice-posted' },
+  { method: 'POST', route: '/v1/integrations/delivery-shipped' },
+  { method: 'POST', route: '/v1/integrations/invoice-posted' },
 ] as const;
 
 export function isPublicRoute(method: string, route: string): boolean {

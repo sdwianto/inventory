@@ -93,16 +93,31 @@ export function apiKeyRouteDenied(
   return Boolean(isApiKey) && routeRootSegment(route) !== 'fp-public';
 }
 
+/** Strip /v1 prefix so /api/v1/integrations/* hits same handlers as /api/integrations/*. */
+export function normalizeApiRoute(route: string): string {
+  const r = String(route || '');
+  if (r === '/v1' || r.startsWith('/v1/')) {
+    const rest = r.slice(3) || '/';
+    return rest.startsWith('/') ? rest : `/${rest}`;
+  }
+  return r;
+}
+
 export async function dispatchRoute(ctx: HandlerContext): Promise<NextResponse | null> {
-  if (apiKeyRouteDenied(ctx.auth?.isApiKey, ctx.route)) {
+  const normalizedRoute = normalizeApiRoute(ctx.route);
+  const normalizedCtx = normalizedRoute === ctx.route
+    ? ctx
+    : { ...ctx, route: normalizedRoute, path: normalizedRoute.split('/').filter(Boolean) };
+
+  if (apiKeyRouteDenied(normalizedCtx.auth?.isApiKey, normalizedCtx.route)) {
     const { err } = await import('@/lib/api/db');
     return err('API key hanya diizinkan pada /api/fp-public/*', 403);
   }
-  const seg = routeRootSegment(ctx.route);
+  const seg = routeRootSegment(normalizedCtx.route);
   const loader = HANDLER_LOADERS[seg];
   if (!loader) return null;
   const handler = await loader();
-  return handler(ctx);
+  return handler(normalizedCtx);
 }
 
 /** @deprecated */

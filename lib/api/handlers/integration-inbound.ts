@@ -28,6 +28,13 @@ export async function handleIntegrationInbound({
       || '',
     ).trim();
 
+    // Contract Spec Category A (P2): headers wajib.
+    const idemKey = String(request.headers.get('idempotency-key') || '').trim();
+    const correlationId = String(request.headers.get('x-correlation-id') || '').trim();
+    if (!idemKey || !correlationId) {
+      return err('Idempotency-Key dan X-Correlation-Id wajib untuk Category A (delivery-shipped)', 400);
+    }
+
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
@@ -39,7 +46,7 @@ export async function handleIntegrationInbound({
 
     const vid = vendorTenantId || v.vendorTenantId || '';
 
-    const existing = payload.deliveryId
+    const existingBefore = payload.deliveryId
       ? await db.collection('goods_receipts').findOne({
         tenantId: customerTenantId,
         vendorDeliveryId: payload.deliveryId,
@@ -47,17 +54,32 @@ export async function handleIntegrationInbound({
       : null;
 
     const grn = await createGrnFromDelivery(db, customerTenantId, payload, vid || null);
+    const existingAfter = payload.deliveryId
+      ? await db.collection('goods_receipts').findOne({
+        tenantId: customerTenantId,
+        vendorDeliveryId: String(payload.deliveryId),
+      })
+      : null;
+    const created = !existingBefore && !!grn?.id;
     const cpoSync = await syncCpoFromVendorEvent(db, customerTenantId, 'delivery.shipped', {
       ...payload,
       vendorTenantId: vid,
     });
     await invalidateDashboardSnapshot(db, customerTenantId);
 
+    // Contract Spec P2: minimum fields + backward-compat.
     return ok(clean({
       ...grn,
       grnId: grn.id,
       noGRN: grn.noGRN,
-      created: !existing,
+      status: grn.status,
+      created,
+      existing: !!existingBefore || (!!existingAfter && !created),
+      vendorTenantId: vid || null,
+      customerTenantId,
+      deliveryId: payload.deliveryId,
+      correlationId,
+      idempotencyKey: idemKey,
       cpoSync,
     }));
   }
