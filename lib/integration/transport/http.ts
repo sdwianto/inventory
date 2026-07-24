@@ -1,4 +1,4 @@
-import { withBulkhead } from '@/lib/integration/bulkhead';
+import { withBulkhead, type BulkheadPool } from '@/lib/integration/bulkhead';
 import { withCircuitBreaker } from '@/lib/integration/circuit-breaker';
 import { IntegrationError, classifyHttpStatus } from '@/lib/integration/errors';
 import type { IntegrationTransport, TransportRequest, TransportResponse } from '@/lib/integration/transport/types';
@@ -70,7 +70,7 @@ export class HttpTransport implements IntegrationTransport {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await withBulkhead(req.pool, () =>
+        return await withBulkhead(req.pool as BulkheadPool, () =>
           withCircuitBreaker(circuitName, async () => {
             const res = await rawFetch(req);
             // Trip CB on server/unavailable — validation 4xx tidak membuka circuit.

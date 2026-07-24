@@ -4,6 +4,7 @@ import { finishIntegrationCommand, startIntegrationCommand } from '@/lib/integra
 import { IntegrationError } from '@/lib/integration/errors';
 import { defaultHttpTransport, throwIfHttpFailed } from '@/lib/integration/transport/http';
 import type { IntegrationTransport } from '@/lib/integration/transport/types';
+import { createIntegrationGateway, IntegrationGateway } from '@sdwianto/integration';
 import { buildTraceHttpHeaders } from '@/lib/execution/tracing/trace-context';
 
 export type CreateInvoiceFromGrnInput = {
@@ -549,6 +550,11 @@ export class IntegrationClient {
   }
 }
 
+/** Inject FakeTransport or HttpTransport — Gateway wraps without changing domain methods. */
 export function createIntegrationClient(db: Db, transport?: IntegrationTransport): IntegrationClient {
-  return new IntegrationClient(db, transport);
+  const underlying = transport ?? defaultHttpTransport;
+  const gated = underlying instanceof IntegrationGateway
+    ? underlying
+    : createIntegrationGateway(underlying);
+  return new IntegrationClient(db, gated);
 }

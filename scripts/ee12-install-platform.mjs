@@ -31,14 +31,17 @@ const CONTRACTS_PKG = join(VENDOR_SALES, 'packages/contracts');
 const EVENTS_PKG = join(VENDOR_SALES, 'packages/events');
 const METRICS_PKG = join(VENDOR_SALES, 'packages/metrics');
 const PLATFORM_PKG = join(VENDOR_SALES, 'packages/platform');
+const INTEGRATION_PKG = join(VENDOR_SALES, 'packages/integration');
 const NM_CONTRACTS = join(ROOT, 'node_modules/@sdwianto/contracts');
 const NM_EVENTS = join(ROOT, 'node_modules/@sdwianto/events');
 const NM_METRICS = join(ROOT, 'node_modules/@sdwianto/metrics');
 const NM_PLATFORM = join(ROOT, 'node_modules/@sdwianto/platform');
+const NM_INTEGRATION = join(ROOT, 'node_modules/@sdwianto/integration');
 const CONTRACTS_VERSION = '1.0.0';
 const EVENTS_VERSION = '1.0.1';
 const METRICS_VERSION = '1.0.0';
 const PLATFORM_VERSION = '1.0.4';
+const INTEGRATION_VERSION = '1.0.0';
 const REGISTRY = 'https://npm.pkg.github.com';
 
 const DIST_CANDIDATES = [
@@ -77,10 +80,12 @@ function packagesReady() {
       && existsSync(join(EVENTS_PKG, 'package.json'))
       && existsSync(join(METRICS_PKG, 'package.json'))
       && existsSync(join(PLATFORM_PKG, 'package.json'))
+      && existsSync(join(INTEGRATION_PKG, 'package.json'))
       && existsSync(join(CONTRACTS_PKG, 'src/index.ts'))
       && existsSync(join(EVENTS_PKG, 'src/publisher.ts'))
       && existsSync(join(METRICS_PKG, 'src/prometheus.ts'))
-      && existsSync(join(PLATFORM_PKG, 'src/queue/enqueue.ts'));
+      && existsSync(join(PLATFORM_PKG, 'src/queue/enqueue.ts'))
+      && existsSync(join(INTEGRATION_PKG, 'src/index.ts'));
   } catch {
     return false;
   }
@@ -91,12 +96,14 @@ function nodeModulesLinksOk() {
   if (!existsSync(join(NM_EVENTS, 'package.json'))) return false;
   if (!existsSync(join(NM_METRICS, 'package.json'))) return false;
   if (!existsSync(join(NM_PLATFORM, 'package.json'))) return false;
+  if (!existsSync(join(NM_INTEGRATION, 'package.json'))) return false;
   if (!packagesReady()) return false;
   try {
     return realpathSync(NM_CONTRACTS) === realpathSync(CONTRACTS_PKG)
       && realpathSync(NM_EVENTS) === realpathSync(EVENTS_PKG)
       && realpathSync(NM_METRICS) === realpathSync(METRICS_PKG)
-      && realpathSync(NM_PLATFORM) === realpathSync(PLATFORM_PKG);
+      && realpathSync(NM_PLATFORM) === realpathSync(PLATFORM_PKG)
+      && realpathSync(NM_INTEGRATION) === realpathSync(INTEGRATION_PKG);
   } catch {
     return false;
   }
@@ -105,10 +112,11 @@ function nodeModulesLinksOk() {
 function assertPackagesReadyOrExit() {
   if (packagesReady()) return;
   console.error('[ee12-install] _vendor packages not ready:');
-  console.error(`  contracts → ${CONTRACTS_PKG}`);
-  console.error(`  events    → ${EVENTS_PKG}`);
-  console.error(`  metrics   → ${METRICS_PKG}`);
-  console.error(`  platform  → ${PLATFORM_PKG}`);
+  console.error(`  contracts   → ${CONTRACTS_PKG}`);
+  console.error(`  events      → ${EVENTS_PKG}`);
+  console.error(`  metrics     → ${METRICS_PKG}`);
+  console.error(`  platform    → ${PLATFORM_PKG}`);
+  console.error(`  integration → ${INTEGRATION_PKG}`);
   console.error('  Local: ensure ../../sales/sales/packages exists');
   console.error('  CI:    checkout sales to _vendor/sales && npm run ee12:pack');
   process.exit(1);
@@ -119,6 +127,7 @@ function ensureLocalPackageCopies() {
   const localEvents = join(LOCAL_SALES, 'packages/events');
   const localMetrics = join(LOCAL_SALES, 'packages/metrics');
   const localPlatform = join(LOCAL_SALES, 'packages/platform');
+  const localIntegration = join(LOCAL_SALES, 'packages/integration');
   if (!existsSync(join(localContracts, 'package.json'))) return false;
 
   mkdirSync(join(VENDOR_SALES, 'packages'), { recursive: true });
@@ -126,6 +135,9 @@ function ensureLocalPackageCopies() {
   syncDir(EVENTS_PKG, localEvents);
   syncDir(METRICS_PKG, localMetrics);
   syncDir(PLATFORM_PKG, localPlatform);
+  if (existsSync(join(localIntegration, 'package.json'))) {
+    syncDir(INTEGRATION_PKG, localIntegration);
+  }
   console.info('[ee12-install] _vendor/sales/packages/* copied from Sales monorepo');
   return packagesReady();
 }
@@ -251,6 +263,7 @@ function ensureNodeModulesSdwianto() {
   linkDir(NM_EVENTS, EVENTS_PKG);
   linkDir(NM_METRICS, METRICS_PKG);
   linkDir(NM_PLATFORM, PLATFORM_PKG);
+  linkDir(NM_INTEGRATION, INTEGRATION_PKG);
 }
 
 function resolveVendorPackages() {
