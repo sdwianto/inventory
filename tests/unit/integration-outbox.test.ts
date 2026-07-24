@@ -100,6 +100,22 @@ describe('integration-outbox H1.1', () => {
     expect(c2).toBeNull();
   });
 
+  it('exports ENSURE_CREATE_SO for H1.3 (Sales Order, not Supplier Order)', async () => {
+    const { INTEGRATION_OUTBOX_TYPES: types, insertEnsureCreateSoOutbox } = await import(
+      '@/lib/api/integration-outbox'
+    );
+    expect(types.ENSURE_CREATE_SO).toBe('ENSURE_CREATE_SO');
+    const col = memoryCollection();
+    const db = { collection: () => col } as never;
+    const a = await insertEnsureCreateSoOutbox(db, {
+      tenantId: 'sppg',
+      poId: 'po-1',
+      noPO: 'PO-1',
+    });
+    expect(a.inserted).toBe(true);
+    expect(col.docs[0].type).toBe('ENSURE_CREATE_SO');
+  });
+
   it('applyGrnInvoiceNotifyResult marks FAILED without invoice', async () => {
     const grns: Record<string, unknown>[] = [{ id: 'g1' }];
     const db = {

@@ -17,6 +17,40 @@ export async function runPoVendorSyncPending(
   scopeAuth: AuthContext | null | undefined,
   { poId, vendorTenantId }: { poId?: string; vendorTenantId?: string } = {},
 ) {
+  // H1.3: targeted poId without vendorTenantId → drain ENSURE_CREATE_SO outbox.
+  if (poId && !vendorTenantId) {
+    const filter = withTenantFilter(scopeAuth, { id: String(poId) });
+    const po = await db.collection('customer_purchase_orders').findOne(filter);
+    if (!po) return { attempted: 0, synced: [], failed: [{ id: poId, error: 'PO tidak ditemukan' }] };
+    const { drainEnsureCreateSo } = await import('@/lib/api/integration-outbox');
+    const drained = await drainEnsureCreateSo(db, {
+      tenantId: String(po.tenantId || 'default'),
+      poId: String(po.id),
+      approverSnap: po.approvedBy,
+    });
+    if (drained.ok && !drained.partialFailures?.length) {
+      return {
+        attempted: 1,
+        synced: [{
+          id: po.id,
+          noPO: po.noPO,
+          vendorNoSO: drained.vendorNoSO || po.vendorNoSO,
+          outboxId: drained.outboxId,
+        }],
+        failed: [],
+      };
+    }
+    if (drained.ok && drained.partialFailures?.length) {
+      // Fall through to legacy retry for remaining vendors.
+    } else if (!drained.ok) {
+      return {
+        attempted: 1,
+        synced: [],
+        failed: [{ id: po.id, noPO: po.noPO, error: drained.error, outboxId: drained.outboxId }],
+      };
+    }
+  }
+
   // Retry satu vendor gagal — hanya di worker, bukan di HTTP request UI.
   if (poId && vendorTenantId) {
     const filter = withTenantFilter(scopeAuth, { id: String(poId) });

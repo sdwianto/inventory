@@ -10,9 +10,11 @@ import { logger } from '@/lib/api/logger';
 
 export const INTEGRATION_OUTBOX_COLLECTION = 'integration_outbox';
 
-/** Locked type names — ENSURE_GRN_INVOICE = pastikan faktur Sales dari GRN POSTED. */
+/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_CREATE_SO (Sales Order from Customer PO, bukan Supplier Order). */
 export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_GRN_INVOICE: 'ENSURE_GRN_INVOICE',
+  /** Customer PO APPROVED → Sales Order di Sales app. */
+  ENSURE_CREATE_SO: 'ENSURE_CREATE_SO',
 } as const;
 
 export type IntegrationOutboxType =
@@ -393,3 +395,233 @@ export async function listPendingGrnInvoiceOutbox(
     status: String(r.status),
   }));
 }
+
+// ─── H1.3 ENSURE_CREATE_SO (Customer PO → Sales Order di Sales app) ───────────
+
+export async function insertEnsureCreateSoOutbox(
+  db: Db,
+  input: {
+    tenantId: string;
+    poId: string;
+    noPO?: string | null;
+    correlationId?: string | null;
+  },
+  session?: ClientSession,
+): Promise<{ inserted: boolean; id: string }> {
+  const now = new Date();
+  const id = randomUUID();
+  const doc: IntegrationOutboxDoc = {
+    id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+    aggregateId: input.poId,
+    tenantId: input.tenantId,
+    payload: {
+      poId: input.poId,
+      noPO: input.noPO || null,
+    },
+    status: 'PENDING',
+    attempts: 0,
+    lastError: null,
+    correlationId: input.correlationId || null,
+    createdAt: now,
+    updatedAt: now,
+    processedAt: null,
+  };
+  try {
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).insertOne(doc, txOpts(session));
+    return { inserted: true, id };
+  } catch (e) {
+    const code = e && typeof e === 'object' && 'code' in e ? Number((e as { code: number }).code) : 0;
+    if (code === 11000) {
+      const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne(
+        { type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO, aggregateId: input.poId },
+        txOpts(session),
+      );
+      return { inserted: false, id: String(existing?.id || id) };
+    }
+    throw e;
+  }
+}
+
+export async function ensureCreateSoOutboxPending(
+  db: Db,
+  input: { tenantId: string; poId: string; noPO?: string | null },
+): Promise<void> {
+  const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+    aggregateId: input.poId,
+  });
+  if (!existing) {
+    await insertEnsureCreateSoOutbox(db, input);
+    return;
+  }
+  const status = String(existing.status || '');
+  if (status === 'DONE' || status === 'PROCESSING') return;
+  await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+    { id: existing.id, status: { $in: ['FAILED', 'PENDING'] } },
+    { $set: { status: 'PENDING', lastError: null, updatedAt: new Date() } },
+  );
+}
+
+async function claimEnsureCreateSoOutbox(
+  db: Db,
+  poId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - STALE_PROCESSING_MS);
+  const claimed = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOneAndUpdate(
+    {
+      type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+      aggregateId: poId,
+      $or: [
+        { status: 'PENDING' },
+        { status: 'FAILED' },
+        { status: 'PROCESSING', updatedAt: { $lt: staleBefore } },
+      ],
+    },
+    {
+      $set: { status: 'PROCESSING', updatedAt: now },
+      $inc: { attempts: 1 },
+    },
+    { returnDocument: 'after' },
+  );
+  return (claimed as IntegrationOutboxDoc | null) || null;
+}
+
+export async function getEnsureCreateSoOutbox(
+  db: Db,
+  poId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  return (await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+    aggregateId: poId,
+  })) as IntegrationOutboxDoc | null;
+}
+
+/**
+ * Drain ENSURE_CREATE_SO → Create Sales Order via pushPoToVendor.
+ * SO = Sales Order di Sales app (bukan Supplier Order).
+ */
+export async function drainEnsureCreateSo(
+  db: Db,
+  input: { tenantId: string; poId: string; approverSnap?: unknown },
+): Promise<{
+  ok: boolean;
+  error?: string;
+  outboxId: string | null;
+  alreadyDone: boolean;
+  vendorNoSO?: string | null;
+  vendorSoId?: string | null;
+  partialFailures?: unknown[];
+}> {
+  const existing = await getEnsureCreateSoOutbox(db, input.poId);
+  if (existing?.status === 'DONE') {
+    const po = await db.collection('customer_purchase_orders').findOne({ id: input.poId });
+    return {
+      ok: true,
+      outboxId: existing.id,
+      alreadyDone: true,
+      vendorNoSO: po?.vendorNoSO ? String(po.vendorNoSO) : null,
+      vendorSoId: po?.vendorSoId ? String(po.vendorSoId) : null,
+    };
+  }
+
+  await ensureCreateSoOutboxPending(db, {
+    tenantId: input.tenantId,
+    poId: input.poId,
+  });
+
+  const claimed = await claimEnsureCreateSoOutbox(db, input.poId);
+  if (!claimed) {
+    const again = await getEnsureCreateSoOutbox(db, input.poId);
+    if (again?.status === 'DONE') {
+      return { ok: true, outboxId: again.id, alreadyDone: true };
+    }
+    return {
+      ok: false,
+      error: again?.status === 'PROCESSING'
+        ? 'Outbox sedang diproses worker lain'
+        : 'Outbox tidak bisa diklaim',
+      outboxId: again?.id || null,
+      alreadyDone: false,
+    };
+  }
+
+  const po = await db.collection('customer_purchase_orders').findOne({ id: input.poId });
+  if (!po) {
+    await markOutboxFailed(db, claimed.id, 'PO tidak ditemukan');
+    return {
+      ok: false,
+      error: 'PO tidak ditemukan',
+      outboxId: claimed.id,
+      alreadyDone: false,
+    };
+  }
+
+  const { pushPoToVendor, finalizePoSubmission } = await import('@/lib/api/customer-po-push');
+  const pushed = await pushPoToVendor(db, po as Record<string, unknown>, input.tenantId);
+
+  if ('error' in pushed && pushed.error && !(pushed as { submissions?: unknown[] }).submissions?.length) {
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: input.poId },
+      {
+        $set: {
+          vendorSyncPending: false,
+          vendorSyncError: pushed.error,
+          vendorSyncAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+    );
+    await markOutboxFailed(db, claimed.id, String(pushed.error));
+    return {
+      ok: false,
+      error: String(pushed.error),
+      outboxId: claimed.id,
+      alreadyDone: false,
+    };
+  }
+
+  const submissions = (pushed as { submissions: unknown[] }).submissions || [];
+  const partialFailures = (pushed as { partialFailures?: unknown[] }).partialFailures || [];
+  const updated = await finalizePoSubmission(
+    db,
+    po as Record<string, unknown>,
+    submissions as import('@/types/json').JsonObject[],
+    (input.approverSnap || po.approvedBy || null) as Record<string, unknown> | null,
+    { partialFailures: partialFailures as import('@/types/json').JsonObject[] },
+  );
+
+  if (partialFailures.length && submissions.length === 0) {
+    await markOutboxFailed(db, claimed.id, 'partial CreateSO failure');
+    return {
+      ok: false,
+      error: 'partial CreateSO failure',
+      outboxId: claimed.id,
+      alreadyDone: false,
+      partialFailures,
+    };
+  }
+
+  await markOutboxDone(db, claimed.id, {
+    lastError: partialFailures.length ? 'partial CreateSO — recovery may retry' : null,
+  });
+  logger.info('integration_outbox_drained', {
+    tenantId: input.tenantId,
+    poId: input.poId,
+    outboxId: claimed.id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+    status: 'DONE',
+    attempts: claimed.attempts,
+  });
+
+  return {
+    ok: true,
+    outboxId: claimed.id,
+    alreadyDone: false,
+    vendorNoSO: updated?.vendorNoSO ? String(updated.vendorNoSO) : null,
+    vendorSoId: updated?.vendorSoId ? String(updated.vendorSoId) : null,
+    partialFailures: partialFailures.length ? partialFailures : undefined,
+  };
+}
+

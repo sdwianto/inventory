@@ -260,7 +260,13 @@ async function validatePoForApproval(db: Db, tenantId, items) {
   return enrichPoItemsForVendor(db, tenantId, items);
 }
 
-async function markPoApproved(db: Db, po, approverSnap, syncError) {
+async function markPoApproved(
+  db: Db,
+  po: Record<string, unknown>,
+  approverSnap: unknown,
+  syncError: unknown,
+  session?: import('mongodb').ClientSession,
+) {
   const now = new Date();
   const patch: Record<string, unknown> = {
     status: 'APPROVED',
@@ -272,36 +278,48 @@ async function markPoApproved(db: Db, po, approverSnap, syncError) {
     vendorSyncAt: now,
     vendorAutoSync: true,
   };
-  await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
-  return db.collection('customer_purchase_orders').findOne({ id: po.id });
+  const { txOpts } = await import('@/lib/api/transaction');
+  await db.collection('customer_purchase_orders').updateOne(
+    { id: po.id },
+    { $set: patch },
+    txOpts(session),
+  );
+  return db.collection('customer_purchase_orders').findOne({ id: po.id }, txOpts(session));
 }
 
 /**
- * P1 Category A: validasi → approve → sync CreateSO via IntegrationClient.
- * PO_VENDOR_SYNC hanya recovery jika sync gagal.
+ * P1 + H1.3: approve + ENSURE_CREATE_SO atomik → drain CreateSO.
+ * PO_VENDOR_SYNC hanya recovery jika drain gagal.
  */
 async function approvePoAndSyncVendor(db: Db, po: Record<string, unknown>, approverSnap: unknown) {
   const validation = await validatePoForApproval(db, String(po.tenantId || 'default'), po.items as JsonObject[]);
   if (validation.error) return { error: validation.error, status: 400 };
 
-  const approved = await markPoApproved(db, po, approverSnap, null);
-  const tenantId = String(approved?.tenantId || po.tenantId || 'default');
-  const { pushPoToVendor, finalizePoSubmission } = await import('@/lib/api/customer-po-push');
+  const { runInTransactionOrFallback } = await import('@/lib/api/transaction');
+  const { insertEnsureCreateSoOutbox, drainEnsureCreateSo } = await import('@/lib/api/integration-outbox');
 
-  const pushed = await pushPoToVendor(db, (approved || po) as Record<string, unknown>, tenantId);
-  if ('error' in pushed && pushed.error && !(pushed as { submissions?: unknown[] }).submissions?.length) {
-    // P1: sync FAILED — bukan PENDING happy path. PO_VENDOR_SYNC = recovery only.
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
+  const approved = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+    const row = await markPoApproved(txDb, po, approverSnap, null, session);
+    await insertEnsureCreateSoOutbox(
+      txDb,
       {
-        $set: {
-          vendorSyncPending: false,
-          vendorSyncError: pushed.error,
-          vendorSyncAt: new Date(),
-          updatedAt: new Date(),
-        },
+        tenantId: String(row?.tenantId || po.tenantId || 'default'),
+        poId: String(po.id),
+        noPO: po.noPO ? String(po.noPO) : null,
       },
+      session,
     );
+    return row;
+  });
+
+  const tenantId = String(approved?.tenantId || po.tenantId || 'default');
+  const drained = await drainEnsureCreateSo(db, {
+    tenantId,
+    poId: String(po.id),
+    approverSnap,
+  });
+
+  if (!drained.ok) {
     const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, {
       poId: String(approved?.id || po.id),
     });
@@ -310,101 +328,96 @@ async function approvePoAndSyncVendor(db: Db, po: Record<string, unknown>, appro
       po: row || approved,
       vendorSynced: false,
       vendorSyncPending: false,
-      vendorSyncError: pushed.error,
+      vendorSyncError: drained.error,
       vendorSyncJobId: jobId,
       async: false,
       reused,
-      error: pushed.error,
+      error: drained.error,
+      outboxId: drained.outboxId,
     };
   }
 
-  const submissions = (pushed as { submissions: JsonObject[] }).submissions || [];
-  const partialFailures = (pushed as { partialFailures?: JsonObject[] }).partialFailures || [];
-  const updated = await finalizePoSubmission(
-    db,
-    (approved || po) as Record<string, unknown>,
-    submissions,
-    approverSnap as Record<string, unknown> | null,
-    { partialFailures },
-  );
-
-  if (partialFailures.length) {
+  const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+  if (drained.partialFailures?.length) {
     const { jobId } = await enqueueAndKickPoVendorSync(db, tenantId, {
-      poId: String(updated?.id || po.id),
+      poId: String(row?.id || po.id),
     });
     return {
-      po: updated,
-      vendorSynced: submissions.length > 0,
+      po: row || approved,
+      vendorSynced: Boolean(drained.vendorNoSO || drained.vendorSoId),
       vendorSyncPending: true,
-      vendorNoSO: updated?.vendorNoSO,
+      vendorNoSO: drained.vendorNoSO || row?.vendorNoSO,
       vendorSyncJobId: jobId,
       async: false,
-      partialFailures,
+      partialFailures: drained.partialFailures,
+      outboxId: drained.outboxId,
     };
   }
 
   return {
-    po: updated,
+    po: row || approved,
     vendorSynced: true,
     vendorSyncPending: false,
-    vendorNoSO: updated?.vendorNoSO,
-    vendorSoId: updated?.vendorSoId,
+    vendorNoSO: drained.vendorNoSO || row?.vendorNoSO,
+    vendorSoId: drained.vendorSoId || row?.vendorSoId,
     async: false,
+    outboxId: drained.outboxId,
   };
 }
 
 /**
- * Retry CreateSO sync (P1). Happy path = sync; job hanya jika sync gagal (recovery).
+ * Retry CreateSO sync (P1 + H1.3). Drain outbox; job hanya jika drain gagal (recovery).
  */
 async function syncApprovedPoToVendor(db: Db, po: Record<string, unknown>) {
   const tenantId = String(po.tenantId || 'default');
-  const { pushPoToVendor, finalizePoSubmission } = await import('@/lib/api/customer-po-push');
-  const pushed = await pushPoToVendor(db, po, tenantId);
+  const { drainEnsureCreateSo } = await import('@/lib/api/integration-outbox');
+  const drained = await drainEnsureCreateSo(db, {
+    tenantId,
+    poId: String(po.id),
+    approverSnap: po.approvedBy,
+  });
 
-  if ('error' in pushed && pushed.error && !(pushed as { submissions?: unknown[] }).submissions?.length) {
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
-      {
-        $set: {
-          vendorSyncPending: false,
-          vendorSyncError: pushed.error,
-          vendorSyncAt: new Date(),
-          updatedAt: new Date(),
-        },
-      },
-    );
+  if (!drained.ok) {
     const { jobId, reused } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
     const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
     const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
     return {
-      ...enriched,
+      po: enriched,
       vendorSynced: false,
       vendorSyncPending: false,
-      vendorSyncError: pushed.error,
+      vendorSyncError: drained.error,
       vendorSyncJobId: jobId,
       async: false,
       reused,
+      error: drained.error,
+      outboxId: drained.outboxId,
     };
   }
 
-  const submissions = (pushed as { submissions: JsonObject[] }).submissions || [];
-  const partialFailures = (pushed as { partialFailures?: JsonObject[] }).partialFailures || [];
-  const updated = await finalizePoSubmission(db, po, submissions, null, { partialFailures });
-  let jobId: string | null = null;
-  if (partialFailures.length) {
-    ({ jobId } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) }));
+  const row = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+  const enriched = await enrichOnePo(db, row || po, { skipSalesBackfill: true });
+  if (drained.partialFailures?.length) {
+    const { jobId } = await enqueueAndKickPoVendorSync(db, tenantId, { poId: String(po.id) });
+    return {
+      po: enriched,
+      vendorSynced: Boolean(drained.vendorNoSO || drained.vendorSoId),
+      vendorSyncPending: true,
+      vendorNoSO: drained.vendorNoSO || enriched?.vendorNoSO,
+      vendorSyncJobId: jobId,
+      async: false,
+      partialFailures: drained.partialFailures,
+      outboxId: drained.outboxId,
+    };
   }
-  const enriched = await enrichOnePo(db, updated, { skipSalesBackfill: true });
+
   return {
-    ...enriched,
-    vendorSynced: submissions.length > 0 && !partialFailures.length,
-    vendorSyncPending: partialFailures.length > 0,
-    vendorSyncError: partialFailures.length
-      ? partialFailures.map((f) => `${f.vendorTenantId}: ${f.error}`).join('; ')
-      : null,
-    vendorSyncJobId: jobId,
-    vendorNoSO: updated?.vendorNoSO,
+    po: enriched,
+    vendorSynced: true,
+    vendorSyncPending: false,
+    vendorNoSO: drained.vendorNoSO || enriched?.vendorNoSO,
+    vendorSoId: drained.vendorSoId || enriched?.vendorSoId,
     async: false,
+    outboxId: drained.outboxId,
   };
 }
 
