@@ -1,9 +1,11 @@
-/** Lookup status SO di sales.app — dipisah agar tidak circular import. */
+/** Lookup status SO di sales.app — via IntegrationClient (P3 FP CPO bridge). */
 
 import type { Db } from 'mongodb';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
-import { salesFetchErrorMessage } from '@/lib/api/integration-common';
+import { integrationCorrelationId } from '@/lib/api/integration-common';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
 import type { JsonObject } from '@/types/json';
 
 export async function fetchSoStatusForCustomerPo(
@@ -18,30 +20,30 @@ export async function fetchSoStatusForCustomerPo(
     : await getSalesApiKeyForVendor(db, tenantId);
   if (!apiKey) return { error: 'Belum terhubung ke sales.app' };
 
-  const qs = new URLSearchParams({
-    customerTenantId: tenantId,
-    ...(params.customerPoId ? { customerPoId: params.customerPoId } : {}),
-    ...(params.noPO ? { noPO: params.noPO } : {}),
-    ...(params.noSO ? { noSO: params.noSO } : {}),
-    ...(vid ? { vendorTenantId: vid } : {}),
-  });
+  const correlationId = integrationCorrelationId(
+    params.customerPoId || params.noPO || params.noSO || tenantId,
+    'po-status',
+  );
 
-  let res: Response;
   try {
-    res = await fetch(`${config.salesAppUrl}/api/integrations/customer-po-status?${qs}`, {
-      headers: { 'X-Api-Key': apiKey },
-      signal: AbortSignal.timeout(12000),
+    const client = createIntegrationClient(db);
+    const result = await client.getCustomerPoSalesOrderStatus({
+      salesAppUrl: config.salesAppUrl,
+      apiKey,
+      correlationId,
+      query: {
+        customerTenantId: tenantId,
+        ...(params.customerPoId ? { customerPoId: params.customerPoId } : {}),
+        ...(params.noPO ? { noPO: params.noPO } : {}),
+        ...(params.noSO ? { noSO: params.noSO } : {}),
+        ...(vid ? { vendorTenantId: vid } : {}),
+      },
     });
+    return { payload: result.raw as JsonObject };
   } catch (e) {
-    return { error: salesFetchErrorMessage(e, config.salesAppUrl) };
+    if (e instanceof IntegrationError) {
+      return { error: e.message };
+    }
+    return { error: e instanceof Error ? e.message : String(e) };
   }
-
-  let data: JsonObject;
-  try {
-    data = await res.json() as JsonObject;
-  } catch {
-    return { error: `Sales.app HTTP ${res.status}` };
-  }
-  if (!res.ok) return { error: String(data.error || `Sales.app ${res.status}`) };
-  return { payload: data };
 }

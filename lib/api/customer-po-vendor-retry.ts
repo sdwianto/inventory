@@ -22,7 +22,7 @@ export async function retryVendorSyncForSingleVendor(
   if (!group) return { error: `Tidak ada baris untuk vendor ${vendorTenantId}`, status: 400 };
 
   const config = await getIntegrationConfig(db, tenantId, vendorTenantId);
-  await warmUpSalesApp(config.salesAppUrl);
+  await warmUpSalesApp(db, config.salesAppUrl);
   const pushed = await pushPoGroupToVendor(db, {
     tenantId,
     config,

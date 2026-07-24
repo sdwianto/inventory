@@ -1,9 +1,11 @@
-/** Beritahu sales.app bahwa CPO dibatalkan — cancel SO per vendor. */
+/** Beritahu sales.app bahwa CPO dibatalkan — via IntegrationClient (P3 Category A). */
 
 import type { Db } from 'mongodb';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
-import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
+import { integrationCorrelationId } from '@/lib/api/integration-common';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { IntegrationError } from '@/lib/integration/errors';
 import type { JsonObject } from '@/types/json';
 
 function vendorSubmissionsForPo(po: Record<string, unknown>): JsonObject[] {
@@ -26,6 +28,7 @@ export async function notifySalesPoCancelled(
   const customerPoId = String(po.id || '');
   const correlationId = integrationCorrelationId(customerPoId, noPO);
   const submissions = vendorSubmissionsForPo(po);
+  const client = createIntegrationClient(db);
 
   const cancelled: JsonObject[] = [];
   const errors: JsonObject[] = [];
@@ -41,41 +44,28 @@ export async function notifySalesPoCancelled(
       continue;
     }
 
-    let res: Response;
     try {
-      res = await fetch(`${config.salesAppUrl}/api/integrations/customer-po/cancel`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-        },
-        body: JSON.stringify({
+      const result = await client.cancelSalesOrderFromCustomerPo({
+        salesAppUrl: config.salesAppUrl,
+        apiKey,
+        correlationId,
+        idempotencyKey: `cpo-cancel:${customerPoId || noPO}:${vendorTenantId}`,
+        customerPoId,
+        body: {
           customerTenantId: tenantId,
           vendorTenantId,
           noPO,
           customerPoId,
-          correlationId,
           reason,
-        }),
-        signal: AbortSignal.timeout(15000),
+        },
       });
+      cancelled.push({ vendorTenantId, ...result.raw });
     } catch (e) {
-      errors.push({ vendorTenantId, error: salesFetchErrorMessage(e, config.salesAppUrl) });
-      continue;
+      const message = e instanceof IntegrationError
+        ? e.message
+        : (e instanceof Error ? e.message : String(e));
+      errors.push({ vendorTenantId, error: message });
     }
-
-    let data: JsonObject;
-    try {
-      data = await res.json() as JsonObject;
-    } catch {
-      errors.push({ vendorTenantId, error: `Sales.app HTTP ${res.status} tanpa JSON` });
-      continue;
-    }
-    if (!res.ok) {
-      errors.push({ vendorTenantId, error: String(data.error || `Sales.app ${res.status}`) });
-      continue;
-    }
-    cancelled.push({ vendorTenantId, ...data });
   }
 
   return { cancelled, errors, correlationId };

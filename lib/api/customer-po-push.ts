@@ -48,15 +48,11 @@ export function shouldWarmUpSalesApp(salesUrl: string): boolean {
   return true;
 }
 
-export async function warmUpSalesApp(salesUrl: string): Promise<void> {
+/** Warm-up via IntegrationClient Transport (bukan fetch ad-hoc). */
+export async function warmUpSalesApp(db: Db, salesUrl: string): Promise<void> {
   if (!shouldWarmUpSalesApp(salesUrl)) return;
-  try {
-    await fetch(`${salesUrl.replace(/\/$/, '')}/api/`, {
-      signal: AbortSignal.timeout(8_000),
-    });
-  } catch {
-    /* ignore — warm-up best effort */
-  }
+  const client = createIntegrationClient(db);
+  await client.pingSalesApp({ salesAppUrl: salesUrl });
 }
 
 async function pushPoGroupOnce(
@@ -173,7 +169,7 @@ export async function pushPoToVendor(
   try {
     const groups = grouped.groups || [];
     const needsPush = groups.some((g) => !syncedByVendor.has(g.vendorTenantId));
-    if (needsPush) await warmUpSalesApp(config.salesAppUrl);
+    if (needsPush) await warmUpSalesApp(db, config.salesAppUrl);
 
     for (const { vendorTenantId, items } of groups) {
       const alreadySynced = syncedByVendor.get(vendorTenantId);
