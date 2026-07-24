@@ -19,7 +19,7 @@ import {
 } from '@/lib/api/inventory-execution-handlers';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
-import { notifyGrnPostedToSales } from '@/lib/api/grn-notify-sales';
+import { drainEnsureGrnInvoice } from '@/lib/api/integration-outbox';
 import { runGrnSyncShipped } from '@/lib/api/grn-sync-shipped-run';
 import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 
@@ -182,7 +182,7 @@ async function setGrnInvoiceSync(db: Db, grnId: string | null | undefined, patch
   );
 }
 
-/** P0: GRN_INVOICE_SYNC = recovery only (pull-reconcile + sync CreateInvoice). No soft-async PENDING happy path. */
+/** P0/H1.1: GRN_INVOICE_SYNC = recovery drain outbox (+ pull-reconcile). No soft-async PENDING happy path. */
 
 export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   const grn = await db.collection('goods_receipts').findOne({ id: job.grnId }) as GrnDoc | null;
@@ -210,6 +210,9 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
         vendorInvoiceId: existingHutang.vendorInvoiceId || null,
         invoiceSyncAt: new Date(),
       });
+      const { getEnsureGrnInvoiceOutbox, markOutboxDone: mark } = await import('@/lib/api/integration-outbox');
+      const row = await getEnsureGrnInvoiceOutbox(db, String(job.grnId));
+      if (row) await mark(db, row.id);
       return { ok: true, healed: true, noInvoice: existingHutang.noInvoice };
     }
   }
@@ -227,71 +230,27 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
         vendorInvoiceId: pulled.invoiceId || null,
         invoiceSyncAt: new Date(),
       });
+      const { getEnsureGrnInvoiceOutbox, markOutboxDone: mark } = await import('@/lib/api/integration-outbox');
+      const row = await getEnsureGrnInvoiceOutbox(db, String(job.grnId));
+      if (row) await mark(db, row.id);
       return { ok: true, reconciled: true, noInvoice: pulled.noInvoice, source: pulled.source };
     }
   }
 
-  await setGrnInvoiceSync(db, grn.id, {
-    invoiceSyncStatus: 'SYNCING',
-    invoiceSyncError: null,
+  // H1.1 primary recovery: claim + drain business outbox (CreateInvoice via IntegrationClient).
+  const drained = await drainEnsureGrnInvoice(db, {
+    tenantId: job.tenantId,
+    grnId: String(job.grnId),
+    preferSync: true,
   });
-
-  let result: Record<string, unknown>;
-  try {
-    // Always sync Category A via IntegrationClient (preferSync kept for API compat).
-    result = await notifyGrnPostedToSales(db, job.tenantId, grn, { preferSync: true }) as Record<string, unknown>;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await setGrnInvoiceSync(db, grn.id, {
-      invoiceSyncStatus: 'FAILED',
-      invoiceSyncError: msg,
-      invoiceSyncAt: new Date(),
-    });
-    return { error: msg };
+  const result = drained.invoiceSync;
+  if (drained.alreadyDone || result.status === 'DONE' || result.status === 'SKIPPED') {
+    return { ok: true, result, outboxId: drained.outboxId, drained: true };
   }
-
-  if ('error' in result && result.error) {
-    await setGrnInvoiceSync(db, grn.id, {
-      invoiceSyncStatus: 'FAILED',
-      invoiceSyncError: result.error,
-      invoiceSyncAt: new Date(),
-    });
-    return { error: result.error, result };
+  if (result.error) {
+    return { error: result.error, result, outboxId: drained.outboxId, drained: true };
   }
-
-  if (result.skipped) {
-    await setGrnInvoiceSync(db, grn.id, {
-      invoiceSyncStatus: 'SKIPPED',
-      invoiceSyncError: result.reason || null,
-      invoiceSyncAt: new Date(),
-    });
-    return { skipped: true, result };
-  }
-
-  // Legacy 202 / pending — treat as FAILED (P0: no PENDING happy path).
-  if (result.pending || (result.async && result.salesJobId)) {
-    await setGrnInvoiceSync(db, grn.id, {
-      invoiceSyncStatus: 'FAILED',
-      invoiceSyncError: `Sales mengembalikan async/pending (tidak diizinkan Category A). Job ${result.salesJobId || '—'}. Klik Buat faktur.`,
-      salesJobId: result.salesJobId || null,
-      invoiceSyncAt: new Date(),
-    });
-    return { ok: false, pending: true, failed: true, result };
-  }
-
-  const patch: Record<string, unknown> = {
-    invoiceSyncStatus: 'DONE',
-    invoiceSyncError: null,
-    invoiceSyncAt: new Date(),
-    invoiceSyncAttempts: 0,
-  };
-  if (result.noInvoice) patch.noInvoice = result.noInvoice;
-  if (result.invoiceId) patch.vendorInvoiceId = result.invoiceId;
-  const hutang = result.hutang as Record<string, unknown> | undefined;
-  if (hutang?.hutangId) patch.hutangId = hutang.hutangId;
-  await setGrnInvoiceSync(db, grn.id, patch);
-
-  return { ok: true, result };
+  return { ok: true, result, outboxId: drained.outboxId, drained: true };
 }
 
 async function runCatalogSyncJob(db: Db, job: BgJob) {

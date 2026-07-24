@@ -52,15 +52,19 @@ describe('grn-notify-sales P0 sync contract (no soft-async happy path)', () => {
   });
 
   it('treats legacy pending/async as FAILED (no soft PENDING happy path)', () => {
-    expect(jobSrc).toMatch(/tidak diizinkan Category A/);
+    const outboxSrc = readFileSync(join(process.cwd(), 'lib/api/integration-outbox.ts'), 'utf8');
+    expect(outboxSrc).toMatch(/tidak diizinkan Category A/);
+    expect(jobSrc).toMatch(/drainEnsureGrnInvoice/);
     expect(jobSrc).not.toMatch(/GRN_INVOICE_MAX_SOFT_ATTEMPTS/);
   });
 
-  it('grn-post always syncs invoice inline (no PENDING enqueue happy path)', () => {
+  it('grn-post inserts outbox in TX and drains after commit (H1.1)', () => {
     const postSrc = readFileSync(join(process.cwd(), 'lib/api/grn-post.ts'), 'utf8');
     expect(postSrc).toMatch(/syncInvoiceInline = canSyncInvoice/);
     expect(postSrc).toMatch(/asyncInvoice diabaikan/);
-    expect(postSrc).toMatch(/Buat faktur — sync Category A/);
+    expect(postSrc).toMatch(/insertEnsureGrnInvoiceOutbox/);
+    expect(postSrc).toMatch(/drainEnsureGrnInvoice/);
+    expect(postSrc).toMatch(/Buat faktur — drain outbox Category A/);
     expect(postSrc).not.toMatch(/forceVpsInline/);
   });
 

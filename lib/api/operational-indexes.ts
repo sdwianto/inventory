@@ -82,6 +82,22 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'integration_commands', index: { commandType: 1, status: 1, startedAt: -1 }, name: 'idx_integration_commands_type_status' },
   { collection: 'integration_commands', index: { grnId: 1, startedAt: -1 }, name: 'idx_integration_commands_grn' },
   { collection: 'integration_commands', index: { id: 1 }, name: 'uniq_integration_commands_id', unique: true },
+  {
+    collection: 'integration_outbox',
+    index: { type: 1, aggregateId: 1 },
+    name: 'uniq_integration_outbox_type_aggregate',
+    unique: true,
+  },
+  {
+    collection: 'integration_outbox',
+    index: { status: 1, updatedAt: 1 },
+    name: 'idx_integration_outbox_status_updated',
+  },
+  {
+    collection: 'integration_outbox',
+    index: { tenantId: 1, type: 1, status: 1 },
+    name: 'idx_integration_outbox_tenant_type_status',
+  },
   { collection: 'webhook_inbox', index: { dedupeKey: 1 }, name: 'uniq_webhook_dedupe', unique: true },
   { collection: 'audit_log', index: { tenantId: 1, createdAt: -1 }, name: 'idx_audit_tenant_created' },
   { collection: 'audit_log', index: { entityType: 1, entityId: 1 }, name: 'idx_audit_entity' },

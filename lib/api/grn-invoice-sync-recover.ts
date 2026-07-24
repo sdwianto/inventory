@@ -153,5 +153,31 @@ export async function sweepAllStuckGrnInvoiceSyncs(
   if (enqueued > 0) {
     scheduleJobProcessing(db, { limit: Math.min(20, enqueued) });
   }
+
+  // H1.1: also drain PENDING/FAILED business outbox (intent may exist while GRN status already FAILED).
+  try {
+    const { listPendingGrnInvoiceOutbox } = await import('@/lib/api/integration-outbox');
+    const pendingOutbox = await listPendingGrnInvoiceOutbox(db, { limit: Math.max(0, limit - enqueued) });
+    for (const row of pendingOutbox) {
+      if (enqueued >= limit) break;
+      await enqueueJob(db, {
+        type: JOB_TYPES.GRN_INVOICE_SYNC,
+        tenantId: normalizeTenantId(row.tenantId),
+        grnId: row.aggregateId,
+        payload: {
+          grnId: row.aggregateId,
+          recoverOutbox: true,
+          dedupeKey: `outbox-sweep:${row.aggregateId}:${Math.floor(now / GRN_INVOICE_PENDING_STALE_MS)}`,
+        },
+      });
+      enqueued += 1;
+    }
+    if (pendingOutbox.length > 0) {
+      scheduleJobProcessing(db, { limit: Math.min(20, enqueued || 1) });
+    }
+  } catch {
+    /* best-effort */
+  }
+
   return { scanned: rows.length, enqueued, cancelledMisrouted };
 }
