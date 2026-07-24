@@ -130,7 +130,9 @@ export async function processWebhookInboxEvent(
 
   if (event === 'delivery.shipped') {
     if (!payload.deliveryId) throw new Error('deliveryId wajib');
-    const grn = await createGrnFromDelivery(db, customerTenantId, payload, vendorTenantId);
+    const grn = await createGrnFromDelivery(db, customerTenantId, payload, vendorTenantId, {
+      correlationId: payload.correlationId ? String(payload.correlationId) : null,
+    });
     await invalidateDashboardSnapshot(db, customerTenantId);
     return {
       ...result,

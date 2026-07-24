@@ -53,7 +53,9 @@ export async function handleIntegrationInbound({
       })
       : null;
 
-    const grn = await createGrnFromDelivery(db, customerTenantId, payload, vid || null);
+    const grn = await createGrnFromDelivery(db, customerTenantId, payload, vid || null, {
+      correlationId,
+    });
     const existingAfter = payload.deliveryId
       ? await db.collection('goods_receipts').findOne({
         tenantId: customerTenantId,

@@ -76,6 +76,12 @@ const INDEX_SPECS: IndexSpec[] = [
     partialFilterExpression: { vendorDeliveryId: { $type: 'string', $gt: '' } },
   },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1, 'items.vendorKode': 1 }, name: 'idx_grn_tenant_status_kode' },
+  {
+    collection: 'goods_receipts',
+    index: { correlationId: 1 },
+    name: 'idx_grn_correlation',
+    partialFilterExpression: { correlationId: { $type: 'string', $gt: '' } },
+  },
   { collection: 'bg_jobs', index: { status: 1, createdAt: 1 }, name: 'idx_bg_jobs_status_created' },
   { collection: 'bg_jobs', index: { grnId: 1, type: 1 }, name: 'idx_bg_jobs_grn_type' },
   { collection: 'integration_commands', index: { correlationId: 1, startedAt: -1 }, name: 'idx_integration_commands_corr_started' },

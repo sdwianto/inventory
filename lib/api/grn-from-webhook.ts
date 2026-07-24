@@ -93,13 +93,16 @@ export function grnUpdateFieldsFromPayload(
   payload: JsonObject,
   vendorTenantId: string | null | undefined,
   existing: JsonObject,
+  correlationId?: string | null,
 ): Record<string, unknown> {
+  const cid = String(correlationId || payload.correlationId || existing.correlationId || '').trim();
   return {
     noDO: payload.noDO || existing.noDO,
     noSO: payload.noSO || existing.noSO,
     noPO: payload.noPO || existing.noPO,
     vendorTenantId: vendorTenantId || existing.vendorTenantId,
     vendorDeliverySnapshot: payload,
+    ...(cid ? { correlationId: cid } : {}),
     updatedAt: new Date(),
   };
 }
@@ -164,6 +167,7 @@ export async function buildGrnInsertDoc(
   payload: JsonObject,
   vendorTenantId: string | null | undefined,
   noGRN: string,
+  correlationId?: string | null,
 ): Promise<JsonObject> {
   const tid = tenantId || 'default';
   const now = new Date();
@@ -175,6 +179,7 @@ export async function buildGrnInsertDoc(
   );
 
   const vendorTenantName = await resolveVendorTenantName(db, tid, vendorTenantId ?? null);
+  const cid = String(correlationId || payload.correlationId || '').trim();
 
   return {
     id: uuidv4(),
@@ -196,6 +201,7 @@ export async function buildGrnInsertDoc(
     tanggal: payload.shippedAt ? new Date(String(payload.shippedAt)) : now,
     createdAt: now,
     invoiceSyncStatus: 'NONE',
+    ...(cid ? { correlationId: cid } : {}),
   };
 }
 
@@ -204,8 +210,10 @@ export async function createGrnFromDelivery(
   tenantId: string | null | undefined,
   payload: JsonObject,
   vendorTenantId: string | null | undefined,
+  opts: { correlationId?: string | null } = {},
 ): Promise<JsonObject> {
   const tid = tenantId || 'default';
+  const correlationId = String(opts.correlationId || payload.correlationId || '').trim() || null;
   if (payload.deliveryId) {
     const existing = await db.collection('goods_receipts').findOne({
       tenantId: tid,
@@ -216,6 +224,7 @@ export async function createGrnFromDelivery(
         payload,
         vendorTenantId ?? null,
         existing as JsonObject,
+        correlationId,
       ) as Record<string, unknown>;
       if (existing.status !== 'POSTED') {
         const { items, hasUnknown } = await buildGrnLinesFromWebhookPayload(
@@ -236,7 +245,14 @@ export async function createGrnFromDelivery(
   }
 
   const noGRN = await nextDocNumber(db, tenantId, 'GRN', 'GRN');
-  const doc = await buildGrnInsertDoc(db, tenantId, payload, vendorTenantId, noGRN);
+  const doc = await buildGrnInsertDoc(
+    db,
+    tenantId,
+    payload,
+    vendorTenantId,
+    noGRN,
+    correlationId,
+  );
   try {
     await db.collection('goods_receipts').insertOne(doc);
     return doc;

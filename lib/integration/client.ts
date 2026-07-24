@@ -230,6 +230,9 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
       });
       throw err;
     }
@@ -332,6 +335,9 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
       });
       throw err;
     }
@@ -449,6 +455,9 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
       });
       throw err;
     }
@@ -544,6 +553,9 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
       });
       throw err;
     }
@@ -603,6 +615,9 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
       });
       throw err;
     }

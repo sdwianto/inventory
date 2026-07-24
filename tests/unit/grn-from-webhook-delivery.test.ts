@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+vi.mock('uuid', () => ({ v4: () => 'grn-uuid-1' }));
+
 vi.mock('@/lib/api/document-sequence', () => ({
   nextDocNumber: vi.fn(async () => 'GRN-NEW'),
 }));
@@ -82,12 +84,40 @@ describe('createGrnFromDelivery', () => {
       }],
     };
 
-    const result = await createGrnFromDelivery(db as never, 'sppg', payload, 'uddawam');
+    const result = await createGrnFromDelivery(db as never, 'sppg', payload, 'uddawam', {
+      correlationId: 'corr-h3',
+    });
     expect(updates[0]?.items).toBeDefined();
+    expect(updates[0]?.correlationId).toBe('corr-h3');
     const line = (updates[0]?.items as Array<Record<string, unknown>>)?.[0];
     expect(line?.qtyBase).toBe(20);
     expect(line?.qtyOrdered).toBe(2);
     expect(result.status).toBe('DRAFT');
+  });
+
+  it('stamps correlationId on insert (CreateGRN)', async () => {
+    const inserted: Record<string, unknown>[] = [];
+    const db = {
+      collection: (name: string) => ({
+        findOne: async () => null,
+        updateOne: async () => ({}),
+        insertOne: async (doc: Record<string, unknown>) => {
+          inserted.push(doc);
+          return {};
+        },
+        find: () => ({ sort: () => ({ toArray: async () => [] }) }),
+      }),
+    };
+
+    await createGrnFromDelivery(
+      db as never,
+      'sppg',
+      { deliveryId: 'do-new', noDO: 'DO-NEW', items: [] },
+      'uddawam',
+      { correlationId: 'corr-create' },
+    );
+
+    expect(inserted[0]?.correlationId).toBe('corr-create');
   });
 
   it('does not refresh items on POSTED GRN', async () => {
