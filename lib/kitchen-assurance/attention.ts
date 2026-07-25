@@ -12,7 +12,10 @@ import {
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
 import { HACCP_RESULTS_COLLECTION } from '@/lib/food-production/haccp';
 import { MAINTENANCE_SCHEDULES_COLLECTION } from '@/lib/maintenance/constants';
-import { PRODUCTION_BATCHES_COLLECTION } from '@/lib/food-production/production-batch';
+import {
+  PRODUCTION_BATCHES_COLLECTION,
+  effectiveQtyRemaining,
+} from '@/lib/food-production/production-batch';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { KA_FOLLOW_UPS_COLLECTION } from '@/lib/kitchen-assurance/follow-up';
 import { KA_OBSERVATIONS_COLLECTION } from '@/lib/kitchen-assurance/observation';
@@ -152,12 +155,19 @@ export async function collectAttentions(
     .toArray();
   for (const row of expiredBatches) {
     const r = row as Record<string, unknown>;
+    const rem = effectiveQtyRemaining({
+      qty: Number(r.qty || 0),
+      qtyRemaining: r.qtyRemaining as number | undefined,
+      status: String(r.status || 'ACTIVE') as 'ACTIVE' | 'EXPIRED' | 'CONSUMED',
+    });
     out.push({
       key: `batch-exp:${String(r.id)}`,
       pillar: 'FOOD',
       level: 'CRITICAL',
       label: `Expired material · ${String(r.batchNo || r.id)}`,
-      detail: `Expiry ${String(r.expiryDate || '').slice(0, 10)}`,
+      detail: rem > 0
+        ? `Expiry ${String(r.expiryDate || '').slice(0, 10)} · remaining ${rem}`
+        : `Expiry ${String(r.expiryDate || '').slice(0, 10)}`,
       href: '/food-production/batch',
       source: 'FOOD_PRODUCTION',
       kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,

@@ -187,6 +187,13 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'production_batches', index: { tenantId: 1, batchNo: 1 }, name: 'idx_batch_tenant_no' },
   { collection: 'production_batches', index: { tenantId: 1, expiryDate: 1 }, name: 'idx_batch_tenant_expiry' },
   { collection: 'production_batches', index: { tenantId: 1, kitchenId: 1, expiryDate: 1 }, name: 'idx_batch_tenant_kitchen_expiry' },
+  // W2-1 FEFO allocate by product + warehouse + status + expiry
+  {
+    collection: 'production_batches',
+    index: { tenantId: 1, finishedGoodProductId: 1, warehouseKode: 1, status: 1, expiryDate: 1 },
+    name: 'idx_batch_fefo_product_wh',
+  },
+  { collection: 'fefo_batch_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_fefo_recon_tenant_created' },
   { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },
   { collection: 'service_points', index: { tenantId: 1, id: 1 }, name: 'idx_sp_tenant_id' },

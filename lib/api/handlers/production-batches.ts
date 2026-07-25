@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import {
   PRODUCTION_BATCHES_COLLECTION,
   daysUntilExpiry,
+  effectiveQtyRemaining,
   isExpired,
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
@@ -61,6 +62,7 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
       const daysLeft = daysUntilExpiry(b.expiryDate, today);
       return {
         ...b,
+        qtyRemaining: effectiveQtyRemaining(b),
         expired,
         daysUntilExpiry: daysLeft,
         status: expired && b.status === 'ACTIVE' ? 'EXPIRED' : b.status,

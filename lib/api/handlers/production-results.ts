@@ -662,6 +662,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
               finishedGoodProductId: line.finishedGoodProductId,
               finishedGoodNama: line.finishedGoodNama || line.recipeNama || line.menuNama || line.finishedGoodKode,
               qty,
+              qtyRemaining: qty,
               satuan: line.satuan,
               status: 'ACTIVE',
               createdAt: now,

@@ -1,6 +1,6 @@
 /**
- * Production Batch + Expiry — ADR-001 Phase 4.
- * Batch stamped on Result COMPLETE; listed for FEFO / expiry watch.
+ * Production Batch + Expiry — ADR-001 Phase 4 · W2-1 FEFO consume.
+ * Batch stamped on Result COMPLETE; qtyRemaining decremented on Release FEFO.
  */
 
 export const PRODUCTION_BATCHES_COLLECTION = 'production_batches';
@@ -21,10 +21,27 @@ export interface ProductionBatchDoc {
   finishedGoodProductId?: string;
   finishedGoodNama?: string;
   qty: number;
+  /** Remaining after FEFO consume; defaults to qty for legacy rows. */
+  qtyRemaining?: number;
   satuan?: string;
   status: 'ACTIVE' | 'EXPIRED' | 'CONSUMED';
+  lastConsumedBy?: {
+    releaseId?: string;
+    noRelease?: string;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Legacy rows without qtyRemaining: ACTIVE/EXPIRED → qty, CONSUMED → 0. */
+export function effectiveQtyRemaining(b: Pick<ProductionBatchDoc, 'qty' | 'qtyRemaining' | 'status'>): number {
+  if (b.qtyRemaining != null && Number.isFinite(Number(b.qtyRemaining))) {
+    return Math.max(0, Number(b.qtyRemaining));
+  }
+  if (b.status === 'CONSUMED') return 0;
+  const q = Number(b.qty);
+  return Number.isFinite(q) && q > 0 ? q : 0;
 }
 
 export function buildBatchNo(input: {

@@ -24,6 +24,8 @@ import type { AuthContext } from '@/types/auth';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
+import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
+import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -280,11 +282,42 @@ export async function handleInventoryReleases({
         );
         if (claim.modifiedCount === 0) throw new Error('Release sudah diproses oleh approver lain');
 
+        const fefoLines: Array<{
+          stokId: string;
+          allocated: number;
+          shortfall: number;
+          skippedNoBatches: boolean;
+          allocations: FefoAllocation[];
+        }> = [];
+
         for (const it of releaseLines) {
           await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
           const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qtyBase, session);
           if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
           await syncProductStokFromLokasi(txDb, tenantId, it.stokId, session);
+
+          // W2-1: FEFO consume production batches when present for this FG+warehouse.
+          const fefo = await consumeBatchesFefo(
+            txDb,
+            {
+              tenantId,
+              stokId: it.stokId,
+              warehouseKode: lokasiKode,
+              needQty: it.qtyBase,
+              asOf: now,
+              releaseId: doc.id,
+              noRelease: doc.noRelease,
+            },
+            session,
+          );
+          fefoLines.push({
+            stokId: it.stokId,
+            allocated: fefo.allocated,
+            shortfall: fefo.shortfall,
+            skippedNoBatches: fefo.skippedNoBatches,
+            allocations: fefo.allocations,
+          });
+
           await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
             id: uuidv4(),
             stokId: it.stokId,
@@ -299,8 +332,15 @@ export async function handleInventoryReleases({
             uomId: it.uomId,
             satuan: it.satuan,
             hargaSatuan: it.hargaBeli || 0,
+            fefoAllocations: fefo.allocations,
           }), session ? { session } : {});
         }
+
+        await txDb.collection('inventory_releases').updateOne(
+          { id: doc.id },
+          { $set: { fefoConsume: fefoLines, updatedAt: now } },
+          session ? { session } : {},
+        );
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Gagal approve release';

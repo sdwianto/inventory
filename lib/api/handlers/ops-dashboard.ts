@@ -15,6 +15,10 @@ import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
 import { sweepStuckGrnPosting } from '@/lib/api/stuck-posting-sweep';
 import { createIntegrationClient } from '@/lib/integration/client';
 import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
+import {
+  FEFO_RECONCILE_REPORTS_COLLECTION,
+  runFefoBatchDetect,
+} from '@/lib/api/fefo-batch-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -76,6 +80,22 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     });
   }
 
+  // W2-1: FEFO batch Detect (Compare/Repair deferred).
+  if (route === '/ops/fefo-reconcile/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runFefoBatchDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -91,6 +111,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     fpLatency,
     fpHotpath,
     latestReconcile,
+    latestFefo,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -132,6 +153,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
         'diff.autoFixEnqueued': 1,
       })
       .toArray(),
+    db.collection(FEFO_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -142,6 +169,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     diff?: { autoFixEnqueued?: number; grnInvoiceNotDone?: unknown[] };
   } | null;
   const summary = (report?.summary || {}) as Record<string, unknown>;
+
+  const fefoReport = (latestFefo[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const fefoSummary = (fefoReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -164,6 +200,20 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           ),
           grnInvoiceNotDoneSample: Array.isArray(report.diff?.grnInvoiceNotDone)
             ? report.diff.grnInvoiceNotDone.slice(0, 10)
+            : [],
+        }
+      : null,
+    fefoReconcile: fefoReport
+      ? {
+          reportId: fefoReport.id,
+          tenantId: fefoReport.tenantId,
+          createdAt: fefoReport.createdAt,
+          totalMismatch: Number(fefoSummary.totalMismatch || 0),
+          expiredWithQty: Number(fefoSummary.expiredWithQty || 0),
+          activePastExpiry: Number(fefoSummary.activePastExpiry || 0),
+          batchVsStok: Number(fefoSummary.batchVsStok || 0),
+          mismatchSample: Array.isArray(fefoReport.mismatches)
+            ? fefoReport.mismatches.slice(0, 10)
             : [],
         }
       : null,

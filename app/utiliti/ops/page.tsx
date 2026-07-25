@@ -23,6 +23,16 @@ type InvoiceReconcile = {
   grnInvoiceNotDoneSample?: Array<Record<string, unknown>>;
 };
 
+type FefoReconcile = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  expiredWithQty?: number;
+  activePastExpiry?: number;
+  batchVsStok?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -34,6 +44,7 @@ type OpsDashboard = {
   deadLetterJobs?: Array<Record<string, unknown>>;
   recentAudit?: Array<Record<string, unknown>>;
   invoiceReconcile?: InvoiceReconcile | null;
+  fefoReconcile?: FefoReconcile | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -87,6 +98,7 @@ export default function OpsDashboardPage() {
   const worker = (data?.health?.checks?.worker || {}) as Record<string, unknown>;
   const reconcile = (data?.health?.checks?.integrationReconcile || {}) as Record<string, unknown>;
   const invoiceRec = data?.invoiceReconcile;
+  const fefoRec = data?.fefoReconcile;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -307,6 +319,76 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Detail report: <Link href="/integrasi" className="text-primary underline">Integrasi</Link>
               {' · '}full Replay/Repair toolkit = W1-6
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-1 · FEFO Batch Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  Expired+qty · ACTIVE past expiry · sum(qtyRemaining) vs stok_lokasi
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      path: '/api/ops/fefo-reconcile/run',
+                      method: 'POST',
+                      body: {},
+                      offlineLabel: 'FEFO Detect',
+                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                    toast.success(
+                      `FEFO Detect OK · mismatch ${res.summary?.totalMismatch ?? 0} · ${res.reportId || ''}`,
+                    );
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'FEFO Detect gagal');
+                  }
+                }}
+              >
+                Run FEFO Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(fefoRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!fefoRec || Number(fefoRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">expiredWithQty</div>
+                <div className="font-semibold">{String(fefoRec?.expiredWithQty ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">batchVsStok</div>
+                <div className="font-semibold">{String(fefoRec?.batchVsStok ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {fefoRec?.createdAt ? formatDateTime(fefoRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(fefoRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(fefoRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.batchId || m.stokId || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.kind || '—')} · {String(m.batchNo || m.stokId || '—')} · {String(m.detail || '')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Batch UI: <Link href="/food-production/batch" className="text-primary underline">Production Batch</Link>
             </p>
           </section>
 

@@ -21,6 +21,7 @@ interface BatchRow {
   kitchenNama?: string;
   finishedGoodNama?: string;
   qty: number;
+  qtyRemaining?: number;
   satuan?: string;
   producedAt: string;
   expiryDate: string;
@@ -109,7 +110,7 @@ export default function ProductionBatchPage() {
             Batch &amp; Expiry
           </h1>
           <p className="text-sm text-muted-foreground">
-            Batch di-stamp saat HSL selesai — pantau kadaluarsa (FEFO) · export audit trail
+            Batch di-stamp saat HSL selesai — FEFO consume on Release · pantau qtyRemaining
           </p>
         </div>
         <div className="flex gap-2 items-end">
@@ -139,7 +140,7 @@ export default function ProductionBatchPage() {
               <th className="text-left p-3">Batch</th>
               <th className="text-left p-3">FG / HSL</th>
               <th className="text-left p-3">Dapur</th>
-              <th className="text-right p-3">Qty</th>
+              <th className="text-right p-3">Qty / Sisa</th>
               <th className="text-left p-3">Produksi</th>
               <th className="text-left p-3">Expiry</th>
               <th className="text-left p-3">Status</th>
@@ -159,7 +160,12 @@ export default function ProductionBatchPage() {
                   <div className="text-[11px] font-mono text-muted-foreground">{row.productionResultNo}</div>
                 </td>
                 <td className="p-3">{row.kitchenNama || '—'}</td>
-                <td className="p-3 text-right">{row.qty} {row.satuan || ''}</td>
+                <td className="p-3 text-right">
+                  <div>{row.qty} {row.satuan || ''}</div>
+                  {row.qtyRemaining != null && (
+                    <div className="text-[11px] text-muted-foreground">sisa {row.qtyRemaining}</div>
+                  )}
+                </td>
                 <td className="p-3">{row.producedAt}</td>
                 <td className="p-3">
                   {row.expiryDate}
