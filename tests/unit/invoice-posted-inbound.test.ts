@@ -13,5 +13,7 @@ describe('integrations invoice-posted inbound', () => {
     expect(src).toContain('createHutangFromVendorInvoice');
     expect(src).toContain('invoice-posted-push');
     expect(src).toContain('invoice.posted');
+    expect(src).toContain('X-Correlation-Id wajib untuk invoice-posted');
+    expect(src).toContain('ReceiveInvoicePosted');
   });
 });

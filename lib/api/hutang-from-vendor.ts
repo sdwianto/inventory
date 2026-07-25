@@ -22,6 +22,8 @@ import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor
 
 export type HutangCreateOptions = {
   createdVia?: 'grn-posted' | 'invoice-posted-webhook' | 'invoice-posted-push';
+  /** W1-3: ops spine Entity → CID → integration_commands. */
+  correlationId?: string | null;
 };
 
 /** Skip webhook invoice.posted jika hutang sudah dibuat lewat jalur grn-posted (primary). */
@@ -430,6 +432,13 @@ export async function createHutangFromVendorInvoice(
       payload,
       vendorTenantId,
     );
+    const cid = opts.correlationId ? String(opts.correlationId).trim() : '';
+    if (cid && result.hutangId) {
+      await db.collection('hutang').updateOne(
+        { id: result.hutangId },
+        { $set: { correlationId: cid } },
+      );
+    }
     if (!('error' in result && result.error) && result.hutangId) {
       await markGrnInvoiceSyncDone(
         db,
@@ -511,6 +520,7 @@ export async function createHutangFromVendorInvoice(
     variancePoToSo: varianceCtx.variancePoToSo,
     varianceSoToInvoice,
     createdVia: opts.createdVia || null,
+    correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
     createdAt: now,
   });
 

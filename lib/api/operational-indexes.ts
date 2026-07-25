@@ -87,7 +87,15 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'integration_commands', index: { correlationId: 1, startedAt: -1 }, name: 'idx_integration_commands_corr_started' },
   { collection: 'integration_commands', index: { commandType: 1, status: 1, startedAt: -1 }, name: 'idx_integration_commands_type_status' },
   { collection: 'integration_commands', index: { grnId: 1, startedAt: -1 }, name: 'idx_integration_commands_grn' },
+  { collection: 'integration_commands', index: { invoiceId: 1, startedAt: -1 }, name: 'idx_integration_commands_invoice' },
+  { collection: 'integration_commands', index: { apId: 1, startedAt: -1 }, name: 'idx_integration_commands_ap' },
   { collection: 'integration_commands', index: { id: 1 }, name: 'uniq_integration_commands_id', unique: true },
+  {
+    collection: 'hutang',
+    index: { correlationId: 1 },
+    name: 'idx_hutang_correlation',
+    partialFilterExpression: { correlationId: { $type: 'string', $gt: '' } },
+  },
   {
     collection: 'integration_outbox',
     index: { type: 1, aggregateId: 1 },

@@ -165,7 +165,10 @@ export async function processWebhookInboxEvent(
       customerTenantId,
       payload as VendorInvoicePayload,
       vendorTenantId,
-      { createdVia: 'invoice-posted-webhook' },
+      {
+        createdVia: 'invoice-posted-webhook',
+        correlationId: payload.correlationId ? String(payload.correlationId) : null,
+      },
     );
     if ('error' in hutang && hutang.error) throw new Error(String(hutang.error));
     await invalidateDashboardSnapshot(db, customerTenantId);

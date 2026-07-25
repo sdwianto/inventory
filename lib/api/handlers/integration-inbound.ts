@@ -96,6 +96,16 @@ export async function handleIntegrationInbound({
       || '',
     ).trim();
 
+    // W1-3: CID wajib untuk ops spine hutang (align Category A header discipline).
+    const correlationId = String(
+      request.headers.get('x-correlation-id')
+      || payload.correlationId
+      || '',
+    ).trim();
+    if (!correlationId) {
+      return err('X-Correlation-Id wajib untuk invoice-posted', 400);
+    }
+
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
@@ -106,26 +116,63 @@ export async function handleIntegrationInbound({
     if (!payload.invoiceId) return err('invoiceId wajib', 400);
 
     const vid = vendorTenantId || v.vendorTenantId || '';
-    const hutang = await createHutangFromVendorInvoice(
-      db,
-      customerTenantId,
-      payload as VendorInvoicePayload,
-      vid || null,
-      { createdVia: 'invoice-posted-push' },
+    const { startIntegrationCommand, finishIntegrationCommand } = await import(
+      '@/lib/integration/command-log'
     );
-    if ('error' in hutang && hutang.error) return err(String(hutang.error), 400);
-
-    const cpoSync = await syncCpoFromVendorEvent(db, customerTenantId, 'invoice.posted', {
-      ...payload,
-      vendorTenantId: vid,
+    const commandId = await startIntegrationCommand(db, {
+      correlationId,
+      commandType: 'ReceiveInvoicePosted',
+      invoiceId: String(payload.invoiceId),
     });
-    await invalidateDashboardSnapshot(db, customerTenantId);
 
-    return ok(clean({
-      ...hutang,
-      cpoSync,
-      message: 'hutang via invoice-posted push',
-    }));
+    try {
+      const hutang = await createHutangFromVendorInvoice(
+        db,
+        customerTenantId,
+        payload as VendorInvoicePayload,
+        vid || null,
+        { createdVia: 'invoice-posted-push', correlationId },
+      );
+      if ('error' in hutang && hutang.error) {
+        await finishIntegrationCommand(db, commandId, {
+          status: 'FAILED',
+          invoiceId: String(payload.invoiceId),
+          errorCode: 'HUTANG_CREATE_FAILED',
+          errorMessage: String(hutang.error),
+          errorClass: 'validation',
+          httpStatus: 400,
+        });
+        return err(String(hutang.error), 400);
+      }
+
+      await finishIntegrationCommand(db, commandId, {
+        status: 'SUCCEEDED',
+        invoiceId: String(payload.invoiceId),
+        apId: hutang.hutangId ? String(hutang.hutangId) : null,
+      });
+
+      const cpoSync = await syncCpoFromVendorEvent(db, customerTenantId, 'invoice.posted', {
+        ...payload,
+        vendorTenantId: vid,
+      });
+      await invalidateDashboardSnapshot(db, customerTenantId);
+
+      return ok(clean({
+        ...hutang,
+        cpoSync,
+        correlationId,
+        message: 'hutang via invoice-posted push',
+      }));
+    } catch (e) {
+      await finishIntegrationCommand(db, commandId, {
+        status: 'FAILED',
+        invoiceId: String(payload.invoiceId),
+        errorCode: 'HUTANG_CREATE_FAILED',
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorClass: 'unknown',
+      });
+      throw e;
+    }
   }
 
   return null;

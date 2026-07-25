@@ -125,6 +125,7 @@ export async function finishIntegrationCommand(
     httpStatus,
     grnId: existing?.grnId ?? null,
     invoiceId: patch.invoiceId ?? existing?.invoiceId ?? null,
+    apId: patch.apId ?? existing?.apId ?? null,
   });
 
   return { durationMs };
