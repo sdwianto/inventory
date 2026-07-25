@@ -23,6 +23,7 @@ import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
+import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -114,6 +115,15 @@ export async function handleTransfer({
             txDb, tenantId, stokId, invBody.lokasiAsal!, invBody.lokasiTujuan!, it.qtyBase, session,
           );
           if ('error' in tr && tr.error) throw new Error(`Stok ${stokId}: ${tr.error}`);
+          // W2-20: soft bin OUT from source warehouse only — never fail transfer on bin shortfall.
+          await softConsumeBinOnWarehouseOut(
+            txDb,
+            tenantId,
+            stokId,
+            String(invBody.lokasiAsal),
+            it.qtyBase,
+            session,
+          );
           // W2-12: relocate FG batches FEFO with the stock move.
           const fefo = await relocateBatchesFefo(
             txDb,

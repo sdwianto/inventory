@@ -1,5 +1,5 @@
 /**
- * W2-19 — Soft OUT bin consume.
+ * W2-19 / W2-20 — Soft OUT bin consume.
  * After warehouse OUT succeeds, decrement `stok_bin` (default bin first, then greedy).
  * Never throws; shortfall / missing bins do not fail the warehouse mutation.
  */
@@ -16,6 +16,15 @@ export type ConsumeStokBinSoftResult = {
   skippedNoBins: boolean;
   takes: Array<{ binKode: string; qty: number }>;
 };
+
+type SoftConsumeFn = (
+  db: Db,
+  tenantId: string,
+  stokId: string,
+  warehouseKode: string,
+  qtyNeed: number,
+  session?: ClientSession,
+) => Promise<ConsumeStokBinSoftResult>;
 
 function emptyResult(shortfall = 0, skippedNoBins = false): ConsumeStokBinSoftResult {
   return { allocated: 0, shortfall, skippedNoBins, takes: [] };
@@ -101,5 +110,27 @@ export async function consumeStokBinSoft(
     };
   } catch {
     return emptyResult(need0, true);
+  }
+}
+
+/**
+ * Soft OUT wrapper for release / transfer / postStockMutation.
+ * Swallows unexpected throws so warehouse posting never fails on bin shortfall.
+ * Optional `consumeFn` is a test seam; production callers omit it.
+ */
+export async function softConsumeBinOnWarehouseOut(
+  db: Db,
+  tenantId: string,
+  stokId: string,
+  warehouseKode: string,
+  qty: number,
+  session?: ClientSession,
+  consumeFn: SoftConsumeFn = consumeStokBinSoft,
+): Promise<ConsumeStokBinSoftResult> {
+  const need = Math.abs(Number(qty) || 0);
+  try {
+    return await consumeFn(db, tenantId, stokId, warehouseKode, need, session);
+  } catch {
+    return emptyResult(need, true);
   }
 }

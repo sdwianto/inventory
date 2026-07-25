@@ -26,6 +26,7 @@ import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
+import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -294,6 +295,15 @@ export async function handleInventoryReleases({
           await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
           const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qtyBase, session);
           if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
+          // W2-20: soft bin OUT after warehouse OUT — never fail release on bin shortfall.
+          await softConsumeBinOnWarehouseOut(
+            txDb,
+            tenantId,
+            it.stokId,
+            lokasiKode,
+            it.qtyBase,
+            session,
+          );
           await syncProductStokFromLokasi(txDb, tenantId, it.stokId, session);
 
           // W2-1: FEFO consume production batches when present for this FG+warehouse.

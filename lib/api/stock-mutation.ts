@@ -11,7 +11,7 @@ import {
   syncProductStokFromLokasi,
   parseLokasiKode,
 } from '@/lib/api/stok-lokasi';
-import { consumeStokBinSoft } from '@/lib/api/stok-bin-consume';
+import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { txOpts } from '@/lib/api/transaction';
@@ -78,13 +78,16 @@ export async function postStockMutation(
     return { ok: false, error: adj.error };
   }
 
-  // W2-19: soft bin OUT after warehouse qty succeeded — never fail mutation on shortfall.
+  // W2-19/W2-20: soft bin OUT after warehouse qty succeeded — never fail mutation on shortfall.
   if (delta < 0) {
-    try {
-      await consumeStokBinSoft(db, tid, input.productId, lokasiKode, -delta, input.session);
-    } catch {
-      /* soft — warehouse OUT already committed in this TX path */
-    }
+    await softConsumeBinOnWarehouseOut(
+      db,
+      tid,
+      input.productId,
+      lokasiKode,
+      -delta,
+      input.session,
+    );
   }
 
   const qtyAfter = await syncProductStokFromLokasi(db, tid, input.productId, input.session);
