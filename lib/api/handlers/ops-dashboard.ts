@@ -47,6 +47,7 @@ import {
 } from '@/lib/api/hsl-waste-reconcile';
 import {
   STOK_BIN_RECONCILE_REPORTS_COLLECTION,
+  repairStokBinGtMismatches,
   repairStokBinMismatches,
   runStokBinDetect,
 } from '@/lib/api/stok-bin-reconcile';
@@ -259,13 +260,23 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     });
   }
 
-  // W2-22: Soft bin Repair — BIN_SUM_LT residual → default bin (never GT / stok_lokasi).
+  // W2-22: Soft bin Repair LT — BIN_SUM_LT residual → default bin (never GT / stok_lokasi).
   if (route === '/ops/stok-bin-reconcile/repair' && method === 'POST') {
     const denied = requireRole(auth, ['MASTER']);
     if (denied) return denied;
     const payload = (body || {}) as { tenantId?: string };
     const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
     const result = await repairStokBinMismatches(db, tenantId);
+    return ok(result);
+  }
+
+  // W2-23: Soft bin Repair GT — BIN_SUM_GT overage → consumeStokBinSoft (never LT / stok_lokasi).
+  if (route === '/ops/stok-bin-reconcile/repair-gt' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await repairStokBinGtMismatches(db, tenantId);
     return ok(result);
   }
 

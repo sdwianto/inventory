@@ -928,9 +928,9 @@ export default function OpsDashboardPage() {
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-medium">W2-17/W2-22 — Stok Bin Detect & Repair</h2>
+                <h2 className="font-medium">W2-17/W2-22/W2-23 — Stok Bin Detect & Repair</h2>
                 <p className="text-xs text-muted-foreground">
-                  Soft Detect: sum(stok_bin) vs stok_lokasi · Repair BIN_SUM_LT → default bin (never GT / stok_lokasi)
+                  Soft Detect: sum(stok_bin) vs stok_lokasi · Repair LT → allocate · Repair GT → consume (never stok_lokasi)
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -968,22 +968,50 @@ export default function OpsDashboardPage() {
                         path: '/api/ops/stok-bin-reconcile/repair',
                         method: 'POST',
                         body: {},
-                        offlineLabel: 'Stok Bin Repair',
+                        offlineLabel: 'Stok Bin Repair LT',
                       }) as {
                         repaired?: number;
                         ignoredGt?: number;
                         afterSummary?: { totalMismatch?: number };
                       };
                       toast.success(
-                        `Stok Bin Repair OK · repaired ${res.repaired ?? 0} · ignoredGt ${res.ignoredGt ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                        `Stok Bin Repair LT OK · repaired ${res.repaired ?? 0} · ignoredGt ${res.ignoredGt ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
                       );
                       void refetch();
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : 'Stok Bin Repair gagal');
+                      toast.error(e instanceof Error ? e.message : 'Stok Bin Repair LT gagal');
                     }
                   }}
                 >
-                  Run Stok Bin Repair
+                  Repair LT
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/stok-bin-reconcile/repair-gt',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Stok Bin Repair GT',
+                      }) as {
+                        repaired?: number;
+                        ignoredLt?: number;
+                        afterSummary?: { totalMismatch?: number };
+                      };
+                      toast.success(
+                        `Stok Bin Repair GT OK · repaired ${res.repaired ?? 0} · ignoredLt ${res.ignoredLt ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Stok Bin Repair GT gagal');
+                    }
+                  }}
+                >
+                  Repair GT
                 </Button>
               </div>
             </div>

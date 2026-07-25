@@ -37,6 +37,7 @@ Baca di Sales repo:
 | **W2-20 Release/Transfer Bin OUT** | `sales/docs/architecture/W2-20-RELEASE-TRANSFER-BIN-OUT.md` |
 | **W2-21 Transfer IN Bin Putaway** | `sales/docs/architecture/W2-21-TRANSFER-IN-BIN-PUTAWAY.md` |
 | **W2-22 Soft Bin LT Repair** | `sales/docs/architecture/W2-22-STOK-BIN-LT-REPAIR.md` |
+| **W2-23 Soft Bin GT Reverse** | `sales/docs/architecture/W2-23-STOK-BIN-GT-REVERSE.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
