@@ -5,9 +5,23 @@ import Link from 'next/link';
 import { Activity, AlertTriangle, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
+import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { formatDateTime } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
+import { toast } from 'sonner';
+
+type InvoiceReconcile = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  grnStale?: number;
+  grnWithoutDo?: number;
+  hutangOrphan?: number;
+  cpoMismatch?: number;
+  autoFixEnqueued?: number;
+  grnInvoiceNotDoneSample?: Array<Record<string, unknown>>;
+};
 
 type OpsDashboard = {
   health?: {
@@ -19,6 +33,7 @@ type OpsDashboard = {
   pendingJobs?: Array<Record<string, unknown>>;
   deadLetterJobs?: Array<Record<string, unknown>>;
   recentAudit?: Array<Record<string, unknown>>;
+  invoiceReconcile?: InvoiceReconcile | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -66,9 +81,12 @@ export default function OpsDashboardPage() {
     { enabled: user?.role === 'MASTER', refetchInterval: 60_000 },
   );
 
+  const runReconcile = useApiMutation([queryKeys.ops.dashboard]);
+
   const slo = (data?.health?.checks?.slo || {}) as Record<string, { ok?: boolean }>;
   const worker = (data?.health?.checks?.worker || {}) as Record<string, unknown>;
   const reconcile = (data?.health?.checks?.integrationReconcile || {}) as Record<string, unknown>;
+  const invoiceRec = data?.invoiceReconcile;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -84,8 +102,10 @@ export default function OpsDashboardPage() {
         <div className="flex items-center gap-2">
           <Activity className="h-6 w-6 text-primary" />
           <div>
-            <h1 className="text-xl font-semibold">Ops Dashboard</h1>
-            <p className="text-sm text-muted-foreground">Health, webhook inbox, bg_jobs — Inventory (MASTER)</p>
+            <h1 className="text-xl font-semibold">Ops · Invoice Reconciliation</h1>
+            <p className="text-sm text-muted-foreground">
+              Health, Detect→Compare→Repair (W1-5), webhook, bg_jobs — Inventory (MASTER)
+            </p>
           </div>
         </div>
         <Button type="button" variant="outline" size="sm" disabled={isFetching} onClick={() => refetch()} className="gap-2">
@@ -136,6 +156,90 @@ export default function OpsDashboardPage() {
                 </li>
               ))}
             </ul>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">Invoice Reconciliation (W1-5)</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Detect → Compare (Sales pull by noDO) → Repair (hutang / GRN_INVOICE_SYNC)
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      url: '/api/ops/invoice-reconcile/run',
+                      method: 'POST',
+                      offlineLabel: 'Enqueue invoice reconcile',
+                    }) as { jobId?: string; reused?: boolean };
+                    toast.success(
+                      res.reused
+                        ? `Reconcile job reused (${res.jobId || '—'})`
+                        : `Detect enqueued (${res.jobId || '—'})`,
+                    );
+                    void refetch();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Gagal enqueue reconcile');
+                  }
+                }}
+              >
+                Run Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">
+                  {invoiceRec ? String(invoiceRec.totalMismatch ?? 0) : String(reconcile.totalMismatch ?? '—')}
+                </div>
+                <StatusBadge
+                  ok={
+                    invoiceRec
+                      ? Number(invoiceRec.totalMismatch || 0) === 0
+                      : Number(reconcile.totalMismatch || 0) === 0 && !reconcile.neverRun
+                  }
+                />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">GRN invoice stale</div>
+                <div className="font-semibold">{String(invoiceRec?.grnStale ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">autoFix enqueued</div>
+                <div className="font-semibold">{String(invoiceRec?.autoFixEnqueued ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {invoiceRec?.createdAt ? formatDateTime(invoiceRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">
+                Sample GRN invoice not done
+              </h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(invoiceRec?.grnInvoiceNotDoneSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(invoiceRec?.grnInvoiceNotDoneSample || []).map((g) => (
+                  <li key={String(g.id)} className="p-2 font-mono text-xs">
+                    {String(g.noGRN || g.id)} · DO {String(g.noDO || '—')} · {String(g.invoiceSyncStatus || '—')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Detail report: <Link href="/integrasi" className="text-primary underline">Integrasi</Link>
+              {' · '}full Replay/Repair toolkit = W1-6
+            </p>
           </section>
 
           <section className="rounded-lg border p-4 space-y-4">

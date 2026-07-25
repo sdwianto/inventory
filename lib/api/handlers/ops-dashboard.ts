@@ -1,4 +1,4 @@
-/** MASTER ops dashboard — Inventory (P2.3a) + FP observability (Sprint 22). */
+/** MASTER ops dashboard — Inventory (P2.3a) + FP observability + W1-5 Invoice reconcile. */
 
 import type { NextResponse } from 'next/server';
 import type { HandlerContext } from '@/types/api/handler';
@@ -10,45 +10,100 @@ import {
   getFpRecentFailures,
   getFpHotpathSlo,
 } from '@/lib/api/request-metrics';
+import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth } = ctx;
+
+  // W1-5: MASTER triggers Invoice Detect (INTEGRATION_RECONCILE) — Compare/Repair via worker.
+  if (route === '/ops/invoice-reconcile/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const { jobId, reused } = await enqueueJob(db, {
+      type: JOB_TYPES.INTEGRATION_RECONCILE,
+      tenantId: 'system',
+      payload: {
+        dedupeKey: `integration-reconcile:ops:${new Date().toISOString().slice(0, 13)}`,
+        allTenants: true,
+        source: 'ops-dashboard',
+      },
+    });
+    scheduleJobProcessing(db, { limit: 3 });
+    return ok({
+      enqueued: true,
+      jobId,
+      reused,
+      type: JOB_TYPES.INTEGRATION_RECONCILE,
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
   if (denied) return denied;
 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [health, failedWebhooks, pendingJobs, deadLetterJobs, recentAudit, fpLatency, fpHotpath] =
-    await Promise.all([
-      buildHealthResponse(db, 'inventory'),
-      db.collection('webhook_inbox')
-        .find({ status: 'FAILED', createdAt: { $gte: since24h } })
-        .sort({ createdAt: -1 })
-        .limit(25)
-        .project({ id: 1, event: 1, tenantId: 1, status: 1, lastError: 1, createdAt: 1 })
-        .toArray(),
-      db.collection('bg_jobs')
-        .find({ status: 'PENDING' })
-        .sort({ createdAt: 1 })
-        .limit(20)
-        .project({ id: 1, type: 1, tenantId: 1, status: 1, attempts: 1, createdAt: 1, nextRunAt: 1 })
-        .toArray(),
-      db.collection('bg_jobs')
-        .find({ status: 'FAILED', deadLetter: true })
-        .sort({ updatedAt: -1 })
-        .limit(15)
-        .project({ id: 1, type: 1, tenantId: 1, lastError: 1, updatedAt: 1 })
-        .toArray(),
-      db.collection('audit_log')
-        .find({ createdAt: { $gte: since24h } })
-        .sort({ createdAt: -1 })
-        .limit(15)
-        .project({ id: 1, action: 1, summary: 1, tenantId: 1, userName: 1, createdAt: 1 })
-        .toArray(),
-      getFpLatencySnapshots(),
-      getFpHotpathSlo(),
-    ]);
+  const [
+    health,
+    failedWebhooks,
+    pendingJobs,
+    deadLetterJobs,
+    recentAudit,
+    fpLatency,
+    fpHotpath,
+    latestReconcile,
+  ] = await Promise.all([
+    buildHealthResponse(db, 'inventory'),
+    db.collection('webhook_inbox')
+      .find({ status: 'FAILED', createdAt: { $gte: since24h } })
+      .sort({ createdAt: -1 })
+      .limit(25)
+      .project({ id: 1, event: 1, tenantId: 1, status: 1, lastError: 1, createdAt: 1 })
+      .toArray(),
+    db.collection('bg_jobs')
+      .find({ status: 'PENDING' })
+      .sort({ createdAt: 1 })
+      .limit(20)
+      .project({ id: 1, type: 1, tenantId: 1, status: 1, attempts: 1, createdAt: 1, nextRunAt: 1 })
+      .toArray(),
+    db.collection('bg_jobs')
+      .find({ status: 'FAILED', deadLetter: true })
+      .sort({ updatedAt: -1 })
+      .limit(15)
+      .project({ id: 1, type: 1, tenantId: 1, lastError: 1, updatedAt: 1 })
+      .toArray(),
+    db.collection('audit_log')
+      .find({ createdAt: { $gte: since24h } })
+      .sort({ createdAt: -1 })
+      .limit(15)
+      .project({ id: 1, action: 1, summary: 1, tenantId: 1, userName: 1, createdAt: 1 })
+      .toArray(),
+    getFpLatencySnapshots(),
+    getFpHotpathSlo(),
+    db.collection('integration_reconcile_reports')
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({
+        id: 1,
+        tenantId: 1,
+        createdAt: 1,
+        summary: 1,
+        'diff.grnInvoiceNotDone': 1,
+        'diff.autoFixEnqueued': 1,
+      })
+      .toArray(),
+  ]);
+
+  const report = (latestReconcile[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    diff?: { autoFixEnqueued?: number; grnInvoiceNotDone?: unknown[] };
+  } | null;
+  const summary = (report?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -56,6 +111,24 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     pendingJobs: pendingJobs.map(clean),
     deadLetterJobs: deadLetterJobs.map(clean),
     recentAudit: recentAudit.map(clean),
+    invoiceReconcile: report
+      ? {
+          reportId: report.id,
+          tenantId: report.tenantId,
+          createdAt: report.createdAt,
+          totalMismatch: Number(summary.totalMismatch || 0),
+          grnStale: Number(summary.grnStale || 0),
+          grnWithoutDo: Number(summary.grnWithoutDo || 0),
+          hutangOrphan: Number(summary.hutangOrphan || 0),
+          cpoMismatch: Number(summary.cpoMismatch || 0),
+          autoFixEnqueued: Number(
+            summary.autoFixEnqueued ?? report.diff?.autoFixEnqueued ?? 0,
+          ),
+          grnInvoiceNotDoneSample: Array.isArray(report.diff?.grnInvoiceNotDone)
+            ? report.diff.grnInvoiceNotDone.slice(0, 10)
+            : [],
+        }
+      : null,
     fpObservability: {
       hotpath: fpHotpath,
       latency: fpLatency,
