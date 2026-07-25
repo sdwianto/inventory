@@ -20,6 +20,11 @@ import {
   repairFefoBatchMismatches,
   runFefoBatchDetect,
 } from '@/lib/api/fefo-batch-reconcile';
+import {
+  INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION,
+  repairIngredientLotMismatches,
+  runIngredientLotDetect,
+} from '@/lib/api/ingredient-lot-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -107,6 +112,32 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     return ok(result);
   }
 
+  // W2-5: Ingredient lot Detect.
+  if (route === '/ops/ingredient-lot-reconcile/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runIngredientLotDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
+  // W2-5: Ingredient lot Repair (ACTIVE past expiry → EXPIRED).
+  if (route === '/ops/ingredient-lot-reconcile/repair' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await repairIngredientLotMismatches(db, tenantId);
+    return ok(result);
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -123,6 +154,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     fpHotpath,
     latestReconcile,
     latestFefo,
+    latestIngredientLot,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -170,6 +202,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .limit(1)
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
+    db.collection(INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -189,6 +227,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const fefoSummary = (fefoReport?.summary || {}) as Record<string, unknown>;
+
+  const ingredientLotReport = (latestIngredientLot[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const ingredientLotSummary = (ingredientLotReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -211,6 +258,20 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           ),
           grnInvoiceNotDoneSample: Array.isArray(report.diff?.grnInvoiceNotDone)
             ? report.diff.grnInvoiceNotDone.slice(0, 10)
+            : [],
+        }
+      : null,
+    ingredientLotReconcile: ingredientLotReport
+      ? {
+          reportId: ingredientLotReport.id,
+          tenantId: ingredientLotReport.tenantId,
+          createdAt: ingredientLotReport.createdAt,
+          totalMismatch: Number(ingredientLotSummary.totalMismatch || 0),
+          activePastExpiry: Number(ingredientLotSummary.activePastExpiry || 0),
+          expiredWithQty: Number(ingredientLotSummary.expiredWithQty || 0),
+          lotVsStok: Number(ingredientLotSummary.lotVsStok || 0),
+          mismatchSample: Array.isArray(ingredientLotReport.mismatches)
+            ? ingredientLotReport.mismatches.slice(0, 10)
             : [],
         }
       : null,

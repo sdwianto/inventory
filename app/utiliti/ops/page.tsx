@@ -33,6 +33,16 @@ type FefoReconcile = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type IngredientLotReconcile = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  activePastExpiry?: number;
+  expiredWithQty?: number;
+  lotVsStok?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -45,6 +55,7 @@ type OpsDashboard = {
   recentAudit?: Array<Record<string, unknown>>;
   invoiceReconcile?: InvoiceReconcile | null;
   fefoReconcile?: FefoReconcile | null;
+  ingredientLotReconcile?: IngredientLotReconcile | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -99,6 +110,7 @@ export default function OpsDashboardPage() {
   const reconcile = (data?.health?.checks?.integrationReconcile || {}) as Record<string, unknown>;
   const invoiceRec = data?.invoiceReconcile;
   const fefoRec = data?.fefoReconcile;
+  const ingredientLotRec = data?.ingredientLotReconcile;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -415,6 +427,85 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Batch UI: <Link href="/food-production/batch" className="text-primary underline">Production Batch</Link>
             </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-5 · Ingredient Lot Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  Lots stamped on GRN POST · past-expiry · lot vs stok_lokasi
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ingredient-lot-reconcile/run',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Ingredient Lot Detect',
+                      }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                      toast.success(
+                        `Lot Detect OK · mismatch ${res.summary?.totalMismatch ?? 0}`,
+                      );
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Lot Detect gagal');
+                    }
+                  }}
+                >
+                  Run Lot Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ingredient-lot-reconcile/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Ingredient Lot Repair',
+                      }) as { repaired?: number; afterSummary?: { totalMismatch?: number } };
+                      toast.success(
+                        `Lot Repair OK · repaired ${res.repaired ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Lot Repair gagal');
+                    }
+                  }}
+                >
+                  Run Lot Repair
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(ingredientLotRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!ingredientLotRec || Number(ingredientLotRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">activePastExpiry</div>
+                <div className="font-semibold">{String(ingredientLotRec?.activePastExpiry ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">lotVsStok</div>
+                <div className="font-semibold">{String(ingredientLotRec?.lotVsStok ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {ingredientLotRec?.createdAt ? formatDateTime(ingredientLotRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
           </section>
 
           <section className="rounded-lg border p-4 space-y-4">

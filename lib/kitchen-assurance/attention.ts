@@ -16,6 +16,10 @@ import {
   PRODUCTION_BATCHES_COLLECTION,
   effectiveQtyRemaining,
 } from '@/lib/food-production/production-batch';
+import {
+  INGREDIENT_LOTS_COLLECTION,
+  effectiveIngredientQtyRemaining,
+} from '@/lib/food-production/ingredient-lot';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { KA_FOLLOW_UPS_COLLECTION } from '@/lib/kitchen-assurance/follow-up';
 import { KA_OBSERVATIONS_COLLECTION } from '@/lib/kitchen-assurance/observation';
@@ -171,6 +175,39 @@ export async function collectAttentions(
       href: '/food-production/batch',
       source: 'FOOD_PRODUCTION',
       kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
+    });
+  }
+
+  // ── Food: Expired / expiring ingredient lots (W2-5) ──
+  const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const ingredientLots = await db
+    .collection(INGREDIENT_LOTS_COLLECTION)
+    .find({
+      tenantId,
+      status: { $in: ['ACTIVE', 'EXPIRED'] },
+      expiryDate: { $lte: soon },
+    })
+    .sort({ expiryDate: 1 })
+    .limit(20)
+    .toArray();
+  for (const row of ingredientLots) {
+    const r = row as Record<string, unknown>;
+    const rem = effectiveIngredientQtyRemaining({
+      qty: Number(r.qty || 0),
+      qtyRemaining: r.qtyRemaining as number | undefined,
+      status: String(r.status || 'ACTIVE') as 'ACTIVE' | 'EXPIRED' | 'CONSUMED',
+    });
+    if (!(rem > 0)) continue;
+    const exp = String(r.expiryDate || '').slice(0, 10);
+    const past = exp < today;
+    out.push({
+      key: `ilot-exp:${String(r.id)}`,
+      pillar: 'FOOD',
+      level: past ? 'CRITICAL' : 'ATTENTION',
+      label: `${past ? 'Expired' : 'Expiring'} ingredient · ${String(r.lotNo || r.productKode || r.id)}`,
+      detail: `${String(r.productNama || r.productKode || '')} · expiry ${exp} · remaining ${rem}`,
+      href: '/penerimaan',
+      source: 'FOOD_PRODUCTION',
     });
   }
 

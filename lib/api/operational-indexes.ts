@@ -194,6 +194,12 @@ const INDEX_SPECS: IndexSpec[] = [
     name: 'idx_batch_fefo_product_wh',
   },
   { collection: 'fefo_batch_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_fefo_recon_tenant_created' },
+  // W2-5 ingredient lots
+  { collection: 'ingredient_lots', index: { tenantId: 1, id: 1 }, name: 'idx_ilot_tenant_id' },
+  { collection: 'ingredient_lots', index: { tenantId: 1, grnId: 1 }, name: 'idx_ilot_tenant_grn' },
+  { collection: 'ingredient_lots', index: { tenantId: 1, productId: 1, warehouseKode: 1, status: 1, expiryDate: 1 }, name: 'idx_ilot_fefo_product_wh' },
+  { collection: 'ingredient_lots', index: { tenantId: 1, expiryDate: 1 }, name: 'idx_ilot_tenant_expiry' },
+  { collection: 'ingredient_lot_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_ilot_recon_tenant_created' },
   { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },
   { collection: 'service_points', index: { tenantId: 1, id: 1 }, name: 'idx_sp_tenant_id' },

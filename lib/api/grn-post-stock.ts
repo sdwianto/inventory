@@ -14,6 +14,12 @@ import { formatStockDualLabel } from '@/lib/uom/display';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
+import {
+  INGREDIENT_LOTS_COLLECTION,
+  buildIngredientLotNo,
+  defaultIngredientExpiryDate,
+  type IngredientLotDoc,
+} from '@/lib/food-production/ingredient-lot';
 
 function lokasiKey(stokId: string, kode: string) {
   return `${stokId}:${kode}`;
@@ -88,8 +94,10 @@ export async function applyGrnStockPosting(
   const itemsFull: JsonObject[] = [];
   const lokasiSet = new Set<string>();
   const kartuDocs: JsonObject[] = [];
+  const lotDocs: IngredientLotDoc[] = [];
+  const receivedDay = now.toISOString().slice(0, 10);
 
-  for (const { it, qty, qtyBase, resolved } of lineInputs) {
+  for (const { it, qty, qtyBase, resolved, lineIndex } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
     if (!prod) return { error: `Produk lokal tidak ditemukan: ${it.vendorKode}` };
 
@@ -140,6 +148,45 @@ export async function applyGrnStockPosting(
       hargaSatuan: unitCostBase,
     }));
 
+    // W2-5: stamp ingredient lot (body override → line → default shelf).
+    const bodyLine = bodyItems?.find((b) => (
+      (b.lineIndex != null && b.lineIndex === lineIndex)
+      || (b.lineIndex == null && b.lineId === it.lineId)
+    ));
+    const expiryRaw = String(bodyLine?.expiryDate || it.expiryDate || '').trim();
+    const expiryDate = /^\d{4}-\d{2}-\d{2}/.test(expiryRaw)
+      ? expiryRaw.slice(0, 10)
+      : defaultIngredientExpiryDate(receivedDay);
+    const lotNo = String(bodyLine?.lotNo || it.lotNo || '').trim()
+      || buildIngredientLotNo({
+        noGRN: grn.noGRN ? String(grn.noGRN) : undefined,
+        productKode: String(prod.kode || it.vendorKode || ''),
+        lineIndex,
+        receivedAt: receivedDay,
+      });
+
+    const lot: IngredientLotDoc = {
+      id: uuidv4(),
+      tenantId: tid,
+      lotNo,
+      grnId: String(grn.id || ''),
+      noGRN: grn.noGRN ? String(grn.noGRN) : undefined,
+      productId: String(it.localStokId),
+      productKode: String(prod.kode || it.vendorKode || ''),
+      productNama: String(prod.nama || it.nama || ''),
+      warehouseKode: lokasiKode,
+      receivedAt: receivedDay,
+      expiryDate,
+      qty: qtyBase,
+      qtyRemaining: qtyBase,
+      satuan: resolved.satuan,
+      status: 'ACTIVE',
+      lineIndex,
+      createdAt: now,
+      updatedAt: now,
+    };
+    lotDocs.push(lot);
+
     itemsFull.push({
       ...it,
       qtyReceived: qty,
@@ -149,6 +196,9 @@ export async function applyGrnStockPosting(
       lokasiKode,
       lokasiNama: warehouseLabel(lokasiKode),
       hargaBeliBaru: state.newBeli,
+      lotNo,
+      lotId: lot.id,
+      expiryDate,
     });
   }
 
@@ -246,11 +296,22 @@ export async function applyGrnStockPosting(
     await db.collection('stok_kartu').insertMany(kartuDocs, txOpts(session));
   }
 
+  // Idempotent lot stamp: skip insert if lots already exist for this GRN (replay-safe).
+  if (lotDocs.length && grn.id) {
+    const existingLots = await db.collection(INGREDIENT_LOTS_COLLECTION).countDocuments(
+      { tenantId: tid, grnId: String(grn.id) },
+      txOpts(session),
+    );
+    if (existingLots === 0) {
+      await db.collection(INGREDIENT_LOTS_COLLECTION).insertMany(lotDocs, txOpts(session));
+    }
+  }
+
   const receivedTotal = itemsFull.reduce((s, it) => {
     const qty = parseFloat(String(it.qtyReceived)) || 0;
     const harga = parseInt(String(it.harga || it.hargaSatuan || 0), 10);
     return s + Math.round(qty * harga);
   }, 0);
 
-  return { itemsFull, receivedTotal, lokasiSet, kartuDocs };
+  return { itemsFull, receivedTotal, lokasiSet, kartuDocs, lotDocs };
 }
