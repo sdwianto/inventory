@@ -303,6 +303,49 @@ export async function collectAttentions(
     });
   }
 
+  // ── Food: Dist return FEFO restore shortfall (W2-14) ──
+  const distReturnSfFilter: Record<string, unknown> = {
+    tenantId,
+    status: 'COMPLETED',
+    fefoRestore: {
+      $elemMatch: {
+        shortfall: { $gt: 0 },
+      },
+    },
+  };
+  if (kitchenId) distReturnSfFilter.kitchenId = kitchenId;
+  const distReturnShortfalls = await db
+    .collection(DISTRIBUTION_ORDERS_COLLECTION)
+    .find(distReturnSfFilter)
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .toArray();
+  for (const row of distReturnShortfalls) {
+    const r = row as Record<string, unknown>;
+    const restore = Array.isArray(r.fefoRestore) ? r.fefoRestore : [];
+    let shortfallSum = 0;
+    let lineCount = 0;
+    for (const c of restore) {
+      const line = c as { shortfall?: number };
+      const sf = Number(line.shortfall || 0);
+      if (sf > 0.001) {
+        shortfallSum += sf;
+        lineCount += 1;
+      }
+    }
+    if (!(shortfallSum > 0)) continue;
+    out.push({
+      key: `dist-return-fefo-sf:${String(r.id)}`,
+      pillar: 'FOOD',
+      level: 'ATTENTION',
+      label: `Dist return FEFO shortfall · ${String(r.noDokumen || r.id)}`,
+      detail: `${lineCount} line(s) · restore shortfall qty ${shortfallSum}`,
+      href: '/food-production/distribution',
+      source: 'FOOD_PRODUCTION',
+      kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
+    });
+  }
+
   // ── Food: Release FEFO shortfall (W2-11) — tenant-wide (no kitchenId on RL) ──
   if (!kitchenId) {
     const releaseShortfalls = await db

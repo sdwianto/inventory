@@ -28,6 +28,7 @@ Baca di Sales repo:
 | **W2-11 Release FEFO Shortfall Detect** | `sales/docs/architecture/W2-11-RELEASE-FEFO-SHORTFALL-DETECT.md` |
 | **W2-12 Transfer FEFO** | `sales/docs/architecture/W2-12-TRANSFER-FEFO.md` |
 | **W2-13 Transfer Lot FEFO** | `sales/docs/architecture/W2-13-TRANSFER-LOT-FEFO.md` |
+| **W2-14 Dist Return FEFO Shortfall Detect** | `sales/docs/architecture/W2-14-DIST-RETURN-FEFO-SHORTFALL-DETECT.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
