@@ -112,6 +112,30 @@ export async function executePoVendorSyncJob(
   return runPoVendorSyncPending(db, scopeAuth, { poId, vendorTenantId });
 }
 
+/** W1-2 slice 2: retry ENSURE_PUSH_CANCEL_SO drain only. */
+export async function executeCancelSoPushRecoveryJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const poId = String(payload.poId || '').trim();
+  if (!poId) {
+    throw new ValidationError('poId wajib di payload CANCEL_SO_PUSH_RECOVERY');
+  }
+  const reason = payload.reason != null ? String(payload.reason) : null;
+  const { drainEnsurePushCancelSo } = await import('@/lib/api/integration-outbox');
+  const drained = await drainEnsurePushCancelSo(db, { tenantId, poId, reason });
+  if (!drained.ok) {
+    throw new Error(drained.error || 'ENSURE_PUSH_CANCEL_SO drain gagal');
+  }
+  return {
+    ok: true,
+    outboxId: drained.outboxId,
+    alreadyDone: drained.alreadyDone,
+    salesNotify: drained.salesNotify || null,
+  };
+}
+
 export async function executeGrnInvoiceSyncJob(
   db: Db,
   tenantId: string,

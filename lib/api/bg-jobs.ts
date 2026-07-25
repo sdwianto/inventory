@@ -12,6 +12,7 @@ import {
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { shouldUseExecutionEnqueue, shouldUseLegacyBgPoll } from '@/lib/api/execution-wave';
 import {
+  executeCancelSoPushRecoveryJob,
   executeCatalogSyncJob,
   executeHutangSyncJob,
   executePoVendorSyncJob,
@@ -28,6 +29,7 @@ export const JOB_TYPES = {
   CATALOG_SYNC: 'CATALOG_SYNC',
   HUTANG_SYNC: 'HUTANG_SYNC',
   PO_VENDOR_SYNC: 'PO_VENDOR_SYNC',
+  CANCEL_SO_PUSH_RECOVERY: 'CANCEL_SO_PUSH_RECOVERY',
   WEBHOOK_INBOX: 'WEBHOOK_INBOX',
   GRN_SYNC_SHIPPED: 'GRN_SYNC_SHIPPED',
   GRN_POST_SIDE_EFFECTS: 'GRN_POST_SIDE_EFFECTS',
@@ -321,6 +323,12 @@ export async function processJob(db: Db, job: BgJob) {
       outcome = await runHutangSyncJob(db, job);
     } else if (job.type === JOB_TYPES.PO_VENDOR_SYNC) {
       outcome = await runPoVendorSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.CANCEL_SO_PUSH_RECOVERY) {
+      outcome = await executeCancelSoPushRecoveryJob(
+        db,
+        job.tenantId,
+        (job.payload || {}) as Record<string, unknown>,
+      );
     } else if (job.type === JOB_TYPES.WEBHOOK_INBOX) {
       outcome = await runWebhookInboxJob(db, job);
     } else if (job.type === JOB_TYPES.GRN_SYNC_SHIPPED) {

@@ -116,6 +116,31 @@ describe('integration-outbox H1.1', () => {
     expect(col.docs[0].type).toBe('ENSURE_CREATE_SO');
   });
 
+  it('exports ENSURE_PUSH_CANCEL_SO and inserts once per poId (W1-2)', async () => {
+    const {
+      INTEGRATION_OUTBOX_TYPES: types,
+      insertEnsurePushCancelSoOutbox,
+    } = await import('@/lib/api/integration-outbox');
+    expect(types.ENSURE_PUSH_CANCEL_SO).toBe('ENSURE_PUSH_CANCEL_SO');
+    const col = memoryCollection();
+    const db = { collection: () => col } as never;
+    const a = await insertEnsurePushCancelSoOutbox(db, {
+      tenantId: 'sppg',
+      poId: 'po-cancel-1',
+      noPO: 'PO-C1',
+      reason: 'test',
+    });
+    const b = await insertEnsurePushCancelSoOutbox(db, {
+      tenantId: 'sppg',
+      poId: 'po-cancel-1',
+      reason: 'test',
+    });
+    expect(a.inserted).toBe(true);
+    expect(b.inserted).toBe(false);
+    expect(col.docs).toHaveLength(1);
+    expect(col.docs[0].type).toBe('ENSURE_PUSH_CANCEL_SO');
+  });
+
   it('applyGrnInvoiceNotifyResult marks FAILED without invoice', async () => {
     const grns: Record<string, unknown>[] = [{ id: 'g1' }];
     const db = {

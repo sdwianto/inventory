@@ -19,9 +19,9 @@ import {
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
-import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
 import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
+import { orchestrateEnsurePushCancelSoAfterCommit } from '@/lib/api/cpo-cancel-push-integration';
 import { canEditCustomerPo, canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 import {
   parseCursorPageParams,
@@ -802,7 +802,7 @@ export async function handleCustomerPo({
     });
   }
 
-  // POST /customer-purchase-orders/:id/cancel — batalkan CPO + notify sales.app
+  // POST /customer-purchase-orders/:id/cancel — TX CANCELLED + ENSURE_PUSH_CANCEL_SO (W1-2)
   if (path[0] === 'customer-purchase-orders' && path[2] === 'cancel' && method === 'POST') {
     const deniedRole = requireRole(auth, PO_EDIT_ROLES);
     if (deniedRole) return deniedRole;
@@ -820,26 +820,63 @@ export async function handleCustomerPo({
 
     const now = new Date();
     const canceller = await actorSnapshot(db, auth);
-    let salesNotify: Awaited<ReturnType<typeof notifySalesPoCancelled>> | null = null;
-    if (['SUBMITTED', 'CONFIRMED', 'APPROVED'].includes(status)) {
-      salesNotify = await notifySalesPoCancelled(db, po, poBody.reason || 'Dibatalkan customer');
+    const reason = String(poBody.reason || 'Dibatalkan customer');
+    const needsPeerPush = ['SUBMITTED', 'CONFIRMED', 'APPROVED'].includes(status);
+    const tenantId = String(po.tenantId || 'default');
+
+    const { runInTransactionOrFallback, txOpts } = await import('@/lib/api/transaction');
+    const { insertEnsurePushCancelSoOutbox } = await import('@/lib/api/integration-outbox');
+
+    await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+      await txDb.collection('customer_purchase_orders').updateOne(
+        { id: po.id },
+        {
+          $set: {
+            status: 'CANCELLED',
+            cancelledBy: canceller,
+            cancelledAt: now,
+            cancelReason: reason,
+            updatedAt: now,
+          },
+        },
+        txOpts(session),
+      );
+      if (needsPeerPush) {
+        await insertEnsurePushCancelSoOutbox(
+          txDb,
+          {
+            tenantId,
+            poId: String(po.id),
+            noPO: po.noPO ? String(po.noPO) : null,
+            reason,
+          },
+          session,
+        );
+      }
+    });
+
+    let salesNotify: Record<string, unknown> | null = null;
+    let cancelPushJobId: string | undefined;
+    let cancelPushError: string | undefined;
+    if (needsPeerPush) {
+      const orch = await orchestrateEnsurePushCancelSoAfterCommit(db, {
+        tenantId,
+        poId: String(po.id),
+        reason,
+      });
+      salesNotify = (orch.salesNotify as Record<string, unknown> | undefined) || null;
+      cancelPushJobId = orch.jobId;
+      cancelPushError = orch.error;
     }
 
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
-      {
-        $set: {
-          status: 'CANCELLED',
-          cancelledBy: canceller,
-          cancelledAt: now,
-          cancelReason: poBody.reason || 'Dibatalkan',
-          updatedAt: now,
-        },
-      },
-    );
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
-    return ok({ ...(await enrichOnePo(db, updated)), salesNotify });
+    await invalidateDashboardSnapshot(db, tenantId);
+    return ok({
+      ...(await enrichOnePo(db, updated)),
+      salesNotify,
+      cancelPushJobId: cancelPushJobId || null,
+      cancelPushError: cancelPushError || null,
+    });
   }
 
   // POST /customer-purchase-orders/:id/reject — Admin tolak pengajuan

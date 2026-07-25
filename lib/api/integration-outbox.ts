@@ -10,11 +10,13 @@ import { logger } from '@/lib/api/logger';
 
 export const INTEGRATION_OUTBOX_COLLECTION = 'integration_outbox';
 
-/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_CREATE_SO (Sales Order from Customer PO, bukan Supplier Order). */
+/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO. */
 export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_GRN_INVOICE: 'ENSURE_GRN_INVOICE',
   /** Customer PO APPROVED → Sales Order di Sales app. */
   ENSURE_CREATE_SO: 'ENSURE_CREATE_SO',
+  /** Customer PO CANCELLED → push cancel SO ke Sales (W1-2 slice 2). */
+  ENSURE_PUSH_CANCEL_SO: 'ENSURE_PUSH_CANCEL_SO',
 } as const;
 
 export type IntegrationOutboxType =
@@ -622,6 +624,220 @@ export async function drainEnsureCreateSo(
     vendorNoSO: updated?.vendorNoSO ? String(updated.vendorNoSO) : null,
     vendorSoId: updated?.vendorSoId ? String(updated.vendorSoId) : null,
     partialFailures: partialFailures.length ? partialFailures : undefined,
+  };
+}
+
+// ─── W1-2 ENSURE_PUSH_CANCEL_SO (CPO CANCELLED → cancel SO di Sales) ─────────
+
+export async function insertEnsurePushCancelSoOutbox(
+  db: Db,
+  input: {
+    tenantId: string;
+    poId: string;
+    noPO?: string | null;
+    reason?: string | null;
+    correlationId?: string | null;
+  },
+  session?: ClientSession,
+): Promise<{ inserted: boolean; id: string }> {
+  const now = new Date();
+  const id = randomUUID();
+  const doc: IntegrationOutboxDoc = {
+    id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+    aggregateId: input.poId,
+    tenantId: input.tenantId,
+    payload: {
+      poId: input.poId,
+      noPO: input.noPO || null,
+      reason: input.reason || null,
+    },
+    status: 'PENDING',
+    attempts: 0,
+    lastError: null,
+    correlationId: input.correlationId || null,
+    createdAt: now,
+    updatedAt: now,
+    processedAt: null,
+  };
+  try {
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).insertOne(doc, txOpts(session));
+    return { inserted: true, id };
+  } catch (e) {
+    const code = e && typeof e === 'object' && 'code' in e ? Number((e as { code: number }).code) : 0;
+    if (code === 11000) {
+      const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne(
+        { type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO, aggregateId: input.poId },
+        txOpts(session),
+      );
+      return { inserted: false, id: String(existing?.id || id) };
+    }
+    throw e;
+  }
+}
+
+export async function ensurePushCancelSoOutboxPending(
+  db: Db,
+  input: { tenantId: string; poId: string; noPO?: string | null; reason?: string | null },
+): Promise<void> {
+  const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+    aggregateId: input.poId,
+  });
+  if (!existing) {
+    await insertEnsurePushCancelSoOutbox(db, input);
+    return;
+  }
+  const status = String(existing.status || '');
+  if (status === 'DONE' || status === 'PROCESSING') return;
+  await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+    { id: existing.id, status: { $in: ['FAILED', 'PENDING'] } },
+    {
+      $set: {
+        status: 'PENDING',
+        lastError: null,
+        updatedAt: new Date(),
+        ...(input.reason != null ? { 'payload.reason': input.reason } : {}),
+      },
+    },
+  );
+}
+
+async function claimEnsurePushCancelSoOutbox(
+  db: Db,
+  poId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - STALE_PROCESSING_MS);
+  const claimed = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOneAndUpdate(
+    {
+      type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+      aggregateId: poId,
+      $or: [
+        { status: 'PENDING' },
+        { status: 'FAILED' },
+        { status: 'PROCESSING', updatedAt: { $lt: staleBefore } },
+      ],
+    },
+    {
+      $set: { status: 'PROCESSING', updatedAt: now },
+      $inc: { attempts: 1 },
+    },
+    { returnDocument: 'after' },
+  );
+  return (claimed as IntegrationOutboxDoc | null) || null;
+}
+
+export async function getEnsurePushCancelSoOutbox(
+  db: Db,
+  poId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  return (await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+    aggregateId: poId,
+  })) as IntegrationOutboxDoc | null;
+}
+
+/**
+ * Drain ENSURE_PUSH_CANCEL_SO → notifySalesPoCancelled (SDK).
+ * Sync only — no enqueue / webhook (W1-2 canonical).
+ */
+export async function drainEnsurePushCancelSo(
+  db: Db,
+  input: { tenantId: string; poId: string; reason?: string | null },
+): Promise<{
+  ok: boolean;
+  error?: string;
+  outboxId: string | null;
+  alreadyDone: boolean;
+  salesNotify?: { cancelled: unknown[]; errors: unknown[]; correlationId?: string };
+}> {
+  const existing = await getEnsurePushCancelSoOutbox(db, input.poId);
+  if (existing?.status === 'DONE') {
+    return { ok: true, outboxId: existing.id, alreadyDone: true };
+  }
+
+  const reason = String(
+    input.reason
+      || existing?.payload?.reason
+      || 'Dibatalkan customer',
+  );
+
+  await ensurePushCancelSoOutboxPending(db, {
+    tenantId: input.tenantId,
+    poId: input.poId,
+    reason,
+  });
+
+  const claimed = await claimEnsurePushCancelSoOutbox(db, input.poId);
+  if (!claimed) {
+    const again = await getEnsurePushCancelSoOutbox(db, input.poId);
+    if (again?.status === 'DONE') {
+      return { ok: true, outboxId: again.id, alreadyDone: true };
+    }
+    return {
+      ok: false,
+      error: again?.status === 'PROCESSING'
+        ? 'Outbox sedang diproses worker lain'
+        : 'Outbox tidak bisa diklaim',
+      outboxId: again?.id || null,
+      alreadyDone: false,
+    };
+  }
+
+  const po = await db.collection('customer_purchase_orders').findOne({ id: input.poId });
+  if (!po) {
+    await markOutboxFailed(db, claimed.id, 'PO tidak ditemukan');
+    return {
+      ok: false,
+      error: 'PO tidak ditemukan',
+      outboxId: claimed.id,
+      alreadyDone: false,
+    };
+  }
+
+  const { notifySalesPoCancelled } = await import('@/lib/api/customer-po-cancel-sales');
+  const salesNotify = await notifySalesPoCancelled(db, po as Record<string, unknown>, reason);
+  const errors = salesNotify.errors || [];
+
+  if (errors.length > 0) {
+    const msg = errors
+      .map((e) => String((e as { error?: string }).error || 'cancel gagal'))
+      .join('; ')
+      .slice(0, 2000);
+    await markOutboxFailed(db, claimed.id, msg || 'partial cancel SO failure');
+    logger.info('integration_outbox_drained', {
+      tenantId: input.tenantId,
+      poId: input.poId,
+      outboxId: claimed.id,
+      type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+      status: 'FAILED',
+      attempts: claimed.attempts,
+      error: msg,
+    });
+    return {
+      ok: false,
+      error: msg || 'partial cancel SO failure',
+      outboxId: claimed.id,
+      alreadyDone: false,
+      salesNotify,
+    };
+  }
+
+  await markOutboxDone(db, claimed.id);
+  logger.info('integration_outbox_drained', {
+    tenantId: input.tenantId,
+    poId: input.poId,
+    outboxId: claimed.id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_PUSH_CANCEL_SO,
+    status: 'DONE',
+    attempts: claimed.attempts,
+  });
+  return {
+    ok: true,
+    outboxId: claimed.id,
+    alreadyDone: false,
+    salesNotify,
   };
 }
 

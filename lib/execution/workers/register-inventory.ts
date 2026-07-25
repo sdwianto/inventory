@@ -14,6 +14,7 @@ import {
   executeHutangRepairJob,
   executeHutangSyncJob,
   executeIntegrationReconcileJob,
+  executeCancelSoPushRecoveryJob,
   executePoVendorSyncJob,
   executeSandboxResetJob,
   executeWebhookInboxJob,
@@ -48,6 +49,21 @@ export function registerInventoryHandlers(): void {
     requiredCapabilities: ['SYNC'],
     handler: async (ctx, payload) => assertExecutionHandlerSuccess(
       await executePoVendorSyncJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'CANCEL_SO_PUSH_RECOVERY',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['SYNC'],
+    requiresLock: true,
+    lockTtlTier: 'SHORT',
+    lockKeyFromPayload: (payload, job) => (
+      `cancel-so-push:${job.tenantId}:${String(payload.poId || job.id)}`
+    ),
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeCancelSoPushRecoveryJob(ctx.db, ctx.tenantId, payload),
     ),
   });
 
