@@ -25,6 +25,7 @@ import { requireMaster } from '@/lib/api/require-auth';
 import { handleIntegrationInbound } from '@/lib/api/handlers/integration-inbound';
 import { createIntegrationClient } from '@/lib/integration/client';
 import { IntegrationError } from '@/lib/integration/errors';
+import { getInventoryPairUrl, getInventoryWebhookUrl } from '@/lib/integration-public-url';
 import { randomUUID } from 'node:crypto';
 
 const AUTO_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
@@ -149,6 +150,15 @@ export async function handleIntegrations({
 }: HandlerContext) {
   const inbound = await handleIntegrationInbound({ db, route, method, body, auth, url, request, path });
   if (inbound) return inbound;
+
+  // W1-1: unauthenticated discovery for Sales IntegrationClient.getInventoryPublicInfo
+  if (route === '/integrations/public-info' && method === 'GET') {
+    return ok({
+      webhookUrl: getInventoryWebhookUrl(),
+      pairUrl: getInventoryPairUrl(),
+      service: 'inventory',
+    });
+  }
 
   const intBody = parseHandlerBody(body);
   const scopeOpts = { url, body: intBody, request };

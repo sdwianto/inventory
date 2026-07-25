@@ -7,6 +7,8 @@ const PUBLIC = [
   { method: 'POST', route: '/auth/login' },
   { method: 'POST', route: '/auth/logout' },
   { method: 'POST', route: '/webhooks/sales' },
+  { method: 'GET', route: '/integrations/public-info' },
+  { method: 'GET', route: '/v1/integrations/public-info' },
   { method: 'POST', route: '/integrations/pair' },
   { method: 'POST', route: '/integrations/platform-pair' },
   // Category A inbound dari Sales — auth via X-Webhook-Secret di handler.
