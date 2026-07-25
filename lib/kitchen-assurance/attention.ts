@@ -303,6 +303,50 @@ export async function collectAttentions(
     });
   }
 
+  // ── Food: Release FEFO shortfall (W2-11) — tenant-wide (no kitchenId on RL) ──
+  if (!kitchenId) {
+    const releaseShortfalls = await db
+      .collection('inventory_releases')
+      .find({
+        tenantId,
+        status: 'POSTED',
+        fefoConsume: {
+          $elemMatch: {
+            shortfall: { $gt: 0 },
+            skippedNoBatches: { $ne: true },
+          },
+        },
+      })
+      .sort({ updatedAt: -1 })
+      .limit(15)
+      .toArray();
+    for (const row of releaseShortfalls) {
+      const r = row as Record<string, unknown>;
+      const consume = Array.isArray(r.fefoConsume) ? r.fefoConsume : [];
+      let shortfallSum = 0;
+      let lineCount = 0;
+      for (const c of consume) {
+        const line = c as { shortfall?: number; skippedNoBatches?: boolean };
+        if (line.skippedNoBatches) continue;
+        const sf = Number(line.shortfall || 0);
+        if (sf > 0.001) {
+          shortfallSum += sf;
+          lineCount += 1;
+        }
+      }
+      if (!(shortfallSum > 0)) continue;
+      out.push({
+        key: `release-fefo-sf:${String(r.id)}`,
+        pillar: 'FOOD',
+        level: 'ATTENTION',
+        label: `Release FEFO shortfall · ${String(r.noRelease || r.id)}`,
+        detail: `${lineCount} line(s) · shortfall qty ${shortfallSum}`,
+        href: '/stok/release',
+        source: 'FOOD_PRODUCTION',
+      });
+    }
+  }
+
   // ── Food: HACCP FAIL ──
   const haccpFilter: Record<string, unknown> = {
     tenantId,

@@ -61,6 +61,15 @@ type DistFefoShortfall = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type ReleaseFefoShortfall = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  releasesWithShortfall?: number;
+  shortfallQtyTotal?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -76,6 +85,7 @@ type OpsDashboard = {
   ingredientLotReconcile?: IngredientLotReconcile | null;
   issueFefoShortfall?: IssueFefoShortfall | null;
   distFefoShortfall?: DistFefoShortfall | null;
+  releaseFefoShortfall?: ReleaseFefoShortfall | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -133,6 +143,7 @@ export default function OpsDashboardPage() {
   const ingredientLotRec = data?.ingredientLotReconcile;
   const issueShortfallRec = data?.issueFefoShortfall;
   const distShortfallRec = data?.distFefoShortfall;
+  const releaseShortfallRec = data?.releaseFefoShortfall;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -669,6 +680,77 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Dist UI:{' '}
               <Link href="/food-production/distribution" className="text-primary underline">Distribution</Link>
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-11 · Release FEFO Shortfall Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  RL POSTED with fefoConsume.shortfall &gt; 0 (skip skippedNoBatches) — needQty = allocated + shortfall
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      path: '/api/ops/release-fefo-shortfall/run',
+                      method: 'POST',
+                      body: {},
+                      offlineLabel: 'Release FEFO Shortfall Detect',
+                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                    toast.success(
+                      `Release Shortfall Detect OK · mismatch ${res.summary?.totalMismatch ?? 0}`,
+                    );
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Release Shortfall Detect gagal');
+                  }
+                }}
+              >
+                Run Release Shortfall Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(releaseShortfallRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!releaseShortfallRec || Number(releaseShortfallRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">releasesWithShortfall</div>
+                <div className="font-semibold">{String(releaseShortfallRec?.releasesWithShortfall ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">shortfallQtyTotal</div>
+                <div className="font-semibold">{String(releaseShortfallRec?.shortfallQtyTotal ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {releaseShortfallRec?.createdAt ? formatDateTime(releaseShortfallRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(releaseShortfallRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(releaseShortfallRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.releaseId || m.stokId || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.noRelease || m.releaseId || '—')} · shortfall {String(m.shortfall ?? '—')} · {String(m.detail || '')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Release UI:{' '}
+              <Link href="/stok/release" className="text-primary underline">Inventory Release</Link>
             </p>
           </section>
 

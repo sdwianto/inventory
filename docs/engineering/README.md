@@ -25,6 +25,7 @@ Baca di Sales repo:
 | **W2-8 Cycle Count Ingredient Lots** | `sales/docs/architecture/W2-8-CYCLE-COUNT-INGREDIENT-LOTS.md` |
 | **W2-9 Issue FEFO Shortfall Detect** | `sales/docs/architecture/W2-9-ISSUE-FEFO-SHORTFALL-DETECT.md` |
 | **W2-10 Dist FEFO Shortfall Detect** | `sales/docs/architecture/W2-10-DIST-FEFO-SHORTFALL-DETECT.md` |
+| **W2-11 Release FEFO Shortfall Detect** | `sales/docs/architecture/W2-11-RELEASE-FEFO-SHORTFALL-DETECT.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
