@@ -28,6 +28,7 @@ import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildPenyesuaianJournalLines } from '@/lib/api/journal-lines';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { syncBatchesOnVariance } from '@/lib/food-production/cycle-count-fefo';
+import { syncLotsOnVariance } from '@/lib/food-production/cycle-count-ingredient-lots';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -88,6 +89,7 @@ export async function handlePenyesuaian({
         qtyAktual: number;
         selisih: number;
         fefoSync?: Record<string, unknown>;
+        lotSync?: Record<string, unknown>;
       }>,
       createdAt: now,
     });
@@ -130,8 +132,9 @@ export async function handlePenyesuaian({
           const qtySistem = row ? (parseFloat(String(row.qty)) || 0) : 0;
           const selisih = qtyAktual - qtySistem;
           let fefoSync: Record<string, unknown> | undefined;
+          let lotSync: Record<string, unknown> | undefined;
 
-          // W2-4: unified stock mutation (kartu via postStockMutation) + FEFO sync.
+          // W2-4/W2-8: stock mutation + FG batch sync + ingredient lot sync.
           if (selisih !== 0) {
             const posted = await postStockMutation(txDb, {
               tenantId,
@@ -150,18 +153,16 @@ export async function handlePenyesuaian({
             if (!posted.ok) {
               throw new Error(posted.error || `Gagal penyesuaian ${prod.kode || prod.id}`);
             }
-            fefoSync = await syncBatchesOnVariance(
-              txDb,
-              {
-                tenantId,
-                stokId: prod.id,
-                warehouseKode: lokasiKode,
-                deltaQty: selisih,
-                asOf: now,
-                noDokumen: noPS,
-              },
-              session,
-            ) as unknown as Record<string, unknown>;
+            const syncInput = {
+              tenantId,
+              stokId: prod.id,
+              warehouseKode: lokasiKode,
+              deltaQty: selisih,
+              asOf: now,
+              noDokumen: noPS,
+            };
+            fefoSync = await syncBatchesOnVariance(txDb, syncInput, session) as unknown as Record<string, unknown>;
+            lotSync = await syncLotsOnVariance(txDb, syncInput, session) as unknown as Record<string, unknown>;
           } else {
             await syncProductStokFromLokasi(txDb, tenantId, prod.id, session);
           }
@@ -175,6 +176,7 @@ export async function handlePenyesuaian({
             qtyEntered: plan.qtyEntered,
             gudangKode: lokasiKode, qtySistem, qtyAktual, selisih,
             ...(fefoSync ? { fefoSync } : {}),
+            ...(lotSync ? { lotSync } : {}),
           });
 
           if (selisih !== 0) {

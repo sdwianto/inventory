@@ -158,7 +158,7 @@ export default function PenyesuaianPage() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><FileEdit className="w-6 h-6" /> Penyesuaian Stok</h1>
-            <p className="text-sm text-slate-500">Stock opname: sinkronkan stok sistem + FEFO batch (W2-4) dengan jumlah fisik</p>
+            <p className="text-sm text-slate-500">Stock opname: sinkronkan stok + FG batch (W2-4) + ingredient lots (W2-8)</p>
           </div>
           <div className="flex items-center gap-2">
             <ListExportMenu onExport={exportData} disabled={list.length === 0} />

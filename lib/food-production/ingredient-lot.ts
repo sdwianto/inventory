@@ -31,6 +31,11 @@ export interface IngredientLotDoc {
     noDokumen?: string;
     at?: Date;
   };
+  lastCycleCountBy?: {
+    noDokumen?: string;
+    delta?: number;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
