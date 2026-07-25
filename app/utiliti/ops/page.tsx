@@ -96,6 +96,16 @@ type StokBinReconcile = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type KaFollowUpOrphan = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  activeOnClosed?: number;
+  activeOnCancelled?: number;
+  activeCaseMissing?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -115,6 +125,7 @@ type OpsDashboard = {
   distReturnFefoShortfall?: DistReturnFefoShortfall | null;
   hslWasteReconcile?: HslWasteReconcile | null;
   stokBinReconcile?: StokBinReconcile | null;
+  kaFollowUpOrphan?: KaFollowUpOrphan | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -176,6 +187,7 @@ export default function OpsDashboardPage() {
   const distReturnShortfallRec = data?.distReturnFefoShortfall;
   const hslWasteRec = data?.hslWasteReconcile;
   const stokBinRec = data?.stokBinReconcile;
+  const kaFuOrphanRec = data?.kaFollowUpOrphan;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -1052,6 +1064,112 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Bin master:{' '}
               <Link href="/stok/bins" className="text-primary underline">Stok Bins</Link>
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-25 — KA Follow-up Orphan Detect & Repair</h2>
+                <p className="text-xs text-muted-foreground">
+                  Soft Detect: OPEN/DONE FU on CLOSED/CANCELLED/missing case · Repair cancels orphan FU (never reopen cases)
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ka-follow-up-orphan/run',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'KA FU Orphan Detect',
+                      }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                      toast.success(
+                        `KA FU Orphan Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'KA FU Orphan Detect gagal');
+                    }
+                  }}
+                >
+                  Run KA FU Orphan Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ka-follow-up-orphan/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'KA FU Orphan Repair',
+                      }) as {
+                        repaired?: number;
+                        skipped?: number;
+                        afterSummary?: { totalMismatch?: number };
+                      };
+                      toast.success(
+                        `KA FU Orphan Repair OK · repaired ${res.repaired ?? 0} · skipped ${res.skipped ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'KA FU Orphan Repair gagal');
+                    }
+                  }}
+                >
+                  Repair Orphans
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(kaFuOrphanRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!kaFuOrphanRec || Number(kaFuOrphanRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">activeOnClosed</div>
+                <div className="font-semibold">{String(kaFuOrphanRec?.activeOnClosed ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">activeOnCancelled / missing</div>
+                <div className="font-semibold">
+                  {String(kaFuOrphanRec?.activeOnCancelled ?? '—')}
+                  {' / '}
+                  {String(kaFuOrphanRec?.activeCaseMissing ?? '—')}
+                </div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {kaFuOrphanRec?.createdAt ? formatDateTime(kaFuOrphanRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(kaFuOrphanRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(kaFuOrphanRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.followUpId || m.id || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.kind || '—')} · {String(m.followUpNo || m.followUpId || '—')} · case {String(m.safetyCaseId || '—')} {String(m.caseStatus || '')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              KA:{' '}
+              <Link href="/kitchen-assurance/follow-up" className="text-primary underline">Follow-ups</Link>
             </p>
           </section>
 

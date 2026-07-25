@@ -229,6 +229,12 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'stok_bin', index: { tenantId: 1, warehouseKode: 1, binKode: 1 }, name: 'idx_stok_bin_tenant_wh_bin' },
   { collection: 'stok_bin', index: { tenantId: 1, stokId: 1, warehouseKode: 1 }, name: 'idx_stok_bin_tenant_stok_wh' },
   { collection: 'stok_bin_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_stok_bin_recon_tenant_created' },
+  // W2-25 KA follow-up orphan reconcile reports
+  {
+    collection: 'ka_follow_up_orphan_reconcile_reports',
+    index: { tenantId: 1, createdAt: -1 },
+    name: 'idx_ka_fu_orphan_recon_tenant_created',
+  },
   // W2-18 putaway moves (bin-to-bin ledger docs)
   { collection: 'putaway_moves', index: { tenantId: 1, id: 1 }, name: 'idx_putaway_tenant_id' },
   {

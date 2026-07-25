@@ -51,6 +51,11 @@ import {
   repairStokBinMismatches,
   runStokBinDetect,
 } from '@/lib/api/stok-bin-reconcile';
+import {
+  KA_FOLLOW_UP_ORPHAN_RECONCILE_REPORTS_COLLECTION,
+  repairKaFollowUpOrphans,
+  runKaFollowUpOrphanDetect,
+} from '@/lib/api/ka-follow-up-orphan-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -280,6 +285,32 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     return ok(result);
   }
 
+  // W2-25: KA follow-up orphan Detect — OPEN/DONE FU on CLOSED/CANCELLED/missing case.
+  if (route === '/ops/ka-follow-up-orphan/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runKaFollowUpOrphanDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
+  // W2-25: Soft Repair — cancel orphan active FUs (never touch cases).
+  if (route === '/ops/ka-follow-up-orphan/repair' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await repairKaFollowUpOrphans(db, tenantId);
+    return ok(result);
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -303,6 +334,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     latestDistReturnShortfall,
     latestHslWaste,
     latestStokBin,
+    latestKaFollowUpOrphan,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -392,6 +424,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .limit(1)
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
+    db.collection(KA_FOLLOW_UP_ORPHAN_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -474,6 +512,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const stokBinSummary = (stokBinReport?.summary || {}) as Record<string, unknown>;
+
+  const kaFollowUpOrphanReport = (latestKaFollowUpOrphan[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const kaFollowUpOrphanSummary = (kaFollowUpOrphanReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -601,6 +648,20 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           binSumLt: Number(stokBinSummary.binSumLt || 0),
           mismatchSample: Array.isArray(stokBinReport.mismatches)
             ? stokBinReport.mismatches.slice(0, 10)
+            : [],
+        }
+      : null,
+    kaFollowUpOrphan: kaFollowUpOrphanReport
+      ? {
+          reportId: kaFollowUpOrphanReport.id,
+          tenantId: kaFollowUpOrphanReport.tenantId,
+          createdAt: kaFollowUpOrphanReport.createdAt,
+          totalMismatch: Number(kaFollowUpOrphanSummary.totalMismatch || 0),
+          activeOnClosed: Number(kaFollowUpOrphanSummary.activeOnClosed || 0),
+          activeOnCancelled: Number(kaFollowUpOrphanSummary.activeOnCancelled || 0),
+          activeCaseMissing: Number(kaFollowUpOrphanSummary.activeCaseMissing || 0),
+          mismatchSample: Array.isArray(kaFollowUpOrphanReport.mismatches)
+            ? kaFollowUpOrphanReport.mismatches.slice(0, 10)
             : [],
         }
       : null,
