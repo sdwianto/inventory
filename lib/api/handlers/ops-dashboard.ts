@@ -25,6 +25,10 @@ import {
   repairIngredientLotMismatches,
   runIngredientLotDetect,
 } from '@/lib/api/ingredient-lot-reconcile';
+import {
+  ISSUE_FEFO_SHORTFALL_REPORTS_COLLECTION,
+  runIssueFefoShortfallDetect,
+} from '@/lib/api/issue-fefo-shortfall-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -138,6 +142,22 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     return ok(result);
   }
 
+  // W2-9: Issue FEFO shortfall Detect (W2-6 deferred drift).
+  if (route === '/ops/issue-fefo-shortfall/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runIssueFefoShortfallDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -155,6 +175,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     latestReconcile,
     latestFefo,
     latestIngredientLot,
+    latestIssueShortfall,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -208,6 +229,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .limit(1)
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
+    db.collection(ISSUE_FEFO_SHORTFALL_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -236,6 +263,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const ingredientLotSummary = (ingredientLotReport?.summary || {}) as Record<string, unknown>;
+
+  const issueShortfallReport = (latestIssueShortfall[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const issueShortfallSummary = (issueShortfallReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -286,6 +322,19 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           batchVsStok: Number(fefoSummary.batchVsStok || 0),
           mismatchSample: Array.isArray(fefoReport.mismatches)
             ? fefoReport.mismatches.slice(0, 10)
+            : [],
+        }
+      : null,
+    issueFefoShortfall: issueShortfallReport
+      ? {
+          reportId: issueShortfallReport.id,
+          tenantId: issueShortfallReport.tenantId,
+          createdAt: issueShortfallReport.createdAt,
+          totalMismatch: Number(issueShortfallSummary.totalMismatch || 0),
+          issuesWithShortfall: Number(issueShortfallSummary.issuesWithShortfall || 0),
+          shortfallQtyTotal: Number(issueShortfallSummary.shortfallQtyTotal || 0),
+          mismatchSample: Array.isArray(issueShortfallReport.mismatches)
+            ? issueShortfallReport.mismatches.slice(0, 10)
             : [],
         }
       : null,

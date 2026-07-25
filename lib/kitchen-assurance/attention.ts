@@ -20,6 +20,7 @@ import {
   INGREDIENT_LOTS_COLLECTION,
   effectiveIngredientQtyRemaining,
 } from '@/lib/food-production/ingredient-lot';
+import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { KA_FOLLOW_UPS_COLLECTION } from '@/lib/kitchen-assurance/follow-up';
 import { KA_OBSERVATIONS_COLLECTION } from '@/lib/kitchen-assurance/observation';
@@ -208,6 +209,51 @@ export async function collectAttentions(
       detail: `${String(r.productNama || r.productKode || '')} · expiry ${exp} · remaining ${rem}`,
       href: '/penerimaan',
       source: 'FOOD_PRODUCTION',
+    });
+  }
+
+  // ── Food: Issue FEFO shortfall (W2-9) ──
+  const issueSfFilter: Record<string, unknown> = {
+    tenantId,
+    status: 'COMPLETED',
+    fefoConsume: {
+      $elemMatch: {
+        shortfall: { $gt: 0 },
+        skippedNoLots: { $ne: true },
+      },
+    },
+  };
+  if (kitchenId) issueSfFilter.kitchenId = kitchenId;
+  const issueShortfalls = await db
+    .collection(MATERIAL_ISSUES_COLLECTION)
+    .find(issueSfFilter)
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .toArray();
+  for (const row of issueShortfalls) {
+    const r = row as Record<string, unknown>;
+    const consume = Array.isArray(r.fefoConsume) ? r.fefoConsume : [];
+    let shortfallSum = 0;
+    let lineCount = 0;
+    for (const c of consume) {
+      const line = c as { shortfall?: number; skippedNoLots?: boolean };
+      if (line.skippedNoLots) continue;
+      const sf = Number(line.shortfall || 0);
+      if (sf > 0.001) {
+        shortfallSum += sf;
+        lineCount += 1;
+      }
+    }
+    if (!(shortfallSum > 0)) continue;
+    out.push({
+      key: `issue-fefo-sf:${String(r.id)}`,
+      pillar: 'FOOD',
+      level: 'ATTENTION',
+      label: `Issue FEFO shortfall · ${String(r.noDokumen || r.id)}`,
+      detail: `${lineCount} line(s) · shortfall qty ${shortfallSum}`,
+      href: '/food-production/issue',
+      source: 'FOOD_PRODUCTION',
+      kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
     });
   }
 
