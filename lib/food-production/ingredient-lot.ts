@@ -26,6 +26,11 @@ export interface IngredientLotDoc {
   satuan?: string;
   status: IngredientLotStatus;
   lineIndex?: number;
+  lastConsumedBy?: {
+    issueId?: string;
+    noDokumen?: string;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }

@@ -44,6 +44,16 @@ export interface MaterialIssueDoc {
     qtyIssuedTotal: number;
   };
   stockPostedAt?: Date;
+  /** W2-6: FEFO consume summary per line (ingredient_lots). */
+  fefoConsume?: Array<{
+    stokId: string;
+    warehouseKode: string;
+    needQty: number;
+    allocated: number;
+    shortfall: number;
+    skippedNoLots: boolean;
+    allocations?: unknown[];
+  }>;
   catatan?: string;
   createdAt: Date;
   updatedAt: Date;

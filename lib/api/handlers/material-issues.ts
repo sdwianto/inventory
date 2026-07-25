@@ -12,6 +12,7 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
 import {
   MATERIAL_ISSUES_COLLECTION,
   ISSUE_ELIGIBLE_PLAN_STATUSES,
@@ -216,7 +217,12 @@ async function postIssueStock(
   db: HandlerContext['db'],
   doc: MaterialIssueDoc,
   session?: ClientSession,
-): Promise<{ error: string } | { ok: true }> {
+): Promise<{
+  error: string;
+} | {
+  ok: true;
+  fefoConsume: NonNullable<MaterialIssueDoc['fefoConsume']>;
+}> {
   if (!session) {
     return {
       error: 'Posting stok Issue membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
@@ -233,29 +239,57 @@ async function postIssueStock(
     products.map((p) => [String(p.id), resolveProductGudangKode(p as { gudangKode?: string })]),
   );
 
+  const fefoConsume: NonNullable<MaterialIssueDoc['fefoConsume']> = [];
+  const now = new Date();
+
   for (const line of doc.lines) {
     if (!(Number(line.qtyIssued) > 0)) continue;
     // Deduct from line warehouse (product gudang) when set; else resolve from product master.
     const warehouseKode = line.warehouseKode
       || gudangById.get(line.productId)
       || doc.warehouseKode;
+    const needQty = Number(line.qtyIssued);
     const posted = await postStockMutation(db, {
       tenantId: doc.tenantId,
       productId: line.productId,
       warehouseKode,
-      deltaQtyBase: -Number(line.qtyIssued),
+      deltaQtyBase: -needQty,
       sourceType: 'FP_ISSUE',
       noTransaksi: doc.noDokumen,
       keterangan: `Pengambilan bahan ${doc.noDokumen} — ${line.productNama || line.productKode || line.productId}`,
       satuan: line.satuan,
-      qtyEntered: Number(line.qtyIssued),
+      qtyEntered: needQty,
       session,
     });
     if (!posted.ok) {
       return { error: posted.error || `Gagal post stok ${line.productId}` };
     }
+
+    // W2-6: FEFO consume ingredient lots when present (skip legacy stock without lots).
+    const fefo = await consumeIngredientLotsFefo(
+      db,
+      {
+        tenantId: doc.tenantId,
+        stokId: line.productId,
+        warehouseKode,
+        needQty,
+        asOf: now,
+        issueId: doc.id,
+        noDokumen: doc.noDokumen,
+      },
+      session,
+    );
+    fefoConsume.push({
+      stokId: line.productId,
+      warehouseKode,
+      needQty: fefo.needQty,
+      allocated: fefo.allocated,
+      shortfall: fefo.shortfall,
+      skippedNoLots: fefo.skippedNoLots,
+      allocations: fefo.allocations,
+    });
   }
-  return { ok: true };
+  return { ok: true, fefoConsume };
 }
 
 export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -528,7 +562,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             toStatus: 'COMPLETED',
             userId: actor.userId,
             userName: actor.userName,
-            note: String(issueBody.note || '').trim() || 'Stok keluar diposting',
+            note: String(issueBody.note || '').trim() || 'Stok keluar diposting · FEFO lots',
           });
           await txDb.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
             withTenantFilter(scopeAuth, { id }),
@@ -537,6 +571,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
                 status: 'COMPLETED',
                 history,
                 stockPostedAt: now,
+                fefoConsume: posted.fefoConsume,
                 updatedAt: now,
               },
             },
