@@ -21,6 +21,7 @@ import {
   effectiveIngredientQtyRemaining,
 } from '@/lib/food-production/ingredient-lot';
 import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
+import { DISTRIBUTION_ORDERS_COLLECTION } from '@/lib/food-production/distribution';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { KA_FOLLOW_UPS_COLLECTION } from '@/lib/kitchen-assurance/follow-up';
 import { KA_OBSERVATIONS_COLLECTION } from '@/lib/kitchen-assurance/observation';
@@ -252,6 +253,51 @@ export async function collectAttentions(
       label: `Issue FEFO shortfall · ${String(r.noDokumen || r.id)}`,
       detail: `${lineCount} line(s) · shortfall qty ${shortfallSum}`,
       href: '/food-production/issue',
+      source: 'FOOD_PRODUCTION',
+      kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
+    });
+  }
+
+  // ── Food: Dist FEFO shortfall (W2-10) ──
+  const distSfFilter: Record<string, unknown> = {
+    tenantId,
+    status: { $in: ['PROCESSING', 'COMPLETED'] },
+    fefoConsume: {
+      $elemMatch: {
+        shortfall: { $gt: 0 },
+        skippedNoBatches: { $ne: true },
+      },
+    },
+  };
+  if (kitchenId) distSfFilter.kitchenId = kitchenId;
+  const distShortfalls = await db
+    .collection(DISTRIBUTION_ORDERS_COLLECTION)
+    .find(distSfFilter)
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .toArray();
+  for (const row of distShortfalls) {
+    const r = row as Record<string, unknown>;
+    const consume = Array.isArray(r.fefoConsume) ? r.fefoConsume : [];
+    let shortfallSum = 0;
+    let lineCount = 0;
+    for (const c of consume) {
+      const line = c as { shortfall?: number; skippedNoBatches?: boolean };
+      if (line.skippedNoBatches) continue;
+      const sf = Number(line.shortfall || 0);
+      if (sf > 0.001) {
+        shortfallSum += sf;
+        lineCount += 1;
+      }
+    }
+    if (!(shortfallSum > 0)) continue;
+    out.push({
+      key: `dist-fefo-sf:${String(r.id)}`,
+      pillar: 'FOOD',
+      level: 'ATTENTION',
+      label: `Dist FEFO shortfall · ${String(r.noDokumen || r.id)}`,
+      detail: `${lineCount} line(s) · shortfall qty ${shortfallSum}`,
+      href: '/food-production/distribution',
       source: 'FOOD_PRODUCTION',
       kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
     });

@@ -52,6 +52,15 @@ type IssueFefoShortfall = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type DistFefoShortfall = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  ordersWithShortfall?: number;
+  shortfallQtyTotal?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -66,6 +75,7 @@ type OpsDashboard = {
   fefoReconcile?: FefoReconcile | null;
   ingredientLotReconcile?: IngredientLotReconcile | null;
   issueFefoShortfall?: IssueFefoShortfall | null;
+  distFefoShortfall?: DistFefoShortfall | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -122,6 +132,7 @@ export default function OpsDashboardPage() {
   const fefoRec = data?.fefoReconcile;
   const ingredientLotRec = data?.ingredientLotReconcile;
   const issueShortfallRec = data?.issueFefoShortfall;
+  const distShortfallRec = data?.distFefoShortfall;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -587,6 +598,77 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Issue UI:{' '}
               <Link href="/food-production/issue" className="text-primary underline">Material Issue</Link>
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-10 · Dist FEFO Shortfall Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  DST PROCESSING/COMPLETED with fefoConsume.shortfall &gt; 0 (skip skippedNoBatches)
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      path: '/api/ops/dist-fefo-shortfall/run',
+                      method: 'POST',
+                      body: {},
+                      offlineLabel: 'Dist FEFO Shortfall Detect',
+                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                    toast.success(
+                      `Dist Shortfall Detect OK · mismatch ${res.summary?.totalMismatch ?? 0}`,
+                    );
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Dist Shortfall Detect gagal');
+                  }
+                }}
+              >
+                Run Dist Shortfall Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(distShortfallRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!distShortfallRec || Number(distShortfallRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">ordersWithShortfall</div>
+                <div className="font-semibold">{String(distShortfallRec?.ordersWithShortfall ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">shortfallQtyTotal</div>
+                <div className="font-semibold">{String(distShortfallRec?.shortfallQtyTotal ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {distShortfallRec?.createdAt ? formatDateTime(distShortfallRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(distShortfallRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(distShortfallRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.distId || m.stokId || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.noDokumen || m.distId || '—')} · shortfall {String(m.shortfall ?? '—')} · {String(m.detail || '')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Dist UI:{' '}
+              <Link href="/food-production/distribution" className="text-primary underline">Distribution</Link>
             </p>
           </section>
 
