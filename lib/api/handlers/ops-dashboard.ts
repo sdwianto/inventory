@@ -41,6 +41,10 @@ import {
   DIST_RETURN_FEFO_SHORTFALL_REPORTS_COLLECTION,
   runDistReturnFefoShortfallDetect,
 } from '@/lib/api/dist-return-fefo-shortfall-reconcile';
+import {
+  HSL_WASTE_RECONCILE_REPORTS_COLLECTION,
+  runHslWasteDetect,
+} from '@/lib/api/hsl-waste-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -218,6 +222,22 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     });
   }
 
+  // W2-15: HSL waste unposted Detect (legacy capture-only waste).
+  if (route === '/ops/hsl-waste-reconcile/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runHslWasteDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -239,6 +259,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     latestDistShortfall,
     latestReleaseShortfall,
     latestDistReturnShortfall,
+    latestHslWaste,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -316,6 +337,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .limit(1)
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
+    db.collection(HSL_WASTE_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -380,6 +407,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const distReturnShortfallSummary = (distReturnShortfallReport?.summary || {}) as Record<string, unknown>;
+
+  const hslWasteReport = (latestHslWaste[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const hslWasteSummary = (hslWasteReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -482,6 +518,18 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           shortfallQtyTotal: Number(distReturnShortfallSummary.shortfallQtyTotal || 0),
           mismatchSample: Array.isArray(distReturnShortfallReport.mismatches)
             ? distReturnShortfallReport.mismatches.slice(0, 10)
+            : [],
+        }
+      : null,
+    hslWasteReconcile: hslWasteReport
+      ? {
+          reportId: hslWasteReport.id,
+          tenantId: hslWasteReport.tenantId,
+          createdAt: hslWasteReport.createdAt,
+          totalMismatch: Number(hslWasteSummary.totalMismatch || 0),
+          wasteQtyTotal: Number(hslWasteSummary.wasteQtyTotal || 0),
+          mismatchSample: Array.isArray(hslWasteReport.mismatches)
+            ? hslWasteReport.mismatches.slice(0, 10)
             : [],
         }
       : null,

@@ -62,6 +62,8 @@ export interface ProductionResultDoc {
     warnings?: string[];
   };
   stockPostedAt?: Date;
+  /** W2-15: set when wastePorsi was posted as FP_RESULT_WASTE on COMPLETE. */
+  wasteStockPostedAt?: Date;
   /** Phase 4 — batch stamped on COMPLETE. */
   batchNo?: string;
   expiryDate?: string;
@@ -242,10 +244,17 @@ export const RESULT_UI_STATUS_NEXT_LABEL: Partial<Record<ProductionResultStatus,
   PROCESSING: 'Selesai',
 };
 
+/** Gross cooked yield = good + waste (W2-15). */
+export function resultLineGrossPorsi(line: Pick<ProductionResultLine, 'actualPorsi' | 'wastePorsi'>): number {
+  return roundQty(Number(line.actualPorsi || 0) + Number(line.wastePorsi || 0));
+}
+
 /** True if any line would post FG stock (manufaktur). MBG biasanya false. */
 export function resultHasStockableLines(lines: ProductionResultLine[]): boolean {
   return lines.some(
-    (l) => Boolean(String(l.finishedGoodProductId || '').trim()) && Number(l.actualPorsi) > 0,
+    (l) =>
+      Boolean(String(l.finishedGoodProductId || '').trim())
+      && resultLineGrossPorsi(l) > 0,
   );
 }
 

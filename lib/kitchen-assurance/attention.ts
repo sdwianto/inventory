@@ -22,6 +22,7 @@ import {
 } from '@/lib/food-production/ingredient-lot';
 import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
 import { DISTRIBUTION_ORDERS_COLLECTION } from '@/lib/food-production/distribution';
+import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { KA_FOLLOW_UPS_COLLECTION } from '@/lib/kitchen-assurance/follow-up';
 import { KA_OBSERVATIONS_COLLECTION } from '@/lib/kitchen-assurance/observation';
@@ -341,6 +342,41 @@ export async function collectAttentions(
       label: `Dist return FEFO shortfall · ${String(r.noDokumen || r.id)}`,
       detail: `${lineCount} line(s) · restore shortfall qty ${shortfallSum}`,
       href: '/food-production/distribution',
+      source: 'FOOD_PRODUCTION',
+      kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
+    });
+  }
+
+  // ── Food: HSL waste unposted (W2-15) ──
+  const hslWasteFilter: Record<string, unknown> = {
+    tenantId,
+    status: 'COMPLETED',
+    'summary.wastePorsiTotal': { $gt: 0 },
+    wasteStockPostedAt: { $exists: false },
+  };
+  if (kitchenId) hslWasteFilter.kitchenId = kitchenId;
+  const hslWasteRows = await db
+    .collection(PRODUCTION_RESULTS_COLLECTION)
+    .find(hslWasteFilter)
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .toArray();
+  for (const row of hslWasteRows) {
+    const r = row as Record<string, unknown>;
+    const lines = Array.isArray(r.lines) ? r.lines : [];
+    const hasFgWaste = lines.some((l) => {
+      const line = l as { finishedGoodProductId?: string; wastePorsi?: number };
+      return Boolean(String(line.finishedGoodProductId || '').trim()) && Number(line.wastePorsi || 0) > 0;
+    });
+    if (!hasFgWaste) continue;
+    const waste = Number((r.summary as { wastePorsiTotal?: number } | undefined)?.wastePorsiTotal || 0);
+    out.push({
+      key: `hsl-waste:${String(r.id)}`,
+      pillar: 'FOOD',
+      level: 'ATTENTION',
+      label: `HSL waste unposted · ${String(r.noDokumen || r.id)}`,
+      detail: `waste ${waste} captured without FP_RESULT_WASTE`,
+      href: '/food-production/result',
       source: 'FOOD_PRODUCTION',
       kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,
     });

@@ -23,6 +23,7 @@ export type StockMutationSourceType =
   | 'MASTER_PRODUK'
   | 'FP_ISSUE'
   | 'FP_RESULT'
+  | 'FP_RESULT_WASTE'
   | 'FP_DIST'
   | 'FP_DIST_RETURN'
   | 'FP_ADJUST'

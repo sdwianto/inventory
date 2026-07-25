@@ -25,9 +25,11 @@ import {
   assertPlanCanComplete,
   postingDateFromIso,
   resultHasStockableLines,
+  resultLineGrossPorsi,
   type ProductionResultDoc,
   type ProductionResultStatus,
 } from '@/lib/food-production/production-result';
+import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
 import {
   MATERIAL_ISSUES_COLLECTION,
   ISSUE_OPEN_STATUSES,
@@ -230,35 +232,57 @@ async function postResultStock(
   db: HandlerContext['db'],
   doc: ProductionResultDoc,
   session?: ClientSession,
-): Promise<{ error: string } | { ok: true; postedLines: number }> {
+): Promise<{ error: string } | { ok: true; postedLines: number; wastePostedQty: number }> {
   let postedLines = 0;
+  let wastePostedQty = 0;
   for (const line of doc.lines) {
     const fgId = String(line.finishedGoodProductId || '').trim();
-    const qty = Number(line.actualPorsi);
-    if (!fgId || !(qty > 0)) continue; // MBG / empty FG — skip stock
+    const waste = Number(line.wastePorsi) || 0;
+    const gross = resultLineGrossPorsi(line);
+    if (!fgId || !(gross > 0)) continue; // MBG / empty FG — skip stock
     if (!session) {
       return {
         error: 'Posting stok Result membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
       };
     }
+    // W2-15: IN gross (actual + waste), then OUT waste as FP_RESULT_WASTE.
     const posted = await postStockMutation(db, {
       tenantId: doc.tenantId,
       productId: fgId,
       warehouseKode: doc.warehouseKode,
-      deltaQtyBase: qty,
+      deltaQtyBase: gross,
       sourceType: 'FP_RESULT',
       noTransaksi: doc.noDokumen,
       keterangan: `Hasil produksi ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || fgId}`,
       satuan: line.satuan,
-      qtyEntered: qty,
+      qtyEntered: gross,
       session,
     });
     if (!posted.ok) {
       return { error: posted.error || `Gagal post stok ${fgId}` };
     }
     postedLines += 1;
+
+    if (waste > 0) {
+      const wasteOut = await postStockMutation(db, {
+        tenantId: doc.tenantId,
+        productId: fgId,
+        warehouseKode: doc.warehouseKode,
+        deltaQtyBase: -waste,
+        sourceType: 'FP_RESULT_WASTE',
+        noTransaksi: doc.noDokumen,
+        keterangan: `Write-off waste HSL ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || fgId}`,
+        satuan: line.satuan,
+        qtyEntered: waste,
+        session,
+      });
+      if (!wasteOut.ok) {
+        return { error: wasteOut.error || `Gagal write-off waste ${fgId}` };
+      }
+      wastePostedQty += waste;
+    }
   }
-  return { ok: true, postedLines };
+  return { ok: true, postedLines, wastePostedQty };
 }
 
 async function maybeCompletePlan(
@@ -608,8 +632,11 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             kitchenKode: kitchen?.kode,
           });
 
+          const wasteQty = 'wastePostedQty' in posted ? Number(posted.wastePostedQty || 0) : 0;
           const defaultNote = posted.postedLines > 0
-            ? `Stok masuk FG · batch ${batchNo}`
+            ? (wasteQty > 0
+              ? `Stok masuk FG · waste write-off ${wasteQty} · batch ${batchNo}`
+              : `Stok masuk FG · batch ${batchNo}`)
             : `Selesai MBG (porsi dicatat, tanpa post stok FG) · batch ${batchNo}`;
           const history = appendDocHistory(fresh.history, {
             at: now,
@@ -626,6 +653,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
                 status: 'COMPLETED',
                 history,
                 stockPostedAt: now,
+                ...(wasteQty > 0 ? { wasteStockPostedAt: now } : {}),
                 batchNo,
                 expiryDate,
                 updatedAt: now,
@@ -636,8 +664,9 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
 
           const batchDocs: ProductionBatchDoc[] = [];
           for (const line of fresh.lines) {
-            const qty = Number(line.actualPorsi);
-            if (!(qty > 0)) continue;
+            const fgId = String(line.finishedGoodProductId || '').trim();
+            const gross = resultLineGrossPorsi(line);
+            if (!fgId || !(gross > 0)) continue;
             const suffix = String(
               line.finishedGoodKode
               || line.recipeKode
@@ -661,8 +690,8 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
               expiryDate,
               finishedGoodProductId: line.finishedGoodProductId,
               finishedGoodNama: line.finishedGoodNama || line.recipeNama || line.menuNama || line.finishedGoodKode,
-              qty,
-              qtyRemaining: qty,
+              qty: gross,
+              qtyRemaining: gross,
               satuan: line.satuan,
               status: 'ACTIVE',
               createdAt: now,
@@ -671,6 +700,27 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
           }
           if (batchDocs.length) {
             await txDb.collection(PRODUCTION_BATCHES_COLLECTION).insertMany(batchDocs, txOpts(session));
+          }
+
+          // W2-15: FEFO-consume waste qty so batch remaining = actual good yield.
+          for (const line of fresh.lines) {
+            const fgId = String(line.finishedGoodProductId || '').trim();
+            const waste = Number(line.wastePorsi) || 0;
+            if (!fgId || !(waste > 0)) continue;
+            await consumeBatchesFefo(
+              txDb,
+              {
+                tenantId: fresh.tenantId,
+                stokId: fgId,
+                warehouseKode: fresh.warehouseKode,
+                needQty: waste,
+                asOf: now,
+                allowExpired: true,
+                productionResultId: fresh.id,
+                noDokumen: fresh.noDokumen,
+              },
+              session,
+            );
           }
 
           await maybeCompletePlan(txDb, scopeAuth, fresh.productionPlanId, session);
