@@ -72,7 +72,8 @@ async function pushPoGroupOnce(
     return { error: 'Belum terhubung ke sales.app (API key vendor)', vendorTenantId };
   }
 
-  const correlationId = integrationCorrelationId(String(po.id || ''), String(po.noPO || ''));
+  const correlationId = String(po.correlationId || '').trim()
+    || integrationCorrelationId(String(po.id || ''), String(po.noPO || ''));
   const client = createIntegrationClient(db);
   try {
     const created = await client.createSalesOrderFromCustomerPo({

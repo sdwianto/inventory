@@ -266,6 +266,7 @@ async function markPoApproved(
   approverSnap: unknown,
   syncError: unknown,
   session?: import('mongodb').ClientSession,
+  correlationId?: string | null,
 ) {
   const now = new Date();
   const patch: Record<string, unknown> = {
@@ -278,6 +279,8 @@ async function markPoApproved(
     vendorSyncAt: now,
     vendorAutoSync: true,
   };
+  const cid = String(correlationId || po.correlationId || '').trim();
+  if (cid) patch.correlationId = cid;
   const { txOpts } = await import('@/lib/api/transaction');
   await db.collection('customer_purchase_orders').updateOne(
     { id: po.id },
@@ -297,15 +300,21 @@ async function approvePoAndSyncVendor(db: Db, po: Record<string, unknown>, appro
 
   const { runInTransactionOrFallback } = await import('@/lib/api/transaction');
   const { insertEnsureCreateSoOutbox, drainEnsureCreateSo } = await import('@/lib/api/integration-outbox');
+  const { integrationCorrelationId } = await import('@/lib/api/integration-common');
+  // W1-3: stamp CID on CPO in approve TX (Entity → CID → outbox → CreateSO commands).
+  const approveCorrelationId = String(po.correlationId || '').trim()
+    || integrationCorrelationId(String(po.id || ''), String(po.noPO || ''))
+    || '';
 
   const approved = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-    const row = await markPoApproved(txDb, po, approverSnap, null, session);
+    const row = await markPoApproved(txDb, po, approverSnap, null, session, approveCorrelationId);
     await insertEnsureCreateSoOutbox(
       txDb,
       {
         tenantId: String(row?.tenantId || po.tenantId || 'default'),
         poId: String(po.id),
         noPO: po.noPO ? String(po.noPO) : null,
+        correlationId: approveCorrelationId || null,
       },
       session,
     );
@@ -827,6 +836,11 @@ export async function handleCustomerPo({
     const { runInTransactionOrFallback, txOpts } = await import('@/lib/api/transaction');
     const { insertEnsurePushCancelSoOutbox } = await import('@/lib/api/integration-outbox');
 
+    const { integrationCorrelationId } = await import('@/lib/api/integration-common');
+    const cancelCorrelationId = String(po.correlationId || '').trim()
+      || integrationCorrelationId(String(po.id || ''), String(po.noPO || ''))
+      || '';
+
     await runInTransactionOrFallback(async ({ db: txDb, session }) => {
       await txDb.collection('customer_purchase_orders').updateOne(
         { id: po.id },
@@ -837,6 +851,7 @@ export async function handleCustomerPo({
             cancelledAt: now,
             cancelReason: reason,
             updatedAt: now,
+            ...(cancelCorrelationId ? { correlationId: cancelCorrelationId } : {}),
           },
         },
         txOpts(session),
@@ -849,6 +864,7 @@ export async function handleCustomerPo({
             poId: String(po.id),
             noPO: po.noPO ? String(po.noPO) : null,
             reason,
+            correlationId: cancelCorrelationId || null,
           },
           session,
         );

@@ -26,7 +26,8 @@ export async function notifySalesPoCancelled(
   const tenantId = String(po.tenantId || 'default');
   const noPO = String(po.noPO || '');
   const customerPoId = String(po.id || '');
-  const correlationId = integrationCorrelationId(customerPoId, noPO);
+  const correlationId = String(po.correlationId || '').trim()
+    || integrationCorrelationId(customerPoId, noPO);
   const submissions = vendorSubmissionsForPo(po);
   const client = createIntegrationClient(db);
 

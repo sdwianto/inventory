@@ -97,6 +97,12 @@ const INDEX_SPECS: IndexSpec[] = [
     partialFilterExpression: { correlationId: { $type: 'string', $gt: '' } },
   },
   {
+    collection: 'customer_purchase_orders',
+    index: { correlationId: 1 },
+    name: 'idx_cpo_correlation',
+    partialFilterExpression: { correlationId: { $type: 'string', $gt: '' } },
+  },
+  {
     collection: 'integration_outbox',
     index: { type: 1, aggregateId: 1 },
     name: 'uniq_integration_outbox_type_aggregate',
