@@ -21,6 +21,7 @@ import { writeAuditLog } from '@/lib/api/audit-log';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
+import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -103,6 +104,7 @@ export async function handleTransfer({
 
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const fefoRelocate: Array<Record<string, unknown>> = [];
         for (const it of transferLines) {
           const stokId = itemStokId(it);
           await ensureStokLokasiRow(txDb, tenantId, stokId, invBody.lokasiAsal!, session);
@@ -110,7 +112,34 @@ export async function handleTransfer({
             txDb, tenantId, stokId, invBody.lokasiAsal!, invBody.lokasiTujuan!, it.qtyBase, session,
           );
           if ('error' in tr && tr.error) throw new Error(`Stok ${stokId}: ${tr.error}`);
+          // W2-12: relocate FG batches FEFO with the stock move.
+          const fefo = await relocateBatchesFefo(
+            txDb,
+            {
+              tenantId,
+              stokId,
+              fromWarehouseKode: String(invBody.lokasiAsal),
+              toWarehouseKode: String(invBody.lokasiTujuan),
+              needQty: it.qtyBase,
+              asOf: now,
+              allowExpired: true,
+              noTransaksi: noTransfer,
+              transferId: String(doc.id),
+            },
+            session,
+          );
+          fefoRelocate.push({
+            stokId: fefo.stokId,
+            fromWarehouseKode: fefo.fromWarehouseKode,
+            toWarehouseKode: fefo.toWarehouseKode,
+            needQty: fefo.needQty,
+            allocated: fefo.allocated,
+            shortfall: fefo.shortfall,
+            skippedNoBatches: fefo.skippedNoBatches,
+            allocations: fefo.allocations,
+          });
         }
+        (doc as Record<string, unknown>).fefoRelocate = fefoRelocate;
         await txDb.collection('transfer_stok').insertOne(doc, session ? { session } : {});
         for (const it of transferLines) {
           const stokId = itemStokId(it);

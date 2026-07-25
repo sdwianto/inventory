@@ -42,6 +42,17 @@ export interface ProductionBatchDoc {
     delta?: number;
     at?: Date;
   };
+  /** W2-12: set when batch cloned on partial transfer relocate. */
+  relocatedFromBatchId?: string;
+  /** W2-12: last TR/XFR that relocated this batch (or its remainder). */
+  lastRelocatedBy?: {
+    transferId?: string;
+    xferId?: string;
+    noTransaksi?: string;
+    fromWarehouseKode?: string;
+    toWarehouseKode?: string;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }

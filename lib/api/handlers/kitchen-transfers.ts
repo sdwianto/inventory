@@ -12,6 +12,7 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import {
   KITCHEN_TRANSFERS_COLLECTION,
   XFER_STATUS_TRANSITIONS,
@@ -281,10 +282,41 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
             throw Object.assign(new Error(productErrTx), { httpStatus: 400 });
           }
 
+          const fefoRelocate: Array<Record<string, unknown>> = [];
           if (!fresh.allocationOnly) {
             const posted = await postXferStock(txDb, fresh, session!);
             if ('error' in posted) {
               throw Object.assign(new Error(posted.error), { httpStatus: 400 });
+            }
+            // W2-12: relocate FG batches FEFO with the stock move.
+            for (const line of fresh.lines) {
+              const qty = Number(line.qty);
+              if (!(qty > 0)) continue;
+              const fefo = await relocateBatchesFefo(
+                txDb,
+                {
+                  tenantId: fresh.tenantId,
+                  stokId: line.productId,
+                  fromWarehouseKode: fresh.fromWarehouseKode,
+                  toWarehouseKode: fresh.toWarehouseKode,
+                  needQty: qty,
+                  asOf: now,
+                  allowExpired: true,
+                  noTransaksi: fresh.noDokumen,
+                  xferId: fresh.id,
+                },
+                session,
+              );
+              fefoRelocate.push({
+                stokId: fefo.stokId,
+                fromWarehouseKode: fefo.fromWarehouseKode,
+                toWarehouseKode: fefo.toWarehouseKode,
+                needQty: fefo.needQty,
+                allocated: fefo.allocated,
+                shortfall: fefo.shortfall,
+                skippedNoBatches: fefo.skippedNoBatches,
+                allocations: fefo.allocations,
+              });
             }
           }
 
@@ -306,6 +338,7 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
                 history,
                 stockPostedAt: now,
                 updatedAt: now,
+                ...(fefoRelocate.length ? { fefoRelocate } : {}),
               },
             },
             txOpts(session),
