@@ -29,6 +29,17 @@ vi.mock('@/lib/api/transaction', () => ({
   txOpts: () => ({}),
 }));
 
+const consumeStokBinSoft = vi.fn(async () => ({
+  allocated: 0,
+  shortfall: 0,
+  skippedNoBins: true,
+  takes: [],
+}));
+
+vi.mock('@/lib/api/stok-bin-consume', () => ({
+  consumeStokBinSoft: (...args: unknown[]) => consumeStokBinSoft(...args),
+}));
+
 import { postStockMutation } from '@/lib/api/stock-mutation';
 
 describe('postStockMutation', () => {
@@ -41,8 +52,15 @@ describe('postStockMutation', () => {
     adjustStokLokasi.mockClear();
     syncProductStokFromLokasi.mockClear();
     parseLokasiKode.mockClear();
+    consumeStokBinSoft.mockClear();
     adjustStokLokasi.mockResolvedValue({ qtyAfter: 15 });
     syncProductStokFromLokasi.mockResolvedValue(15);
+    consumeStokBinSoft.mockResolvedValue({
+      allocated: 0,
+      shortfall: 0,
+      skippedNoBins: true,
+      takes: [],
+    });
 
     db = {
       collection: () => ({
@@ -97,6 +115,7 @@ describe('postStockMutation', () => {
     expect(r).toEqual({ ok: true, qtyAfter: 15, lokasiKode: 'GKERING' });
     expect(ensureStokLokasiRow).toHaveBeenCalled();
     expect(adjustStokLokasi).toHaveBeenCalledWith(db, 't1', 'p1', 'GKERING', 10, undefined);
+    expect(consumeStokBinSoft).not.toHaveBeenCalled();
     expect(inserted).toMatchObject({
       tenantId: 't1',
       stokId: 'p1',
@@ -123,6 +142,7 @@ describe('postStockMutation', () => {
       keterangan: 'Issue bahan',
     });
     expect(r).toEqual({ ok: true, qtyAfter: 5, lokasiKode: 'GBASAH' });
+    expect(consumeStokBinSoft).toHaveBeenCalledWith(db, 't1', 'p1', 'GBASAH', 3, undefined);
     expect(inserted).toMatchObject({
       sourceType: 'FP_ISSUE',
       masuk: 0,
@@ -131,7 +151,7 @@ describe('postStockMutation', () => {
     });
   });
 
-  it('returns adjust error without writing kartu', async () => {
+  it('returns adjust error without writing kartu or consuming bins', async () => {
     adjustStokLokasi.mockResolvedValue({ error: 'Stok tidak cukup' });
     const r = await postStockMutation(db, {
       tenantId: 't1',
@@ -145,5 +165,23 @@ describe('postStockMutation', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe('Stok tidak cukup');
     expect(inserted).toBeNull();
+    expect(consumeStokBinSoft).not.toHaveBeenCalled();
+  });
+
+  it('keeps ok:true when soft bin consume throws', async () => {
+    adjustStokLokasi.mockResolvedValue({ qtyAfter: 5 });
+    syncProductStokFromLokasi.mockResolvedValue(5);
+    consumeStokBinSoft.mockRejectedValueOnce(new Error('bin boom'));
+
+    const r = await postStockMutation(db, {
+      tenantId: 't1',
+      productId: 'p1',
+      warehouseKode: 'GKERING',
+      deltaQtyBase: -2,
+      sourceType: 'RELEASE',
+      noTransaksi: 'REL-1',
+      keterangan: 'out',
+    });
+    expect(r).toEqual({ ok: true, qtyAfter: 5, lokasiKode: 'GKERING' });
   });
 });
