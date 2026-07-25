@@ -32,6 +32,11 @@ export interface ProductionBatchDoc {
     noDokumen?: string;
     at?: Date;
   };
+  lastRestoredBy?: {
+    distributionId?: string;
+    noDokumen?: string;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }

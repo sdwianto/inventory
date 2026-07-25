@@ -24,6 +24,7 @@ export type StockMutationSourceType =
   | 'FP_ISSUE'
   | 'FP_RESULT'
   | 'FP_DIST'
+  | 'FP_DIST_RETURN'
   | 'FP_ADJUST'
   | string;
 

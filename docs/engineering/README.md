@@ -17,6 +17,7 @@ Baca di Sales repo:
 | **W1-7 Conventions** | `sales/docs/architecture/W1-7-ENGINEERING-CONVENTIONS.md` |
 | **W2-1 FEFO Batch Consume** | `sales/docs/architecture/W2-1-FEFO-BATCH-CONSUME.md` |
 | **W2-2 Distribution FEFO** | `sales/docs/architecture/W2-2-DISTRIBUTION-FEFO.md` |
+| **W2-3 Dist Return Restock** | `sales/docs/architecture/W2-3-DISTRIBUTION-RETURN-RESTOCK.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |

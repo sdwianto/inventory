@@ -164,6 +164,8 @@ export interface DistributionOrderDoc {
   lastStatusPhotoUrls?: string[];
   /** W2-2: set when PROCESSING posted FG stock + FEFO. */
   stockPostedAt?: Date;
+  /** W2-3: set when COMPLETED restocked returns. */
+  stockReturnedAt?: Date;
   warehouseKode?: string;
   fefoConsume?: Array<{
     stokId: string;
@@ -171,6 +173,13 @@ export interface DistributionOrderDoc {
     allocated: number;
     shortfall: number;
     skippedNoBatches: boolean;
+    allocations?: unknown[];
+  }>;
+  fefoRestore?: Array<{
+    stokId: string;
+    needQty: number;
+    restored: number;
+    shortfall: number;
     allocations?: unknown[];
   }>;
   createdAt: Date;

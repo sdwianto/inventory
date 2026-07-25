@@ -134,3 +134,95 @@ export async function consumeBatchesFefo(
     skippedNoBatches: false,
   };
 }
+
+export type FefoRestoreResult = {
+  stokId: string;
+  needQty: number;
+  restored: number;
+  shortfall: number;
+  allocations: FefoAllocation[];
+};
+
+/**
+ * W2-3 — restore qtyRemaining from prior ship allocations (already planned LIFO).
+ * CONSUMED → ACTIVE when remaining > 0; past-expiry → EXPIRED.
+ */
+export async function restoreBatchesFromAllocations(
+  db: Db,
+  input: {
+    tenantId: string;
+    stokId: string;
+    restores: FefoAllocation[];
+    asOf?: Date;
+    distributionId?: string;
+    noDokumen?: string;
+  },
+  session?: ClientSession | null,
+): Promise<FefoRestoreResult> {
+  const needQty = (input.restores || []).reduce((s, a) => s + (Number(a.qty) || 0), 0);
+  const empty: FefoRestoreResult = {
+    stokId: input.stokId,
+    needQty,
+    restored: 0,
+    shortfall: needQty,
+    allocations: [],
+  };
+  if (!(needQty > 0)) return empty;
+
+  const now = input.asOf ?? new Date();
+  const today = now.toISOString().slice(0, 10);
+  let restored = 0;
+  const applied: FefoAllocation[] = [];
+
+  for (const a of input.restores) {
+    const qty = Number(a.qty) || 0;
+    if (!(qty > 0) || !a.batchId) continue;
+    const batch = await db.collection(PRODUCTION_BATCHES_COLLECTION).findOne(
+      { id: a.batchId, tenantId: input.tenantId },
+      txOpts(session),
+    ) as unknown as ProductionBatchDoc | null;
+    if (!batch) continue;
+
+    const before = effectiveQtyRemaining(batch);
+    const cap = Math.max(0, Number(batch.qty) || 0);
+    const after = Math.min(cap, before + qty);
+    const gained = after - before;
+    if (!(gained > 0)) continue;
+
+    const exp = String(batch.expiryDate || '').slice(0, 10);
+    const past = /^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today;
+    const status = after <= 0 ? 'CONSUMED' : past ? 'EXPIRED' : 'ACTIVE';
+
+    await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
+      { id: batch.id, tenantId: input.tenantId },
+      {
+        $set: {
+          qtyRemaining: after,
+          status,
+          updatedAt: now,
+          lastRestoredBy: {
+            distributionId: input.distributionId,
+            noDokumen: input.noDokumen,
+            at: now,
+          },
+        },
+      },
+      txOpts(session),
+    );
+    restored += gained;
+    applied.push({
+      batchId: a.batchId,
+      batchNo: a.batchNo || batch.batchNo,
+      expiryDate: exp,
+      qty: gained,
+    });
+  }
+
+  return {
+    stokId: input.stokId,
+    needQty,
+    restored,
+    shortfall: Math.max(0, needQty - restored),
+    allocations: applied,
+  };
+}

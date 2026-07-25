@@ -1,10 +1,10 @@
 /**
- * W2-2 — compute FG stock-out + FEFO needs when DST ships (PROCESSING).
- * DST lines are Food Tray (no FG id); FG truth lives on linked HSL.
+ * W2-2 / W2-3 — FG ship & return needs for DST (Food Tray lines; FG on linked HSL).
  */
 
 import { FOOD_TRAY_ID, type DistributionLine } from '@/lib/food-production/distribution';
 import { roundQty } from '@/lib/food-production/material-requirement';
+import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 
 export type HslFgLine = {
   finishedGoodProductId?: string;
@@ -97,4 +97,75 @@ export function computeDistFgShipNeeds(input: {
     hslQty: row.qty,
     needQty: roundQty(row.qty * ratio),
   })).filter((r) => r.needQty > 0);
+}
+
+function trayReturnQtyFromDistLines(lines: DistributionLine[]): number {
+  return roundQty(
+    (lines || []).reduce((s, l) => {
+      const ret = Number(l.qtyDikembalikan) || 0;
+      return s + (ret > 0 ? ret : 0);
+    }, 0),
+  );
+}
+
+/**
+ * W2-3 — FG restock needs from returned tray qty (vs HSL tray).
+ * Caps each FG at shipped needQty when `shippedByStok` provided.
+ */
+export function computeDistFgReturnNeeds(input: {
+  distLines: DistributionLine[];
+  hslLines: HslFgLine[];
+  /** Optional cap from W2-2 fefoConsume.needQty per stokId. */
+  shippedByStok?: Record<string, number>;
+}): DistFgShipNeed[] {
+  const fg = hslFgStockLines(input.hslLines);
+  if (!fg.length) return [];
+
+  const hslTray = trayQtyFromHsl(input.hslLines);
+  const returnTray = trayReturnQtyFromDistLines(input.distLines);
+  if (!(hslTray > 0) || !(returnTray > 0)) return [];
+
+  const ratio = Math.min(1, returnTray / hslTray);
+  return fg.map((row) => {
+    let needQty = roundQty(row.qty * ratio);
+    const cap = input.shippedByStok?.[row.stokId];
+    if (cap != null && Number.isFinite(cap)) {
+      needQty = Math.min(needQty, Math.max(0, Number(cap)));
+    }
+    return {
+      stokId: row.stokId,
+      nama: row.nama,
+      kode: row.kode,
+      satuan: row.satuan,
+      hslQty: row.qty,
+      needQty,
+    };
+  }).filter((r) => r.needQty > 0);
+}
+
+/**
+ * Restore plan: reverse FEFO (LIFO on ship allocations) up to returnQty.
+ */
+export function planFefoRestore(
+  returnQty: number,
+  allocations: FefoAllocation[],
+): FefoAllocation[] {
+  const need = Number(returnQty);
+  if (!(need > 0) || !allocations?.length) return [];
+  let left = need;
+  const out: FefoAllocation[] = [];
+  for (const a of [...allocations].reverse()) {
+    if (left <= 0) break;
+    const avail = Number(a.qty) || 0;
+    if (!(avail > 0)) continue;
+    const take = Math.min(avail, left);
+    out.push({
+      batchId: a.batchId,
+      batchNo: a.batchNo,
+      expiryDate: a.expiryDate,
+      qty: take,
+    });
+    left -= take;
+  }
+  return out;
 }

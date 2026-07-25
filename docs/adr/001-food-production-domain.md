@@ -399,6 +399,7 @@ Phase 2 kitchen loop tertutup. Phase 3 Management & Intelligence (Sprint 8–12 
 - Titik harus aktif; jika punya `kitchenId` harus cocok dengan dapur dokumen.
 - Status: DRAFT→…→PROCESSING (dikirim)→COMPLETED (diterima) — tidak loncat APPROVED→COMPLETED.
 - W2-2: APPROVED→PROCESSING posts FG OUT + FEFO when linked HSL has FG stock (`FP_DIST`); FOOD_TRAY-only (no FG) tetap tanpa mutasi stok.
+- W2-3: PROCESSING→COMPLETED with `qtyDikembalikan` restocks FG (`FP_DIST_RETURN`) + restores FEFO from ship allocations.
 - Deep-link: Plan/Result → `/food-production/distribution?productionPlanId=` / `productionResultId=` (Plan auto-switch ke HSL bila COMPLETED ada).
 - Scope dapur pada list titik/distribusi; write UI gated manage roles.
 
