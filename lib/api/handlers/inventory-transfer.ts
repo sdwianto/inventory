@@ -24,6 +24,7 @@ import { nextDocNumber } from '@/lib/api/document-sequence';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
+import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -115,12 +116,21 @@ export async function handleTransfer({
             txDb, tenantId, stokId, invBody.lokasiAsal!, invBody.lokasiTujuan!, it.qtyBase, session,
           );
           if ('error' in tr && tr.error) throw new Error(`Stok ${stokId}: ${tr.error}`);
-          // W2-20: soft bin OUT from source warehouse only — never fail transfer on bin shortfall.
+          // W2-20: soft bin OUT from source warehouse — never fail transfer on bin shortfall.
           await softConsumeBinOnWarehouseOut(
             txDb,
             tenantId,
             stokId,
             String(invBody.lokasiAsal),
+            it.qtyBase,
+            session,
+          );
+          // W2-21: soft bin putaway to destination default bin — never fail transfer if no default.
+          await softPutawayBinOnWarehouseIn(
+            txDb,
+            tenantId,
+            stokId,
+            String(invBody.lokasiTujuan),
             it.qtyBase,
             session,
           );

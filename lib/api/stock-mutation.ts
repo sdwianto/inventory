@@ -12,6 +12,7 @@ import {
   parseLokasiKode,
 } from '@/lib/api/stok-lokasi';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
+import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { txOpts } from '@/lib/api/transaction';
@@ -86,6 +87,17 @@ export async function postStockMutation(
       input.productId,
       lokasiKode,
       -delta,
+      input.session,
+    );
+  }
+  // W2-21: soft default-bin putaway on IN — never fail mutation if no default bin.
+  if (delta > 0) {
+    await softPutawayBinOnWarehouseIn(
+      db,
+      tid,
+      input.productId,
+      lokasiKode,
+      delta,
       input.session,
     );
   }

@@ -36,8 +36,17 @@ const softConsumeBinOnWarehouseOut = vi.fn(async () => ({
   takes: [],
 }));
 
+const softPutawayBinOnWarehouseIn = vi.fn(async () => ({
+  allocated: 0,
+  skippedNoDefaultBin: true,
+}));
+
 vi.mock('@/lib/api/stok-bin-consume', () => ({
   softConsumeBinOnWarehouseOut: (...args: unknown[]) => softConsumeBinOnWarehouseOut(...args),
+}));
+
+vi.mock('@/lib/api/stok-bin-allocate', () => ({
+  softPutawayBinOnWarehouseIn: (...args: unknown[]) => softPutawayBinOnWarehouseIn(...args),
 }));
 
 import { postStockMutation } from '@/lib/api/stock-mutation';
@@ -53,6 +62,7 @@ describe('postStockMutation', () => {
     syncProductStokFromLokasi.mockClear();
     parseLokasiKode.mockClear();
     softConsumeBinOnWarehouseOut.mockClear();
+    softPutawayBinOnWarehouseIn.mockClear();
     adjustStokLokasi.mockResolvedValue({ qtyAfter: 15 });
     syncProductStokFromLokasi.mockResolvedValue(15);
     softConsumeBinOnWarehouseOut.mockResolvedValue({
@@ -60,6 +70,10 @@ describe('postStockMutation', () => {
       shortfall: 0,
       skippedNoBins: true,
       takes: [],
+    });
+    softPutawayBinOnWarehouseIn.mockResolvedValue({
+      allocated: 0,
+      skippedNoDefaultBin: true,
     });
 
     db = {
@@ -116,6 +130,14 @@ describe('postStockMutation', () => {
     expect(ensureStokLokasiRow).toHaveBeenCalled();
     expect(adjustStokLokasi).toHaveBeenCalledWith(db, 't1', 'p1', 'GKERING', 10, undefined);
     expect(softConsumeBinOnWarehouseOut).not.toHaveBeenCalled();
+    expect(softPutawayBinOnWarehouseIn).toHaveBeenCalledWith(
+      db,
+      't1',
+      'p1',
+      'GKERING',
+      10,
+      undefined,
+    );
     expect(inserted).toMatchObject({
       tenantId: 't1',
       stokId: 'p1',
@@ -150,6 +172,7 @@ describe('postStockMutation', () => {
       3,
       undefined,
     );
+    expect(softPutawayBinOnWarehouseIn).not.toHaveBeenCalled();
     expect(inserted).toMatchObject({
       sourceType: 'FP_ISSUE',
       masuk: 0,
@@ -173,6 +196,7 @@ describe('postStockMutation', () => {
     if (!r.ok) expect(r.error).toBe('Stok tidak cukup');
     expect(inserted).toBeNull();
     expect(softConsumeBinOnWarehouseOut).not.toHaveBeenCalled();
+    expect(softPutawayBinOnWarehouseIn).not.toHaveBeenCalled();
   });
 
   it('keeps ok:true when soft bin consume returns shortfall', async () => {
