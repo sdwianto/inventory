@@ -12,6 +12,7 @@ export type AuditAction =
   | 'HUTANG_CREATED'
   | 'HUTANG_UPDATED'
   | 'STOCK_TRANSFER'
+  | 'PUTAWAY_POST'
   | 'INVENTORY_RELEASE'
   | 'ASSET_CREATED'
   | 'ASSET_DELETED'

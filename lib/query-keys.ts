@@ -71,6 +71,12 @@ export const queryKeys = {
     list: (params: { tenantId?: string; warehouseKode?: string } = {}) =>
       ['warehouse-bins', 'list', params] as const,
   },
+  putawayMoves: {
+    all: ['putaway-moves'] as const,
+    list: (params: { tenantId?: string; warehouseKode?: string; status?: string } = {}) =>
+      ['putaway-moves', 'list', params] as const,
+    detail: (id: string) => ['putaway-moves', 'detail', id] as const,
+  },
 
   procurementExpenses: {
     all: ['procurement-expenses'] as const,

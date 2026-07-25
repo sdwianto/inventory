@@ -20,6 +20,7 @@ const EXTRA_COLLECTIONS = [
   'stok_bin',
   'warehouse_bins',
   'stok_bin_reconcile_reports',
+  'putaway_moves',
   'goods_receipts',
 
   'customer_purchase_orders',

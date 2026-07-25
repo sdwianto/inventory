@@ -229,7 +229,16 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'stok_bin', index: { tenantId: 1, warehouseKode: 1, binKode: 1 }, name: 'idx_stok_bin_tenant_wh_bin' },
   { collection: 'stok_bin', index: { tenantId: 1, stokId: 1, warehouseKode: 1 }, name: 'idx_stok_bin_tenant_stok_wh' },
   { collection: 'stok_bin_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_stok_bin_recon_tenant_created' },
-
+  // W2-18 putaway moves (bin-to-bin ledger docs)
+  { collection: 'putaway_moves', index: { tenantId: 1, id: 1 }, name: 'idx_putaway_tenant_id' },
+  {
+    collection: 'putaway_moves',
+    index: { tenantId: 1, noPutaway: 1 },
+    name: 'uniq_putaway_tenant_no',
+    unique: true,
+  },
+  { collection: 'putaway_moves', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_putaway_tenant_status_tanggal' },
+  { collection: 'putaway_moves', index: { tenantId: 1, warehouseKode: 1, tanggal: -1 }, name: 'idx_putaway_tenant_wh_tanggal' },
 
   { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },
