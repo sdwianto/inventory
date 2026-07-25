@@ -10,6 +10,7 @@ import {
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
+import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
 
 export const INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION = 'ingredient_lot_reconcile_reports';
 
@@ -150,12 +151,22 @@ export type IngredientLotRepairResult = {
   tenantId: string;
   detectReportId: string;
   repaired: number;
-  actions: Array<{ kind: string; lotId?: string; detail: string }>;
+  actions: Array<{
+    kind: string;
+    lotId?: string;
+    productId?: string;
+    warehouseKode?: string;
+    detail: string;
+  }>;
   afterSummary: IngredientLotReconcileReport['summary'];
   at: Date;
 };
 
-/** Repair: ACTIVE_PAST_EXPIRY → EXPIRED (excess consume deferred to W2-6). */
+/**
+ * W2-5/W2-7 Repair:
+ * - ACTIVE_PAST_EXPIRY → EXPIRED
+ * - LOT_VS_STOK_LOKASI (sum > stock) → FEFO consume excess (parity W2-4)
+ */
 export async function repairIngredientLotMismatches(
   db: Db,
   tenantId: string,
@@ -172,18 +183,45 @@ export async function repairIngredientLotMismatches(
   let repaired = 0;
 
   for (const m of detect.mismatches) {
-    if (m.kind !== 'ACTIVE_PAST_EXPIRY' || !m.lotId) continue;
-    const res = await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
-      { id: m.lotId, tenantId: tid, status: 'ACTIVE' },
-      { $set: { status: 'EXPIRED', updatedAt: now } },
-    );
-    if (res.modifiedCount > 0) {
-      repaired += 1;
-      actions.push({
-        kind: m.kind,
-        lotId: m.lotId,
-        detail: `Marked EXPIRED · ${m.lotNo || m.lotId}`,
+    if (m.kind === 'ACTIVE_PAST_EXPIRY' && m.lotId) {
+      const res = await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
+        { id: m.lotId, tenantId: tid, status: 'ACTIVE' },
+        { $set: { status: 'EXPIRED', updatedAt: now } },
+      );
+      if (res.modifiedCount > 0) {
+        repaired += 1;
+        actions.push({
+          kind: m.kind,
+          lotId: m.lotId,
+          productId: m.productId,
+          warehouseKode: m.warehouseKode,
+          detail: `Marked EXPIRED · ${m.lotNo || m.lotId}`,
+        });
+      }
+      continue;
+    }
+
+    if (m.kind === 'LOT_VS_STOK_LOKASI' && m.productId && m.warehouseKode) {
+      const excess = Number(m.qtyRemaining || 0) - Number(m.stokLokasi || 0);
+      if (!(excess > 0.001)) continue;
+      const fefo = await consumeIngredientLotsFefo(db, {
+        tenantId: tid,
+        stokId: m.productId,
+        warehouseKode: m.warehouseKode,
+        needQty: excess,
+        asOf: now,
+        allowExpired: true,
+        noDokumen: `LOT-REPAIR-${detect.id.slice(0, 8)}`,
       });
+      if (fefo.allocated > 0) {
+        repaired += 1;
+        actions.push({
+          kind: m.kind,
+          productId: m.productId,
+          warehouseKode: m.warehouseKode,
+          detail: `Consumed excess ${fefo.allocated} (shortfall ${fefo.shortfall})`,
+        });
+      }
     }
   }
 

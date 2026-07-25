@@ -432,9 +432,9 @@ export default function OpsDashboardPage() {
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-medium">W2-5 · Ingredient Lot Detect</h2>
+                <h2 className="font-medium">W2-5/W2-7 · Ingredient Lot Detect & Repair</h2>
                 <p className="text-xs text-muted-foreground">
-                  Lots stamped on GRN POST · past-expiry · lot vs stok_lokasi
+                  GRN lots · past-expiry → EXPIRED · lot-vs-stok excess → FEFO consume
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">

@@ -21,6 +21,7 @@ Baca di Sales repo:
 | **W2-4 Cycle Count** | `sales/docs/architecture/W2-4-CYCLE-COUNT.md` |
 | **W2-5 Ingredient Lot Stamp** | `sales/docs/architecture/W2-5-INGREDIENT-LOT-STAMP.md` |
 | **W2-6 Issue Ingredient FEFO** | `sales/docs/architecture/W2-6-ISSUE-INGREDIENT-FEFO.md` |
+| **W2-7 Lot vs Stok Repair** | `sales/docs/architecture/W2-7-INGREDIENT-LOT-VS-STOK-REPAIR.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
