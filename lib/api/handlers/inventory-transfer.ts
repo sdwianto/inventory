@@ -22,6 +22,7 @@ import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
+import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -105,6 +106,7 @@ export async function handleTransfer({
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const fefoRelocate: Array<Record<string, unknown>> = [];
+        const lotRelocate: Array<Record<string, unknown>> = [];
         for (const it of transferLines) {
           const stokId = itemStokId(it);
           await ensureStokLokasiRow(txDb, tenantId, stokId, invBody.lokasiAsal!, session);
@@ -138,8 +140,35 @@ export async function handleTransfer({
             skippedNoBatches: fefo.skippedNoBatches,
             allocations: fefo.allocations,
           });
+          // W2-13: relocate ingredient lots FEFO with the stock move.
+          const lots = await relocateLotsFefo(
+            txDb,
+            {
+              tenantId,
+              stokId,
+              fromWarehouseKode: String(invBody.lokasiAsal),
+              toWarehouseKode: String(invBody.lokasiTujuan),
+              needQty: it.qtyBase,
+              asOf: now,
+              allowExpired: true,
+              noTransaksi: noTransfer,
+              transferId: String(doc.id),
+            },
+            session,
+          );
+          lotRelocate.push({
+            stokId: lots.stokId,
+            fromWarehouseKode: lots.fromWarehouseKode,
+            toWarehouseKode: lots.toWarehouseKode,
+            needQty: lots.needQty,
+            allocated: lots.allocated,
+            shortfall: lots.shortfall,
+            skippedNoLots: lots.skippedNoLots,
+            allocations: lots.allocations,
+          });
         }
         (doc as Record<string, unknown>).fefoRelocate = fefoRelocate;
+        (doc as Record<string, unknown>).lotRelocate = lotRelocate;
         await txDb.collection('transfer_stok').insertOne(doc, session ? { session } : {});
         for (const it of transferLines) {
           const stokId = itemStokId(it);

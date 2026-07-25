@@ -36,6 +36,17 @@ export interface IngredientLotDoc {
     delta?: number;
     at?: Date;
   };
+  /** W2-13: set when lot cloned on partial transfer relocate. */
+  relocatedFromLotId?: string;
+  /** W2-13: last TR/XFR that relocated this lot (or its remainder). */
+  lastRelocatedBy?: {
+    transferId?: string;
+    xferId?: string;
+    noTransaksi?: string;
+    fromWarehouseKode?: string;
+    toWarehouseKode?: string;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }

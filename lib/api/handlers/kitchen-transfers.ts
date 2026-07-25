@@ -13,6 +13,7 @@ import { guardPosting } from '@/lib/api/period-lock';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
+import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
 import {
   KITCHEN_TRANSFERS_COLLECTION,
   XFER_STATUS_TRANSITIONS,
@@ -283,12 +284,13 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
           }
 
           const fefoRelocate: Array<Record<string, unknown>> = [];
+          const lotRelocate: Array<Record<string, unknown>> = [];
           if (!fresh.allocationOnly) {
             const posted = await postXferStock(txDb, fresh, session!);
             if ('error' in posted) {
               throw Object.assign(new Error(posted.error), { httpStatus: 400 });
             }
-            // W2-12: relocate FG batches FEFO with the stock move.
+            // W2-12/W2-13: relocate FG batches + ingredient lots FEFO with the stock move.
             for (const line of fresh.lines) {
               const qty = Number(line.qty);
               if (!(qty > 0)) continue;
@@ -317,6 +319,31 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
                 skippedNoBatches: fefo.skippedNoBatches,
                 allocations: fefo.allocations,
               });
+              const lots = await relocateLotsFefo(
+                txDb,
+                {
+                  tenantId: fresh.tenantId,
+                  stokId: line.productId,
+                  fromWarehouseKode: fresh.fromWarehouseKode,
+                  toWarehouseKode: fresh.toWarehouseKode,
+                  needQty: qty,
+                  asOf: now,
+                  allowExpired: true,
+                  noTransaksi: fresh.noDokumen,
+                  xferId: fresh.id,
+                },
+                session,
+              );
+              lotRelocate.push({
+                stokId: lots.stokId,
+                fromWarehouseKode: lots.fromWarehouseKode,
+                toWarehouseKode: lots.toWarehouseKode,
+                needQty: lots.needQty,
+                allocated: lots.allocated,
+                shortfall: lots.shortfall,
+                skippedNoLots: lots.skippedNoLots,
+                allocations: lots.allocations,
+              });
             }
           }
 
@@ -339,6 +366,7 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
                 stockPostedAt: now,
                 updatedAt: now,
                 ...(fefoRelocate.length ? { fefoRelocate } : {}),
+                ...(lotRelocate.length ? { lotRelocate } : {}),
               },
             },
             txOpts(session),
