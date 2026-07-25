@@ -28,6 +28,8 @@ export interface ProductionBatchDoc {
   lastConsumedBy?: {
     releaseId?: string;
     noRelease?: string;
+    distributionId?: string;
+    noDokumen?: string;
     at?: Date;
   };
   createdAt: Date;

@@ -4,7 +4,8 @@
  * DRAFT → APPROVED (Terjadwal, nomor DST) → PROCESSING (Dikirim) → COMPLETED (Selesai).
  * Nomor DST baru diterbitkan saat jadi Terjadwal (setelah HSL ada).
  * Retur dicatat per titik (qtyDikembalikan), bukan status dokumen global.
- * Tanpa mutasi stok (MBG: porsi langsung distribusi).
+ * W2-2: APPROVED→PROCESSING posts FG OUT + FEFO when linked HSL has FG stock;
+ * FOOD_TRAY-only (no FG on HSL) tetap tanpa mutasi stok.
  */
 
 /** Alasan blok create DST dari RPN (HSL sudah ada / DST PLAN masih aktif). */
@@ -161,6 +162,17 @@ export interface DistributionOrderDoc {
   };
   catatan?: string;
   lastStatusPhotoUrls?: string[];
+  /** W2-2: set when PROCESSING posted FG stock + FEFO. */
+  stockPostedAt?: Date;
+  warehouseKode?: string;
+  fefoConsume?: Array<{
+    stokId: string;
+    needQty: number;
+    allocated: number;
+    shortfall: number;
+    skippedNoBatches: boolean;
+    allocations?: unknown[];
+  }>;
   createdAt: Date;
   updatedAt: Date;
   createdBy?: string;

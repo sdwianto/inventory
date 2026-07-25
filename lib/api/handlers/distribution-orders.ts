@@ -58,6 +58,10 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { storeBase64Image } from '@/lib/api/media-storage';
+import { postStockMutation } from '@/lib/api/stock-mutation';
+import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
+import { computeDistFgShipNeeds } from '@/lib/food-production/dist-fefo-ship';
 import type { AuthContext } from '@/types/auth';
 import type { HandlerContext } from '@/types/api/handler';
 
@@ -1031,6 +1035,143 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     }
     if (persisted.urls.length) {
       update.lastStatusPhotoUrls = persisted.urls;
+    }
+
+    // W2-2: APPROVED → PROCESSING posts FG OUT + FEFO from linked HSL (Food Tray lines have no FG id).
+    if (toStatus === 'PROCESSING' && !existing.stockPostedAt) {
+      const resultId = String(
+        (update.productionResultId as string | undefined)
+        || existing.productionResultId
+        || '',
+      ).trim();
+      let hsl: ProductionResultDoc | null = linkResult;
+      if (!hsl && resultId) {
+        hsl = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: resultId }),
+        ) as ProductionResultDoc | null;
+      }
+      if (hsl?.warehouseKode) {
+        const needs = computeDistFgShipNeeds({
+          distLines: nextLines,
+          hslLines: hsl.lines || [],
+        });
+        if (needs.length) {
+          const docNo = String(assignedNo || existing.noDokumen || id);
+          try {
+            await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+              if (!session) {
+                throw Object.assign(
+                  new Error(
+                    'Posting stok distribusi membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
+                  ),
+                  { httpStatus: 503 },
+                );
+              }
+              const claim = await txDb.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
+                withTenantFilter(scopeAuth, { id, status: existing.status }),
+                { $set: update },
+                session ? { session } : {},
+              );
+              if (claim.modifiedCount === 0) {
+                throw Object.assign(new Error('Distribusi sudah diproses'), { httpStatus: 400 });
+              }
+
+              const fefoLines: Array<{
+                stokId: string;
+                needQty: number;
+                allocated: number;
+                shortfall: number;
+                skippedNoBatches: boolean;
+                allocations: unknown[];
+              }> = [];
+
+              for (const need of needs) {
+                const posted = await postStockMutation(txDb, {
+                  tenantId: existing.tenantId,
+                  productId: need.stokId,
+                  warehouseKode: hsl!.warehouseKode,
+                  deltaQtyBase: -need.needQty,
+                  sourceType: 'FP_DIST',
+                  noTransaksi: docNo,
+                  keterangan: `Distribusi ${docNo} — ${need.nama || need.kode || need.stokId}`,
+                  satuan: need.satuan,
+                  qtyEntered: need.needQty,
+                  session,
+                });
+                if (!posted.ok) {
+                  throw Object.assign(
+                    new Error(posted.error || `Gagal post stok ${need.stokId}`),
+                    { httpStatus: 400 },
+                  );
+                }
+                const fefo = await consumeBatchesFefo(
+                  txDb,
+                  {
+                    tenantId: existing.tenantId,
+                    stokId: need.stokId,
+                    warehouseKode: hsl!.warehouseKode,
+                    needQty: need.needQty,
+                    asOf: now,
+                    productionResultId: hsl!.id,
+                    distributionId: id,
+                    noDokumen: docNo,
+                  },
+                  session,
+                );
+                fefoLines.push({
+                  stokId: need.stokId,
+                  needQty: fefo.needQty,
+                  allocated: fefo.allocated,
+                  shortfall: fefo.shortfall,
+                  skippedNoBatches: fefo.skippedNoBatches,
+                  allocations: fefo.allocations,
+                });
+              }
+
+              await txDb.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
+                withTenantFilter(scopeAuth, { id }),
+                {
+                  $set: {
+                    stockPostedAt: now,
+                    warehouseKode: hsl!.warehouseKode,
+                    fefoConsume: fefoLines,
+                    updatedAt: now,
+                  },
+                },
+                session ? { session } : {},
+              );
+            });
+          } catch (e: unknown) {
+            if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
+              return err('Nomor dokumen bentrok — coba lagi', 409);
+            }
+            const httpStatus = e && typeof e === 'object'
+              ? Number((e as { httpStatus?: number }).httpStatus || 0)
+              : 0;
+            if (httpStatus === 503) {
+              return err(e instanceof Error ? e.message : 'Transaksi MongoDB wajib', 503);
+            }
+            if (httpStatus === 400) {
+              return err(e instanceof Error ? e.message : 'Gagal kirim distribusi', 400);
+            }
+            throw e;
+          }
+
+          const savedTx = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
+            withTenantFilter(scopeAuth, { id }),
+          );
+          const displayNoTx = hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft';
+          await writeAuditLog(db, {
+            tenantId: existing.tenantId,
+            action: 'DIST_STATUS',
+            entityType: 'distribution_order',
+            entityId: id,
+            summary: `DST ${displayNoTx}: ${existing.status} → ${toStatus} · FEFO ship`,
+            ...auditActor(auth),
+          });
+          return ok(clean(savedTx as Record<string, unknown>));
+        }
+      }
     }
 
     try {

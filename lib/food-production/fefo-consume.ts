@@ -38,8 +38,12 @@ export async function consumeBatchesFefo(
     needQty: number;
     asOf?: Date;
     allowExpired?: boolean;
+    /** W2-2: limit consume to batches stamped by this HSL. */
+    productionResultId?: string;
     releaseId?: string;
     noRelease?: string;
+    distributionId?: string;
+    noDokumen?: string;
   },
   session?: ClientSession | null,
 ): Promise<FefoConsumeLineResult> {
@@ -55,17 +59,19 @@ export async function consumeBatchesFefo(
   if (!(needQty > 0) || !input.stokId || !input.warehouseKode) return empty;
 
   const now = input.asOf ?? new Date();
+  const filter: Record<string, unknown> = {
+    tenantId: input.tenantId,
+    finishedGoodProductId: input.stokId,
+    warehouseKode: input.warehouseKode,
+    status: { $in: ['ACTIVE', 'EXPIRED'] },
+  };
+  if (input.productionResultId) {
+    filter.productionResultId = input.productionResultId;
+  }
+
   const rows = await db
     .collection(PRODUCTION_BATCHES_COLLECTION)
-    .find(
-      {
-        tenantId: input.tenantId,
-        finishedGoodProductId: input.stokId,
-        warehouseKode: input.warehouseKode,
-        status: { $in: ['ACTIVE', 'EXPIRED'] },
-      },
-      txOpts(session),
-    )
+    .find(filter, txOpts(session))
     .sort({ expiryDate: 1 })
     .toArray() as unknown as ProductionBatchDoc[];
 
@@ -90,6 +96,19 @@ export async function consumeBatchesFefo(
     const before = effectiveQtyRemaining(batch);
     const after = Math.max(0, before - a.qty);
     const status = after <= 0 ? 'CONSUMED' : batch.status === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
+    const lastConsumedBy = input.distributionId
+      ? {
+          distributionId: input.distributionId,
+          noDokumen: input.noDokumen,
+          at: now,
+        }
+      : input.releaseId
+        ? {
+            releaseId: input.releaseId,
+            noRelease: input.noRelease,
+            at: now,
+          }
+        : undefined;
     await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
       { id: batch.id, tenantId: input.tenantId },
       {
@@ -97,15 +116,7 @@ export async function consumeBatchesFefo(
           qtyRemaining: after,
           status,
           updatedAt: now,
-          ...(input.releaseId
-            ? {
-                lastConsumedBy: {
-                  releaseId: input.releaseId,
-                  noRelease: input.noRelease,
-                  at: now,
-                },
-              }
-            : {}),
+          ...(lastConsumedBy ? { lastConsumedBy } : {}),
         },
       },
       txOpts(session),
