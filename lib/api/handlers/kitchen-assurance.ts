@@ -36,6 +36,7 @@ import {
   KA_CASE_TRANSITIONS,
   normalizeCaseKind,
   normalizeCaseStatus,
+  assertKaCaseTerminalBlockedByActiveFollowUps,
   type KaSafetyCaseDoc,
   type KaCaseStatus,
 } from '@/lib/kitchen-assurance/safety-case';
@@ -668,16 +669,15 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
         KA_CASE_TRANSITIONS as unknown as Record<string, string[]>,
       );
       if (gate) return err(gate, 400);
-      if (toStatus === 'CLOSED') {
+      if (toStatus === 'CLOSED' || toStatus === 'CANCELLED') {
         const openFu = await db.collection(KA_FOLLOW_UPS_COLLECTION).countDocuments(
           withTenantFilter(scopeAuth, {
             safetyCaseId: existing.id,
-            status: { $in: ['OPEN', 'DONE'] },
+            status: { $in: KA_ACTIVE_FOLLOW_UP_STATUSES },
           }),
         );
-        if (openFu > 0) {
-          return err(`Tidak bisa tutup: masih ada ${openFu} follow-up aktif/belum diverifikasi`, 400);
-        }
+        const terminalGate = assertKaCaseTerminalBlockedByActiveFollowUps(toStatus, openFu);
+        if (terminalGate) return err(terminalGate, 400);
       }
       patch.status = toStatus as KaCaseStatus;
       patch.history = appendKaHistory(existing.history, {

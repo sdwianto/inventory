@@ -40,6 +40,7 @@ Baca di Sales repo:
 | **W2-23 Soft Bin GT Reverse** | `sales/docs/architecture/W2-23-STOK-BIN-GT-REVERSE.md` |
 | **W2-24 Warehouse Slotting Closeout** | `sales/docs/architecture/W2-24-WAREHOUSE-SLOTTING-CLOSEOUT.md` |
 | **W2-25 KA Follow-up Orphan Reconcile** | `sales/docs/architecture/W2-25-KA-FOLLOW-UP-ORPHAN-RECONCILE.md` |
+| **W2-26 KA Case CANCELLED Active-FU Gate** | `sales/docs/architecture/W2-26-KA-CASE-CANCELLED-ACTIVE-FU-GATE.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |

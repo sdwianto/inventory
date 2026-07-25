@@ -144,6 +144,25 @@ export function normalizeCaseStatus(raw: unknown): KaCaseStatus | { error: strin
   return { error: 'status case wajib OPEN | IN_PROGRESS | PENDING_VERIFY | CLOSED | CANCELLED' };
 }
 
+/**
+ * Block terminal case transitions (CLOSED | CANCELLED) while active follow-ups remain.
+ * Active FU count is typically OPEN | DONE (see KA_ACTIVE_FOLLOW_UP_STATUSES).
+ * Returns Indonesian soft-gate message, or null when allowed.
+ */
+export function assertKaCaseTerminalBlockedByActiveFollowUps(
+  toStatus: string,
+  activeFollowUpCount: number,
+): string | null {
+  if (activeFollowUpCount <= 0) return null;
+  if (toStatus === 'CLOSED') {
+    return `Tidak bisa tutup: masih ada ${activeFollowUpCount} follow-up aktif/belum diverifikasi`;
+  }
+  if (toStatus === 'CANCELLED') {
+    return `Tidak bisa batalkan: masih ada ${activeFollowUpCount} follow-up aktif/belum diverifikasi`;
+  }
+  return null;
+}
+
 export function normalizeResolutionType(raw: unknown): KaResolutionType | { error: string } {
   const v = String(raw || '').toUpperCase();
   const allowed = Object.keys(KA_RESOLUTION_LABELS);
