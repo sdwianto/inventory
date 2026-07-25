@@ -14,12 +14,11 @@ import { assertOperationalAccess } from '@/lib/api/tenant-validate';
 import { requireRole, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { guardPosting } from '@/lib/api/period-lock';
 import {
-  setQtyStokLokasi,
   syncProductStokFromLokasi,
   ensureStokLokasiRow,
 } from '@/lib/api/stok-lokasi';
 import { warehouseLabel } from '@/lib/api/warehouses';
-import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { resolveProductGudangKode, purgeOtherWarehouseRows } from '@/lib/api/product-warehouse';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
@@ -27,6 +26,8 @@ import { writeAuditLog } from '@/lib/api/audit-log';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildPenyesuaianJournalLines } from '@/lib/api/journal-lines';
+import { postStockMutation } from '@/lib/api/stock-mutation';
+import { syncBatchesOnVariance } from '@/lib/food-production/cycle-count-fefo';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -86,6 +87,7 @@ export async function handlePenyesuaian({
         qtySistem: number;
         qtyAktual: number;
         selisih: number;
+        fefoSync?: Record<string, unknown>;
       }>,
       createdAt: now,
     });
@@ -119,7 +121,7 @@ export async function handlePenyesuaian({
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         for (const plan of adjustPlan) {
-          const { prod, lokasiKode, lokasiLabel, qtyAktual, hargaBeli } = plan;
+          const { prod, lokasiKode, qtyAktual, hargaBeli } = plan;
           await ensureStokLokasiRow(txDb, tenantId, prod.id, lokasiKode, session);
           const row = await txDb.collection('stok_lokasi').findOne(
             { tenantId, stokId: prod.id, lokasiKode },
@@ -127,28 +129,54 @@ export async function handlePenyesuaian({
           );
           const qtySistem = row ? (parseFloat(String(row.qty)) || 0) : 0;
           const selisih = qtyAktual - qtySistem;
+          let fefoSync: Record<string, unknown> | undefined;
+
+          // W2-4: unified stock mutation (kartu via postStockMutation) + FEFO sync.
+          if (selisih !== 0) {
+            const posted = await postStockMutation(txDb, {
+              tenantId,
+              productId: prod.id,
+              warehouseKode: lokasiKode,
+              deltaQtyBase: selisih,
+              sourceType: 'PENYESUAIAN',
+              noTransaksi: noPS,
+              keterangan: `Penyesuaian Stok ${selisih >= 0 ? '(+)' : '(-)'} ${noPS}`,
+              hargaSatuan: prod.hargaBeli || 0,
+              qtyEntered: plan.qtyEntered,
+              uomId: plan.uomId,
+              satuan: plan.satuan || prod.satuan,
+              session,
+            });
+            if (!posted.ok) {
+              throw new Error(posted.error || `Gagal penyesuaian ${prod.kode || prod.id}`);
+            }
+            fefoSync = await syncBatchesOnVariance(
+              txDb,
+              {
+                tenantId,
+                stokId: prod.id,
+                warehouseKode: lokasiKode,
+                deltaQty: selisih,
+                asOf: now,
+                noDokumen: noPS,
+              },
+              session,
+            ) as unknown as Record<string, unknown>;
+          } else {
+            await syncProductStokFromLokasi(txDb, tenantId, prod.id, session);
+          }
+
+          await purgeOtherWarehouseRows(txDb, tenantId, prod.id, lokasiKode, session);
+
           doc.items.push({
             stokId: prod.id, kode: prod.kode, nama: prod.nama,
             satuan: plan.satuan || prod.satuan,
             uomId: plan.uomId,
             qtyEntered: plan.qtyEntered,
             gudangKode: lokasiKode, qtySistem, qtyAktual, selisih,
+            ...(fefoSync ? { fefoSync } : {}),
           });
-          await setQtyStokLokasi(txDb, tenantId, prod.id, lokasiKode, qtyAktual, session);
-          await purgeOtherWarehouseRows(txDb, tenantId, prod.id, lokasiKode, session);
-          await syncProductStokFromLokasi(txDb, tenantId, prod.id, session);
-          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
-            id: uuidv4(),
-            stokId: prod.id, lokasi: lokasiLabel, tanggal: now, noTransaksi: noPS,
-            keterangan: `Penyesuaian Stok ${selisih >= 0 ? '(+)' : '(-)'}`,
-            sourceType: 'PENYESUAIAN',
-            masuk: selisih > 0 ? selisih : 0,
-            keluar: selisih < 0 ? Math.abs(selisih) : 0,
-            qtyEntered: plan.qtyEntered,
-            uomId: plan.uomId,
-            satuan: plan.satuan || prod.satuan,
-            hargaSatuan: prod.hargaBeli || 0,
-          }), session ? { session } : {});
+
           if (selisih !== 0) {
             const jAmt = Math.round(Math.abs(selisih) * hargaBeli);
             const jLines = buildPenyesuaianJournalLines({

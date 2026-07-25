@@ -17,6 +17,7 @@ import { createIntegrationClient } from '@/lib/integration/client';
 import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
 import {
   FEFO_RECONCILE_REPORTS_COLLECTION,
+  repairFefoBatchMismatches,
   runFefoBatchDetect,
 } from '@/lib/api/fefo-batch-reconcile';
 
@@ -80,7 +81,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     });
   }
 
-  // W2-1: FEFO batch Detect (Compare/Repair deferred).
+  // W2-1: FEFO batch Detect.
   if (route === '/ops/fefo-reconcile/run' && method === 'POST') {
     const denied = requireRole(auth, ['MASTER']);
     if (denied) return denied;
@@ -94,6 +95,16 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       mismatchSample: report.mismatches.slice(0, 15),
       at: new Date().toISOString(),
     });
+  }
+
+  // W2-4: FEFO Repair (past-expiry status + batch-vs-stok excess consume).
+  if (route === '/ops/fefo-reconcile/repair' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await repairFefoBatchMismatches(db, tenantId);
+    return ok(result);
   }
 
   if (route !== '/ops/dashboard' || method !== 'GET') return null;

@@ -1,5 +1,5 @@
 /**
- * W2-1 Detect — FEFO / batch qty vs stok_lokasi (Compare/Repair deferred).
+ * W2-1 Detect · W2-4 Repair — FEFO / batch qty vs stok_lokasi.
  */
 
 import type { Db } from 'mongodb';
@@ -10,6 +10,7 @@ import {
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
+import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
 
 export const FEFO_RECONCILE_REPORTS_COLLECTION = 'fefo_batch_reconcile_reports';
 
@@ -169,4 +170,99 @@ export async function runFefoBatchDetect(
   const report = await detectFefoBatchMismatches(db, tenantId);
   await db.collection(FEFO_RECONCILE_REPORTS_COLLECTION).insertOne(report);
   return report;
+}
+
+export type FefoRepairResult = {
+  tenantId: string;
+  detectReportId: string;
+  repaired: number;
+  actions: Array<{
+    kind: string;
+    stokId?: string;
+    warehouseKode?: string;
+    batchId?: string;
+    detail: string;
+  }>;
+  afterSummary: FefoReconcileReport['summary'];
+  at: Date;
+};
+
+/**
+ * W2-4 Repair:
+ * - ACTIVE_PAST_EXPIRY → status EXPIRED
+ * - BATCH_VS_STOK_LOKASI (sum > stock) → FEFO consume excess
+ */
+export async function repairFefoBatchMismatches(
+  db: Db,
+  tenantId: string,
+): Promise<FefoRepairResult> {
+  const tid = String(tenantId || 'default').trim() || 'default';
+  const now = new Date();
+  const detect = await detectFefoBatchMismatches(db, tid);
+  await db.collection(FEFO_RECONCILE_REPORTS_COLLECTION).insertOne({
+    ...detect,
+    phase: 'detect-before-repair',
+  });
+
+  const actions: FefoRepairResult['actions'] = [];
+  let repaired = 0;
+
+  for (const m of detect.mismatches) {
+    if (m.kind === 'ACTIVE_PAST_EXPIRY' && m.batchId) {
+      const res = await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
+        { id: m.batchId, tenantId: tid, status: 'ACTIVE' },
+        { $set: { status: 'EXPIRED', updatedAt: now } },
+      );
+      if (res.modifiedCount > 0) {
+        repaired += 1;
+        actions.push({
+          kind: m.kind,
+          batchId: m.batchId,
+          stokId: m.stokId,
+          warehouseKode: m.warehouseKode,
+          detail: `Marked EXPIRED · ${m.batchNo || m.batchId}`,
+        });
+      }
+      continue;
+    }
+
+    if (m.kind === 'BATCH_VS_STOK_LOKASI' && m.stokId && m.warehouseKode) {
+      const excess = Number(m.qtyRemaining || 0) - Number(m.stokLokasi || 0);
+      if (!(excess > 0.001)) continue;
+      const fefo = await consumeBatchesFefo(db, {
+        tenantId: tid,
+        stokId: m.stokId,
+        warehouseKode: m.warehouseKode,
+        needQty: excess,
+        asOf: now,
+        allowExpired: true,
+        noDokumen: `FEFO-REPAIR-${detect.id.slice(0, 8)}`,
+      });
+      if (fefo.allocated > 0) {
+        repaired += 1;
+        actions.push({
+          kind: m.kind,
+          stokId: m.stokId,
+          warehouseKode: m.warehouseKode,
+          detail: `Consumed excess ${fefo.allocated} (shortfall ${fefo.shortfall})`,
+        });
+      }
+    }
+  }
+
+  const after = await detectFefoBatchMismatches(db, tid);
+  await db.collection(FEFO_RECONCILE_REPORTS_COLLECTION).insertOne({
+    ...after,
+    phase: 'detect-after-repair',
+    repairActions: actions,
+  });
+
+  return {
+    tenantId: tid,
+    detectReportId: detect.id,
+    repaired,
+    actions,
+    afterSummary: after.summary,
+    at: now,
+  };
 }

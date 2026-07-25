@@ -325,33 +325,58 @@ export default function OpsDashboardPage() {
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-medium">W2-1 · FEFO Batch Detect</h2>
+                <h2 className="font-medium">W2-1/W2-4 · FEFO Detect & Repair</h2>
                 <p className="text-xs text-muted-foreground">
-                  Expired+qty · ACTIVE past expiry · sum(qtyRemaining) vs stok_lokasi
+                  Detect drift · Repair past-expiry + batch-vs-stok excess · Cycle count = /stok/penyesuaian
                 </p>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                disabled={runReconcile.isPending}
-                onClick={async () => {
-                  try {
-                    const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/fefo-reconcile/run',
-                      method: 'POST',
-                      body: {},
-                      offlineLabel: 'FEFO Detect',
-                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
-                    toast.success(
-                      `FEFO Detect OK · mismatch ${res.summary?.totalMismatch ?? 0} · ${res.reportId || ''}`,
-                    );
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'FEFO Detect gagal');
-                  }
-                }}
-              >
-                Run FEFO Detect
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/fefo-reconcile/run',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'FEFO Detect',
+                      }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                      toast.success(
+                        `FEFO Detect OK · mismatch ${res.summary?.totalMismatch ?? 0} · ${res.reportId || ''}`,
+                      );
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'FEFO Detect gagal');
+                    }
+                  }}
+                >
+                  Run FEFO Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/fefo-reconcile/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'FEFO Repair',
+                      }) as { repaired?: number; afterSummary?: { totalMismatch?: number } };
+                      toast.success(
+                        `FEFO Repair OK · repaired ${res.repaired ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'FEFO Repair gagal');
+                    }
+                  }}
+                >
+                  Run FEFO Repair
+                </Button>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
               <div className="rounded border p-3">

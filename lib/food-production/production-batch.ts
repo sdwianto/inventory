@@ -37,6 +37,11 @@ export interface ProductionBatchDoc {
     noDokumen?: string;
     at?: Date;
   };
+  lastCycleCountBy?: {
+    noDokumen?: string;
+    delta?: number;
+    at?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
