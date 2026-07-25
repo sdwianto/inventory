@@ -928,34 +928,64 @@ export default function OpsDashboardPage() {
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-medium">W2-17 — Stok Bin vs Lokasi Detect</h2>
+                <h2 className="font-medium">W2-17/W2-22 — Stok Bin Detect & Repair</h2>
                 <p className="text-xs text-muted-foreground">
-                  Soft Detect: sum(stok_bin) vs stok_lokasi — BIN_SUM_LT often unslotted stock until putaway
+                  Soft Detect: sum(stok_bin) vs stok_lokasi · Repair BIN_SUM_LT → default bin (never GT / stok_lokasi)
                 </p>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                disabled={runReconcile.isPending}
-                onClick={async () => {
-                  try {
-                    const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/stok-bin-reconcile/run',
-                      method: 'POST',
-                      body: {},
-                      offlineLabel: 'Stok Bin Detect',
-                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
-                    toast.success(
-                      `Stok Bin Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
-                    );
-                    void refetch();
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'Stok Bin Detect gagal');
-                  }
-                }}
-              >
-                Run Stok Bin Detect
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/stok-bin-reconcile/run',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Stok Bin Detect',
+                      }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                      toast.success(
+                        `Stok Bin Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Stok Bin Detect gagal');
+                    }
+                  }}
+                >
+                  Run Stok Bin Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/stok-bin-reconcile/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Stok Bin Repair',
+                      }) as {
+                        repaired?: number;
+                        ignoredGt?: number;
+                        afterSummary?: { totalMismatch?: number };
+                      };
+                      toast.success(
+                        `Stok Bin Repair OK · repaired ${res.repaired ?? 0} · ignoredGt ${res.ignoredGt ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Stok Bin Repair gagal');
+                    }
+                  }}
+                >
+                  Run Stok Bin Repair
+                </Button>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
               <div className="rounded border p-3">

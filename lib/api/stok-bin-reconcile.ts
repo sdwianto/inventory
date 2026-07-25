@@ -1,10 +1,12 @@
 /**
  * W2-17 Detect — sum(stok_bin) vs stok_lokasi (warehouse grain).
  * Soft only; unslotted warehouse qty commonly appears as BIN_SUM_LT.
+ * W2-22 Repair — soft-allocate BIN_SUM_LT residual to default bin (never GT / stok_lokasi).
  */
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import { allocateStokBinSoft } from '@/lib/api/stok-bin-allocate';
 import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
 
 export const STOK_BIN_RECONCILE_REPORTS_COLLECTION = 'stok_bin_reconcile_reports';
@@ -21,6 +23,16 @@ export type StokBinMismatch = {
   detail: string;
 };
 
+export type StokBinRepairAction = {
+  kind: 'BIN_SUM_LT_STOK_LOKASI' | 'SKIP_NO_DEFAULT_BIN' | 'SKIP_ALLOCATE_FAIL';
+  stokId: string;
+  warehouseKode: string;
+  binKode?: string;
+  residual: number;
+  allocated: number;
+  detail: string;
+};
+
 export type StokBinReconcileReport = {
   id: string;
   tenantId: string;
@@ -32,6 +44,22 @@ export type StokBinReconcileReport = {
     binSumLt: number;
   };
   mismatches: StokBinMismatch[];
+  /** Optional — set on repair before/after Detect inserts only. */
+  phase?: string;
+  repairActions?: StokBinRepairAction[];
+};
+
+export type StokBinRepairResult = {
+  detectBeforeId: string;
+  detectAfterId: string;
+  tenantId: string;
+  repaired: number;
+  skippedNoDefaultBin: number;
+  skippedOther: number;
+  ignoredGt: number;
+  actions: StokBinRepairAction[];
+  afterSummary: StokBinReconcileReport['summary'];
+  at: string;
 };
 
 function qtyNum(v: unknown): number {
@@ -140,4 +168,104 @@ export async function runStokBinDetect(
   const report = await detectStokBinVsLokasi(db, tenantId);
   await db.collection(STOK_BIN_RECONCILE_REPORTS_COLLECTION).insertOne(report);
   return report;
+}
+
+/**
+ * W2-22 Repair (MASTER):
+ * - BIN_SUM_LT only → soft-allocate residual to default bin via allocateStokBinSoft
+ * - Never repair BIN_SUM_GT; never write stok_lokasi
+ */
+export async function repairStokBinMismatches(
+  db: Db,
+  tenantId: string,
+): Promise<StokBinRepairResult> {
+  const tid = String(tenantId || 'default').trim() || 'default';
+  const at = new Date().toISOString();
+
+  const before = await detectStokBinVsLokasi(db, tid);
+  await db.collection(STOK_BIN_RECONCILE_REPORTS_COLLECTION).insertOne({
+    ...before,
+    phase: 'detect-before-repair',
+  });
+
+  const actions: StokBinRepairAction[] = [];
+  let repaired = 0;
+  let skippedNoDefaultBin = 0;
+  let skippedOther = 0;
+  const ignoredGt = before.mismatches.filter(
+    (m) => m.kind === 'BIN_SUM_GT_STOK_LOKASI',
+  ).length;
+
+  for (const m of before.mismatches) {
+    if (m.kind !== 'BIN_SUM_LT_STOK_LOKASI') continue;
+
+    const residual = Math.round((m.stokLokasiQty - m.binQtySum) * 1000) / 1000;
+    if (!(residual > EPS)) continue;
+
+    const alloc = await allocateStokBinSoft(
+      db,
+      tid,
+      m.stokId,
+      m.warehouseKode,
+      residual,
+    );
+
+    if (alloc.allocated > 0) {
+      repaired += 1;
+      actions.push({
+        kind: 'BIN_SUM_LT_STOK_LOKASI',
+        stokId: m.stokId,
+        warehouseKode: m.warehouseKode,
+        binKode: alloc.binKode,
+        residual,
+        allocated: alloc.allocated,
+        detail: `Soft-allocated residual ${alloc.allocated} → bin ${alloc.binKode || '?'}@${m.warehouseKode}`,
+      });
+      continue;
+    }
+
+    if (alloc.skippedNoDefaultBin) {
+      skippedNoDefaultBin += 1;
+      actions.push({
+        kind: 'SKIP_NO_DEFAULT_BIN',
+        stokId: m.stokId,
+        warehouseKode: m.warehouseKode,
+        residual,
+        allocated: 0,
+        detail: `No default bin · residual ${residual} left unslotted @${m.warehouseKode}`,
+      });
+      continue;
+    }
+
+    skippedOther += 1;
+    actions.push({
+      kind: 'SKIP_ALLOCATE_FAIL',
+      stokId: m.stokId,
+      warehouseKode: m.warehouseKode,
+      binKode: alloc.binKode,
+      residual,
+      allocated: 0,
+      detail: `allocateStokBinSoft failed · residual ${residual} @${m.warehouseKode}`,
+    });
+  }
+
+  const after = await detectStokBinVsLokasi(db, tid);
+  await db.collection(STOK_BIN_RECONCILE_REPORTS_COLLECTION).insertOne({
+    ...after,
+    phase: 'detect-after-repair',
+    repairActions: actions,
+  });
+
+  return {
+    detectBeforeId: before.id,
+    detectAfterId: after.id,
+    tenantId: tid,
+    repaired,
+    skippedNoDefaultBin,
+    skippedOther,
+    ignoredGt,
+    actions,
+    afterSummary: after.summary,
+    at,
+  };
 }
