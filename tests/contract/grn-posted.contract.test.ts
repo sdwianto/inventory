@@ -157,4 +157,48 @@ describe('contract: CreateInvoiceFromGrn (grn-posted)', () => {
       body: { grnId: 'grn-4' },
     })).rejects.toBeInstanceOf(IntegrationError);
   });
+
+  it('400 surfaces IntegrationError errorClass=validation (non-retryable)', async () => {
+    const db = mockDb();
+    const transport: IntegrationTransport = {
+      request: async () => jsonResponse(400, { error: 'grnId wajib' }),
+    };
+    const client = new IntegrationClient(db as never, transport);
+    try {
+      await client.createInvoiceFromGrn({
+        salesAppUrl: 'http://sales:3000',
+        apiKey: 'sk_test',
+        idempotencyKey: 'grn-val',
+        body: { grnId: 'grn-bad' },
+      });
+      expect.fail('expected IntegrationError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(IntegrationError);
+      const err = e as IntegrationError;
+      expect(err.errorClass).toBe('validation');
+      expect(err.retryable).toBe(false);
+    }
+  });
+
+  it('503 surfaces IntegrationError errorClass=server (retryable)', async () => {
+    const db = mockDb();
+    const transport: IntegrationTransport = {
+      request: async () => jsonResponse(503, { error: 'unavailable' }),
+    };
+    const client = new IntegrationClient(db as never, transport);
+    try {
+      await client.createInvoiceFromGrn({
+        salesAppUrl: 'http://sales:3000',
+        apiKey: 'sk_test',
+        idempotencyKey: 'grn-503',
+        body: { grnId: 'grn-503' },
+      });
+      expect.fail('expected IntegrationError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(IntegrationError);
+      const err = e as IntegrationError;
+      expect(err.errorClass).toBe('server');
+      expect(err.retryable).toBe(true);
+    }
+  });
 });

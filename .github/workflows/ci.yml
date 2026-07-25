@@ -61,6 +61,9 @@ jobs:
         run: npm run check:execution-boundary:strict
         continue-on-error: true
 
+      - name: W1-7 no peer fetch in lib/api
+        run: npm run check:no-peer-fetch
+
       - name: Strict typecheck (core modules)
         run: npm run typecheck:strict
 

@@ -1,0 +1,9 @@
+# W1-7: lib/api paths allowed to call fetch() (infra / external / ops sandbox).
+# Peer Category A/B must use IntegrationClient → Transport.
+lib/api/webhook.ts
+lib/api/redis-rest.ts
+lib/api/worker-kick.ts
+lib/api/sentry.ts
+lib/api/slo-alert.ts
+lib/api/sandbox-purge-sales-remote.ts
+lib/api/handlers/sandbox.ts

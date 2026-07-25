@@ -14,11 +14,17 @@ Baca di Sales repo:
 
 | Dokumen | Path |
 |---------|------|
+| **W1-7 Conventions** | `sales/docs/architecture/W1-7-ENGINEERING-CONVENTIONS.md` |
+| Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
 | Release checklist | `sales/docs/engineering/release-checklist.md` |
 | Definition of Done | `sales/docs/engineering/definition-of-done.md` |
 | Code review | `sales/docs/engineering/code-review-checklist.md` |
+
+```bash
+npm run check:no-peer-fetch
+```
 
 ## Verifikasi Inventory
 
