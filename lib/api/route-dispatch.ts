@@ -60,6 +60,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'produk-satuan': async () => (await import('@/lib/api/handlers/product-meta')).handleProductMeta,
   stok: async () => (await import('@/lib/api/handlers/inventory')).handleInventory,
   lokasi: async () => (await import('@/lib/api/handlers/inventory')).handleInventory,
+  'warehouse-bins': async () => (await import('@/lib/api/handlers/warehouse-bins')).handleWarehouseBins,
   webhooks: async () => (await import('@/lib/api/handlers/webhooks')).handleWebhooks,
   'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
   sync: async () => (await import('@/lib/api/handlers/catalog-sync')).handleCatalogSync,

@@ -20,6 +20,7 @@ import {
   defaultIngredientExpiryDate,
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
+import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
 
 function lokasiKey(stokId: string, kode: string) {
   return `${stokId}:${kode}`;
@@ -96,6 +97,8 @@ export async function applyGrnStockPosting(
   const kartuDocs: JsonObject[] = [];
   const lotDocs: IngredientLotDoc[] = [];
   const receivedDay = now.toISOString().slice(0, 10);
+  /** W2-16: cache default bin per warehouse (null = none). */
+  const defaultBinByWh = new Map<string, string | null>();
 
   for (const { it, qty, qtyBase, resolved, lineIndex } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
@@ -109,6 +112,13 @@ export async function applyGrnStockPosting(
     if (whErr) return { error: whErr.error };
 
     lokasiSet.add(lokasiKode);
+    if (!defaultBinByWh.has(lokasiKode)) {
+      defaultBinByWh.set(
+        lokasiKode,
+        await resolveDefaultBinKode(db, tid, lokasiKode),
+      );
+    }
+    const binKode = defaultBinByWh.get(lokasiKode) || undefined;
     const unitCost = parseInt(String(it.harga || it.hargaSatuan || 0), 10);
     const unitCostBase = unitCostPerBaseFromLine(resolved, unitCost * qty);
     const lk = lokasiKey(String(it.localStokId), lokasiKode);
@@ -136,6 +146,7 @@ export async function applyGrnStockPosting(
       stokId: it.localStokId,
       lokasi: lokasiLabel,
       lokasiKode,
+      ...(binKode ? { binKode } : {}),
       tanggal: now,
       noTransaksi: grn.noGRN,
       keterangan: `GRN dari ${grn.noDO} (sales.app)`,
@@ -175,6 +186,7 @@ export async function applyGrnStockPosting(
       productKode: String(prod.kode || it.vendorKode || ''),
       productNama: String(prod.nama || it.nama || ''),
       warehouseKode: lokasiKode,
+      ...(binKode ? { binKode } : {}),
       receivedAt: receivedDay,
       expiryDate,
       qty: qtyBase,
@@ -195,6 +207,7 @@ export async function applyGrnStockPosting(
       satuan: resolved.satuan,
       lokasiKode,
       lokasiNama: warehouseLabel(lokasiKode),
+      ...(binKode ? { binKode } : {}),
       hargaBeliBaru: state.newBeli,
       lotNo,
       lotId: lot.id,

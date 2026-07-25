@@ -200,6 +200,26 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'ingredient_lots', index: { tenantId: 1, productId: 1, warehouseKode: 1, status: 1, expiryDate: 1 }, name: 'idx_ilot_fefo_product_wh' },
   { collection: 'ingredient_lots', index: { tenantId: 1, expiryDate: 1 }, name: 'idx_ilot_tenant_expiry' },
   { collection: 'ingredient_lot_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_ilot_recon_tenant_created' },
+  // W2-16 warehouse bins (addressing; stock grain remains warehouse)
+  {
+    collection: 'warehouse_bins',
+    index: { tenantId: 1, warehouseKode: 1, kode: 1 },
+    name: 'uniq_wbin_tenant_wh_kode',
+    unique: true,
+  },
+  { collection: 'warehouse_bins', index: { tenantId: 1, id: 1 }, name: 'idx_wbin_tenant_id' },
+  {
+    collection: 'warehouse_bins',
+    index: { tenantId: 1, warehouseKode: 1, isDefault: 1, aktif: 1 },
+    name: 'idx_wbin_tenant_wh_default',
+  },
+  {
+    collection: 'ingredient_lots',
+    index: { tenantId: 1, warehouseKode: 1, binKode: 1 },
+    name: 'idx_ilot_tenant_wh_bin',
+    partialFilterExpression: { binKode: { $type: 'string', $gt: '' } },
+  },
+
   { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },
   { collection: 'service_points', index: { tenantId: 1, id: 1 }, name: 'idx_sp_tenant_id' },

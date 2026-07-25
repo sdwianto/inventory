@@ -19,6 +19,8 @@ export interface IngredientLotDoc {
   productKode?: string;
   productNama?: string;
   warehouseKode: string;
+  /** W2-16: optional bin address (does not change warehouse FEFO grain). */
+  binKode?: string;
   receivedAt: string;
   expiryDate: string;
   qty: number;

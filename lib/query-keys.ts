@@ -66,6 +66,12 @@ export const queryKeys = {
     all: ['lokasi'] as const,
     list: (params: { tenantId?: string } = {}) => ['lokasi', 'list', params] as const,
   },
+  warehouseBins: {
+    all: ['warehouse-bins'] as const,
+    list: (params: { tenantId?: string; warehouseKode?: string } = {}) =>
+      ['warehouse-bins', 'list', params] as const,
+  },
+
   procurementExpenses: {
     all: ['procurement-expenses'] as const,
     report: (params: { from: string; to: string }) =>
