@@ -17,7 +17,11 @@ const MASTER_COLLECTIONS = [
 
 const EXTRA_COLLECTIONS = [
   'stok_lokasi',
+  'stok_bin',
+  'warehouse_bins',
+  'stok_bin_reconcile_reports',
   'goods_receipts',
+
   'customer_purchase_orders',
   'local_purchase_orders',
   'assets',

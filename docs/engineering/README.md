@@ -31,6 +31,7 @@ Baca di Sales repo:
 | **W2-14 Dist Return FEFO Shortfall Detect** | `sales/docs/architecture/W2-14-DIST-RETURN-FEFO-SHORTFALL-DETECT.md` |
 | **W2-15 HSL Yield/Waste Write-off** | `sales/docs/architecture/W2-15-HSL-YIELD-WASTE-WRITEOFF.md` |
 | **W2-16 Slotting Foundation** | `sales/docs/architecture/W2-16-SLOTTING-FOUNDATION.md` |
+| **W2-17 Bin Balance Ledger** | `sales/docs/architecture/W2-17-BIN-BALANCE-LEDGER.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |

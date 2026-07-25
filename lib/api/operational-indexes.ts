@@ -219,6 +219,17 @@ const INDEX_SPECS: IndexSpec[] = [
     name: 'idx_ilot_tenant_wh_bin',
     partialFilterExpression: { binKode: { $type: 'string', $gt: '' } },
   },
+  // W2-17 bin balance ledger
+  {
+    collection: 'stok_bin',
+    index: { tenantId: 1, stokId: 1, warehouseKode: 1, binKode: 1 },
+    name: 'uniq_stok_bin_tenant_stok_wh_bin',
+    unique: true,
+  },
+  { collection: 'stok_bin', index: { tenantId: 1, warehouseKode: 1, binKode: 1 }, name: 'idx_stok_bin_tenant_wh_bin' },
+  { collection: 'stok_bin', index: { tenantId: 1, stokId: 1, warehouseKode: 1 }, name: 'idx_stok_bin_tenant_stok_wh' },
+  { collection: 'stok_bin_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_stok_bin_recon_tenant_created' },
+
 
   { collection: 'kitchens', index: { tenantId: 1, kode: 1 }, name: 'uniq_kitchen_tenant_kode', unique: true, partialFilterExpression: { kode: { $type: 'string', $gt: '' } } },
   { collection: 'kitchens', index: { tenantId: 1, kitchenType: 1 }, name: 'idx_kitchen_tenant_type' },

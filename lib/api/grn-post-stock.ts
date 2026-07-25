@@ -21,6 +21,7 @@ import {
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
+import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
 
 function lokasiKey(stokId: string, kode: string) {
   return `${stokId}:${kode}`;
@@ -99,6 +100,8 @@ export async function applyGrnStockPosting(
   const receivedDay = now.toISOString().slice(0, 10);
   /** W2-16: cache default bin per warehouse (null = none). */
   const defaultBinByWh = new Map<string, string | null>();
+  /** W2-17: accumulate qtyBase per (stokId, warehouse, bin) when default bin resolved. */
+  const binDeltas = new Map<string, number>();
 
   for (const { it, qty, qtyBase, resolved, lineIndex } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
@@ -119,6 +122,10 @@ export async function applyGrnStockPosting(
       );
     }
     const binKode = defaultBinByWh.get(lokasiKode) || undefined;
+    if (binKode) {
+      const bk = `${String(it.localStokId)}:${lokasiKode}:${binKode}`;
+      binDeltas.set(bk, (binDeltas.get(bk) || 0) + qtyBase);
+    }
     const unitCost = parseInt(String(it.harga || it.hargaSatuan || 0), 10);
     const unitCostBase = unitCostPerBaseFromLine(resolved, unitCost * qty);
     const lk = lokasiKey(String(it.localStokId), lokasiKode);
@@ -253,6 +260,41 @@ export async function applyGrnStockPosting(
   if (stokLokasiBulk.length) {
     await db.collection('stok_lokasi').bulkWrite(
       stokLokasiBulk as AnyBulkWriteOperation<Document>[],
+      { ordered: false, ...txOpts(session) },
+    );
+  }
+
+  // W2-17: parallel bin ledger when default bin resolved (same session as stok_lokasi).
+  const stokBinBulk: Record<string, unknown>[] = [];
+  for (const [bk, delta] of binDeltas) {
+    if (!delta) continue;
+    const parts = bk.split(':');
+    const stokId = parts[0];
+    const warehouseKode = parts[1];
+    const binKodePart = parts.slice(2).join(':');
+    if (!stokId || !warehouseKode || !binKodePart) continue;
+    stokBinBulk.push({
+      updateOne: {
+        filter: { tenantId: tid, stokId, warehouseKode, binKode: binKodePart },
+        update: {
+          $inc: { qty: delta },
+          $set: { updatedAt: now },
+          $setOnInsert: {
+            id: uuidv4(),
+            tenantId: tid,
+            stokId,
+            warehouseKode,
+            binKode: binKodePart,
+            createdAt: now,
+          },
+        },
+        upsert: true,
+      },
+    });
+  }
+  if (stokBinBulk.length) {
+    await db.collection(STOK_BIN_COLLECTION).bulkWrite(
+      stokBinBulk as AnyBulkWriteOperation<Document>[],
       { ordered: false, ...txOpts(session) },
     );
   }

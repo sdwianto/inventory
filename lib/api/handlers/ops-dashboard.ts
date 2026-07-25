@@ -45,6 +45,10 @@ import {
   HSL_WASTE_RECONCILE_REPORTS_COLLECTION,
   runHslWasteDetect,
 } from '@/lib/api/hsl-waste-reconcile';
+import {
+  STOK_BIN_RECONCILE_REPORTS_COLLECTION,
+  runStokBinDetect,
+} from '@/lib/api/stok-bin-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -238,6 +242,22 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     });
   }
 
+  // W2-17: stok_bin vs stok_lokasi Detect (soft; unslotted often BIN_SUM_LT).
+  if (route === '/ops/stok-bin-reconcile/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runStokBinDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -260,6 +280,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     latestReleaseShortfall,
     latestDistReturnShortfall,
     latestHslWaste,
+    latestStokBin,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -343,6 +364,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .limit(1)
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
+    db.collection(STOK_BIN_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
   ]);
 
   const report = (latestReconcile[0] || null) as {
@@ -416,6 +443,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const hslWasteSummary = (hslWasteReport?.summary || {}) as Record<string, unknown>;
+
+  const stokBinReport = (latestStokBin[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const stokBinSummary = (stokBinReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -530,6 +566,19 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           wasteQtyTotal: Number(hslWasteSummary.wasteQtyTotal || 0),
           mismatchSample: Array.isArray(hslWasteReport.mismatches)
             ? hslWasteReport.mismatches.slice(0, 10)
+            : [],
+        }
+      : null,
+    stokBinReconcile: stokBinReport
+      ? {
+          reportId: stokBinReport.id,
+          tenantId: stokBinReport.tenantId,
+          createdAt: stokBinReport.createdAt,
+          totalMismatch: Number(stokBinSummary.totalMismatch || 0),
+          binSumGt: Number(stokBinSummary.binSumGt || 0),
+          binSumLt: Number(stokBinSummary.binSumLt || 0),
+          mismatchSample: Array.isArray(stokBinReport.mismatches)
+            ? stokBinReport.mismatches.slice(0, 10)
             : [],
         }
       : null,

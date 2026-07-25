@@ -87,6 +87,15 @@ type HslWasteReconcile = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type StokBinReconcile = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  binSumGt?: number;
+  binSumLt?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -105,6 +114,7 @@ type OpsDashboard = {
   releaseFefoShortfall?: ReleaseFefoShortfall | null;
   distReturnFefoShortfall?: DistReturnFefoShortfall | null;
   hslWasteReconcile?: HslWasteReconcile | null;
+  stokBinReconcile?: StokBinReconcile | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -165,6 +175,7 @@ export default function OpsDashboardPage() {
   const releaseShortfallRec = data?.releaseFefoShortfall;
   const distReturnShortfallRec = data?.distReturnFefoShortfall;
   const hslWasteRec = data?.hslWasteReconcile;
+  const stokBinRec = data?.stokBinReconcile;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -911,6 +922,78 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               Result UI:{' '}
               <Link href="/food-production/result" className="text-primary underline">Production Result</Link>
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-17 — Stok Bin vs Lokasi Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  Soft Detect: sum(stok_bin) vs stok_lokasi — BIN_SUM_LT often unslotted stock until putaway
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      path: '/api/ops/stok-bin-reconcile/run',
+                      method: 'POST',
+                      body: {},
+                      offlineLabel: 'Stok Bin Detect',
+                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                    toast.success(
+                      `Stok Bin Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
+                    );
+                    void refetch();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Stok Bin Detect gagal');
+                  }
+                }}
+              >
+                Run Stok Bin Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(stokBinRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!stokBinRec || Number(stokBinRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">binSumGt</div>
+                <div className="font-semibold">{String(stokBinRec?.binSumGt ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">binSumLt</div>
+                <div className="font-semibold">{String(stokBinRec?.binSumLt ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {stokBinRec?.createdAt ? formatDateTime(stokBinRec.createdAt) : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(stokBinRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(stokBinRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.stokId || m.id || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.kind || '—')} · {String(m.stokId || '—')}@{String(m.warehouseKode || '—')} · binSum {String(m.binQtySum ?? '—')} vs lok {String(m.stokLokasiQty ?? '—')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Bin master:{' '}
+              <Link href="/stok/bins" className="text-primary underline">Stok Bins</Link>
             </p>
           </section>
 
