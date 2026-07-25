@@ -166,31 +166,99 @@ export default function OpsDashboardPage() {
                   Detect → Compare (Sales pull by noDO) → Repair (hutang / GRN_INVOICE_SYNC)
                 </p>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={runReconcile.isPending}
-                onClick={async () => {
-                  try {
-                    const res = await runReconcile.mutateAsync({
-                      url: '/api/ops/invoice-reconcile/run',
-                      method: 'POST',
-                      offlineLabel: 'Enqueue invoice reconcile',
-                    }) as { jobId?: string; reused?: boolean };
-                    toast.success(
-                      res.reused
-                        ? `Reconcile job reused (${res.jobId || '—'})`
-                        : `Detect enqueued (${res.jobId || '—'})`,
-                    );
-                    void refetch();
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'Gagal enqueue reconcile');
-                  }
-                }}
-              >
-                Run Detect
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        url: '/api/ops/invoice-reconcile/run',
+                        method: 'POST',
+                        offlineLabel: 'Enqueue invoice reconcile',
+                      }) as { jobId?: string; reused?: boolean };
+                      toast.success(
+                        res.reused
+                          ? `Reconcile job reused (${res.jobId || '—'})`
+                          : `Detect enqueued (${res.jobId || '—'})`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Gagal enqueue reconcile');
+                    }
+                  }}
+                >
+                  Run Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        url: '/api/ops/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'Ops repair',
+                      }) as { grnReconcileEnqueued?: number; grnStale?: number };
+                      toast.success(
+                        `Repair OK · stale GRN ${res.grnStale ?? 0} · enqueued ${res.grnReconcileEnqueued ?? 0}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Repair gagal');
+                    }
+                  }}
+                >
+                  Repair
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        url: '/api/ops/sweep',
+                        method: 'POST',
+                        offlineLabel: 'Ops sweep',
+                      }) as { grnReverted?: number; scanned?: number };
+                      toast.success(`Sweep: reverted ${res.grnReverted ?? 0} / scanned ${res.scanned ?? 0}`);
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Sweep gagal');
+                    }
+                  }}
+                >
+                  Sweep GRN
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        url: '/api/ops/ping',
+                        method: 'POST',
+                        offlineLabel: 'Ops ping',
+                      }) as { ok?: boolean; url?: string };
+                      if (res.ok) toast.success(`Ping Sales OK · ${res.url}`);
+                      else toast.error(`Ping Sales gagal · ${res.url}`);
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Ping gagal');
+                    }
+                  }}
+                >
+                  Ping Sales
+                </Button>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
               <div className="rounded border p-3">

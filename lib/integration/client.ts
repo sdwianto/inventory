@@ -351,12 +351,12 @@ export class IntegrationClient {
     salesAppUrl: string;
     correlationId?: string;
     timeoutMs?: number;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const correlationId = String(input.correlationId || randomUUID()).trim();
     const base = normalizeBaseUrl(input.salesAppUrl);
-    const url = `${base}/api/`;
+    const url = `${base}/api/health`;
     try {
-      await this.transport.request({
+      const res = await this.transport.request({
         method: 'GET',
         url,
         pool: 'notification',
@@ -369,8 +369,9 @@ export class IntegrationClient {
           ...buildTraceHttpHeaders(),
         },
       });
+      return res.ok;
     } catch {
-      /* warm-up best effort */
+      return false;
     }
   }
 

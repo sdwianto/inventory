@@ -25,6 +25,23 @@ vi.mock('@/lib/api/bg-jobs', () => ({
   JOB_TYPES: { INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE' },
 }));
 
+vi.mock('@/lib/api/procurement-repair-run', () => ({
+  runProcurementRepair: vi.fn().mockResolvedValue({ grnStale: 1, grnReconcileEnqueued: 1 }),
+}));
+
+vi.mock('@/lib/api/stuck-posting-sweep', () => ({
+  sweepStuckGrnPosting: vi.fn().mockResolvedValue({ grnReverted: 1, scanned: 2 }),
+}));
+
+const pingSalesApp = vi.fn().mockResolvedValue(true);
+vi.mock('@/lib/integration/client', () => ({
+  createIntegrationClient: () => ({ pingSalesApp }),
+}));
+
+vi.mock('@/lib/api/sales-app-url', () => ({
+  resolveEffectiveSalesAppUrl: () => 'http://sales:3000',
+}));
+
 const masterAuth = {
   role: 'MASTER',
   tenantId: 't1',
@@ -155,5 +172,47 @@ describe('W1-5 Invoice reconciliation template', () => {
       url: new URL('http://local/api/ops/invoice-reconcile/run'),
     } as never);
     expect(res?.status).toBe(403);
+  });
+
+  it('W1-6 POST /ops/repair · /ops/sweep · /ops/ping', async () => {
+    const repair = await handleOpsDashboard({
+      db: {} as never,
+      route: '/ops/repair',
+      method: 'POST',
+      path: ['ops', 'repair'],
+      body: { tenantId: 't1' },
+      auth: masterAuth,
+      request: new Request('http://local/api/ops/repair', { method: 'POST' }),
+      url: new URL('http://local/api/ops/repair'),
+    } as never);
+    expect(repair?.status).toBe(200);
+    expect(await repair?.json()).toMatchObject({ tenantId: 't1', grnStale: 1 });
+
+    const sweep = await handleOpsDashboard({
+      db: {} as never,
+      route: '/ops/sweep',
+      method: 'POST',
+      path: ['ops', 'sweep'],
+      body: {},
+      auth: masterAuth,
+      request: new Request('http://local/api/ops/sweep', { method: 'POST' }),
+      url: new URL('http://local/api/ops/sweep'),
+    } as never);
+    expect(sweep?.status).toBe(200);
+    expect(await sweep?.json()).toMatchObject({ grnReverted: 1, scanned: 2 });
+
+    const ping = await handleOpsDashboard({
+      db: {} as never,
+      route: '/ops/ping',
+      method: 'POST',
+      path: ['ops', 'ping'],
+      body: {},
+      auth: masterAuth,
+      request: new Request('http://local/api/ops/ping', { method: 'POST' }),
+      url: new URL('http://local/api/ops/ping'),
+    } as never);
+    expect(ping?.status).toBe(200);
+    expect(await ping?.json()).toMatchObject({ ok: true, peer: 'sales' });
+    expect(pingSalesApp).toHaveBeenCalled();
   });
 });

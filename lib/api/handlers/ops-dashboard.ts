@@ -1,8 +1,8 @@
-/** MASTER ops dashboard — Inventory (P2.3a) + FP observability + W1-5 Invoice reconcile. */
+/** MASTER ops dashboard — Inventory + W1-5 reconcile + W1-6 toolkit wrappers. */
 
 import type { NextResponse } from 'next/server';
 import type { HandlerContext } from '@/types/api/handler';
-import { ok, clean } from '@/lib/api/db';
+import { ok, err, clean } from '@/lib/api/db';
 import { requireRole } from '@/lib/api/require-auth';
 import { buildHealthResponse } from '@/lib/api/health';
 import {
@@ -11,9 +11,13 @@ import {
   getFpHotpathSlo,
 } from '@/lib/api/request-metrics';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
+import { sweepStuckGrnPosting } from '@/lib/api/stuck-posting-sweep';
+import { createIntegrationClient } from '@/lib/integration/client';
+import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
-  const { db, route, method, auth } = ctx;
+  const { db, route, method, auth, body } = ctx;
 
   // W1-5: MASTER triggers Invoice Detect (INTEGRATION_RECONCILE) — Compare/Repair via worker.
   if (route === '/ops/invoice-reconcile/run' && method === 'POST') {
@@ -34,6 +38,40 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       jobId,
       reused,
       type: JOB_TYPES.INTEGRATION_RECONCILE,
+      at: new Date().toISOString(),
+    });
+  }
+
+  // W1-6: Repair — procurement + reconcile for tenant.
+  if (route === '/ops/repair' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await runProcurementRepair(db, tenantId);
+    return ok({ ...result, tenantId, at: new Date().toISOString() });
+  }
+
+  // W1-6: Sweep stuck GRN POSTING → DRAFT.
+  if (route === '/ops/sweep' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const result = await sweepStuckGrnPosting(db);
+    return ok({ ...result, at: new Date().toISOString() });
+  }
+
+  // W1-6: Ping Sales peer via IntegrationClient (no raw peer fetch).
+  if (route === '/ops/ping' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const salesAppUrl = resolveEffectiveSalesAppUrl('');
+    if (!salesAppUrl) return err('SALES_APP_URL belum dikonfigurasi', 400);
+    const client = createIntegrationClient(db);
+    const reachable = await client.pingSalesApp({ salesAppUrl });
+    return ok({
+      ok: reachable,
+      peer: 'sales',
+      url: `${salesAppUrl.replace(/\/$/, '')}/api/health`,
       at: new Date().toISOString(),
     });
   }
