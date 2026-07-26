@@ -21,6 +21,7 @@ const EXTRA_COLLECTIONS = [
   'warehouse_bins',
   'stok_bin_reconcile_reports',
   'ka_follow_up_orphan_reconcile_reports',
+  'ka_open_case_missing_fu_reconcile_reports',
   'putaway_moves',
   'goods_receipts',
 

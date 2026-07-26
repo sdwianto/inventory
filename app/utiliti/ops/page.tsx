@@ -106,6 +106,15 @@ type KaFollowUpOrphan = {
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
+type KaOpenCaseMissingFu = {
+  reportId?: string;
+  createdAt?: string;
+  totalMismatch?: number;
+  zeroFu?: number;
+  onlyTerminalFu?: number;
+  mismatchSample?: Array<Record<string, unknown>>;
+};
+
 type OpsDashboard = {
   health?: {
     status?: string;
@@ -126,6 +135,7 @@ type OpsDashboard = {
   hslWasteReconcile?: HslWasteReconcile | null;
   stokBinReconcile?: StokBinReconcile | null;
   kaFollowUpOrphan?: KaFollowUpOrphan | null;
+  kaOpenCaseMissingFu?: KaOpenCaseMissingFu | null;
   salesHealthUrl?: string | null;
   fpObservability?: {
     hotpath?: { sampleCount: number; p95Ms: number; thresholdMs: number; ok: boolean };
@@ -188,6 +198,7 @@ export default function OpsDashboardPage() {
   const hslWasteRec = data?.hslWasteReconcile;
   const stokBinRec = data?.stokBinReconcile;
   const kaFuOrphanRec = data?.kaFollowUpOrphan;
+  const kaOpenCaseMissingFuRec = data?.kaOpenCaseMissingFu;
 
   if (user && user.role !== 'MASTER') {
     return (
@@ -1170,6 +1181,84 @@ export default function OpsDashboardPage() {
             <p className="text-xs text-muted-foreground">
               KA:{' '}
               <Link href="/kitchen-assurance/follow-up" className="text-primary underline">Follow-ups</Link>
+            </p>
+          </section>
+
+          <section className="rounded-lg border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">W2-27 — KA Open-Case Missing FU Detect</h2>
+                <p className="text-xs text-muted-foreground">
+                  Detect-only: open cases with resolution FOLLOW_UP and zero active FU (OPEN|DONE) — no Repair
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                disabled={runReconcile.isPending}
+                onClick={async () => {
+                  try {
+                    const res = await runReconcile.mutateAsync({
+                      path: '/api/ops/ka-open-case-missing-fu/run',
+                      method: 'POST',
+                      body: {},
+                      offlineLabel: 'KA Open-Case Missing FU Detect',
+                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                    toast.success(
+                      `KA Open-Case Missing FU Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
+                    );
+                    void refetch();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'KA Open-Case Missing FU Detect gagal');
+                  }
+                }}
+              >
+                Run Missing FU Detect
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">totalMismatch</div>
+                <div className="font-semibold">{String(kaOpenCaseMissingFuRec?.totalMismatch ?? '—')}</div>
+                <StatusBadge ok={!kaOpenCaseMissingFuRec || Number(kaOpenCaseMissingFuRec.totalMismatch || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">zeroFu</div>
+                <div className="font-semibold">{String(kaOpenCaseMissingFuRec?.zeroFu ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">onlyTerminalFu</div>
+                <div className="font-semibold">{String(kaOpenCaseMissingFuRec?.onlyTerminalFu ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Last report</div>
+                <div className="text-xs font-mono">
+                  {kaOpenCaseMissingFuRec?.createdAt
+                    ? formatDateTime(kaOpenCaseMissingFuRec.createdAt)
+                    : 'belum ada'}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border overflow-hidden">
+              <h3 className="text-sm font-medium p-2 border-b bg-muted/30">Mismatch sample</h3>
+              <ul className="divide-y max-h-40 overflow-auto text-sm">
+                {(kaOpenCaseMissingFuRec?.mismatchSample || []).length === 0 && (
+                  <li className="p-3 text-muted-foreground">Tidak ada sample / belum ada report.</li>
+                )}
+                {(kaOpenCaseMissingFuRec?.mismatchSample || []).map((m, i) => (
+                  <li key={`${String(m.safetyCaseId || m.id || i)}-${i}`} className="p-2 font-mono text-xs">
+                    {String(m.kind || '—')} · {String(m.caseNo || m.safetyCaseId || '—')} · {String(m.caseStatus || '')}
+                    {' · fu '}
+                    {String(m.fuActiveCount ?? '—')}
+                    /
+                    {String(m.fuTotalCount ?? '—')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              KA:{' '}
+              <Link href="/kitchen-assurance/cases" className="text-primary underline">Safety cases</Link>
             </p>
           </section>
 

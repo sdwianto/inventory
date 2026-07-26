@@ -235,6 +235,12 @@ const INDEX_SPECS: IndexSpec[] = [
     index: { tenantId: 1, createdAt: -1 },
     name: 'idx_ka_fu_orphan_recon_tenant_created',
   },
+  // W2-27 KA open-case missing FU reconcile reports
+  {
+    collection: 'ka_open_case_missing_fu_reconcile_reports',
+    index: { tenantId: 1, createdAt: -1 },
+    name: 'idx_ka_open_case_missing_fu_recon_tenant_created',
+  },
   // W2-18 putaway moves (bin-to-bin ledger docs)
   { collection: 'putaway_moves', index: { tenantId: 1, id: 1 }, name: 'idx_putaway_tenant_id' },
   {

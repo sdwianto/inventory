@@ -56,6 +56,10 @@ import {
   repairKaFollowUpOrphans,
   runKaFollowUpOrphanDetect,
 } from '@/lib/api/ka-follow-up-orphan-reconcile';
+import {
+  KA_OPEN_CASE_MISSING_FU_RECONCILE_REPORTS_COLLECTION,
+  runKaOpenCaseMissingFuDetect,
+} from '@/lib/api/ka-open-case-missing-fu-reconcile';
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
@@ -311,6 +315,22 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     return ok(result);
   }
 
+  // W2-27: KA open-case missing FU Detect — FOLLOW_UP resolution with zero active FU.
+  if (route === '/ops/ka-open-case-missing-fu/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const report = await runKaOpenCaseMissingFuDetect(db, tenantId);
+    return ok({
+      reportId: report.id,
+      tenantId: report.tenantId,
+      summary: report.summary,
+      mismatchSample: report.mismatches.slice(0, 15),
+      at: new Date().toISOString(),
+    });
+  }
+
   if (route !== '/ops/dashboard' || method !== 'GET') return null;
 
   const denied = requireRole(auth, ['MASTER']);
@@ -335,6 +355,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     latestHslWaste,
     latestStokBin,
     latestKaFollowUpOrphan,
+    latestKaOpenCaseMissingFu,
   ] = await Promise.all([
     buildHealthResponse(db, 'inventory'),
     db.collection('webhook_inbox')
@@ -425,6 +446,12 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
       .toArray(),
     db.collection(KA_FOLLOW_UP_ORPHAN_RECONCILE_REPORTS_COLLECTION)
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ id: 1, tenantId: 1, createdAt: 1, summary: 1, mismatches: 1 })
+      .toArray(),
+    db.collection(KA_OPEN_CASE_MISSING_FU_RECONCILE_REPORTS_COLLECTION)
       .find({})
       .sort({ createdAt: -1 })
       .limit(1)
@@ -521,6 +548,15 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     mismatches?: unknown[];
   } | null;
   const kaFollowUpOrphanSummary = (kaFollowUpOrphanReport?.summary || {}) as Record<string, unknown>;
+
+  const kaOpenCaseMissingFuReport = (latestKaOpenCaseMissingFu[0] || null) as {
+    id?: string;
+    tenantId?: string;
+    createdAt?: Date;
+    summary?: Record<string, unknown>;
+    mismatches?: unknown[];
+  } | null;
+  const kaOpenCaseMissingFuSummary = (kaOpenCaseMissingFuReport?.summary || {}) as Record<string, unknown>;
 
   return ok({
     health,
@@ -662,6 +698,19 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           activeCaseMissing: Number(kaFollowUpOrphanSummary.activeCaseMissing || 0),
           mismatchSample: Array.isArray(kaFollowUpOrphanReport.mismatches)
             ? kaFollowUpOrphanReport.mismatches.slice(0, 10)
+            : [],
+        }
+      : null,
+    kaOpenCaseMissingFu: kaOpenCaseMissingFuReport
+      ? {
+          reportId: kaOpenCaseMissingFuReport.id,
+          tenantId: kaOpenCaseMissingFuReport.tenantId,
+          createdAt: kaOpenCaseMissingFuReport.createdAt,
+          totalMismatch: Number(kaOpenCaseMissingFuSummary.totalMismatch || 0),
+          zeroFu: Number(kaOpenCaseMissingFuSummary.zeroFu || 0),
+          onlyTerminalFu: Number(kaOpenCaseMissingFuSummary.onlyTerminalFu || 0),
+          mismatchSample: Array.isArray(kaOpenCaseMissingFuReport.mismatches)
+            ? kaOpenCaseMissingFuReport.mismatches.slice(0, 10)
             : [],
         }
       : null,
