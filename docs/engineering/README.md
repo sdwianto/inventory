@@ -44,6 +44,7 @@ Baca di Sales repo:
 | **W2-27 KA Open-Case Missing FU Detect** | `sales/docs/architecture/W2-27-KA-OPEN-CASE-MISSING-FU-DETECT.md` |
 | **W2-28 KA Open-Case Missing FU Soft Repair** | `sales/docs/architecture/W2-28-KA-OPEN-CASE-MISSING-FU-REPAIR.md` |
 | **W2-29 KA Resolution Follow-Up Pointer Stamp** | `sales/docs/architecture/W2-29-KA-RESOLUTION-FOLLOW-UP-STAMP.md` |
+| **W2-30 KA Operational Excellence Closeout** | `sales/docs/architecture/W2-30-KA-OPERATIONAL-EXCELLENCE-CLOSEOUT.md` |
 | Guardrails | `sales/docs/architecture/IMPLEMENTATION-GUARDRAILS.md` |
 | Index | `sales/docs/engineering/README.md` |
 | Reliability policy | `sales/docs/engineering/reliability-policy.md` |
