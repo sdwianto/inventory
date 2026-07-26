@@ -58,6 +58,7 @@ import {
 } from '@/lib/api/ka-follow-up-orphan-reconcile';
 import {
   KA_OPEN_CASE_MISSING_FU_RECONCILE_REPORTS_COLLECTION,
+  repairKaOpenCaseMissingFu,
   runKaOpenCaseMissingFuDetect,
 } from '@/lib/api/ka-open-case-missing-fu-reconcile';
 
@@ -329,6 +330,16 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       mismatchSample: report.mismatches.slice(0, 15),
       at: new Date().toISOString(),
     });
+  }
+
+  // W2-28: Soft Repair — stub OPEN FU for open FOLLOW_UP cases with zero active FU.
+  if (route === '/ops/ka-open-case-missing-fu/repair' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { tenantId?: string };
+    const tenantId = String(payload.tenantId || auth?.tenantId || 'default').trim() || 'default';
+    const result = await repairKaOpenCaseMissingFu(db, tenantId);
+    return ok(result);
   }
 
   if (route !== '/ops/dashboard' || method !== 'GET') return null;

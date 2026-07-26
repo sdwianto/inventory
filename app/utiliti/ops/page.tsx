@@ -1187,34 +1187,64 @@ export default function OpsDashboardPage() {
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-medium">W2-27 — KA Open-Case Missing FU Detect</h2>
+                <h2 className="font-medium">W2-27/28 — KA Open-Case Missing FU Detect & Repair</h2>
                 <p className="text-xs text-muted-foreground">
-                  Detect-only: open cases with resolution FOLLOW_UP and zero active FU (OPEN|DONE) — no Repair
+                  Soft Detect: open cases with resolution FOLLOW_UP and zero active FU · Repair inserts stub OPEN FU (never clears resolution)
                 </p>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                disabled={runReconcile.isPending}
-                onClick={async () => {
-                  try {
-                    const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/ka-open-case-missing-fu/run',
-                      method: 'POST',
-                      body: {},
-                      offlineLabel: 'KA Open-Case Missing FU Detect',
-                    }) as { summary?: { totalMismatch?: number }; reportId?: string };
-                    toast.success(
-                      `KA Open-Case Missing FU Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
-                    );
-                    void refetch();
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'KA Open-Case Missing FU Detect gagal');
-                  }
-                }}
-              >
-                Run Missing FU Detect
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ka-open-case-missing-fu/run',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'KA Open-Case Missing FU Detect',
+                      }) as { summary?: { totalMismatch?: number }; reportId?: string };
+                      toast.success(
+                        `KA Open-Case Missing FU Detect OK — mismatch ${res.summary?.totalMismatch ?? 0}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'KA Open-Case Missing FU Detect gagal');
+                    }
+                  }}
+                >
+                  Run Missing FU Detect
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={runReconcile.isPending}
+                  onClick={async () => {
+                    try {
+                      const res = await runReconcile.mutateAsync({
+                        path: '/api/ops/ka-open-case-missing-fu/repair',
+                        method: 'POST',
+                        body: {},
+                        offlineLabel: 'KA Open-Case Missing FU Repair',
+                      }) as {
+                        repaired?: number;
+                        skipped?: number;
+                        afterSummary?: { totalMismatch?: number };
+                      };
+                      toast.success(
+                        `KA Missing FU Repair OK · repaired ${res.repaired ?? 0} · skipped ${res.skipped ?? 0} · mismatch now ${res.afterSummary?.totalMismatch ?? '—'}`,
+                      );
+                      void refetch();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'KA Open-Case Missing FU Repair gagal');
+                    }
+                  }}
+                >
+                  Repair Missing FU
+                </Button>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
               <div className="rounded border p-3">
