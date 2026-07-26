@@ -37,6 +37,7 @@ import {
   normalizeCaseKind,
   normalizeCaseStatus,
   assertKaCaseTerminalBlockedByActiveFollowUps,
+  buildKaResolutionFollowUpStamp,
   type KaSafetyCaseDoc,
   type KaCaseStatus,
 } from '@/lib/kitchen-assurance/safety-case';
@@ -761,6 +762,8 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
           },
         );
       }
+      // W2-29 — soft-stamp pointer only (dotted keys); never mutate resolution.type
+      Object.assign(patch, buildKaResolutionFollowUpStamp(fu));
       await writeAuditLog(db, {
         tenantId: existing.tenantId,
         action: 'KA_FOLLOW_UP_CREATE',
@@ -909,6 +912,8 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
       throw e;
     }
 
+    // W2-29 — soft-stamp pointer (dotted $set); never replace whole resolution / type
+    const stamp = buildKaResolutionFollowUpStamp(doc);
     if (linkedCase.status === 'OPEN') {
       await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
         withTenantFilter(scopeAuth, { id: linkedCase.id }),
@@ -924,6 +929,17 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
               userName: actor.userName,
               note: `Follow-up ${doc.noDokumen} dibuat`,
             }),
+            ...stamp,
+          },
+        },
+      );
+    } else {
+      await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id: linkedCase.id }),
+        {
+          $set: {
+            updatedAt: now,
+            ...stamp,
           },
         },
       );

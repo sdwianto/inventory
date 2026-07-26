@@ -19,6 +19,7 @@ import {
 } from '@/lib/kitchen-assurance/follow-up';
 import {
   KA_SAFETY_CASES_COLLECTION,
+  buildKaResolutionFollowUpStamp,
   type KaCaseStatus,
   type KaSafetyCaseDoc,
 } from '@/lib/kitchen-assurance/safety-case';
@@ -51,13 +52,24 @@ export type KaOpenCaseMissingFuRepairAction = {
   kind:
     | KaOpenCaseMissingFuMismatchKind
     | 'SKIP_RACE'
-    | 'SKIP_PRECONDITION';
+    | 'SKIP_PRECONDITION'
+    | 'STAMP_FOLLOW_UP_POINTER';
   safetyCaseId: string;
   caseNo?: string;
   followUpId?: string;
   followUpNo?: string;
   detail: string;
 };
+
+function isKaResolutionFollowUpPointerStale(
+  resolution: KaSafetyCaseDoc['resolution'],
+  fu: { id: string; noDokumen?: string },
+): boolean {
+  if (!resolution?.followUpId || resolution.followUpId !== fu.id) return true;
+  const wantNo = fu.noDokumen || undefined;
+  const haveNo = resolution.followUpNo || undefined;
+  return wantNo !== haveNo;
+}
 
 export type KaOpenCaseMissingFuReconcileReport = {
   id: string;
@@ -185,6 +197,7 @@ export async function runKaOpenCaseMissingFuDetect(
 /**
  * Soft Repair (MASTER):
  * - Insert stub OPEN FU for open FOLLOW_UP cases with zero active FU
+ * - Soft-stamp resolution.followUpId / followUpNo (dotted $set only; W2-29)
  * - Never clear / mutate resolution.type (esp. never → NONE)
  * - Soft skip on race / precondition fail
  */
@@ -236,6 +249,29 @@ export async function repairKaOpenCaseMissingFu(
     )) as Pick<KaFollowUpDoc, 'id' | 'noDokumen'> | null;
 
     if (activeFu) {
+      if (isKaResolutionFollowUpPointerStale(existing.resolution, activeFu)) {
+        const nowStamp = new Date();
+        // Soft stamp only — never replace whole resolution / never touch type.
+        await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+          { tenantId: tid, id: existing.id },
+          {
+            $set: {
+              updatedAt: nowStamp,
+              ...buildKaResolutionFollowUpStamp(activeFu),
+            },
+          },
+        );
+        repaired += 1;
+        actions.push({
+          kind: 'STAMP_FOLLOW_UP_POINTER',
+          safetyCaseId: existing.id,
+          caseNo: existing.noDokumen,
+          followUpId: activeFu.id,
+          followUpNo: activeFu.noDokumen,
+          detail: `Stamped resolution pointer from active FU ${activeFu.noDokumen || activeFu.id}`,
+        });
+        continue;
+      }
       skipped += 1;
       actions.push({
         kind: 'SKIP_PRECONDITION',
@@ -294,8 +330,9 @@ export async function repairKaOpenCaseMissingFu(
       throw e;
     }
 
+    const stamp = buildKaResolutionFollowUpStamp(fu);
     if (existing.status === 'OPEN') {
-      // Soft bump only — never $unset / rewrite resolution.
+      // Soft bump + stamp — never $unset / rewrite whole resolution.
       await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
         { tenantId: tid, id: existing.id, status: 'OPEN' },
         {
@@ -310,6 +347,17 @@ export async function repairKaOpenCaseMissingFu(
               userName: 'System',
               note: `Follow-up ${fu.noDokumen} dibuat (W2-28 repair)`,
             }),
+            ...stamp,
+          },
+        },
+      );
+    } else {
+      await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+        { tenantId: tid, id: existing.id },
+        {
+          $set: {
+            updatedAt: now,
+            ...stamp,
           },
         },
       );

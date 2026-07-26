@@ -169,3 +169,17 @@ export function normalizeResolutionType(raw: unknown): KaResolutionType | { erro
   if (allowed.includes(v)) return v as KaResolutionType;
   return { error: `resolution.type wajib ${allowed.join(' | ')}` };
 }
+
+/**
+ * W2-29 — dotted $set stamp for resolution follow-up pointer.
+ * Never replaces the whole `resolution` object; never touches `resolution.type`.
+ */
+export function buildKaResolutionFollowUpStamp(fu: {
+  id: string;
+  noDokumen?: string;
+}): Record<string, unknown> {
+  return {
+    'resolution.followUpId': fu.id,
+    'resolution.followUpNo': fu.noDokumen || undefined,
+  };
+}
