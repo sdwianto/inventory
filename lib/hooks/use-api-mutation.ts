@@ -31,7 +31,7 @@ const recentKeys = new Map<string, { key: string; at: number }>();
  * dalam jendela singkat memakai key sama — double-click submit = 1 dokumen
  * di server. Setelah jendela lewat, duplikasi disengaja tetap bisa.
  */
-function idempotencyKeyFor(url: string, method: string, body: string | undefined): string {
+export function idempotencyKeyFor(url: string, method: string, body: string | undefined): string {
   const sig = `${method}:${url}:${body ?? ''}`;
   const nowMs = Date.now();
   const hit = recentKeys.get(sig);
@@ -46,6 +46,16 @@ function idempotencyKeyFor(url: string, method: string, body: string | undefined
     }
   }
   return key;
+}
+
+/** Header Idempotency-Key untuk raw fetch mutations (ModeProduksi / HSL / distribusi). */
+export function mutationIdempotencyHeaders(
+  url: string,
+  method: string,
+  body?: string,
+): Record<string, string> {
+  if (!MUTATION_METHODS.has(method)) return {};
+  return { 'Idempotency-Key': idempotencyKeyFor(url, method, body) };
 }
 
 /** Mutasi API dengan invalidate cache + dukungan antrian offline. */

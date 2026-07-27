@@ -185,11 +185,32 @@ export async function processWebhookInboxEvent(
 
   if (event === 'credit_note.posted') {
     if (!payload.invoiceId) throw new Error('invoiceId wajib');
+    const creditNoteId = String(payload.creditNoteId || '').trim();
+    if (creditNoteId) {
+      const existingHutang = await db.collection('hutang').findOne({
+        tenantId: customerTenantId,
+        vendorInvoiceId: payload.invoiceId,
+        referenceType: 'VENDOR_INVOICE',
+        'creditNotes.creditNoteId': creditNoteId,
+      });
+      if (existingHutang) {
+        await invalidateDashboardSnapshot(db, customerTenantId);
+        return {
+          action: 'already_applied',
+          hutangId: existingHutang.id,
+          message: 'credit_note.posted skipped — sudah applied',
+        };
+      }
+    }
     const cn = await applyCreditNoteFromVendor(
       db,
       customerTenantId,
       payload as VendorInvoicePayload,
       vendorTenantId,
+      {
+        appliedVia: 'credit-note-posted-webhook',
+        correlationId: payload.correlationId ? String(payload.correlationId) : null,
+      },
     );
     if ('error' in cn && cn.error) throw new Error(String(cn.error));
     await invalidateDashboardSnapshot(db, customerTenantId);

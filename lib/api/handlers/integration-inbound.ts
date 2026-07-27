@@ -8,7 +8,10 @@ import { verifyWebhookSecret } from '@/lib/api/webhook-verify';
 import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
-import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
+import {
+  applyCreditNoteFromVendor,
+  createHutangFromVendorInvoice,
+} from '@/lib/api/hutang-from-vendor';
 
 export async function handleIntegrationInbound({
   db,
@@ -168,6 +171,90 @@ export async function handleIntegrationInbound({
         status: 'FAILED',
         invoiceId: String(payload.invoiceId),
         errorCode: 'HUTANG_CREATE_FAILED',
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorClass: 'unknown',
+      });
+      throw e;
+    }
+  }
+
+  // Category B: credit note.posted → apply CN ke hutang (mirror invoice-posted).
+  if (route === '/integrations/credit-note-posted') {
+    const payload = (body || {}) as JsonObject;
+    const customerTenantId = String(payload.customerTenantId || '').trim().toLowerCase();
+    const vendorTenantId = String(
+      payload.vendorTenantId
+      || request.headers.get('x-vendor-tenant-id')
+      || '',
+    ).trim();
+
+    const correlationId = String(
+      request.headers.get('x-correlation-id')
+      || payload.correlationId
+      || '',
+    ).trim();
+    if (!correlationId) {
+      return err('X-Correlation-Id wajib untuk credit-note-posted', 400);
+    }
+
+    const v = await verifyWebhookSecret(request, db, {
+      customerTenantId,
+      vendorTenantId: vendorTenantId || undefined,
+    });
+    if (!v.ok) return err(v.error, 401);
+
+    if (!customerTenantId) return err('customerTenantId wajib', 400);
+    if (!payload.invoiceId) return err('invoiceId wajib', 400);
+
+    const vid = vendorTenantId || v.vendorTenantId || '';
+    const creditNoteId = String(payload.creditNoteId || '').trim();
+    const { startIntegrationCommand, finishIntegrationCommand } = await import(
+      '@/lib/integration/command-log'
+    );
+    const commandId = await startIntegrationCommand(db, {
+      correlationId,
+      commandType: 'ReceiveCreditNotePosted',
+      invoiceId: creditNoteId || String(payload.invoiceId),
+    });
+
+    try {
+      const cn = await applyCreditNoteFromVendor(
+        db,
+        customerTenantId,
+        payload as VendorInvoicePayload & { creditNoteId?: string; noCN?: string },
+        vid || null,
+        { appliedVia: 'credit-note-posted-push', correlationId },
+      );
+      if ('error' in cn && cn.error) {
+        await finishIntegrationCommand(db, commandId, {
+          status: 'FAILED',
+          invoiceId: creditNoteId || String(payload.invoiceId),
+          errorCode: 'CREDIT_NOTE_APPLY_FAILED',
+          errorMessage: String(cn.error),
+          errorClass: 'validation',
+          httpStatus: 400,
+        });
+        return err(String(cn.error), 400);
+      }
+
+      await finishIntegrationCommand(db, commandId, {
+        status: 'SUCCEEDED',
+        invoiceId: creditNoteId || String(payload.invoiceId),
+        apId: cn.hutangId ? String(cn.hutangId) : null,
+      });
+
+      await invalidateDashboardSnapshot(db, customerTenantId);
+
+      return ok(clean({
+        ...cn,
+        correlationId,
+        message: 'credit note via credit-note-posted push',
+      }));
+    } catch (e) {
+      await finishIntegrationCommand(db, commandId, {
+        status: 'FAILED',
+        invoiceId: creditNoteId || String(payload.invoiceId),
+        errorCode: 'CREDIT_NOTE_APPLY_FAILED',
         errorMessage: e instanceof Error ? e.message : String(e),
         errorClass: 'unknown',
       });

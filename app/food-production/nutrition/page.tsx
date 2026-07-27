@@ -20,10 +20,13 @@ interface ProfileRow {
   kode?: string;
   nama?: string;
   satuan?: string;
+  tkpiCode?: string | null;
   hasNutrition: boolean;
   nutrition?: {
     basis: string;
     gramsPerUnit?: number;
+    bddPct?: number;
+    tkpiCode?: string;
     energiKcal: number;
     proteinG: number;
     lemakG: number;
@@ -32,6 +35,15 @@ interface ProfileRow {
     natriumMg?: number;
     gulaG?: number;
   } | null;
+}
+
+interface TkpiHit {
+  kode: string;
+  nama: string;
+  energiKcal: number;
+  proteinG: number;
+  bddPct: number;
+  kelompok?: string;
 }
 
 interface Analysis {
@@ -73,6 +85,9 @@ export default function NutritionPage() {
   const [recipeId, setRecipeId] = useState('');
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tkpiQ, setTkpiQ] = useState('');
+  const [tkpiHits, setTkpiHits] = useState<TkpiHit[]>([]);
+  const [tkpiBusy, setTkpiBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +130,51 @@ export default function NutritionPage() {
     });
   }
 
+  async function searchTkpi(q: string) {
+    setTkpiQ(q);
+    if (q.trim().length < 2) {
+      setTkpiHits([]);
+      return;
+    }
+    setTkpiBusy(true);
+    try {
+      const res = await fetch(
+        `/api/nutrition-profiles/tkpi?q=${encodeURIComponent(q.trim())}&limit=20`,
+        { headers: { ...actingTenantHeaders() } },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal cari TKPI');
+      setTkpiHits(Array.isArray(data.items) ? data.items : []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal cari TKPI');
+    } finally {
+      setTkpiBusy(false);
+    }
+  }
+
+  async function applyTkpi(kode: string) {
+    if (!edit) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/nutrition-profiles/${edit.productId}/apply-tkpi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({ tkpiCode: kode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal terapkan TKPI');
+      toast.success(`Gizi dari TKPI ${kode} diterapkan`);
+      setEdit(null);
+      setTkpiHits([]);
+      setTkpiQ('');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal terapkan TKPI');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveNutrition() {
     if (!edit) return;
     setSaving(true);
@@ -154,7 +214,7 @@ export default function NutritionPage() {
     }
     try {
       const res = await fetch(
-        `/api/nutrition-profiles/analyze?scope=recipe&id=${encodeURIComponent(recipeId)}&akg=ANAK_SD`,
+        `/api/nutrition-profiles/analyze?scope=recipe&id=${encodeURIComponent(recipeId)}&akg=PORSI_KECIL`,
         { headers: { ...actingTenantHeaders() } },
       );
       const data = await res.json();
@@ -175,7 +235,7 @@ export default function NutritionPage() {
             Analisis Gizi (MBG)
           </h1>
           <p className="text-sm text-muted-foreground">
-            Profil gizi bahan → agregasi resep / menu / rencana · % AKG Anak SD
+            Profil gizi bahan (TKPI) → agregasi resep / menu / rencana / HSL · % AKG Permenkes
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -227,7 +287,12 @@ export default function NutritionPage() {
               <tr key={row.productId} className="border-t">
                 <td className="p-3">
                   <div>{row.nama}</div>
-                  <div className="text-[11px] font-mono text-muted-foreground">{row.kode} · {row.satuan}</div>
+                  <div className="text-[11px] font-mono text-muted-foreground">
+                    {row.kode} · {row.satuan}
+                    {(row.tkpiCode || row.nutrition?.tkpiCode)
+                      ? ` · TKPI ${row.tkpiCode || row.nutrition?.tkpiCode}`
+                      : ''}
+                  </div>
                 </td>
                 <td className="p-3">{row.nutrition?.basis || '—'}</td>
                 <td className="p-3 text-right">{row.nutrition?.energiKcal ?? '—'}</td>
@@ -288,11 +353,46 @@ export default function NutritionPage() {
         )}
       </div>
 
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
-        <DialogContent>
+      <Dialog open={!!edit} onOpenChange={(o) => {
+        if (!o) {
+          setEdit(null);
+          setTkpiHits([]);
+          setTkpiQ('');
+        }
+      }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Gizi — {edit?.nama}</DialogTitle>
           </DialogHeader>
+          <div className="space-y-2 border rounded-md p-3 bg-muted/30">
+            <Label className="text-xs">Cari & terapkan dari TKPI 2019</Label>
+            <Input
+              className="h-9"
+              placeholder="nama / kode TKPI (min. 2 huruf)"
+              value={tkpiQ}
+              onChange={(e) => void searchTkpi(e.target.value)}
+            />
+            {tkpiBusy && <p className="text-[11px] text-muted-foreground">Mencari…</p>}
+            {tkpiHits.length > 0 && (
+              <ul className="max-h-40 overflow-y-auto text-sm divide-y border rounded-md bg-white">
+                {tkpiHits.map((hit) => (
+                  <li key={hit.kode} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                    <div className="min-w-0">
+                      <div className="font-mono text-[11px] text-muted-foreground">{hit.kode}</div>
+                      <div className="truncate">{hit.nama}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {hit.energiKcal} kkal · P {hit.proteinG}g · BDD {hit.bddPct}%
+                        {hit.kelompok ? ` · ${hit.kelompok}` : ''}
+                      </div>
+                    </div>
+                    <Button size="sm" variant="outline" disabled={saving} onClick={() => void applyTkpi(hit.kode)}>
+                      Terapkan
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3 py-2">
             <div className="col-span-2 space-y-1">
               <Label>Basis</Label>

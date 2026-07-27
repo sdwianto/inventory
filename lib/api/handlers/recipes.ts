@@ -147,11 +147,8 @@ async function enrichLines(
     if (p.aktif === false) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
     }
-    if (String(p.syncSource || '') === 'sales.app') {
-      return {
-        error: `Bahan "${String(p.nama || p.kode || line.productId)}" dari katalog vendor — pilih produk master lokal`,
-      };
-    }
+    // Bahan = baris di collection `products` tenant ini (termasuk sync sales.app).
+    // Satu sumber dengan Master Produk & Kartu Stok — tidak membedakan syncSource.
     if (!isIngredientRole(p.itemRole)) {
       const role = normalizeItemRole(p.itemRole);
       return {
@@ -222,8 +219,7 @@ async function loadIngredientProducts(
     .find({
       ...tenantFilter,
       aktif: { $ne: false },
-      // Resep memakai master lokal — bukan SKU katalog vendor (bisa 1 nama × N supplier).
-      syncSource: { $ne: 'sales.app' },
+      // Impor Excel memetakan ke master Produk tenant (termasuk yang sync dari sales.app).
     })
     .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1 })
     .limit(2000)

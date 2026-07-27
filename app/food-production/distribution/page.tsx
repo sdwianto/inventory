@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders, getActingKitchenId } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
+import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import PrintPortal from '@/components/PrintPortal';
 import DistributionScheduleDocument, {
@@ -783,40 +784,43 @@ function DistributionPageContent() {
 
     setSaving(true);
     try {
-      const res = await fetch('/api/distribution-orders', {
+      const url = '/api/distribution-orders';
+      const body = JSON.stringify({
+        sourceType: useHsl ? 'RESULT' : 'PLAN',
+        tanggal: selectedDate || undefined,
+        ...(useHsl
+          ? { productionResultId: resultId }
+          : { kitchenId: kitchenId || undefined }),
+        servicePointIds,
+        loadings: drafts.map((L, idx) => ({
+          urutan: idx + 1,
+          label: L.label || loadingLabel(idx + 1),
+          jamStart: L.jamStart,
+          jamMax: L.jamMax,
+          armadas: L.fleets.map((f) => ({
+            armadaId: f.armadaId,
+            servicePointIds: [...f.servicePointIds].sort((a, b) => {
+              const pa = pointsById.get(a);
+              const pb = pointsById.get(b);
+              return compareServicePointRouteOrder(
+                { jamKirim: pa?.jamKirim, drops: pa?.drops, nama: pa?.nama || a },
+                { jamKirim: pb?.jamKirim, drops: pb?.drops, nama: pb?.nama || b },
+              );
+            }),
+          })),
+        })),
+        catatan: createNote.trim() || undefined,
+        allocate: true,
+      });
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...actingTenantHeaders(),
           ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
         },
-        body: JSON.stringify({
-          sourceType: useHsl ? 'RESULT' : 'PLAN',
-          tanggal: selectedDate || undefined,
-          ...(useHsl
-            ? { productionResultId: resultId }
-            : { kitchenId: kitchenId || undefined }),
-          servicePointIds,
-          loadings: drafts.map((L, idx) => ({
-            urutan: idx + 1,
-            label: L.label || loadingLabel(idx + 1),
-            jamStart: L.jamStart,
-            jamMax: L.jamMax,
-            armadas: L.fleets.map((f) => ({
-              armadaId: f.armadaId,
-              servicePointIds: [...f.servicePointIds].sort((a, b) => {
-                const pa = pointsById.get(a);
-                const pb = pointsById.get(b);
-                return compareServicePointRouteOrder(
-                  { jamKirim: pa?.jamKirim, drops: pa?.drops, nama: pa?.nama || a },
-                  { jamKirim: pb?.jamKirim, drops: pb?.drops, nama: pb?.nama || b },
-                );
-              }),
-            })),
-          })),
-          catatan: createNote.trim() || undefined,
-          allocate: true,
-        }),
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal');
@@ -895,41 +899,47 @@ function DistributionPageContent() {
     }
     setStatusSaving(true);
     try {
-      const res = await fetch(`/api/distribution-orders/${row.id}/status`, {
+      const url = `/api/distribution-orders/${row.id}/status`;
+      const body = JSON.stringify({
+        status: next,
+        photos: statusPhotos.length ? statusPhotos : undefined,
+        ...(next === 'APPROVED'
+          ? {
+            ...(scheduleResultId || row.productionResultId
+              ? { productionResultId: scheduleResultId || row.productionResultId }
+              : {}),
+          }
+          : {
+            lineActuals: statusLineQtys.map((l) => (
+              next === 'COMPLETED'
+                ? {
+                  servicePointId: l.servicePointId,
+                  menuId: l.menuId,
+                  recipeId: l.recipeId,
+                  finishedGoodProductId: l.finishedGoodProductId,
+                  qtyDiterima: l.qtyDiterima,
+                  qtyDikembalikan: l.qtyDikembalikan,
+                  notes: l.note,
+                }
+                : {
+                  servicePointId: l.servicePointId,
+                  menuId: l.menuId,
+                  recipeId: l.recipeId,
+                  finishedGoodProductId: l.finishedGoodProductId,
+                  qty: l.qty,
+                  notes: l.note,
+                }
+            )),
+          }),
+      });
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
-        body: JSON.stringify({
-          status: next,
-          photos: statusPhotos.length ? statusPhotos : undefined,
-          ...(next === 'APPROVED'
-            ? {
-              ...(scheduleResultId || row.productionResultId
-                ? { productionResultId: scheduleResultId || row.productionResultId }
-                : {}),
-            }
-            : {
-              lineActuals: statusLineQtys.map((l) => (
-                next === 'COMPLETED'
-                  ? {
-                    servicePointId: l.servicePointId,
-                    menuId: l.menuId,
-                    recipeId: l.recipeId,
-                    finishedGoodProductId: l.finishedGoodProductId,
-                    qtyDiterima: l.qtyDiterima,
-                    qtyDikembalikan: l.qtyDikembalikan,
-                    notes: l.note,
-                  }
-                  : {
-                    servicePointId: l.servicePointId,
-                    menuId: l.menuId,
-                    recipeId: l.recipeId,
-                    finishedGoodProductId: l.finishedGoodProductId,
-                    qty: l.qty,
-                    notes: l.note,
-                  }
-              )),
-            }),
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal');

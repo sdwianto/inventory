@@ -27,6 +27,8 @@ const REQUIRED_MODULES = [
   'lib/food-production/production-result.ts',
   'lib/food-production/production-report.ts',
   'lib/food-production/nutrition.ts',
+  'lib/food-production/tkpi-parse.ts',
+  'lib/food-production/tkpi-catalog.ts',
   'lib/food-production/cost.ts',
   'lib/food-production/qc.ts',
   'lib/food-production/forecast.ts',

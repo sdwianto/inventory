@@ -12,7 +12,7 @@ import { refreshGrnInvoiceSyncGauges } from '@/lib/api/grn-invoice-sync-metrics'
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
-import { dispatchRoute } from '@/lib/api/route-dispatch';
+import { dispatchRoute, normalizeApiRoute } from '@/lib/api/route-dispatch';
 import { ensureOperationalIndexes } from '@/lib/api/operational-indexes';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { enforceDangerousRouteGuard } from '@/lib/api/production-guard';
@@ -20,9 +20,9 @@ import { buildHealthResponse } from '@/lib/api/health';
 import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/api/rate-limit';
 import { isWorkerRoute, verifyWorkerOrCronSecret } from '@/lib/api/worker-auth';
 import {
+  claimIdempotency,
   isIdempotentMutation,
   readIdempotencyKey,
-  replayIdempotentResponse,
   storeIdempotentResponse,
 } from '@/lib/api/idempotency';
 import {
@@ -140,16 +140,18 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
 
     const idemKey = readIdempotencyKey(request);
     const tenantId = auth?.tenantId || 'default';
+    const idemRoute = normalizeApiRoute(route);
+    // Thin claim (global when key present): same store as offline+online replay.
     if (isIdempotentMutation(method, idemKey) && auth && !workerAuthed) {
-      const replay = await replayIdempotentResponse(
+      const claim = await claimIdempotency(
         db,
         tenantId,
-        route,
+        idemRoute,
         method,
         idemKey!,
         body,
       );
-      if (replay) return replay;
+      if (claim.kind === 'replay') return claim.response;
     }
 
     const handlerResponse = await dispatchRoute(ctx);
@@ -196,7 +198,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       return storeIdempotentResponse(
         db,
         tenantId,
-        route,
+        idemRoute,
         method,
         idemKey!,
         body,

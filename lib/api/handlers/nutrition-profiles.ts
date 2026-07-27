@@ -12,7 +12,11 @@ import {
   analyzeRecipeNutrition,
   analyzeMenuNutrition,
   analyzePlanNutrition,
+  analyzePlanDraftNutrition,
+  analyzePlanLineNutrition,
+  analyzeResultNutrition,
   AKG_PROFILES,
+  AKG_PROFILE_OPTIONS,
   type ProductNutritionRef,
   type NutritionFacts,
 } from '@/lib/food-production/nutrition';
@@ -22,8 +26,20 @@ import {
   PRODUCTION_PLANS_COLLECTION,
   collectPlanLineRefs,
   type ProductionPlanDoc,
+  type ProductionPlanLine,
+  type KategoriPorsi,
 } from '@/lib/food-production/production-plan';
+import {
+  PRODUCTION_RESULTS_COLLECTION,
+  type ProductionResultDoc,
+} from '@/lib/food-production/production-result';
 import { FP_MGMT_READ_ROLES, FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import {
+  searchTkpiFoods,
+  getTkpiFood,
+  nutritionFromTkpiCode,
+  akgProfileMeta,
+} from '@/lib/food-production/tkpi-catalog';
 import type { HandlerContext } from '@/types/api/handler';
 
 function asNutritionRef(p: Record<string, unknown>): ProductNutritionRef {
@@ -32,8 +48,22 @@ function asNutritionRef(p: Record<string, unknown>): ProductNutritionRef {
     productKode: p.kode != null ? String(p.kode) : undefined,
     productNama: p.nama != null ? String(p.nama) : undefined,
     satuan: p.satuan != null ? String(p.satuan) : undefined,
+    tkpiCode: p.tkpiCode != null ? String(p.tkpiCode) : undefined,
     nutrition: (p.nutrition as NutritionFacts | undefined) || null,
   };
+}
+
+async function loadProductsByIds(
+  db: HandlerContext['db'],
+  tenantFilter: Record<string, unknown>,
+  productIds: string[],
+): Promise<Map<string, ProductNutritionRef>> {
+  if (!productIds.length) return new Map();
+  const products = await db.collection('products')
+    .find({ ...tenantFilter, id: { $in: productIds } })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1, tkpiCode: 1 })
+    .toArray();
+  return new Map(products.map((p) => [String(p.id), asNutritionRef(p as Record<string, unknown>)]));
 }
 
 export async function handleNutritionProfiles(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -52,7 +82,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     if (missingOnly) filter.nutrition = { $exists: false };
     const list = await db.collection('products')
       .find(withTenantFilter(scopeAuth, filter))
-      .project({ id: 1, kode: 1, nama: 1, satuan: 1, aktif: 1, itemRole: 1, nutrition: 1 })
+      .project({ id: 1, kode: 1, nama: 1, satuan: 1, aktif: 1, itemRole: 1, nutrition: 1, tkpiCode: 1 })
       .sort({ nama: 1 })
       .limit(500)
       .toArray();
@@ -64,23 +94,42 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       satuan: p.satuan,
       aktif: p.aktif !== false,
       itemRole: p.itemRole,
+      tkpiCode: p.tkpiCode || (p.nutrition as NutritionFacts | undefined)?.tkpiCode || null,
       hasNutrition: Boolean(p.nutrition),
       nutrition: p.nutrition || null,
     }));
     if (q) {
       rows = rows.filter((r) => {
-        const hay = `${r?.kode || ''} ${r?.nama || ''}`.toLowerCase();
+        const hay = `${r?.kode || ''} ${r?.nama || ''} ${r?.tkpiCode || ''}`.toLowerCase();
         return hay.includes(q);
       });
     }
     return ok({
       akgProfiles: AKG_PROFILES,
+      akgProfileOptions: AKG_PROFILE_OPTIONS.length ? AKG_PROFILE_OPTIONS : akgProfileMeta(),
       items: rows,
       summary: {
         total: rows.length,
         withNutrition: rows.filter((r) => r?.hasNutrition).length,
         missing: rows.filter((r) => !r?.hasNutrition).length,
       },
+    });
+  }
+
+  if (path[0] === 'nutrition-profiles' && path[1] === 'tkpi' && method === 'GET') {
+    const deniedRole = requireRole(auth, [...FP_MGMT_READ_ROLES]);
+    if (deniedRole) return deniedRole;
+    const q = String(url.searchParams.get('q') || '').trim();
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 40));
+    const kode = String(url.searchParams.get('kode') || '').trim();
+    if (kode) {
+      const row = getTkpiFood(kode);
+      if (!row) return err('Kode TKPI tidak ditemukan', 404);
+      return ok({ item: row });
+    }
+    return ok({
+      items: searchTkpiFoods(q, limit),
+      akgProfileOptions: AKG_PROFILE_OPTIONS,
     });
   }
 
@@ -93,10 +142,10 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
 
     const scope = String(url.searchParams.get('scope') || '').trim().toLowerCase();
     const id = String(url.searchParams.get('id') || '').trim();
-    const akgProfile = String(url.searchParams.get('akg') || 'ANAK_SD').trim();
+    const akgProfile = String(url.searchParams.get('akg') || 'PORSI_KECIL').trim();
     if (!id) return err('id wajib');
-    if (!['recipe', 'menu', 'plan'].includes(scope)) {
-      return err('scope wajib recipe | menu | plan', 400);
+    if (!['recipe', 'menu', 'plan', 'result'].includes(scope)) {
+      return err('scope wajib recipe | menu | plan | result', 400);
     }
 
     const tenantFilter = withTenantFilter(scopeAuth, {});
@@ -107,11 +156,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       ) as RecipeDoc | null;
       if (!recipe) return err('Resep tidak ditemukan', 404);
       const productIds = [...new Set((recipe.lines || []).map((l) => l.productId))];
-      const products = await db.collection('products')
-        .find({ ...tenantFilter, id: { $in: productIds } })
-        .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1 })
-        .toArray();
-      const productsById = new Map(products.map((p) => [String(p.id), asNutritionRef(p as Record<string, unknown>)]));
+      const productsById = await loadProductsByIds(db, tenantFilter, productIds);
       return ok(analyzeRecipeNutrition({ recipe, productsById, akgProfile }));
     }
 
@@ -125,19 +170,59 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         .find({ ...tenantFilter, id: { $in: recipeIds } })
         .toArray() as unknown as RecipeDoc[];
       const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
-      const products = await db.collection('products')
-        .find({ ...tenantFilter, id: { $in: productIds } })
-        .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1 })
-        .toArray();
       const analysis = analyzeMenuNutrition({
         menu,
         recipesById: new Map(recipes.map((r) => [r.id, r])),
-        productsById: new Map(products.map((p) => [String(p.id), asNutritionRef(p as Record<string, unknown>)])),
+        productsById: await loadProductsByIds(db, tenantFilter, productIds),
         akgProfile,
       });
       if ('error' in analysis) return err(analysis.error, 400);
       return ok(analysis);
     }
+
+    if (scope === 'result') {
+      const result = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+        { ...tenantFilter, id },
+      ) as ProductionResultDoc | null;
+      if (!result) return err('Hasil produksi tidak ditemukan', 404);
+      const recipeIds = [...new Set((result.lines || []).map((l) => l.recipeId).filter(Boolean))];
+      const recipes = recipeIds.length
+        ? await db.collection(RECIPES_COLLECTION)
+          .find({ ...tenantFilter, id: { $in: recipeIds } })
+          .toArray() as unknown as RecipeDoc[]
+        : [];
+      const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
+      const productsById = await loadProductsByIds(db, tenantFilter, productIds);
+      const recipesById = new Map(recipes.map((r) => [r.id, r]));
+      const analysis = analyzeResultNutrition({
+        resultId: result.id,
+        resultNo: result.noDokumen,
+        resultLines: result.lines || [],
+        recipesById,
+        productsById,
+        akgProfile,
+      });
+      if ('error' in analysis) return err(analysis.error, 400);
+      const lineEstimates = (result.lines || []).map((l, idx) => {
+        const recipe = recipesById.get(l.recipeId);
+        if (!recipe) {
+          return { index: idx, recipeId: l.recipeId, perPorsi: null, perPorsiAkgPct: null, missing: true };
+        }
+        const a = analyzeRecipeNutrition({ recipe, productsById, akgProfile });
+        return {
+          index: idx,
+          recipeId: l.recipeId,
+          targetPorsi: l.actualPorsi,
+          perPorsi: a.perPorsi,
+          perPorsiAkgPct: a.perPorsiAkgPct,
+          missingProductIds: a.missingProductIds,
+          warnings: a.warnings,
+        };
+      });
+      return ok({ ...analysis, lineEstimates });
+    }
+
+    if (scope !== 'plan') return err('scope wajib recipe | menu | plan | result', 400);
 
     const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       { ...tenantFilter, id },
@@ -159,24 +244,184 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         .toArray() as unknown as RecipeDoc[]
       : [];
     const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
-    const products = await db.collection('products')
-      .find({ ...tenantFilter, id: { $in: productIds } })
-      .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1 })
-      .toArray();
+    const productsById = await loadProductsByIds(db, tenantFilter, productIds);
+    const recipesById = new Map(recipes.map((r) => [r.id, r]));
     const analysis = analyzePlanNutrition({
       planId: plan.id,
       planNo: plan.noDokumen,
       planLines: plan.lines || [],
       menusById: new Map(menus.map((m) => [m.id, m])),
-      recipesById: new Map(recipes.map((r) => [r.id, r])),
-      productsById: new Map(products.map((p) => [String(p.id), asNutritionRef(p as Record<string, unknown>)])),
+      recipesById,
+      productsById,
       akgProfile,
     });
     if ('error' in analysis) return err(analysis.error, 400);
-    return ok(analysis);
+    const lineEstimates = (plan.lines || []).map((l, idx) => {
+      if (!l.recipeId) {
+        return { index: idx, recipeId: null, menuId: l.menuId || null, perPorsi: null, perPorsiAkgPct: null, missing: true };
+      }
+      const recipe = recipesById.get(l.recipeId);
+      if (!recipe) {
+        return { index: idx, recipeId: l.recipeId, perPorsi: null, perPorsiAkgPct: null, missing: true };
+      }
+      const a = analyzePlanLineNutrition({
+        recipe,
+        productsById,
+        planLine: l,
+        akgProfile,
+      });
+      return {
+        index: idx,
+        recipeId: l.recipeId,
+        targetPorsi: l.targetPorsi,
+        perPorsi: a.perPorsi,
+        perPorsiAkgPct: a.perPorsiAkgPct,
+        akgProfile: a.akgProfile,
+        missingProductIds: a.missingProductIds,
+        warnings: a.warnings,
+      };
+    });
+    return ok({ ...analysis, lineEstimates });
   }
 
-  if (path[0] === 'nutrition-profiles' && path[1] && path[1] !== 'analyze' && method === 'PUT') {
+  if (path[0] === 'nutrition-profiles' && path[1] === 'analyze-draft' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...FP_MGMT_READ_ROLES]);
+    if (deniedRole) return deniedRole;
+    const bodyRecord = (body || {}) as Record<string, unknown>;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: bodyRecord, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const akgProfile = String(bodyRecord.akg || 'PORSI_KECIL').trim();
+    const acuanRaw = bodyRecord.acuanByKategori;
+    const acuanByKategori = acuanRaw && typeof acuanRaw === 'object' && !Array.isArray(acuanRaw)
+      ? Object.fromEntries(
+        Object.entries(acuanRaw as Record<string, unknown>).map(([k, v]) => [k, Number(v) || 0]),
+      )
+      : null;
+    const rawLines = Array.isArray(bodyRecord.lines) ? bodyRecord.lines : [];
+    const lines = rawLines.map((row) => {
+      const r = row as Record<string, unknown>;
+      const kpRaw = r.kategoriPorsiList;
+      const kategoriPorsiList = Array.isArray(kpRaw)
+        ? kpRaw.map((x) => String(x)).filter(Boolean) as KategoriPorsi[]
+        : undefined;
+      return {
+        recipeId: r.recipeId ? String(r.recipeId) : undefined,
+        menuId: r.menuId ? String(r.menuId) : undefined,
+        targetPorsi: Number(r.targetPorsi) || 0,
+        kategoriPorsiList,
+        kategoriPorsi: r.kategoriPorsi ? String(r.kategoriPorsi) : undefined,
+      } satisfies Partial<ProductionPlanLine> & { targetPorsi: number };
+    }).filter((l) => (l.recipeId || l.menuId) && (Number(l.targetPorsi) || 0) > 0);
+
+    if (!lines.length) return err('lines wajib (recipeId/menuId + targetPorsi)');
+
+    const tenantFilter = withTenantFilter(scopeAuth, {});
+    const recipeIds = [...new Set(lines.map((l) => l.recipeId).filter(Boolean) as string[])];
+    const menuIds = [...new Set(lines.map((l) => l.menuId).filter(Boolean) as string[])];
+    const menus = menuIds.length
+      ? await db.collection(MENUS_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: menuIds } })
+        .toArray() as unknown as MenuDoc[]
+      : [];
+    const allRecipeIds = [...new Set([
+      ...recipeIds,
+      ...menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
+    ])];
+    const recipes = allRecipeIds.length
+      ? await db.collection(RECIPES_COLLECTION)
+        .find({ ...tenantFilter, id: { $in: allRecipeIds } })
+        .toArray() as unknown as RecipeDoc[]
+      : [];
+    const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
+    const productsById = await loadProductsByIds(db, tenantFilter, productIds);
+    const recipesById = new Map(recipes.map((r) => [r.id, r]));
+    const analysis = analyzePlanDraftNutrition({
+      lines,
+      menusById: new Map(menus.map((m) => [m.id, m])),
+      recipesById,
+      productsById,
+      akgProfile,
+      acuanByKategori,
+    });
+    if ('error' in analysis) return err(analysis.error, 400);
+    const lineEstimates = lines.map((l, idx) => {
+      if (!l.recipeId) {
+        return { index: idx, recipeId: null, perPorsi: null, perPorsiAkgPct: null, missing: true };
+      }
+      const recipe = recipesById.get(l.recipeId);
+      if (!recipe) {
+        return { index: idx, recipeId: l.recipeId, perPorsi: null, perPorsiAkgPct: null, missing: true };
+      }
+      const a = analyzePlanLineNutrition({
+        recipe,
+        productsById,
+        planLine: l as ProductionPlanLine,
+        akgProfile,
+        acuanByKategori,
+      });
+      return {
+        index: idx,
+        recipeId: l.recipeId,
+        targetPorsi: l.targetPorsi,
+        perPorsi: a.perPorsi,
+        perPorsiAkgPct: a.perPorsiAkgPct,
+        akgProfile: a.akgProfile,
+        missingProductIds: a.missingProductIds,
+        warnings: a.warnings,
+      };
+    });
+
+    return ok({ ...analysis, lineEstimates });
+  }
+
+  if (
+    path[0] === 'nutrition-profiles'
+    && path[1]
+    && path[2] === 'apply-tkpi'
+    && method === 'POST'
+  ) {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const bodyRecord = (body || {}) as Record<string, unknown>;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: bodyRecord, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const productId = path[1];
+    const tkpiCode = String(bodyRecord.tkpiCode || '').trim();
+    if (!tkpiCode) return err('tkpiCode wajib');
+
+    const product = await db.collection('products').findOne(
+      withTenantFilter(scopeAuth, { id: productId }),
+    );
+    if (!product) return err('Produk tidak ditemukan', 404);
+
+    const facts = nutritionFromTkpiCode(tkpiCode, product.satuan != null ? String(product.satuan) : null);
+    if (!facts) return err('Kode TKPI tidak ditemukan', 404);
+
+    const normalized = normalizeNutritionFacts(facts);
+    if ('error' in normalized) return err(normalized.error, 400);
+
+    const now = new Date();
+    const nutrition = { ...normalized, updatedAt: now };
+    await db.collection('products').updateOne(
+      withTenantFilter(scopeAuth, { id: productId }),
+      { $set: { nutrition, tkpiCode: facts.tkpiCode, updatedAt: now } },
+    );
+    await writeAuditLog(db, {
+      tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
+      action: 'NUTRITION_APPLY_TKPI',
+      entityType: 'product_nutrition',
+      entityId: productId,
+      summary: `Gizi ${String(product.kode || product.nama || productId)} dari TKPI ${facts.tkpiCode}`,
+      ...auditActor(auth),
+    });
+    return ok(clean({ productId, tkpiCode: facts.tkpiCode, nutrition }));
+  }
+
+  if (path[0] === 'nutrition-profiles' && path[1] && path[1] !== 'analyze' && path[1] !== 'tkpi' && path[1] !== 'analyze-draft' && method === 'PUT') {
     const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
     const bodyRecord = (body || {}) as Record<string, unknown>;
@@ -195,9 +440,11 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
 
     const now = new Date();
     const nutrition = { ...normalized, updatedAt: now };
+    const setDoc: Record<string, unknown> = { nutrition, updatedAt: now };
+    if (normalized.tkpiCode) setDoc.tkpiCode = normalized.tkpiCode;
     await db.collection('products').updateOne(
       withTenantFilter(scopeAuth, { id: productId }),
-      { $set: { nutrition, updatedAt: now } },
+      { $set: setDoc },
     );
     await writeAuditLog(db, {
       tenantId: tenantIdForWrite(scopeAuth, bodyRecord),

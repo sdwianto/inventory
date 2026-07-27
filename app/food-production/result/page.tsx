@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
+import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { Factory, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
@@ -113,6 +114,12 @@ function FoodProductionResultPageContent() {
   const [completeBatchNo, setCompleteBatchNo] = useState('');
   const [completeExpiry, setCompleteExpiry] = useState('');
   const [deepLinkHandled, setDeepLinkHandled] = useState(false);
+  const [resultAkg, setResultAkg] = useState<{
+    perPorsi: { energiKcal: number; proteinG: number };
+    perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
+    akgProfile: string;
+    warnings: string[];
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,6 +164,39 @@ function FoodProductionResultPageContent() {
     window.addEventListener('fp-kitchen-changed', onKitchen);
     return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
   }, [load]);
+
+  useEffect(() => {
+    if (!detail?.id) {
+      setResultAkg(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/nutrition-profiles/analyze?scope=result&id=${encodeURIComponent(detail.id)}&akg=PORSI_KECIL`,
+          { headers: { ...actingTenantHeaders() } },
+        );
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        setResultAkg({
+          perPorsi: {
+            energiKcal: Number(data.perPorsi?.energiKcal) || 0,
+            proteinG: Number(data.perPorsi?.proteinG) || 0,
+          },
+          perPorsiAkgPct: {
+            energiKcal: Number(data.perPorsiAkgPct?.energiKcal) || 0,
+            proteinG: Number(data.perPorsiAkgPct?.proteinG) || 0,
+          },
+          akgProfile: String(data.akgProfile || 'PORSI_KECIL'),
+          warnings: Array.isArray(data.warnings) ? data.warnings : [],
+        });
+      } catch {
+        if (!cancelled) setResultAkg(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [detail?.id, detail?.status, detail?.summary?.actualPorsiTotal]);
 
   useEffect(() => {
     if (deepLinkHandled || loading) return;
@@ -244,10 +284,17 @@ function FoodProductionResultPageContent() {
     }
     setSaving(true);
     try {
-      const res = await fetch('/api/production-results', {
+      const url = '/api/production-results';
+      const body = JSON.stringify({ productionPlanId: planId });
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-        body: JSON.stringify({ productionPlanId: planId }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat');
@@ -270,10 +317,17 @@ function FoodProductionResultPageContent() {
     if (!detail) return;
     setSaving(true);
     try {
-      const res = await fetch(`/api/production-results/${detail.id}`, {
+      const url = `/api/production-results/${detail.id}`;
+      const body = JSON.stringify({ lines: editLines });
+      const res = await fetch(url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-        body: JSON.stringify({ lines: editLines }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'PUT', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
@@ -305,14 +359,21 @@ function FoodProductionResultPageContent() {
       return;
     }
     try {
-      const res = await fetch(`/api/production-results/${row.id}/status`, {
+      const url = `/api/production-results/${row.id}/status`;
+      const body = JSON.stringify({
+        status,
+        ...(extras?.batchNo ? { batchNo: extras.batchNo } : {}),
+        ...(extras?.expiryDate ? { expiryDate: extras.expiryDate } : {}),
+      });
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-        body: JSON.stringify({
-          status,
-          ...(extras?.batchNo ? { batchNo: extras.batchNo } : {}),
-          ...(extras?.expiryDate ? { expiryDate: extras.expiryDate } : {}),
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal ubah status');
@@ -324,10 +385,10 @@ function FoodProductionResultPageContent() {
       setCompleteOpen(false);
       setCompleteTarget(null);
       await load();
-      if (status === 'COMPLETED' || status === 'CANCELLED') {
-        // Workflow selesai — tutup dialog detail
+      if (status === 'CANCELLED') {
         if (detail?.id === row.id) setDetail(null);
-      } else if (detail?.id === row.id) {
+      } else if (detail?.id === row.id || status === 'COMPLETED') {
+        // Keep detail open on COMPLETED so AKG aktual / porsi remains visible.
         setDetail(data as ResultRow);
         setEditLines(data.lines || []);
       }
@@ -634,6 +695,26 @@ function FoodProductionResultPageContent() {
                 <ul className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2 space-y-1">
                   {detail.summary.warnings.map((w) => <li key={w}>{w}</li>)}
                 </ul>
+              )}
+              {resultAkg && (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 space-y-1">
+                  <div className="text-xs font-medium text-emerald-900">
+                    {detail.status === 'COMPLETED' ? 'AKG aktual / porsi' : 'Est. AKG / porsi (dari actual saat ini)'}
+                    <span className="font-normal text-emerald-800/80"> · profil {resultAkg.akgProfile}</span>
+                  </div>
+                  <div className="text-sm tabular-nums text-emerald-950">
+                    ~{Math.round(resultAkg.perPorsi.energiKcal)} kkal
+                    {' · '}
+                    {resultAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
+                    {' · '}
+                    {resultAkg.perPorsiAkgPct.energiKcal ?? 0}% energi AKG
+                    {' · '}
+                    {resultAkg.perPorsiAkgPct.proteinG ?? 0}% protein AKG
+                  </div>
+                  {!!resultAkg.warnings.length && (
+                    <p className="text-[11px] text-amber-800">{resultAkg.warnings.join(' · ')}</p>
+                  )}
+                </div>
               )}
               {!detail.materialIssueNo && detail.status !== 'COMPLETED' && detail.status !== 'CANCELLED' && (
                 <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2">

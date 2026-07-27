@@ -1,0 +1,18 @@
+{
+  "title": "Tabel 2. Rujukan Angka Kecukupan Gizi Satu Kali MBG",
+  "source": "Rujukan MBG (bukan CSV AKG Sehari Permenkes)",
+  "rows": [
+    { "no": 1, "kelompok": "Siswa TK/PAUD/TK LB", "distribusi": "Pagi", "pctAkg": "20-25%", "energi": [280, 350], "protein": [5.0, 6.3], "lemak": [10.0, 12.5], "karbohidrat": [44.0, 55.0], "family": "PORSI_KECIL" },
+    { "no": 2, "kelompok": "Siswa SD/MI/SDLB Kelas 1-3", "distribusi": "Pagi", "pctAkg": "20-25%", "energi": [330, 413], "protein": [8.0, 10.0], "lemak": [11.0, 13.8], "karbohidrat": [50.0, 62.5], "family": "PORSI_KECIL" },
+    { "no": 3, "kelompok": "Siswa SD/MI/SDLB Kelas 4-6", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [585, 683], "protein": [15.8, 18.4], "lemak": [19.5, 22.8], "karbohidrat": [87.0, 101.5], "family": "PORSI_BESAR" },
+    { "no": 4, "kelompok": "Siswa SMP/MTS/SMPLB", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [668, 779], "protein": [20.3, 23.6], "lemak": [22.5, 26.3], "karbohidrat": [97.5, 113.8], "family": "PORSI_BESAR" },
+    { "no": 5, "kelompok": "Siswa SMA/SMK/MA/SMALB", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [713, 831], "protein": [21.0, 24.5], "lemak": [22.5, 26.3], "karbohidrat": [105.0, 122.5], "family": "PORSI_BESAR" },
+    { "no": 6, "kelompok": "Pendidik", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [713, 831], "protein": [21.0, 24.5], "lemak": [22.5, 26.3], "karbohidrat": [105.0, 122.5], "family": "PORSI_BESAR" },
+    { "no": 7, "kelompok": "Tenaga Kependidikan", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [713, 831], "protein": [21.0, 24.5], "lemak": [22.5, 26.3], "karbohidrat": [105.0, 122.5], "family": "PORSI_BESAR" },
+    { "no": 8, "kelompok": "Anak Balita", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [405, 473], "protein": [6.0, 7.0], "lemak": [13.5, 15.8], "karbohidrat": [64.5, 75.3], "family": "PORSI_BESAR_ALT", "note": "Tidak dipakai di agregat Porsi Kecil (pakai baris 9 pagi)" },
+    { "no": 9, "kelompok": "Anak Balita usia 13-59 bulan", "distribusi": "Pagi", "pctAkg": "20-25%", "energi": [270, 338], "protein": [4.0, 5.0], "lemak": [9.0, 11.3], "karbohidrat": [43.0, 53.8], "family": "PORSI_KECIL" },
+    { "no": 10, "kelompok": "Balita usia 6-11 bulan", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [240, 280], "protein": [4.5, 5.2], "lemak": [10.5, 12.2], "karbohidrat": [31.5, 36.7], "family": "OTHER" },
+    { "no": 11, "kelompok": "Ibu Hamil", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [753, 879], "protein": [22.1, 25.8], "lemak": [20.2, 23.6], "karbohidrat": [118.5, 138.3], "family": "PORSI_BESAR" },
+    { "no": 12, "kelompok": "Ibu Menyusui", "distribusi": "Siang", "pctAkg": "30-35%", "energi": [782, 912], "protein": [26.3, 30.6], "lemak": [20.2, 23.5], "karbohidrat": [123.0, 143.5], "family": "PORSI_BESAR" }
+  ]
+}

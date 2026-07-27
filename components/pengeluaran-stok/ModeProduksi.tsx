@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
+import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { ArrowUpFromLine, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
@@ -171,13 +172,20 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     }
     setSaving(true);
     try {
-      const res = await fetch('/api/material-issues', {
+      const url = '/api/material-issues';
+      const body = JSON.stringify({
+        productionPlanId: planId,
+        ...(mrpId ? { materialRequirementId: mrpId } : {}),
+      });
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-        body: JSON.stringify({
-          productionPlanId: planId,
-          ...(mrpId ? { materialRequirementId: mrpId } : {}),
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat');
@@ -199,10 +207,17 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     if (!detail) return;
     setSaving(true);
     try {
-      const res = await fetch(`/api/material-issues/${detail.id}`, {
+      const url = `/api/material-issues/${detail.id}`;
+      const body = JSON.stringify({ lines: editLines });
+      const res = await fetch(url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-        body: JSON.stringify({ lines: editLines }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'PUT', body),
+        },
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
@@ -217,10 +232,17 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
   }
 
   async function postStatus(rowId: string, status: MaterialIssueStatus) {
-    const res = await fetch(`/api/material-issues/${rowId}/status`, {
+    const url = `/api/material-issues/${rowId}/status`;
+    const body = JSON.stringify({ status });
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
-      body: JSON.stringify({ status }),
+      headers: {
+        'Content-Type': 'application/json',
+        ...actingTenantHeaders(),
+        ...actingKitchenHeaders(),
+        ...mutationIdempotencyHeaders(url, 'POST', body),
+      },
+      body,
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || 'Gagal ubah status');

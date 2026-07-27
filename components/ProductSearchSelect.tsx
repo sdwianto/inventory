@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { vendorDisplayName } from '@/lib/vendor-display';
 import ProductStockReminder from '@/components/ProductStockReminder';
 import { fetchJson } from '@/lib/fetch-json';
+import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { primeProductUomsCacheFromProducts } from '@/lib/hooks/use-product-uoms';
 import type { ProductUom } from '@/lib/uom/types';
 
@@ -76,7 +77,7 @@ export default function ProductSearchSelect({
     if (selectedProduct && str(selectedProduct.id) === value) return undefined;
     if (fetched && str(fetched.id) === value) return undefined;
     let cancelled = false;
-    fetchJson<JsonObject>(`/api/products/${value}`)
+    fetchJson<JsonObject>(`/api/products/${value}`, { headers: { ...actingTenantHeaders() } })
       .then((p) => {
         if (cancelled || !p?.id) return;
         setFetched(p);
@@ -94,7 +95,9 @@ export default function ProductSearchSelect({
       if (withWarehouseStock) url += '&withWarehouseStock=1';
       if (syncSource) url += `&syncSource=${encodeURIComponent(syncSource)}`;
       if (itemRole) url += `&itemRole=${encodeURIComponent(itemRole)}`;
-      fetchJson<JsonObject[] | { items?: JsonObject[] }>(url)
+      fetchJson<JsonObject[] | { items?: JsonObject[] }>(url, {
+        headers: { ...actingTenantHeaders() },
+      })
         .then((data) => {
           const rows = Array.isArray(data) ? data : (data?.items || []);
           const filtered = filterProduct ? rows.filter((p) => filterProduct(p)) : rows;
@@ -149,7 +152,11 @@ export default function ProductSearchSelect({
           <CommandList className="max-h-56">
             {loading && <div className="p-3 text-sm text-slate-500">Memuat…</div>}
             {!loading && items.length === 0 && (
-              <CommandEmpty>{q ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk…'}</CommandEmpty>
+              <CommandEmpty>
+                {q
+                  ? 'Produk tidak ditemukan.'
+                  : 'Tidak ada produk cocok. Ketik kode/nama, atau cek Master Produk (aktif + peran bahan).'}
+              </CommandEmpty>
             )}
             <CommandGroup>
               {items.map((p) => (

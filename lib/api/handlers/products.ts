@@ -161,8 +161,14 @@ export async function handleProducts({
       filter.itemRole = itemRoleParam;
     }
     if (syncSource) {
-      filter.syncSource = syncSource;
-      if (syncSource === 'sales.app') filter.aktif = { $ne: false };
+      // `local` = master inventori (bukan SKU katalog vendor). Include dokumen
+      // tanpa field syncSource (data lama), bukan hanya string persis "local".
+      if (syncSource === 'local') {
+        filter.syncSource = { $ne: 'sales.app' };
+      } else {
+        filter.syncSource = syncSource;
+        if (syncSource === 'sales.app') filter.aktif = { $ne: false };
+      }
     }
     if (idsParam) {
       const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);

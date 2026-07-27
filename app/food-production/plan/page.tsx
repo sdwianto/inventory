@@ -54,6 +54,7 @@ import {
   emptyPortionTargets,
   type PortionTargetMap,
 } from '@/lib/food-production/portion-target';
+import { suggestAkgProfileForCategories } from '@/lib/food-production/nutrition';
 import {
   dateKey,
   formatPlanDateLabel,
@@ -304,11 +305,126 @@ function FoodProductionPlanPageContent() {
   const [kitchenScopeTick, setKitchenScopeTick] = useState(0);
   /** Acuan porsi untuk tanggal/dapur di dialog (bisa beda dari panel kiri). */
   const [dialogTargets, setDialogTargets] = useState<PortionTargetMap>(() => emptyPortionTargets());
+  const [planAkgProfile, setPlanAkgProfile] = useState('PORSI_KECIL');
+  type AkgPerPorsi = {
+    energiKcal: number;
+    proteinG: number;
+    lemakG?: number;
+    karbohidratG?: number;
+  };
+  const [draftAkg, setDraftAkg] = useState<{
+    perPorsi: AkgPerPorsi;
+    perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
+    yieldPorsi: number;
+    warnings: string[];
+    lineEstimates: Array<{
+      index: number;
+      recipeId?: string | null;
+      perPorsi?: AkgPerPorsi | null;
+      perPorsiAkgPct?: { energiKcal?: number; proteinG?: number } | null;
+      missingProductIds?: string[];
+    }>;
+  } | null>(null);
+  const [draftAkgLoading, setDraftAkgLoading] = useState(false);
+  /** Cached Est. AKG for expanded plan rows (list view). */
+  const [planAkgById, setPlanAkgById] = useState<Record<string, {
+    perPorsi: AkgPerPorsi;
+    perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
+    warnings: string[];
+    lineEstimates: Array<{
+      recipeId?: string | null;
+      perPorsi?: AkgPerPorsi | null;
+      perPorsiAkgPct?: { energiKcal?: number; proteinG?: number } | null;
+    }>;
+  }>>({});
 
   const scopeKitchenId = useMemo(
     () => getActingKitchenId() || kitchens[0]?.id || '',
     [kitchens, kitchenScopeTick],
   );
+
+  const draftPorsiDescription = useMemo(() => {
+    const seen = new Set<string>();
+    const parts: string[] = [];
+    for (const line of lines) {
+      for (const kp of line.kategoriPorsiList || []) {
+        if (seen.has(kp)) continue;
+        seen.add(kp);
+        const label = KATEGORI_PORSI_OPTIONS.find((o) => o.value === kp)?.label || kp;
+        const acuan = dialogTargets[kp as KategoriPorsi] ?? 0;
+        parts.push(`${label} ${Number(acuan).toLocaleString('id-ID')}`);
+      }
+    }
+    const total = lines.reduce((s, l) => s + (Number(l.targetPorsi) || 0), 0);
+    return { parts, total };
+  }, [lines, dialogTargets]);
+
+  // Auto-pilih target MBG bila semua baris satu keluarga porsi.
+  useEffect(() => {
+    if (!open) return;
+    const suggested = suggestAkgProfileForCategories(lines.map((l) => l.kategoriPorsiList));
+    if (suggested === 'PORSI_KECIL' || suggested === 'PORSI_BESAR') {
+      setPlanAkgProfile(suggested);
+    }
+  }, [open, lines]);
+
+  useEffect(() => {
+    if (!open) return;
+    const payload = lines
+      .filter((l) => l.recipeId && (Number(l.targetPorsi) || 0) > 0)
+      .map((l) => ({
+        recipeId: l.recipeId,
+        targetPorsi: Number(l.targetPorsi) || 0,
+        kategoriPorsiList: l.kategoriPorsiList,
+      }));
+    if (!payload.length) {
+      setDraftAkg(null);
+      return;
+    }
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      setDraftAkgLoading(true);
+      void (async () => {
+        try {
+          const res = await fetch('/api/nutrition-profiles/analyze-draft', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+            body: JSON.stringify({
+              akg: planAkgProfile,
+              lines: payload,
+              acuanByKategori: dialogTargets,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data?.error || 'Gagal hitung est. AKG');
+          if (cancelled) return;
+          setDraftAkg({
+            perPorsi: {
+              energiKcal: Number(data.perPorsi?.energiKcal) || 0,
+              proteinG: Number(data.perPorsi?.proteinG) || 0,
+              lemakG: Number(data.perPorsi?.lemakG) || 0,
+              karbohidratG: Number(data.perPorsi?.karbohidratG) || 0,
+            },
+            perPorsiAkgPct: {
+              energiKcal: Number(data.perPorsiAkgPct?.energiKcal) || 0,
+              proteinG: Number(data.perPorsiAkgPct?.proteinG) || 0,
+            },
+            yieldPorsi: Number(data.yieldPorsi) || 0,
+            warnings: Array.isArray(data.warnings) ? data.warnings : [],
+            lineEstimates: Array.isArray(data.lineEstimates) ? data.lineEstimates : [],
+          });
+        } catch {
+          if (!cancelled) setDraftAkg(null);
+        } finally {
+          if (!cancelled) setDraftAkgLoading(false);
+        }
+      })();
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [open, lines, planAkgProfile, dialogTargets]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -705,6 +821,13 @@ function FoodProductionPlanPageContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal menyimpan');
       toast.success(editing ? 'Rencana diperbarui' : `Rencana ${data.noDokumen || ''} dibuat`);
+      if (editing?.id) {
+        setPlanAkgById((prev) => {
+          const next = { ...prev };
+          delete next[editing.id];
+          return next;
+        });
+      }
       setOpen(false);
       if (payload.tanggal) {
         setSelectedDate(payload.tanggal);
@@ -776,9 +899,40 @@ function FoodProductionPlanPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when plan list changes
   }, [rows]);
 
+  async function fetchPlanAkgEstimate(row: PlanRow) {
+    try {
+      const res = await fetch(
+        `/api/nutrition-profiles/analyze?scope=plan&id=${encodeURIComponent(row.id)}&akg=${encodeURIComponent(planAkgProfile || 'PORSI_KECIL')}`,
+        { headers: { ...actingTenantHeaders() } },
+      );
+      const data = await res.json();
+      if (!res.ok) return;
+      setPlanAkgById((prev) => ({
+        ...prev,
+        [row.id]: {
+          perPorsi: {
+            energiKcal: Number(data.perPorsi?.energiKcal) || 0,
+            proteinG: Number(data.perPorsi?.proteinG) || 0,
+          },
+          perPorsiAkgPct: {
+            energiKcal: Number(data.perPorsiAkgPct?.energiKcal) || 0,
+            proteinG: Number(data.perPorsiAkgPct?.proteinG) || 0,
+          },
+          warnings: Array.isArray(data.warnings) ? data.warnings : [],
+          lineEstimates: Array.isArray(data.lineEstimates) ? data.lineEstimates : [],
+        },
+      }));
+    } catch {
+      /* ignore — Est. AKG opsional */
+    }
+  }
+
   async function toggleExpand(row: PlanRow) {
     const next = expandedId === row.id ? null : row.id;
     setExpandedId(next);
+    if (next) {
+      void fetchPlanAkgEstimate(row);
+    }
     if (
       next
       && ISSUE_ELIGIBLE_PLAN_STATUSES.has(row.status)
@@ -1695,6 +1849,24 @@ function FoodProductionPlanPageContent() {
                         {row.catatan && <span>Catatan: {row.catatan}</span>}
                       </div>
 
+                      {planAkgById[row.id] && (
+                        <div className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-slate-800">
+                          <span className="font-medium">Est. AKG / porsi: </span>
+                          <span className="tabular-nums">
+                            ~{Math.round(planAkgById[row.id].perPorsi.energiKcal)} kkal
+                            {' · '}
+                            {planAkgById[row.id].perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
+                            {' · '}
+                            {planAkgById[row.id].perPorsiAkgPct.energiKcal ?? 0}% energi AKG
+                          </span>
+                          {!!planAkgById[row.id].warnings.length && (
+                            <span className="ml-2 text-amber-800">
+                              ({planAkgById[row.id].warnings.join(' · ')})
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       <div className="rounded-md border bg-white overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead className="bg-muted/40">
@@ -1704,6 +1876,7 @@ function FoodProductionPlanPageContent() {
                               <th className="text-left p-2 font-medium">Resep</th>
                               <th className="text-center p-2 font-medium whitespace-nowrap">Buffer {RECIPE_NEED_BUFFER_PCT}%</th>
                               <th className="text-right p-2 font-medium">Porsi</th>
+                              <th className="text-right p-2 font-medium whitespace-nowrap">Est. AKG</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1713,6 +1886,9 @@ function FoodProductionPlanPageContent() {
                                 : (row.kategoriPorsiList?.length
                                   ? row.kategoriPorsiList
                                   : (row.kategoriPorsi ? [row.kategoriPorsi] : []));
+                              const lineAkg = l.recipeId
+                                ? planAkgById[row.id]?.lineEstimates?.find((e) => e.recipeId === l.recipeId)
+                                : null;
 
                               if (l.recipeId) {
                                 const rKey = recipeExpandKey(row.id, '_', l.recipeId);
@@ -1780,6 +1956,21 @@ function FoodProductionPlanPageContent() {
                                         />
                                       </td>
                                       <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
+                                      <td
+                                        className="p-2 text-right text-[11px] leading-tight tabular-nums text-slate-700"
+                                        title={lineAkg?.perPorsi
+                                          ? `${lineAkg.perPorsi.energiKcal} kkal · ${lineAkg.perPorsi.proteinG} g protein / porsi`
+                                          : undefined}
+                                      >
+                                        {lineAkg?.perPorsi ? (
+                                          <>
+                                            <div className="font-medium">~{Math.round(lineAkg.perPorsi.energiKcal)} kkal</div>
+                                            <div className="text-muted-foreground">
+                                              {lineAkg.perPorsiAkgPct?.energiKcal ?? 0}% AKG
+                                            </div>
+                                          </>
+                                        ) : '—'}
+                                      </td>
                                     </tr>
                                     {recipeOpen && ingredients.map((ing) => {
                                       const stock = stockByProductId[ing.productId];
@@ -1852,19 +2043,20 @@ function FoodProductionPlanPageContent() {
                                             recipeId: l.recipeId!,
                                             ing,
                                           })}
+                                          <td className="p-2" />
                                         </tr>
                                       );
                                     })}
                                     {recipeOpen && !recipe && (
                                       <tr className="border-t bg-white">
-                                        <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
+                                        <td colSpan={6} className="p-2 pl-14 text-xs text-muted-foreground">
                                           Detail resep belum termuat
                                         </td>
                                       </tr>
                                     )}
                                     {recipeOpen && recipe && ingredients.length === 0 && (
                                       <tr className="border-t bg-white">
-                                        <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
+                                        <td colSpan={6} className="p-2 pl-14 text-xs text-muted-foreground">
                                           Resep belum punya baris bahan
                                         </td>
                                       </tr>
@@ -1902,6 +2094,7 @@ function FoodProductionPlanPageContent() {
                                     </td>
                                     <td className="p-2" />
                                     <td className="p-2 text-right font-medium">{l.targetPorsi}</td>
+                                    <td className="p-2 text-right text-[11px] text-muted-foreground">—</td>
                                   </tr>
                                   {menuOpen && hasChildren && children.map((child) => {
                                     const recipeOpen = !!expandedRecipeKeys[
@@ -1982,6 +2175,26 @@ function FoodProductionPlanPageContent() {
                                           <td className="p-2 text-right text-muted-foreground tabular-nums">
                                             {Number(l.targetPorsi) * Number(child.porsi || 1)}
                                           </td>
+                                          <td
+                                            className="p-2 text-right text-[11px] leading-tight tabular-nums text-slate-600"
+                                          >
+                                            {(() => {
+                                              const childAkg = planAkgById[row.id]?.lineEstimates?.find(
+                                                (e) => e.recipeId === child.recipeId,
+                                              );
+                                              if (!childAkg?.perPorsi) return '—';
+                                              return (
+                                                <>
+                                                  <div className="font-medium">
+                                                    ~{Math.round(childAkg.perPorsi.energiKcal)} kkal
+                                                  </div>
+                                                  <div className="text-muted-foreground">
+                                                    {childAkg.perPorsiAkgPct?.energiKcal ?? 0}% AKG
+                                                  </div>
+                                                </>
+                                              );
+                                            })()}
+                                          </td>
                                         </tr>
                                         {recipeOpen && ingredients.map((ing) => {
                                           const stock = stockByProductId[ing.productId];
@@ -2054,19 +2267,20 @@ function FoodProductionPlanPageContent() {
                                                 recipeId: child.recipeId,
                                                 ing,
                                               })}
+                                              <td className="p-2" />
                                             </tr>
                                           );
                                         })}
                                         {recipeOpen && !recipe && (
                                           <tr className="border-t bg-white">
-                                            <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
+                                            <td colSpan={6} className="p-2 pl-14 text-xs text-muted-foreground">
                                               Detail resep belum termuat
                                             </td>
                                           </tr>
                                         )}
                                         {recipeOpen && recipe && ingredients.length === 0 && (
                                           <tr className="border-t bg-white">
-                                            <td colSpan={5} className="p-2 pl-14 text-xs text-muted-foreground">
+                                            <td colSpan={6} className="p-2 pl-14 text-xs text-muted-foreground">
                                               Resep belum punya baris bahan
                                             </td>
                                           </tr>
@@ -2426,18 +2640,71 @@ function FoodProductionPlanPageContent() {
               </div>
             </div>
 
-            <div className="hidden sm:grid sm:grid-cols-[minmax(12rem,1.1fr)_minmax(16rem,1.6fr)_6.5rem_2.5rem] gap-3 px-1 text-[11px] font-medium text-muted-foreground">
+            <div className="rounded-md border bg-orange-50/60 border-orange-200/80 px-3 py-2.5 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-700">
+                  <span className="font-medium text-slate-900">Deskripsi porsi: </span>
+                  {draftPorsiDescription.parts.length
+                    ? `${draftPorsiDescription.parts.join(' · ')} · total ${draftPorsiDescription.total.toLocaleString('id-ID')} porsi`
+                    : 'Belum ada kategori/porsi'}
+                </p>
+                <select
+                  className="h-7 border rounded-md px-2 text-[11px] bg-white"
+                  value={planAkgProfile}
+                  onChange={(e) => setPlanAkgProfile(e.target.value)}
+                  title="Target AKG Tabel 2 MBG (penyebut %); isi porsi dihitung dari TKPI × qty besar/kecil"
+                >
+                  <option value="PORSI_KECIL">Target Porsi Kecil (340 kkal)</option>
+                  <option value="PORSI_BESAR">Target Porsi Besar (762 kkal)</option>
+                </select>
+              </div>
+              <p className="text-sm text-slate-900">
+                <span className="font-medium">Est. isi porsi (TKPI) vs target MBG: </span>
+                {draftAkgLoading && <span className="text-muted-foreground text-xs">menghitung…</span>}
+                {!draftAkgLoading && draftAkg && (
+                  <span className="tabular-nums">
+                    ~{Math.round(draftAkg.perPorsi.energiKcal)} kkal
+                    {' · '}
+                    {draftAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
+                    {' · '}
+                    {draftAkg.perPorsiAkgPct.energiKcal ?? 0}% energi
+                    {' · '}
+                    {draftAkg.perPorsiAkgPct.proteinG ?? 0}% protein
+                  </span>
+                )}
+                {!draftAkgLoading && !draftAkg && (
+                  <span className="text-muted-foreground text-xs">isi resep + porsi untuk estimasi</span>
+                )}
+              </p>
+              <p className="text-[10px] text-slate-600">
+                Qty bahan: porsi besar = 100%; porsi kecil/balita = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
+              </p>
+              {!!draftAkg?.warnings?.length && (
+                <p className="text-[11px] text-amber-800">{draftAkg.warnings.join(' · ')}</p>
+              )}
+            </div>
+
+            <div className="hidden sm:grid sm:grid-cols-[minmax(12rem,1.1fr)_minmax(14rem,1.5fr)_6.5rem_7.5rem_2.5rem] gap-3 px-1 text-[11px] font-medium text-muted-foreground">
               <span>Kategori porsi *</span>
               <span>Resep *</span>
               <span className="text-right pr-1">Porsi</span>
+              <span className="text-right pr-1">Est. AKG</span>
               <span />
             </div>
 
             <div className="space-y-2">
-              {lines.map((line, idx) => (
+              {lines.map((line, idx) => {
+                const draftLinePos = lines
+                  .map((l, i) => ({ l, i }))
+                  .filter(({ l }) => l.recipeId && (Number(l.targetPorsi) || 0) > 0)
+                  .findIndex(({ i }) => i === idx);
+                const lineEst = draftLinePos >= 0
+                  ? draftAkg?.lineEstimates?.[draftLinePos]
+                  : undefined;
+                return (
                 <div
                   key={idx}
-                  className="grid gap-3 sm:grid-cols-[minmax(12rem,1.1fr)_minmax(16rem,1.6fr)_6.5rem_2.5rem] sm:items-start border rounded-lg px-3 py-2.5 bg-white"
+                  className="grid gap-3 sm:grid-cols-[minmax(12rem,1.1fr)_minmax(14rem,1.5fr)_6.5rem_7.5rem_2.5rem] sm:items-start border rounded-lg px-3 py-2.5 bg-white"
                 >
                   <div className="min-w-0 space-y-1.5">
                     <Label className="text-xs sm:hidden">Kategori porsi *</Label>
@@ -2539,6 +2806,26 @@ function FoodProductionPlanPageContent() {
                       )))}
                     />
                   </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs sm:hidden">Est. AKG</Label>
+                    <div
+                      className="h-9 flex flex-col justify-center text-right text-[11px] leading-tight tabular-nums text-slate-700"
+                      title={lineEst?.perPorsi
+                        ? `${lineEst.perPorsi.energiKcal} kkal · P ${lineEst.perPorsi.proteinG}g · L ${lineEst.perPorsi.lemakG ?? 0}g · K ${lineEst.perPorsi.karbohidratG ?? 0}g / porsi`
+                        : 'Belum ada data gizi resep'}
+                    >
+                      {line.recipeId && lineEst?.perPorsi ? (
+                        <>
+                          <span className="font-medium">~{Math.round(lineEst.perPorsi.energiKcal)} kkal</span>
+                          <span className="text-muted-foreground">
+                            {lineEst.perPorsiAkgPct?.energiKcal ?? 0}% AKG
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex justify-end sm:justify-center">
                     <Button
                       type="button"
@@ -2553,7 +2840,8 @@ function FoodProductionPlanPageContent() {
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {activeRecipes.length === 0 && (

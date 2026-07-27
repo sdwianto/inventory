@@ -610,23 +610,41 @@ export async function createHutangFromVendorInvoice(
   };
 }
 
+export type CreditNoteApplyOptions = {
+  appliedVia?: 'credit-note-posted-push' | 'credit-note-posted-webhook';
+  correlationId?: string | null;
+};
+
 export async function applyCreditNoteFromVendor(
   db: Db,
   customerTenantId: string,
   payload: VendorInvoicePayload & { creditNoteId?: string; noCN?: string },
   vendorTenantId: string | null | undefined,
+  opts: CreditNoteApplyOptions = {},
 ) {
-  const tid = customerTenantId || 'default';
+  const tid = normalizeTenantId(customerTenantId || 'default');
   const invoiceId = payload.invoiceId;
   const creditTotal = parseInt(String(payload.total || 0), 10);
   if (!invoiceId || creditTotal <= 0) return { error: 'invoiceId dan total wajib' };
 
+  const creditNoteId = String(payload.creditNoteId || '').trim() || null;
+
   const hutang = await db.collection('hutang').findOne({
-    tenantId: tid,
+    ...tenantIdMatchFilter(tid),
     vendorInvoiceId: invoiceId,
     referenceType: 'VENDOR_INVOICE',
   });
   if (!hutang) return { action: 'no_hutang', invoiceId };
+
+  const existingNotes = Array.isArray(hutang.creditNotes) ? hutang.creditNotes : [];
+  if (creditNoteId) {
+    const already = existingNotes.some(
+      (n: { creditNoteId?: string }) => String(n?.creditNoteId || '').trim() === creditNoteId,
+    );
+    if (already) {
+      return { action: 'already_applied' as const, hutangId: hutang.id };
+    }
+  }
 
   const reduce = Math.min(creditTotal, hutang.sisa || 0);
   if (reduce <= 0) return { action: 'nothing_to_reduce' };
@@ -641,9 +659,15 @@ export async function applyCreditNoteFromVendor(
     : hutang.approvalStatus;
   const cnSourceId = String(payload.creditNoteId || payload.noCN || `${hutang.id}-${now.getTime()}`);
 
+  let claimed = false;
   await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-    await txDb.collection('hutang').updateOne(
-      { id: hutang.id },
+    // Atomic claim: skip if creditNoteId already present (concurrent push/webhook).
+    const filter: Record<string, unknown> = { id: hutang.id };
+    if (creditNoteId) {
+      filter.creditNotes = { $not: { $elemMatch: { creditNoteId } } };
+    }
+    const upd = await txDb.collection('hutang').updateOne(
+      filter,
       {
         $set: {
           terbayar: newTerbayar,
@@ -658,6 +682,8 @@ export async function applyCreditNoteFromVendor(
             noCN: payload.noCN,
             amount: reduce,
             postedAt: payload.postedAt || now,
+            appliedVia: opts.appliedVia || null,
+            correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
             items: Array.isArray(payload.items)
               ? payload.items.map((it) => ({
                 lineId: it.lineId,
@@ -673,6 +699,9 @@ export async function applyCreditNoteFromVendor(
       },
       txOpts(session),
     );
+    if (upd.matchedCount === 0) return;
+    claimed = true;
+
     const cnLines = buildCreditNoteHutangJournalLines({
       noDoc: payload.noCN || payload.creditNoteId || 'CN',
       amount: reduce,
@@ -683,12 +712,21 @@ export async function applyCreditNoteFromVendor(
         keterangan: `Credit note vendor ${payload.noCN || payload.creditNoteId}`,
         sourceType: 'AUTO_CN_VENDOR',
         sourceId: cnSourceId,
-        userName: 'credit-note-webhook',
+        userName: opts.appliedVia === 'credit-note-posted-push'
+          ? 'credit-note-push'
+          : 'credit-note-webhook',
         details: cnLines,
         tenantId: tid,
       }, session);
     }
   });
+
+  if (!claimed) {
+    if (creditNoteId) {
+      return { action: 'already_applied' as const, hutangId: hutang.id };
+    }
+    return { action: 'exists' as const, hutangId: hutang.id };
+  }
 
   return {
     action: 'credit_applied',

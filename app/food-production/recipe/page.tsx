@@ -212,11 +212,13 @@ export default function FoodProductionRecipePage() {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
-  /** Bahan resep = master lokal aktif (bukan SKU katalog vendor per-supplier). */
+  /**
+   * Bahan resep = produk aktif dengan peran bahan (INGREDIENT/PACKAGING/…).
+   * Termasuk master yang disinkron dari sales.app — di SPPG itu sumber utama bahan dapur.
+   */
   const filterIngredientProduct = useCallback(
-    (p: { itemRole?: unknown; syncSource?: unknown; aktif?: unknown }) => {
+    (p: { itemRole?: unknown; aktif?: unknown }) => {
       if (p.aktif === false) return false;
-      if (String(p.syncSource || '') === 'sales.app') return false;
       return isIngredientRole(p.itemRole);
     },
     [],
@@ -757,7 +759,6 @@ export default function FoodProductionRecipePage() {
                       <ProductSearchSelect
                         value={line.productId}
                         withWarehouseStock={false}
-                        syncSource="local"
                         placeholder="Ketik kode / nama bahan…"
                         selectedProduct={
                           line.productId

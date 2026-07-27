@@ -4,8 +4,17 @@ import {
   normalizeNutritionFacts,
   contributionFromProduct,
   analyzeRecipeNutrition,
+  analyzePlanLineNutrition,
+  analyzePlanDraftNutrition,
+  analyzeResultNutrition,
+  resolveProductNutrition,
+  resolveAkgKey,
+  suggestAkgProfileForCategories,
   AKG_PROFILES,
+  AKG_COMPLIANCE_MIN_PCT,
 } from '@/lib/food-production/nutrition';
+import { resolveTkpiCodeByProductName } from '@/lib/food-production/tkpi-catalog';
+import { DEFAULT_PCT_KECIL, computeQtyKecil } from '@/lib/food-production/recipe';
 import {
   analyzeRecipeStandardCost,
   analyzeActualCost,
@@ -49,6 +58,68 @@ describe('food-production phase 3', () => {
     expect(c?.energiKcal).toBe(1300);
   });
 
+  it('applies BDD% on PER_100G contribution', () => {
+    const n = normalizeNutritionFacts({
+      basis: 'PER_100G',
+      gramsPerUnit: 100,
+      bddPct: 50,
+      energiKcal: 200,
+      proteinG: 10,
+      lemakG: 1,
+      karbohidratG: 20,
+    });
+    expect('error' in (n as object)).toBe(false);
+    if ('error' in (n as object)) return;
+    const c = contributionFromProduct(1, n); // 100g × 50% BDD → 50g → 0.5× per-100g
+    expect(c?.energiKcal).toBe(100);
+  });
+
+  it('resolves nutrition from TKPI alias when products.nutrition empty', () => {
+    expect(resolveTkpiCodeByProductName('Bawang Bombay')?.kode).toBe('DR007');
+    expect(resolveTkpiCodeByProductName('Telur Ayam Broiler')?.kode).toBe('HR002');
+    expect(resolveTkpiCodeByProductName('Beras Pulen')?.kode).toBe('AR001');
+    expect(resolveTkpiCodeByProductName('Kangkung')?.kode).toBe('DR100');
+
+    const resolved = resolveProductNutrition({
+      productId: 'p1',
+      productNama: 'Bawang Bombay',
+      satuan: 'KG',
+      nutrition: null,
+    });
+    expect(resolved.source).toBe('alias');
+    expect(resolved.tkpiCode).toBe('DR007');
+    expect(resolved.nutrition?.energiKcal).toBeGreaterThan(0);
+
+    const analyzed = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r-gado',
+        kode: 'RSP-0001',
+        nama: 'Gado gado',
+        yieldQty: 100,
+        lines: [
+          { productId: 'beras', qty: 5, productNama: 'Beras Pulen', satuan: 'KG' },
+          { productId: 'telur', qty: 15, productNama: 'Telur Ayam Broiler', satuan: 'KG' },
+          { productId: 'bombay', qty: 5, productNama: 'Bawang Bombay', satuan: 'KG' },
+          { productId: 'bputih', qty: 4, productNama: 'Bawang Putih Kupas', satuan: 'KG' },
+          { productId: 'bmerah', qty: 4, productNama: 'Bawang Merah Kupas', satuan: 'KG' },
+          { productId: 'kangkung', qty: 10, productNama: 'Kangkung', satuan: 'PACK' },
+        ],
+      },
+      productsById: new Map([
+        ['beras', { productId: 'beras', productNama: 'Beras Pulen', satuan: 'KG', nutrition: null }],
+        ['telur', { productId: 'telur', productNama: 'Telur Ayam Broiler', satuan: 'KG', nutrition: null }],
+        ['bombay', { productId: 'bombay', productNama: 'Bawang Bombay', satuan: 'KG', nutrition: null }],
+        ['bputih', { productId: 'bputih', productNama: 'Bawang Putih Kupas', satuan: 'KG', nutrition: null }],
+        ['bmerah', { productId: 'bmerah', productNama: 'Bawang Merah Kupas', satuan: 'KG', nutrition: null }],
+        ['kangkung', { productId: 'kangkung', productNama: 'Kangkung', satuan: 'PACK', nutrition: null }],
+      ]),
+      akgProfile: 'PORSI_KECIL',
+    });
+    expect(analyzed.missingProductIds).toHaveLength(0);
+    expect(analyzed.perPorsi.energiKcal).toBeGreaterThan(0);
+    expect(analyzed.warnings.some((w) => /PACK/.test(w))).toBe(true);
+  });
+
   it('analyzes recipe nutrition per porsi + AKG pct', () => {
     const analyzed = analyzeRecipeNutrition({
       recipe: {
@@ -68,12 +139,176 @@ describe('food-production phase 3', () => {
           karbohidratG: 750,
         },
       }]]),
-      akgProfile: 'ANAK_SD',
+      akgProfile: 'PORSI_KECIL',
     });
     // 10 unit × 3500 kkal / 100 porsi = 350 kkal per porsi
     expect(analyzed.perPorsi.energiKcal).toBe(350);
-    expect(analyzed.akgDaily.energiKcal).toBe(AKG_PROFILES.ANAK_SD.energiKcal);
-    expect(analyzed.perPorsiAkgPct.energiKcal).toBeGreaterThan(0);
+    expect(analyzed.akgDaily.energiKcal).toBe(AKG_PROFILES.PORSI_KECIL.energiKcal);
+    expect(AKG_PROFILES.PORSI_KECIL.energiKcal).toBe(340);
+    // 350/340 ≈ 103% of one-meal MBG target
+    expect(analyzed.perPorsiAkgPct.energiKcal).toBeGreaterThan(100);
+  });
+
+  it('resolves legacy AKG aliases to MBG meal profiles', () => {
+    expect(resolveAkgKey('ANAK_7_9')).toBe('PORSI_KECIL');
+    expect(resolveAkgKey('ANAK_SD')).toBe('PORSI_KECIL');
+    expect(resolveAkgKey('DEWASA')).toBe('PORSI_BESAR');
+    expect(AKG_PROFILES[resolveAkgKey('ANAK_7_9')].energiKcal).toBe(340);
+  });
+
+  it('scales recipe nutrition by qtyKecil (pctKecil) vs qtyBesar', () => {
+    const qtyBesar = 10;
+    const pctKecil = DEFAULT_PCT_KECIL;
+    const qtyKecil = computeQtyKecil(qtyBesar, pctKecil);
+    const recipe = {
+      id: 'r1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      yieldQty: 100,
+      lines: [{
+        productId: 'beras',
+        qty: qtyBesar,
+        qtyBesar,
+        pctKecil,
+        qtyKecil,
+        productNama: 'Beras',
+      }],
+    };
+    const productsById = new Map([['beras', {
+      productId: 'beras',
+      nutrition: {
+        basis: 'PER_UNIT' as const,
+        energiKcal: 1000,
+        proteinG: 20,
+        lemakG: 5,
+        karbohidratG: 200,
+      },
+    }]]);
+
+    const besar = analyzeRecipeNutrition({
+      recipe,
+      productsById,
+      porsiFamily: 'BESAR',
+      akgProfile: 'PORSI_BESAR',
+    });
+    const kecil = analyzeRecipeNutrition({
+      recipe,
+      productsById,
+      porsiFamily: 'KECIL',
+      akgProfile: 'PORSI_KECIL',
+    });
+
+    expect(besar.perPorsi.energiKcal).toBe(100); // 10×1000/100
+    expect(kecil.perPorsi.energiKcal).toBeCloseTo(70, 5); // 70% of besar
+    expect(kecil.perPorsi.energiKcal / besar.perPorsi.energiKcal).toBeCloseTo(pctKecil / 100, 5);
+    expect(kecil.akgProfile).toBe('PORSI_KECIL');
+    expect(besar.akgProfile).toBe('PORSI_BESAR');
+    expect(kecil.akgDaily.energiKcal).toBe(340);
+    expect(besar.akgDaily.energiKcal).toBe(762);
+  });
+
+  it('blends plan line besar+kecil and suggests AKG profile', () => {
+    expect(suggestAkgProfileForCategories([['PORSI_BESAR']])).toBe('PORSI_BESAR');
+    expect(suggestAkgProfileForCategories([['PORSI_KECIL']])).toBe('PORSI_KECIL');
+    expect(suggestAkgProfileForCategories([['PORSI_BESAR', 'PORSI_KECIL']])).toBe('MIXED');
+
+    const qtyBesar = 10;
+    const pctKecil = 70;
+    const recipe = {
+      id: 'r1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      yieldQty: 100,
+      lines: [{
+        productId: 'beras',
+        qty: qtyBesar,
+        qtyBesar,
+        pctKecil,
+        qtyKecil: computeQtyKecil(qtyBesar, pctKecil),
+      }],
+    };
+    const productsById = new Map([['beras', {
+      productId: 'beras',
+      nutrition: {
+        basis: 'PER_UNIT' as const,
+        energiKcal: 1000,
+        proteinG: 20,
+        lemakG: 5,
+        karbohidratG: 200,
+      },
+    }]]);
+
+    // 50 besar + 50 kecil → perPorsi = (100×50 + 70×50) / 100 = 85
+    const blended = analyzePlanLineNutrition({
+      recipe,
+      productsById,
+      planLine: {
+        targetPorsi: 100,
+        kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      },
+      acuanByKategori: { PORSI_BESAR: 50, PORSI_KECIL: 50 },
+      akgProfile: 'PORSI_BESAR',
+    });
+    expect(blended.perPorsi.energiKcal).toBeCloseTo(85, 5);
+    expect(blended.akgProfile).toBe('PORSI_BESAR'); // mixed → user profile
+
+    const draft = analyzePlanDraftNutrition({
+      lines: [{
+        recipeId: 'r1',
+        targetPorsi: 100,
+        kategoriPorsiList: ['PORSI_KECIL'],
+      }],
+      menusById: new Map(),
+      recipesById: new Map([['r1', recipe]]),
+      productsById,
+      akgProfile: 'PORSI_BESAR', // overridden by pure kecil line
+    });
+    expect('error' in draft).toBe(false);
+    if ('error' in draft) return;
+    expect(draft.akgProfile).toBe('PORSI_KECIL');
+    expect(draft.perPorsi.energiKcal).toBeCloseTo(70, 5);
+    expect(draft.perPorsiAkgPct.energiKcal).toBeCloseTo((70 / 340) * 100, 0);
+    expect(AKG_COMPLIANCE_MIN_PCT).toBe(90);
+  });
+
+  it('analyzes HSL result nutrition from actualPorsi', () => {
+    const productsById = new Map([['beras', {
+      productId: 'beras',
+      nutrition: {
+        basis: 'PER_UNIT' as const,
+        energiKcal: 3500,
+        proteinG: 70,
+        lemakG: 10,
+        karbohidratG: 750,
+      },
+    }]]);
+    const recipe = {
+      id: 'r1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      yieldQty: 100,
+      lines: [{ productId: 'beras', qty: 10, productNama: 'Beras' }],
+    };
+    const analyzed = analyzeResultNutrition({
+      resultId: 'hsl1',
+      resultNo: 'HSL-1',
+      resultLines: [{
+        recipeId: 'r1',
+        targetPorsi: 100,
+        actualPorsi: 80,
+      }],
+      recipesById: new Map([['r1', recipe]]),
+      productsById,
+      akgProfile: 'ANAK_7_9',
+    });
+    expect('error' in analyzed).toBe(false);
+    if ('error' in analyzed) return;
+    // per porsi tetap dari resep (350); batch = 350×80
+    expect(analyzed.scope).toBe('result');
+    expect(analyzed.perPorsi.energiKcal).toBe(350);
+    expect(analyzed.yieldPorsi).toBe(80);
+    expect(analyzed.akgProfile).toBe('PORSI_KECIL');
+    expect(analyzed.batch.energiKcal).toBe(28000);
   });
 
   it('computes standard vs actual cost variance', () => {

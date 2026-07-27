@@ -31,6 +31,7 @@
         "lint": "node scripts/ensure-node-version.mjs && npx eslint --config eslint.config.mjs lib app components",
         "typecheck:strict": "node scripts/ensure-node-version.mjs && node scripts/ee12-install-platform.mjs && tsc -p tsconfig.strict.json --noEmit",
         "ci": "npm run typecheck && npm run typecheck:strict && npm run check:no-peer-fetch && npm run test:unit && npm run build",
+        "build:tkpi-seed": "node scripts/build-tkpi-seed.mjs",
         "test:unit": "vitest run",
         "test:fp:enterprise": "vitest run tests/unit/food-production-enterprise-gate.test.ts tests/unit/request-metrics.test.ts tests/unit/food-production-phase5-sprint19.test.ts tests/unit/food-production-phase5-sprint20.test.ts tests/unit/food-production-phase5-sprint21.test.ts tests/unit/food-production-phase5-sprint23.test.ts tests/unit/food-production-phase5-sprint24.test.ts",
         "test:multi-uom": "vitest run tests/unit/uom-conversion.test.ts tests/unit/uom-display.test.ts tests/unit/resolve-line-qty.test.ts tests/unit/grn-from-webhook.test.ts tests/unit/match-vendor-line.test.ts tests/unit/hutang-variance-uom.test.ts",
