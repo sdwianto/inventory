@@ -113,11 +113,11 @@ export function err(msg: string, status = 400): NextResponse {
 }
 
 /** Strip MongoDB internal _id before sending to client. */
-export function clean<T extends Record<string, unknown>>(
+export function clean<T extends object>(
   doc: T | null | undefined,
 ): Omit<T, '_id'> | T | null | undefined {
   if (!doc) return doc;
-  const { _id: _unused, ...rest } = doc;
+  const { _id: _unused, ...rest } = doc as T & { _id?: unknown };
   void _unused;
   return rest as Omit<T, '_id'>;
 }

@@ -257,7 +257,7 @@ export default function PutawayPage() {
                       </td>
                     )}
                     <td className="px-3 py-2 font-mono text-xs font-medium">{str(row.noPutaway)}</td>
-                    <td className="px-3 py-2 text-xs">{formatDateTime(row.tanggal)}</td>
+                    <td className="px-3 py-2 text-xs">{formatDateTime(row.tanggal as string | number | Date | null | undefined)}</td>
                     <td className="px-3 py-2 font-mono text-xs">{str(row.warehouseKode)}</td>
                     <td className="px-3 py-2">
                       <span className={`text-xs font-medium ${

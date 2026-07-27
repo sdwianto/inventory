@@ -214,7 +214,8 @@ export async function handleIntegrationInbound({
     const commandId = await startIntegrationCommand(db, {
       correlationId,
       commandType: 'ReceiveCreditNotePosted',
-      invoiceId: creditNoteId || String(payload.invoiceId),
+      invoiceId: String(payload.invoiceId),
+      creditNoteId: creditNoteId || null,
     });
 
     try {
@@ -228,7 +229,8 @@ export async function handleIntegrationInbound({
       if ('error' in cn && cn.error) {
         await finishIntegrationCommand(db, commandId, {
           status: 'FAILED',
-          invoiceId: creditNoteId || String(payload.invoiceId),
+          invoiceId: String(payload.invoiceId),
+          creditNoteId: creditNoteId || null,
           errorCode: 'CREDIT_NOTE_APPLY_FAILED',
           errorMessage: String(cn.error),
           errorClass: 'validation',
@@ -239,7 +241,8 @@ export async function handleIntegrationInbound({
 
       await finishIntegrationCommand(db, commandId, {
         status: 'SUCCEEDED',
-        invoiceId: creditNoteId || String(payload.invoiceId),
+        invoiceId: String(payload.invoiceId),
+        creditNoteId: creditNoteId || null,
         apId: cn.hutangId ? String(cn.hutangId) : null,
       });
 
@@ -253,7 +256,8 @@ export async function handleIntegrationInbound({
     } catch (e) {
       await finishIntegrationCommand(db, commandId, {
         status: 'FAILED',
-        invoiceId: creditNoteId || String(payload.invoiceId),
+        invoiceId: String(payload.invoiceId),
+        creditNoteId: creditNoteId || null,
         errorCode: 'CREDIT_NOTE_APPLY_FAILED',
         errorMessage: e instanceof Error ? e.message : String(e),
         errorClass: 'unknown',

@@ -8,6 +8,7 @@ export type IntegrationCommandStart = {
   commandType: string;
   grnId?: string | null;
   invoiceId?: string | null;
+  creditNoteId?: string | null;
   apId?: string | null;
   node?: string;
 };
@@ -15,6 +16,7 @@ export type IntegrationCommandStart = {
 export type IntegrationCommandFinish = {
   status: Exclude<CommandLogStatus, 'STARTED'>;
   invoiceId?: string | null;
+  creditNoteId?: string | null;
   apId?: string | null;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -54,6 +56,7 @@ export async function startIntegrationCommand(
     commandType: input.commandType,
     grnId: input.grnId || null,
     invoiceId: input.invoiceId || null,
+    creditNoteId: input.creditNoteId || null,
     apId: input.apId || null,
     startedAt: now,
     finishedAt: null,
@@ -103,6 +106,7 @@ export async function finishIntegrationCommand(
         finishedAt: now,
         durationMs,
         invoiceId: patch.invoiceId ?? existing?.invoiceId ?? null,
+        creditNoteId: patch.creditNoteId ?? existing?.creditNoteId ?? null,
         apId: patch.apId ?? existing?.apId ?? null,
         errorCode,
         errorMessage,

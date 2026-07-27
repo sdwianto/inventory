@@ -438,7 +438,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/fefo-reconcile/run',
+                        url: '/api/ops/fefo-reconcile/run',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'FEFO Detect',
@@ -461,7 +461,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/fefo-reconcile/repair',
+                        url: '/api/ops/fefo-reconcile/repair',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'FEFO Repair',
@@ -533,7 +533,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ingredient-lot-reconcile/run',
+                        url: '/api/ops/ingredient-lot-reconcile/run',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'Ingredient Lot Detect',
@@ -556,7 +556,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ingredient-lot-reconcile/repair',
+                        url: '/api/ops/ingredient-lot-reconcile/repair',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'Ingredient Lot Repair',
@@ -611,7 +611,7 @@ export default function OpsDashboardPage() {
                 onClick={async () => {
                   try {
                     const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/issue-fefo-shortfall/run',
+                      url: '/api/ops/issue-fefo-shortfall/run',
                       method: 'POST',
                       body: {},
                       offlineLabel: 'Issue FEFO Shortfall Detect',
@@ -682,7 +682,7 @@ export default function OpsDashboardPage() {
                 onClick={async () => {
                   try {
                     const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/dist-fefo-shortfall/run',
+                      url: '/api/ops/dist-fefo-shortfall/run',
                       method: 'POST',
                       body: {},
                       offlineLabel: 'Dist FEFO Shortfall Detect',
@@ -753,7 +753,7 @@ export default function OpsDashboardPage() {
                 onClick={async () => {
                   try {
                     const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/release-fefo-shortfall/run',
+                      url: '/api/ops/release-fefo-shortfall/run',
                       method: 'POST',
                       body: {},
                       offlineLabel: 'Release FEFO Shortfall Detect',
@@ -824,7 +824,7 @@ export default function OpsDashboardPage() {
                 onClick={async () => {
                   try {
                     const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/dist-return-fefo-shortfall/run',
+                      url: '/api/ops/dist-return-fefo-shortfall/run',
                       method: 'POST',
                       body: {},
                       offlineLabel: 'Dist Return FEFO Shortfall Detect',
@@ -895,7 +895,7 @@ export default function OpsDashboardPage() {
                 onClick={async () => {
                   try {
                     const res = await runReconcile.mutateAsync({
-                      path: '/api/ops/hsl-waste-reconcile/run',
+                      url: '/api/ops/hsl-waste-reconcile/run',
                       method: 'POST',
                       body: {},
                       offlineLabel: 'HSL Waste Detect',
@@ -964,7 +964,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/stok-bin-reconcile/run',
+                        url: '/api/ops/stok-bin-reconcile/run',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'Stok Bin Detect',
@@ -988,7 +988,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/stok-bin-reconcile/repair',
+                        url: '/api/ops/stok-bin-reconcile/repair',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'Stok Bin Repair LT',
@@ -1016,7 +1016,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/stok-bin-reconcile/repair-gt',
+                        url: '/api/ops/stok-bin-reconcile/repair-gt',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'Stok Bin Repair GT',
@@ -1094,7 +1094,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ka-follow-up-orphan/run',
+                        url: '/api/ops/ka-follow-up-orphan/run',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'KA FU Orphan Detect',
@@ -1118,7 +1118,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ka-follow-up-orphan/repair',
+                        url: '/api/ops/ka-follow-up-orphan/repair',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'KA FU Orphan Repair',
@@ -1200,7 +1200,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ka-open-case-missing-fu/run',
+                        url: '/api/ops/ka-open-case-missing-fu/run',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'KA Open-Case Missing FU Detect',
@@ -1224,7 +1224,7 @@ export default function OpsDashboardPage() {
                   onClick={async () => {
                     try {
                       const res = await runReconcile.mutateAsync({
-                        path: '/api/ops/ka-open-case-missing-fu/repair',
+                        url: '/api/ops/ka-open-case-missing-fu/repair',
                         method: 'POST',
                         body: {},
                         offlineLabel: 'KA Open-Case Missing FU Repair',

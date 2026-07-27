@@ -306,12 +306,15 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       const kategoriPorsiList = Array.isArray(kpRaw)
         ? kpRaw.map((x) => String(x)).filter(Boolean) as KategoriPorsi[]
         : undefined;
+      const legacyKp = r.kategoriPorsi ? String(r.kategoriPorsi) : undefined;
+      const kpList = kategoriPorsiList?.length
+        ? kategoriPorsiList
+        : (legacyKp ? [legacyKp as KategoriPorsi] : undefined);
       return {
         recipeId: r.recipeId ? String(r.recipeId) : undefined,
         menuId: r.menuId ? String(r.menuId) : undefined,
         targetPorsi: Number(r.targetPorsi) || 0,
-        kategoriPorsiList,
-        kategoriPorsi: r.kategoriPorsi ? String(r.kategoriPorsi) : undefined,
+        kategoriPorsiList: kpList,
       } satisfies Partial<ProductionPlanLine> & { targetPorsi: number };
     }).filter((l) => (l.recipeId || l.menuId) && (Number(l.targetPorsi) || 0) > 0);
 

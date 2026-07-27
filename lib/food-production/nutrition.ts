@@ -272,7 +272,7 @@ export function normalizeNutritionFacts(raw: unknown): NutritionFacts | { error:
   };
 }
 
-function hasCompleteMacros(n: NutritionFacts | null | undefined): n is NutritionFacts {
+function hasCompleteMacros(n: NutritionFacts | null | undefined): boolean {
   if (!n) return false;
   return (
     Number.isFinite(Number(n.energiKcal))
@@ -307,7 +307,7 @@ export function resolveProductNutrition(
     ? `Satuan ${String(satuan).toUpperCase()} tanpa gramsPerUnit — hitungan memakai tebakan gram/unit`
     : undefined;
 
-  if (hasCompleteMacros(stored)) {
+  if (stored && hasCompleteMacros(stored)) {
     return {
       nutrition: stored,
       source: 'stored',

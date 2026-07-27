@@ -80,7 +80,7 @@ export function defaultIngredientExpiryDate(
 }
 
 export function effectiveIngredientQtyRemaining(
-  b: Pick<IngredientLotDoc, 'qty' | 'qtyRemaining' | 'status'>,
+  b: Pick<IngredientLotDoc, 'qty' | 'status'> & { qtyRemaining?: number | null },
 ): number {
   if (b.qtyRemaining != null && Number.isFinite(Number(b.qtyRemaining))) {
     return Math.max(0, Number(b.qtyRemaining));
