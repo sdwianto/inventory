@@ -115,24 +115,49 @@ Isi: hapus `app/food-production/mobile/`, `lib/food-production/portion-target.ts
 
 ---
 
-## Sprint 4 — Dispatch / Logistics *(baru masuk sini — bukan Sprint 1-3)*
+## Sprint 4 — Dispatch Mental Model *(Tahap 1 saja — ✅ DONE, checkpoint)*
 
-**Distribution — JANGAN rename dulu.** FEFO, stok, shipment, return sudah bergantung padanya (dependency audit sebelumnya). Tahap pertama cukup ubah mental model, bukan kode:
-
-- [ ] Tambahkan komentar dokumentasi di `lib/food-production/distribution.ts`:
-```ts
-/**
- * Inventory Dispatch Document
- * Historical collection name: distribution_orders (belum di-rename — lihat migration plan Sprint 4)
- */
 ```
-- [ ] Baru setelah tim nyaman dengan mental model ini: rename tipe (`DistributionOrderDoc`→`DispatchDoc`) — collection Mongo rename **paling akhir**, terpisah, dengan migration script sendiri
+Sprint 4
+──────────────
+✔ Mental model established     — komentar "Inventory Dispatch Document" di distribution.ts
+✔ FEFO independence verified   — diverifikasi ulang (bukan diasumsikan): 3 script FEFO nol
+                                  referensi armada/driver/route/stop
+✔ Documentation updated        — docs/migration ini + header file
+✔ Regression green             — tsc clean, 12/12 test distribution/FEFO (w2-2/w2-3/w2-14)
+──────────────
+STOP — jangan lanjut ke rename/ekstraksi di sprint yang sama
+```
 
-**Service Point — JANGAN dipindah dulu.** Audit menemukan coupling **dua arah** (`service-point.ts` ↔ `distribution-orders.ts`) — pindah sekarang = migration kecil yang tidak memberi value operator. Prioritas: operator sederhana → Inventory stabil → baru Logistics.
+- [x] Tambahkan komentar dokumentasi di `lib/food-production/distribution.ts` (mental model, bukan rename tipe)
+- [x] Verifikasi ulang independensi FEFO terhadap armada/route/stop/driver (regression, bukan asumsi baru)
+- [x] `tsc --noEmit` clean + 12/12 test distribution/FEFO hijau
 
-Baru di sprint ini (setelah Distribution stabil sebagai konsep):
+**Kenapa berhenti di sini (bukan keterbatasan teknis)**: rename (`DistributionOrderDoc`→`DispatchDoc`) adalah **pekerjaan bahasa, bukan pekerjaan teknis** — begitu istilah "Dispatch" dipakai di kode, seluruh tim harus otomatis membaca "Dispatch = dokumen inventory", bukan "Dispatch = pengiriman truck". Kalau bahasa itu belum jadi acuan bersama, rename hanya menambah friksi review. Mental model perlu "mengendap" dulu sebelum struktur berubah.
+
+**Commit untuk Sprint 4 Tahap 1** (perubahan komentar di file implementasi, bukan docs-only):
+```
+refactor(distribution): clarify inventory dispatch boundary
+```
+Isi: `lib/food-production/distribution.ts` (komentar mental model).
+
+**Status Sprint 4 Tahap 1**: ✅ DONE. Rename tipe, ekstraksi Logistics, dan pemindahan Service Point **sengaja dipindah ke Sprint 5** — lihat di bawah, bukan dikerjakan di sprint yang sama.
+
+---
+
+## Sprint 5 — Dispatch/Logistics Rename & Extraction *(belum dimulai — menunggu kesiapan tim, bukan blocker teknis)*
+
+Prasyarat sebelum sprint ini dimulai: mental model "Distribution = Inventory Dispatch" (Sprint 4) sudah jadi acuan bersama tim, bukan sekadar komentar di kode.
+
+**Distribution rename** (setelah prasyarat terpenuhi):
+- [ ] Rename tipe (`DistributionOrderDoc`→`DispatchDoc`, dst.) — commit **terpisah**, isinya rename saja (tidak dicampur logic change), supaya mudah direview
+- [ ] Rename collection Mongo (`distribution_orders`→...) — **paling akhir**, terpisah lagi, dengan migration script sendiri
+
+**Service Point — masih coupling terbesar, jangan dipindah sebelum jelas domainnya.** Service Point menyentuh Distribution, Kitchen, Production, Portal, Planning, Delivery, Reporting, kemungkinan Dashboard — sebelum dipindah harus jelas dulu: Service Point itu konsep Delivery, Kitchen, atau Distribution? Kalau belum yakin, jangan dipindah.
+
+Baru setelah domain Service Point jelas dan rename Distribution stabil:
 - [ ] Ekstrak `DistributionLoading`/`DistributionArmada`/`DistributionArmadaStop`/`DistributionStopDrop` → `lib/logistics/delivery.ts`, mereferensikan `dispatchId` (FK), tidak mewarisi struktur
-- [ ] Pindahkan Service Point → Logistics (sekarang coupling dua arahnya sudah jelas, bisa direfactor sekaligus)
+- [ ] Pindahkan Service Point → Logistics (atau domain lain yang sudah dikonfirmasi jelas)
 - [ ] Pindahkan role `DRIVER` → role-set Logistics
 - [ ] Pindahkan `DistributionScheduleDocument.tsx` → Logistics
 - [ ] Sederhanakan nav `Jadwal Pengiriman` jadi tampilan Dispatch murni (jumlah/tujuan/barang keluar) untuk operator
@@ -148,11 +173,11 @@ Baru di sprint ini (setelah Distribution stabil sebagai konsep):
 | 2 | Kitchen Assurance boundary adapter · Lepas direct query di `production-batches.ts` (Sprint 2 STEP 1) |
 | 3 | Extract Armada (Sprint 2 STEP 2) |
 
-Setelah tiga hal ini selesai, baru masuk migrasi besar (Sprint 3-4).
+Setelah tiga hal ini selesai, baru masuk migrasi besar (Sprint 3-5).
 
 ---
 
-## Fase 4 (dulu) — Revisi dokumen besar, setelah kode stabil
+## Revisi dokumen arsitektur (setelah Sprint 5 selesai — bukan sekarang)
 
 - [ ] Update ADR-001 → "Inventory Production Domain" (Procurement → Dispatch)
 - [ ] Update ADR-002 → "Operational Assurance Layer" (owner QC/Cold Chain/HACCP)
