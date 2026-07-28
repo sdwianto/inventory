@@ -7,14 +7,13 @@ import {
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
 import {
+  computeRecipeLineContributions,
   roundQty,
   scaleRecipeIngredientQty,
 } from '@/lib/food-production/material-requirement';
 import {
   applyRecipeBufferQty,
-  getRecipeBufferPct,
   materialExcludedSet,
-  materialOverrideKey,
   materialOverridesMap,
   resolvePlanLineRecipeSlots,
   type PlanMaterialOverride,
@@ -99,53 +98,37 @@ export function buildRencanaKebutuhanLines(input: {
           errors.push(`Resep ${recipe.kode || slot.recipeId} belum punya bahan`);
           continue;
         }
-        const factor = Number(slot.recipeFactor) || 1;
-        const porsiBesarNeeded = split.porsiBesar * factor;
-        const porsiKecilNeeded = split.porsiKecil * factor;
-        const yieldQty = Number(recipe.yieldQty) > 0 ? Number(recipe.yieldQty) : 1;
-        const wastePct = Number(recipe.wastePct) || 0;
 
-        for (const rLine of recipe.lines) {
-          const addBesar = scaleRecipeIngredientQty(
-            recipeQtyForFamily(rLine, 'BESAR'),
-            porsiBesarNeeded,
-            yieldQty,
-            wastePct,
-          );
-          const addKecil = scaleRecipeIngredientQty(
-            recipeQtyForFamily(rLine, 'KECIL'),
-            porsiKecilNeeded,
-            yieldQty,
-            wastePct,
-          );
-          const computed = addBesar + addKecil;
-          const ovKey = materialOverrideKey(recipe.id, rLine.productId);
-          if (excludedKeys.has(ovKey)) continue;
-          const bufferPct = getRecipeBufferPct(plan.recipeBufferPct, recipe.id);
-          const add = overrideQtyByKey.has(ovKey)
-            ? Number(overrideQtyByKey.get(ovKey)) || 0
-            : applyRecipeBufferQty(computed, bufferPct);
-          if (!(add > 0)) continue;
-          const prev = acc.get(rLine.productId) || {
-            productId: rLine.productId,
-            productKode: rLine.productKode,
-            productNama: rLine.productNama,
-            satuan: rLine.satuan,
+        const contributions = computeRecipeLineContributions({
+          recipe,
+          recipeFactor: slot.recipeFactor,
+          porsiBesar: split.porsiBesar,
+          porsiKecil: split.porsiKecil,
+          excludedKeys,
+          overrideQtyByKey,
+          recipeBufferPct: plan.recipeBufferPct,
+        });
+        for (const c of contributions) {
+          const prev = acc.get(c.productId) || {
+            productId: c.productId,
+            productKode: c.productKode,
+            productNama: c.productNama,
+            satuan: c.satuan,
             qty: 0,
             sources: [],
           };
-          prev.qty = roundQty(prev.qty + add);
-          prev.productKode = prev.productKode || rLine.productKode;
-          prev.productNama = prev.productNama || rLine.productNama;
-          prev.satuan = prev.satuan || rLine.satuan;
+          prev.qty = roundQty(prev.qty + c.qty);
+          prev.productKode = prev.productKode || c.productKode;
+          prev.productNama = prev.productNama || c.productNama;
+          prev.satuan = prev.satuan || c.satuan;
           prev.sources.push({
             planNo: plan.noDokumen,
             kitchenNama: plan.kitchenNama,
             menuKode: slot.menuKode || planLine.menuKode,
             recipeKode: recipe.kode || planLine.recipeKode,
-            qty: roundQty(add),
+            qty: roundQty(c.qty),
           });
-          acc.set(rLine.productId, prev);
+          acc.set(c.productId, prev);
         }
       }
     }
