@@ -202,6 +202,11 @@ const FP_MGMT_ROUTES = [
 const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
+  /**
+   * DRIVER — Logistics execution role (lib/logistics/roles.ts LOGISTICS_DELIVERY_STATUS_ROLES,
+   * Sprint 5.4). Routes below tidak pindah: Service Point tetap Destination Master / shared
+   * (Sprint 5.3 Decision Record), Distribution tetap route Dispatch (belum di-rename/dipindah).
+   */
   DRIVER: [
     '/dashboard',
     '/food-production/service-point',

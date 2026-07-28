@@ -31,12 +31,15 @@ import {
   DIST_UI_STATUS_NEXT_LABEL,
   distDocDisplayNo,
   hasDistDokumenNo,
-  loadingLabel,
-  resolveDistLoadings,
   type DispatchStatus,
-  type DistributionArmada,
-  type DistributionLoading,
 } from '@/lib/food-production/distribution';
+import {
+  deliveryLoadingLabel,
+  resolveDeliveryLoadings,
+  type DeliveryArmada,
+  type DeliveryLoading,
+} from '@/lib/logistics/delivery';
+import { LOGISTICS_DELIVERY_STATUS_ROLES } from '@/lib/logistics/roles';
 import {
   dateKey,
   formatPlanDateLabel,
@@ -56,8 +59,8 @@ import Link from 'next/link';
 import { format } from 'date-fns';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
-/** Manage + DRIVER — update status kirim/selesai. */
-const STATUS_ROLES = new Set([...MANAGE_ROLES, 'DRIVER']);
+/** Manage + DRIVER (Logistics) — update status kirim/selesai. */
+const STATUS_ROLES = new Set<string>(LOGISTICS_DELIVERY_STATUS_ROLES);
 const PLAN_ELIGIBLE_STATUSES = new Set(['APPROVED', 'PROCESSING', 'COMPLETED']);
 
 /** Warna berganti per gelombang loading agar mudah dibedakan. */
@@ -207,8 +210,8 @@ interface DistRow {
   kitchenNama?: string;
   status: DispatchStatus;
   lines?: DistLine[];
-  loadings?: DistributionLoading[];
-  armadas?: DistributionArmada[];
+  loadings?: DeliveryLoading[];
+  armadas?: DeliveryArmada[];
   history?: DistHistoryEntry[];
   catatan?: string;
   summary?: {
@@ -620,7 +623,7 @@ function DistributionPageContent() {
       {
         key: `load-${Date.now()}`,
         urutan,
-        label: loadingLabel(urutan),
+        label: deliveryLoadingLabel(urutan),
         jamStart: defaults.jamStart,
         jamMax: defaults.jamMax,
         fleets: [],
@@ -635,7 +638,7 @@ function DistributionPageContent() {
   function removeLoadingDraft(key: string) {
     setLoadingDrafts((prev) => prev
       .filter((L) => L.key !== key)
-      .map((L, i) => ({ ...L, urutan: i + 1, label: L.label || loadingLabel(i + 1) })));
+      .map((L, i) => ({ ...L, urutan: i + 1, label: L.label || deliveryLoadingLabel(i + 1) })));
   }
 
   function addFleetToLoading(loadingKey: string) {
@@ -794,7 +797,7 @@ function DistributionPageContent() {
         servicePointIds,
         loadings: drafts.map((L, idx) => ({
           urutan: idx + 1,
-          label: L.label || loadingLabel(idx + 1),
+          label: L.label || deliveryLoadingLabel(idx + 1),
           jamStart: L.jamStart,
           jamMax: L.jamMax,
           armadas: L.fleets.map((f) => ({
@@ -1080,7 +1083,7 @@ function DistributionPageContent() {
             const expanded = expandedId === row.id;
             const next = DIST_UI_STATUS_NEXT[row.status];
             const canSchedule = next === 'APPROVED';
-            const loadings = resolveDistLoadings(row);
+            const loadings = resolveDeliveryLoadings(row);
             return (
               <div key={row.id} className="border rounded-lg overflow-hidden">
                 <button
@@ -1128,7 +1131,7 @@ function DistributionPageContent() {
                       <ul className="text-xs space-y-1">
                         {loadings.map((L, idx) => (
                           <li key={`sum-${L.urutan}`} className="text-slate-600">
-                            {L.label || loadingLabel(idx + 1)}
+                            {L.label || deliveryLoadingLabel(idx + 1)}
                             {' · '}
                             {L.jamStart.replace(':', '.')}–{L.jamMax.replace(':', '.')}
                             {' · '}
@@ -1231,7 +1234,7 @@ function DistributionPageContent() {
               ) : (
                 <div className="space-y-3">
                   {(() => {
-                    const loadings = resolveDistLoadings(detail);
+                    const loadings = resolveDeliveryLoadings(detail);
                     if (!loadings.length) return null;
                     return (
                       <div className="space-y-3 rounded-md border bg-slate-50/60 p-3">
@@ -1259,7 +1262,7 @@ function DistributionPageContent() {
                                 Loading {idx + 1}
                               </span>
                               <div className={`font-medium text-sm ${wave.header}`}>
-                                {L.label || loadingLabel(L.urutan)}
+                                {L.label || deliveryLoadingLabel(L.urutan)}
                               </div>
                             </div>
                             <div className="text-xs text-muted-foreground">
@@ -1951,7 +1954,7 @@ function DistributionPageContent() {
                         Loading {idx + 1}
                       </span>
                       <span className={`text-xs font-medium ${wave.header}`}>
-                        {L.label || loadingLabel(L.urutan)}
+                        {L.label || deliveryLoadingLabel(L.urutan)}
                       </span>
                     </div>
                     <div className="flex flex-wrap items-end gap-2">
@@ -1960,7 +1963,7 @@ function DistributionPageContent() {
                         <Input
                           value={L.label}
                           onChange={(e) => updateLoadingDraft(L.key, { label: e.target.value })}
-                          placeholder={loadingLabel(L.urutan)}
+                          placeholder={deliveryLoadingLabel(L.urutan)}
                           className="bg-white"
                         />
                       </div>

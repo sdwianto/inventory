@@ -25,7 +25,6 @@ import {
   applyDistSettleLines,
   movementQtyForStatus,
   allDistLinesSettled,
-  buildDistributionLoadings,
   scalePorsiByKategoriForQty,
   planDistCreateBlockedReason,
   FOOD_TRAY_ID,
@@ -33,10 +32,13 @@ import {
   type DispatchDoc,
   type DispatchStatus,
   type DispatchLine,
-  type DistributionArmada,
-  type DistributionLoading,
-  type DistLoadingInput,
 } from '@/lib/food-production/distribution';
+import {
+  buildDeliveryLoadings,
+  type DeliveryArmada,
+  type DeliveryLoading,
+  type DeliveryLoadingInput,
+} from '@/lib/logistics/delivery';
 import {
   SERVICE_POINTS_COLLECTION,
   routeJamKirim,
@@ -47,7 +49,8 @@ import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
-import { FP_DIST_STATUS_ROLES, FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import { LOGISTICS_DELIVERY_STATUS_ROLES } from '@/lib/logistics/roles';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -488,15 +491,15 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       }
     }
 
-    let armadas: DistributionArmada[] | undefined;
-    let loadings: DistributionLoading[] | undefined;
+    let armadas: DeliveryArmada[] | undefined;
+    let loadings: DeliveryLoading[] | undefined;
 
     const hasLoadings = Array.isArray(distBody.loadings) && distBody.loadings.length > 0;
     const hasLegacyArmada = Array.isArray(distBody.armadaAssignments)
       && distBody.armadaAssignments.length > 0;
 
     if (hasLoadings || hasLegacyArmada) {
-      const loadingInputs: DistLoadingInput[] = hasLoadings
+      const loadingInputs: DeliveryLoadingInput[] = hasLoadings
         ? (distBody.loadings as Array<Record<string, unknown>>).map((L, idx) => ({
           urutan: Number(L.urutan) > 0 ? Number(L.urutan) : idx + 1,
           label: L.label != null ? String(L.label) : undefined,
@@ -510,7 +513,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                 ? row.servicePointIds.map(String)
                 : [],
               stopDrops: row.stopDrops && typeof row.stopDrops === 'object'
-                ? row.stopDrops as DistLoadingInput['armadas'][0]['stopDrops']
+                ? row.stopDrops as DeliveryLoadingInput['armadas'][0]['stopDrops']
                 : undefined,
             };
           }),
@@ -570,7 +573,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         }));
       }
 
-      const enrichedInputs: DistLoadingInput[] = loadingInputs.map((L) => ({
+      const enrichedInputs: DeliveryLoadingInput[] = loadingInputs.map((L) => ({
         ...L,
         armadas: L.armadas.map((a) => {
           const doc = byArmada.get(a.armadaId);
@@ -584,7 +587,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         }),
       }));
 
-      const built = buildDistributionLoadings({
+      const built = buildDeliveryLoadings({
         loadings: enrichedInputs,
         lines,
         dropsByServicePointId,
@@ -815,7 +818,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
   }
 
   if (path[0] === 'distribution-orders' && path[1] && path[2] === 'status' && method === 'POST') {
-    const deniedRole = requireRole(auth, [...FP_DIST_STATUS_ROLES]);
+    const deniedRole = requireRole(auth, [...LOGISTICS_DELIVERY_STATUS_ROLES]);
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: distBody, request });
     if (denied) return denied;

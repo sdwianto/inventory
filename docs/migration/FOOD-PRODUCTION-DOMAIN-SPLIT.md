@@ -174,25 +174,61 @@ Isi: 7 file di atas.
 
 **Status Sprint 5.1**: ✅ DONE.
 
-### Sprint 5.2 — Logistics extraction *(belum dikerjakan)*
+### Sprint 5.2 — Logistics extraction — ✅ DONE
 
-- [ ] Ekstrak `DistributionLoading`/`DistributionArmada`/`DistributionArmadaStop`/`DistributionStopDrop` + `buildDistributionLoadings`/`buildDistributionArmadas` → `lib/logistics/delivery.ts`, dengan nama baru yang pas domain Logistics (mis. `DeliveryLoading`/`DeliveryArmadaAssignment`/dst. — diputuskan saat eksekusi)
-- [ ] Referensi ke `DispatchDoc` via `dispatchId` (FK), tidak mewarisi struktur
-- [ ] Masih **tanpa** menyentuh Service Point
+**Koreksi lingkup, penting dibaca sebelum Sprint 5.3**: rencana awal menyebut *"referensi ke `DispatchDoc` via `dispatchId` (FK), tidak mewarisi struktur"*. Yang benar-benar dieksekusi adalah **ekstraksi tipe/fungsi ke modul terpisah** (`lib/logistics/delivery.ts`), **bukan** pemisahan storage/collection. `DispatchDoc.loadings`/`DispatchDoc.armadas` tetap embedded di dokumen/collection yang sama (`distribution_orders`) — belum ada collection `deliveries` baru, belum ada `dispatchId` FK sungguhan. Alasan: builder Logistics (`buildDeliveryLoadings`) butuh snapshot penuh `DispatchLine[]` (qtyPorsi, porsiByKategori, kapasitasPorsi, jamKirim) untuk menyusun rute — bukan sekadar ID — jadi ini domain **referensi tipe**, bukan referensi storage. Pemisahan collection sungguhan (dengan migration script + rewrite handler untuk atomic write) adalah pekerjaan terpisah, lebih besar, di luar langkah ini.
 
-### Sprint 5.3 — Service Point assessment *(belum dikerjakan — review domain dulu, bukan otomatis implementasi)*
+Konsekuensi teknis yang jujur perlu dicatat: `lib/logistics/delivery.ts` meng-import `type DispatchLine` + `scalePorsiByKategoriForQty` dari `distribution.ts`, dan `distribution.ts` meng-import `DeliveryLoading`/`DeliveryArmada` dari `lib/logistics/delivery.ts` (untuk field `DispatchDoc.loadings`/`.armadas` serta signature `summarizeDistLines`). Ini adalah **circular import yang disengaja** — bukan kesalahan desain, karena arah data memang dua arah: Logistics butuh snapshot Dispatch untuk membangun rute, Dispatch butuh tipe Delivery untuk merepresentasikan jadwal yang sudah tertanam di dokumennya. Aman secara runtime (hanya deklarasi fungsi/tipe di top-level, tidak ada eksekusi saat modul dimuat).
 
-Pertanyaan yang harus dijawab dulu: Service Point itu konsep **Kitchen**, **Delivery**, **Distribution/Dispatch**, **Planning**, atau **Shared Location**? Service Point menyentuh Distribution, Kitchen, Production, Portal, Planning, Delivery, Reporting, kemungkinan Dashboard — coupling dua arah yang sudah dikonfirmasi di dependency audit sebelumnya.
+- [x] Ekstrak `DistributionLoading`→`DeliveryLoading`, `DistributionArmada`→`DeliveryArmada`, `DistributionArmadaStop`→`DeliveryArmadaStop`, `DistributionStopDrop`→`DeliveryStopDrop`, `DistLoadingInput`→`DeliveryLoadingInput`, `DistLoadingArmadaInput`→`DeliveryArmadaAssignmentInput` + fungsi `resolveDistLoadings`→`resolveDeliveryLoadings`, `loadingLabel`→`deliveryLoadingLabel`, `splitStopIntoDrops`, `sumPorsiByKategoriMaps`, `buildDistributionLoadings`→`buildDeliveryLoadings`, `buildDistributionArmadas`→`buildDeliveryArmadas` ke `lib/logistics/delivery.ts` (file baru)
+- [x] `scalePorsiByKategoriForQty` **sengaja tetap** di `distribution.ts` (tidak ikut pindah) — dipakai baik oleh Dispatch-domain code (`allocatePorsiAcrossPoints`, alokasi porsi lintas titik layanan) maupun Delivery-domain code (`splitStopIntoDrops`, `buildDeliveryLoadings`); memindahkannya hanya akan membalik arah coupling, bukan menghilangkannya
+- [x] `distLineKey` **sengaja tetap** di `distribution.ts` — dipakai 9× untuk identitas baris Dispatch umum (`normalizeDistLines`, settle/actuals), tidak spesifik Loading/Armada
+- [x] `DispatchDoc.loadings`/`.armadas` field types diupdate ke `DeliveryLoading[]`/`DeliveryArmada[]`; `summarizeDistLines` opts type diikutkan
+- [x] 4 consumer diupdate: `lib/api/handlers/distribution-orders.ts`, `app/food-production/distribution/page.tsx`, `components/food-production/DistributionScheduleDocument.tsx`, `tests/unit/food-production-phase5-sprint19.test.ts`
+- [x] Verifikasi: sweep repo-wide untuk nama lama (`Distribution{Armada,Loading,StopDrop}`, `DistLoading*Input`, `buildDistribution*`, `resolveDistLoadings`, bare `loadingLabel`/`splitStopIntoDrops`/`sumPorsiByKategoriMaps`) mengonfirmasi nol residu di luar `lib/logistics/delivery.ts` sendiri; `tsc --noEmit` clean (0 error); 41/41 test terkait hijau (`w2-2`/`w2-3`/`w2-14`-distribution-fefo, `food-production-enterprise-gate`, `food-production-phase5-sprint19`)
+- [x] Masih **tanpa** menyentuh Service Point — sesuai batas yang disetujui
 
-- [ ] Review domain (bukan kode) — tentukan pemilik konseptual Service Point
-- [ ] **Hanya jika** hasil review = Logistics: pindahkan. Kalau belum jelas, **biarkan di tempatnya** — jangan pindah demi "merapikan struktur"
+**Commit untuk Sprint 5.2** (extraction saja, tidak dicampur Sprint 5.3):
+```
+refactor(logistics): extract delivery loading/armada domain from distribution
+```
+Isi: `lib/logistics/delivery.ts` (baru), `lib/food-production/distribution.ts`, `lib/api/handlers/distribution-orders.ts`, `app/food-production/distribution/page.tsx`, `components/food-production/DistributionScheduleDocument.tsx`, `tests/unit/food-production-phase5-sprint19.test.ts`.
 
-### Sprint 5.4 — Role cleanup *(belum dikerjakan — setelah domain selesai)*
+**Status Sprint 5.2**: ✅ DONE.
 
-- [ ] Pindahkan role `DRIVER` → role-set Logistics (mengikuti hasil 5.2/5.3, bukan mendahului)
-- [ ] Rapikan nav/permission mengikuti struktur akhir domain
-- [ ] Sederhanakan nav `Jadwal Pengiriman` jadi tampilan Dispatch murni (jumlah/tujuan/barang keluar) untuk operator
-- [ ] Regression check final: pastikan 3 script FEFO tetap 100% di sisi Dispatch setelah seluruh split Sprint 5 selesai
+### Sprint 5.3 — Service Point assessment — ✅ DONE (domain assessment, bukan refactor)
+
+**Audit ulang (bukan asumsi lama)**: klaim dependency audit sebelumnya — "Service Point menyentuh Distribution, Kitchen, Production, Portal, Planning, Delivery, Reporting, Dashboard" — **tidak terbukti** saat di-grep ulang terhadap kode aktual pasca-Sprint 5.2. Konsumen nyata `lib/food-production/service-point.ts` hanya: `service-points.ts` handler + halamannya sendiri (CRUD), Dispatch (`distribution.ts`, `distribution-orders.ts`, halaman & dokumen cetak distribusi — butuh `kapasitasPorsi`/`porsiByKategori` untuk sizing alokasi), `lib/logistics/delivery.ts` (butuh `jamKirim`/`drops` untuk menyusun rute), dan `temperature-logs.ts` (Kitchen Assurance, tag lokasi cold-chain). Tidak ada coupling ke dashboard, report, forecast, recommendations, portal (`fp-public`), atau kitchen/plan module.
+
+**Temuan arsitektural** (bukan sekadar hasil grep, tapi kesimpulan domain): `ServicePointDoc` sendiri terbelah dua secara struktural — `alamat`/`pic`/`picNoTelp`/`jamKirim`/`drops` adalah data tujuan pengiriman (bentuknya identik dengan konsep destination Logistics), sedangkan `kapasitasPorsi`/`porsiByKategori` adalah input perencanaan alokasi (kebutuhan Dispatch). `kitchenId` cuma tautan balik ke dapur sumber, bukan bukti kepemilikan Kitchen.
+
+**Keputusan (Decision Record)** — ditetapkan oleh Principal, bukan hasil default algoritmik:
+
+> **Service Point bukan subdomain Logistics maupun Dispatch. Ia adalah *shared supporting domain* yang merepresentasikan Destination Master**, dikonsumsi lintas domain (Dispatch untuk sizing, Logistics untuk routing, Kitchen Assurance untuk tagging lokasi) tanpa dimiliki eksklusif oleh satu pun.
+
+Konsekuensi keputusan ini:
+- [x] **Tidak ada refactor kode.** `lib/food-production/service-point.ts` **tetap di lokasi sekarang** — bukan karena alasan historis/kemalasan, tapi karena "shared supporting domain, dikonsumsi lintas domain" berarti belum ada pemilik tunggal yang berhak menariknya ke folder domainnya. Memindahkan ke `lib/logistics/` (asumsi awal sebelum assessment) akan salah — itu akan membuat Dispatch bergantung pada folder Logistics untuk data perencanaan alokasinya sendiri, kebalikan dari tujuan pemisahan domain.
+- [x] **Target restrukturisasi folder di masa depan, jika terjadi, BUKAN `lib/logistics/`** — melainkan namespace netral: `lib/destination/`, `lib/location/`, atau `lib/master-data/` (dipilih nanti sesuai arah arsitektur jangka panjang, bukan sekarang).
+- [x] Status konseptual di dokumen ini diperbarui: Service Point diklasifikasikan sebagai **Destination Master / Shared Supporting Domain**, bukan Kitchen/Dispatch/Logistics.
+
+**Kenapa ini hasil yang baik, bukan jalan buntu**: assessment ini membuktikan bahwa asumsi awal ("Service Point kemungkinan milik Logistics", tercermin di frasa Sprint 5.3 versi sebelumnya) **tidak didukung model domain aktual**. Sprint 5.3 selesai sebagai *domain assessment* murni — outputnya adalah keputusan tertulis, bukan file yang berpindah, persis skenario yang sudah diantisipasi di rencana awal ("Kalau belum jelas, biarkan di tempatnya").
+
+### Sprint 5.4 — Role cleanup — ✅ DONE
+
+- [x] `FP_DIST_STATUS_ROLES` (`lib/food-production/roles.ts`) dipindah + di-rename jadi `LOGISTICS_DELIVERY_STATUS_ROLES` di `lib/logistics/roles.ts` (file baru). Isi role-set tidak berubah (`DRIVER`, `ADMIN`, `OWNER`, `SUPERVISOR`, `MASTER`) — yang pindah adalah kepemilikan konseptual: mengatur siapa yang boleh mengeksekusi aksi fisik pengiriman (status Dikirim/Selesai) adalah keputusan Logistics, meski dokumen yang dimutasi (`DispatchDoc`) tetap milik Dispatch
+- [x] Konsumen diupdate: `lib/api/handlers/distribution-orders.ts` (authorization check status transition), `app/food-production/distribution/page.tsx` (`STATUS_ROLES` UI gate — sebelumnya literal `'DRIVER'` ter-duplikasi lokal, sekarang mengacu ke satu sumber kebenaran `LOGISTICS_DELIVERY_STATUS_ROLES`)
+- [x] `components/AppShell.tsx` — **tidak ada perpindahan route**. Ditambahkan komentar di blok `ROLE_PERMISSIONS.DRIVER` mendokumentasikan kenapa: Service Point tetap Destination Master/shared (Sprint 5.3), Distribution tetap route Dispatch (belum di-rename), sehingga rute yang diakses DRIVER tidak berubah — yang berubah cuma kepemilikan role-set di kode
+- [x] **Diaudit, bukan dikerjakan ulang**: nav `Jadwal Pengiriman` (`/food-production/distribution`) sudah punya pemisahan tampilan operator vs manajemen sejak sebelum Sprint 5 — `canManage` (ADMIN/OWNER/SUPERVISOR/MASTER, sekarang identik dengan `LOGISTICS_DELIVERY_STATUS_ROLES` dikurangi DRIVER) menggerbangi create/edit/assign loading-armada; `canUpdateStatus`/`STATUS_ROLES` (`LOGISTICS_DELIVERY_STATUS_ROLES` — termasuk DRIVER) hanya menggerbangi tombol ubah status. GUDANG tidak masuk kedua set ini → read-only. Hasil: DRIVER/GUDANG sudah melihat tampilan Dispatch murni (qty/tujuan/status), tidak ada UI routing/armada yang perlu disembunyikan lebih lanjut. Tidak ada perubahan kode untuk item ini — label nav tetap "Jadwal Pengiriman" karena dipakai bersama oleh SUPERVISOR/ADMIN yang memang mengelola loading & rute penuh di halaman yang sama; me-rename label akan salah merepresentasikan kapasitas mereka
+- [x] Sweep repo-wide: nol residu `FP_DIST_STATUS_ROLES` di luar doc-comment referensi historis di `lib/logistics/roles.ts` sendiri
+- [x] Regression check final: `tsc --noEmit` clean (0 error); 41/41 test hijau (`w2-2`/`w2-3`/`w2-14`-distribution-fefo, `food-production-enterprise-gate`, `food-production-phase5-sprint19`) — 3 script FEFO tetap 100% di sisi Dispatch, tidak tersentuh perubahan role
+
+**Commit untuk Sprint 5.4** (role cleanup saja):
+```
+refactor(logistics): move driver delivery-status role-set out of food-production
+```
+Isi: `lib/logistics/roles.ts` (baru), `lib/food-production/roles.ts`, `lib/api/handlers/distribution-orders.ts`, `app/food-production/distribution/page.tsx`, `components/AppShell.tsx`.
+
+**Status Sprint 5.4**: ✅ DONE. **Sprint 5 (Dispatch/Logistics Rename & Extraction) selesai seluruhnya** — 5.1 rename, 5.2 extraction, 5.3 domain assessment (Service Point tetap, tidak dipindah), 5.4 role cleanup.
 
 ---
 

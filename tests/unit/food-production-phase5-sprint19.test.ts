@@ -18,10 +18,6 @@ import {
   applyDistLineActuals,
   applyDistSettleLines,
   collapseSourceToFoodTray,
-  buildDistributionArmadas,
-  buildDistributionLoadings,
-  resolveDistLoadings,
-  splitStopIntoDrops,
   planDistCreateBlockedReason,
   FOOD_TRAY_ID,
   FOOD_TRAY_LABEL,
@@ -34,6 +30,12 @@ import {
   canPromoteDistToScheduled,
   isDistEditable,
 } from '@/lib/food-production/distribution';
+import {
+  buildDeliveryArmadas,
+  buildDeliveryLoadings,
+  resolveDeliveryLoadings,
+  splitStopIntoDrops,
+} from '@/lib/logistics/delivery';
 
 describe('food-production phase 5 sprint 19', () => {
   it('registers DST doc prefix', () => {
@@ -81,7 +83,7 @@ describe('food-production phase 5 sprint 19', () => {
     expect(lines.find((l) => l.servicePointId === 'a')?.jamKirim).toBe('09:00');
     expect(lines.find((l) => l.servicePointId === 'b')?.jamKirim).toBe('08:30');
 
-    const built = buildDistributionArmadas({
+    const built = buildDeliveryArmadas({
       assignments: [{
         armadaId: 'arm1',
         armadaKode: 'ARM-01',
@@ -118,7 +120,7 @@ describe('food-production phase 5 sprint 19', () => {
     expect('error' in (lines as object)).toBe(false);
     if ('error' in (lines as object)) return;
 
-    const built = buildDistributionLoadings({
+    const built = buildDeliveryLoadings({
       loadings: [
         {
           urutan: 1,
@@ -173,7 +175,7 @@ describe('food-production phase 5 sprint 19', () => {
       ],
     });
     expect(drops.map((d) => d.qtyPorsi)).toEqual([30, 46]);
-    const resolved = resolveDistLoadings({
+    const resolved = resolveDeliveryLoadings({
       armadas: [{
         armadaId: 'x',
         stops: [],

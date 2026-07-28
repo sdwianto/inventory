@@ -3,12 +3,14 @@
 import { formatDate, formatDateTime } from '@/lib/format';
 import {
   DIST_STATUS_LABELS,
-  loadingLabel,
-  resolveDistLoadings,
-  type DistributionArmada,
-  type DistributionLoading,
   type DispatchStatus,
 } from '@/lib/food-production/distribution';
+import {
+  deliveryLoadingLabel,
+  resolveDeliveryLoadings,
+  type DeliveryArmada,
+  type DeliveryLoading,
+} from '@/lib/logistics/delivery';
 import {
   KATEGORI_PORSI_OPTIONS,
   KATEGORI_PORSI_SHORT,
@@ -26,8 +28,8 @@ export type DistSchedulePrintDoc = {
   kitchenNama?: string;
   status: DispatchStatus;
   catatan?: string;
-  loadings?: DistributionLoading[] | null;
-  armadas?: DistributionArmada[] | null;
+  loadings?: DeliveryLoading[] | null;
+  armadas?: DeliveryArmada[] | null;
   summary?: {
     qtyPorsiTotal?: number;
     servicePointCount?: number;
@@ -63,7 +65,7 @@ export default function DistributionScheduleDocument({
   printId,
   className = '',
 }: Props) {
-  const loadings = resolveDistLoadings(doc);
+  const loadings = resolveDeliveryLoadings(doc);
   const dateLabel = doc.tanggal
     ? formatDate(`${doc.tanggal}T12:00:00`)
     : '—';
@@ -149,7 +151,7 @@ export default function DistributionScheduleDocument({
             return (
             <section key={`print-load-${L.urutan}`} className="break-inside-avoid">
               <div className={`${tone.head} text-white px-2 py-1.5 text-sm font-semibold rounded-t`}>
-                {L.label || loadingLabel(L.urutan)}
+                {L.label || deliveryLoadingLabel(L.urutan)}
                 <span className="font-normal opacity-90 ml-2">
                   Start {L.jamStart.replace(':', '.')} · Maks {L.jamMax.replace(':', '.')}
                   {' · '}
