@@ -28,6 +28,13 @@ import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 
 const empty = { email: '', password: '', name: '', role: 'GUDANG', tenantId: 'default' };
 
+/** Pseudo-tenant untuk role MASTER (lintas tenant) — tidak selalu ada di /api/tenants. */
+const MASTER_TENANT_OPTION: JsonObject = {
+  tenantId: 'master',
+  companyName: 'Pusat Master (lintas tenant)',
+  tenantName: 'Pusat Master',
+};
+
 type UserForm = typeof empty & { tenantName?: string };
 
 const ROLE_BADGE: Record<string, string> = {
@@ -65,6 +72,27 @@ export default function UserManagementPage() {
   const tenants = masterTenants as JsonObject[];
   const userMutation = useApiMutation([queryKeys.users.all]);
 
+  const operationalTenants = tenants.filter((t) => str(t.tenantId) && str(t.tenantId) !== 'master');
+
+  // MASTER creator: operational tenants + pseudo "master" when creating MASTER role.
+  const tenantOptions: JsonObject[] = (() => {
+    if (currentUser?.role !== 'MASTER') {
+      return currentUser
+        ? [{ tenantId: currentUser.tenantId || 'default', companyName: currentUser.tenantName || 'Default' }]
+        : [];
+    }
+    if (form.role === 'MASTER') {
+      const fromApi = tenants.find((t) => str(t.tenantId) === 'master');
+      return [
+        fromApi
+          ? { ...fromApi, companyName: str(fromApi.companyName) || str(MASTER_TENANT_OPTION.companyName) }
+          : MASTER_TENANT_OPTION,
+        ...operationalTenants,
+      ];
+    }
+    return operationalTenants;
+  })();
+
   const refreshList = async () => {
     selection.clear();
     await reload();
@@ -73,7 +101,15 @@ export default function UserManagementPage() {
   const openNew = () => {
     const u = getUser();
     setEditing(null);
-    setForm({ ...empty, tenantId: u?.tenantId || 'default', tenantName: u?.tenantName });
+    const tid = u?.role === 'MASTER'
+      ? (operationalTenants[0] ? str(operationalTenants[0].tenantId) : 'default')
+      : (u?.tenantId || 'default');
+    const selected = tenants.find((t) => str(t.tenantId) === tid);
+    setForm({
+      ...empty,
+      tenantId: tid,
+      tenantName: str(selected?.companyName) || str(selected?.tenantName) || u?.tenantName,
+    });
     setShowForm(true);
   };
   const openEdit = (p: JsonObject) => { setEditing(p); setForm({ ...empty, ...p, password: '' } as UserForm); setShowForm(true); };
@@ -81,13 +117,21 @@ export default function UserManagementPage() {
   const save = async () => {
     if (!form.email || !form.name) { toast.error('Email dan nama wajib'); return; }
     if (!editing && !form.password) { toast.error('Password wajib untuk user baru'); return; }
+    if (form.role !== 'MASTER' && form.tenantId === 'master') {
+      toast.error('Pilih tenant operasional (bukan "master") untuk role ini');
+      return;
+    }
     setSaving(true);
     try {
-      // Attach tenantName from selected tenant for nicer display
-      const selectedTenant = tenants.find(t => str(t.tenantId) === form.tenantId);
+      const selectedTenant = tenantOptions.find((t) => str(t.tenantId) === form.tenantId)
+        || tenants.find((t) => str(t.tenantId) === form.tenantId);
+      const isMasterRole = form.role === 'MASTER';
       const payload = {
         ...form,
-        tenantName: str(selectedTenant?.companyName) || str(selectedTenant?.tenantName) || form.tenantName || form.tenantId,
+        tenantId: isMasterRole ? 'master' : form.tenantId,
+        tenantName: isMasterRole
+          ? str(MASTER_TENANT_OPTION.tenantName)
+          : (str(selectedTenant?.companyName) || str(selectedTenant?.tenantName) || form.tenantName || form.tenantId),
       };
       const url = editing ? `/api/users/${str(editing.id)}` : '/api/users';
       await userMutation.mutateAsync({
@@ -130,11 +174,6 @@ export default function UserManagementPage() {
     }
     setDeleting(false);
   };
-
-  // For non-MASTER users, allow only their own tenant
-  const tenantOptions: JsonObject[] = currentUser?.role === 'MASTER'
-    ? tenants
-    : (currentUser ? [{ tenantId: currentUser.tenantId || 'default', companyName: currentUser.tenantName || 'Default' }] : []);
 
   const selectableList = list.filter((u) => str(u.id) !== str(currentUser?.id));
 
@@ -303,7 +342,21 @@ export default function UserManagementPage() {
             </div>
             <div>
               <Label>Role</Label>
-              <select value={form.role} onChange={e => setForm({...form, role: e.target.value})} className="w-full border rounded px-3 py-2 text-sm">
+              <select
+                value={form.role}
+                onChange={(e) => {
+                  const role = e.target.value;
+                  const next: UserForm = { ...form, role };
+                  if (role === 'MASTER') next.tenantId = 'master';
+                  else if (form.tenantId === 'master') {
+                    next.tenantId = operationalTenants[0]
+                      ? str(operationalTenants[0].tenantId)
+                      : 'default';
+                  }
+                  setForm(next);
+                }}
+                className="w-full border rounded px-3 py-2 text-sm"
+              >
                 <option value="GUDANG">GUDANG (staff gudang — terima barang, release, buat PO)</option>
                 <option value="DRIVER">DRIVER (titik layanan & distribusi — update status kirim)</option>
                 <option value="SUPERVISOR">SUPERVISOR (supervisor — approve release & ajukan PO)</option>
@@ -313,26 +366,39 @@ export default function UserManagementPage() {
               </select>
             </div>
             <div>
-              <Label>Tenant {currentUser?.role !== 'MASTER' && <span className="text-xs text-slate-400">(otomatis)</span>}</Label>
+              <Label>
+                Tenant{' '}
+                {(currentUser?.role !== 'MASTER' || form.role === 'MASTER') && (
+                  <span className="text-xs text-slate-400">(otomatis)</span>
+                )}
+              </Label>
               <select
-                value={form.tenantId}
-                onChange={e => setForm({...form, tenantId: e.target.value})}
-                disabled={currentUser?.role !== 'MASTER'}
+                value={form.role === 'MASTER' ? 'master' : form.tenantId}
+                onChange={(e) => setForm({ ...form, tenantId: e.target.value })}
+                disabled={currentUser?.role !== 'MASTER' || form.role === 'MASTER'}
                 className="w-full border rounded px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-500"
               >
-                {tenantOptions.length === 0 && <option value="default">default — Default</option>}
-                {tenantOptions.map(t => (
+                {tenantOptions.length === 0 && currentUser?.role === 'MASTER' && (
+                  <option value="" disabled>Pilih tenant — buat dulu di Daftar Tenant</option>
+                )}
+                {tenantOptions.length === 0 && currentUser?.role !== 'MASTER' && (
+                  <option value="default">default — Default</option>
+                )}
+                {tenantOptions.map((t) => (
                   <option key={str(t.tenantId)} value={str(t.tenantId)}>
                     {str(t.tenantId)} — {str(t.companyName) || str(t.tenantName) || str(t.tenantId)}
                   </option>
                 ))}
-                {/* If editing and the user's tenantId is not in current list (e.g., orphan), still show it */}
-                {editing && form.tenantId && !tenantOptions.some(t => str(t.tenantId) === form.tenantId) && (
+                {editing && form.tenantId && !tenantOptions.some((t) => str(t.tenantId) === form.tenantId) && (
                   <option value={form.tenantId}>{form.tenantId} — (tidak terdaftar)</option>
                 )}
               </select>
               {currentUser?.role === 'MASTER' && (
-                <p className="text-[11px] text-slate-500 mt-1">Pilih tenant yang tersedia. Buat tenant baru di menu Daftar Tenant.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {form.role === 'MASTER'
+                    ? 'Role MASTER memakai tenant pusat master (lintas tenant).'
+                    : 'Pilih tenant operasional. Buat tenant baru di menu Daftar Tenant.'}
+                </p>
               )}
             </div>
           </div>
