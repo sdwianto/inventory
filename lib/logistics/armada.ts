@@ -1,5 +1,8 @@
 /**
  * Armada kendaraan distribusi MBG — master armada per dapur.
+ *
+ * Moved from lib/food-production/armada.ts — Sprint 2 Step 2
+ * (docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md). No business logic change.
  */
 
 export const ARMADAS_COLLECTION = 'armadas';

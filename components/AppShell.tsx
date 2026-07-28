@@ -16,7 +16,7 @@ import {
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, LineChart, LayoutGrid, ClipboardList,
-  PackageOpen, KeyRound, MapPinned,
+  PackageOpen, KeyRound, MapPinned, Car,
   ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -93,7 +93,7 @@ const NAV: NavEntry[] = [
       { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
       // Transfer Dapur disembunyikan — belum dipakai operasional (route/API tetap ada).
       { href: '/food-production/service-point', label: 'Titik Layanan', icon: MapPinned },
-      // Armada disembunyikan — pindah ke domain Logistics (route/API tetap ada; docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 2).
+      // Armada pindah ke domain Logistics — lihat grup nav 'Logistics' di bawah (Sprint 2 Step 2).
       { href: '/food-production/distribution', label: 'Jadwal Pengiriman', icon: Truck },
       // Cold Chain disembunyikan — pindah ke domain Kitchen Assurance (route/API tetap ada; migration plan Sprint 2).
       // HACCP disembunyikan — pindah ke domain Kitchen Assurance (route/API tetap ada; migration plan Sprint 2).
@@ -116,6 +116,13 @@ const NAV: NavEntry[] = [
       { href: '/kitchen-assurance/follow-up', label: 'Follow Up', icon: SquareCheck },
       { href: '/kitchen-assurance/reports', label: 'Reports', icon: FileChartColumn },
       { href: '/kitchen-assurance/analytics', label: 'Analytics', icon: LineChart },
+    ],
+  },
+  {
+    // Sprint 2 Step 2 (docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md) — domain baru, Armada instance pertama.
+    type: 'group', key: 'logistics', label: 'Logistics', icon: Car,
+    items: [
+      { href: '/logistics/armada', label: 'Armada', icon: Car },
     ],
   },
   {
@@ -181,6 +188,11 @@ const KA_OPS_ROUTES = [
   '/kitchen-assurance/analytics',
 ] as const;
 
+/** Logistics — domain baru, Armada instance pertama (Sprint 2 Step 2). Management-only, sama seperti sebelum dipindah (bukan GUDANG). */
+const LOGISTICS_ROUTES = [
+  '/logistics/armada',
+] as const;
+
 /** Cost / Nutrition / Forecast / AI / Dashboard — management (ADR coding #5). */
 const FP_MGMT_ROUTES = [
   '/food-production/nutrition', '/food-production/cost', '/food-production/forecast',
@@ -203,17 +215,20 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
+    ...LOGISTICS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
+          ...LOGISTICS_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
+          ...LOGISTICS_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],

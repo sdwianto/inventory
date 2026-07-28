@@ -77,11 +77,21 @@ Isi: `lib/kitchen-assurance/index.ts` (baru), `lib/api/handlers/production-batch
 
 **STEP 2 — Extract Armada** *(risiko: Rendah — 1 consumer, tidak menyentuh transaksi stok)*
 
-- [ ] Pindahkan `lib/food-production/armada.ts` (collection `armadas`) → `lib/logistics/armada.ts`
-- [ ] Pindahkan `app/food-production/armada/page.tsx` → route Logistics baru
-- [ ] Pindahkan `lib/api/handlers/armadas.ts` → handler namespace Logistics
-- [ ] Update satu-satunya consumer: `lib/api/handlers/distribution-orders.ts` (impor `ARMADAS_COLLECTION`)
-- [ ] Tidak ada perubahan logika bisnis — murni pindah lokasi
+- [x] Pindahkan `lib/food-production/armada.ts` (collection `armadas`) → `lib/logistics/armada.ts` — isi identik, hanya header komentar ditambah
+- [x] Pindahkan `app/food-production/armada/page.tsx` → `app/logistics/armada/page.tsx` (URL baru: `/logistics/armada`) — isi identik, hanya 1 baris impor diubah
+- [x] `lib/api/handlers/armadas.ts` **tidak dipindah lokasi** (koreksi dari rencana awal) — konvensi `lib/api/handlers/*` di repo ini flat, tidak ada subfolder per-domain untuk handler manapun (termasuk Kitchen Assurance). Yang diubah hanya impor internalnya, dari `@/lib/food-production/armada` → `@/lib/logistics/armada`. API route `/api/armadas` tidak berubah — konsumen page tidak perlu tahu.
+- [x] Update konsumen: `lib/api/handlers/distribution-orders.ts` (impor `ARMADAS_COLLECTION`) — dan **1 konsumen tambahan yang ditemukan saat sweep akhir**, tidak tercatat di rencana awal: `<Link href="/food-production/armada">` di `app/food-production/distribution/page.tsx` (baris "Belum ada armada aktif — Buat armada dulu") → diupdate ke `/logistics/armada`
+- [x] Nav: grup baru **Logistics** ditambahkan di `AppShell.tsx` (`key: 'logistics'`) berisi Armada — sebelumnya di Sprint 1 armada cuma "disembunyikan", sekarang benar-benar punya rumah baru. Role `SUPERVISOR`/`ADMIN`/`OWNER` diberi akses (`LOGISTICS_ROUTES`, konsisten dengan hak akses armada sebelum Sprint 1); `GUDANG` tetap tidak diberi, sesuai tujuan operator-simplification
+- [x] Tidak ada perubahan logika bisnis — murni pindah lokasi + 1 link diupdate
+- [x] Verifikasi: `tsc --noEmit` clean (0 error) setelah seluruh perubahan; sweep repo-wide untuk `food-production/armada` mengonfirmasi tidak ada referensi tersisa (kecuali komentar historis di file baru)
+
+**Commit terpisah untuk Step 2** (jangan gabung dengan Step 1):
+```
+refactor(logistics): extract armada domain from food-production
+```
+Isi: `lib/logistics/armada.ts` (baru), `app/logistics/armada/page.tsx` (baru), hapus `lib/food-production/armada.ts` + `app/food-production/armada/page.tsx`, `lib/api/handlers/armadas.ts`, `lib/api/handlers/distribution-orders.ts`, `app/food-production/distribution/page.tsx`, `components/AppShell.tsx`.
+
+**Status Sprint 2 Step 2**: ✅ DONE.
 
 ---
 

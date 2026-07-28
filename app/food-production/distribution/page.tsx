@@ -1912,7 +1912,7 @@ function DistributionPageContent() {
             {!armadas.length && (
               <p className="text-xs text-amber-700">
                 Belum ada armada aktif.{' '}
-                <Link href="/food-production/armada" className="underline underline-offset-2">
+                <Link href="/logistics/armada" className="underline underline-offset-2">
                   Buat armada
                 </Link>
                 {' '}dulu.

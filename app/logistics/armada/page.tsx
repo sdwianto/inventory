@@ -15,7 +15,7 @@ import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { Car, Plus, Pencil, RefreshCw, Power } from 'lucide-react';
-import { nextArmadaKode } from '@/lib/food-production/armada';
+import { nextArmadaKode } from '@/lib/logistics/armada';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 

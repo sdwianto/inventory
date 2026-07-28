@@ -15,7 +15,7 @@ import {
   normalizePlatNomor,
   nextArmadaKode,
   type ArmadaDoc,
-} from '@/lib/food-production/armada';
+} from '@/lib/logistics/armada';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';

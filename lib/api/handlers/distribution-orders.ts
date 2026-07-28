@@ -42,7 +42,7 @@ import {
   routeJamKirim,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
-import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/food-production/armada';
+import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/logistics/armada';
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
