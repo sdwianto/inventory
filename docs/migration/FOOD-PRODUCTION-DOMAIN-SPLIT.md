@@ -59,24 +59,21 @@ Isi: `components/AppShell.tsx` saja. Jangan digabung dengan `kitchen-assurance/i
 
 ## Sprint 2 — Boundary Cleanup *(kontrak dulu, bukan pindah file)*
 
-**STEP 1 — Kitchen Assurance boundary (bukan extract file)**
+**STEP 1 — Kitchen Assurance boundary (bukan extract file)** — ✅ DONE
 
-- [ ] Buat `lib/kitchen-assurance/index.ts` — kontrak baru, **implementasi di dalamnya boleh tetap query collection lama** (`qc_results`, `temperature_logs`, `haccp_results`) di lokasi lama:
+⚠️ **Koreksi dari rencana awal, ditemukan saat implementasi**: kontrak `getBatchAssuranceStatus()` (status ringkas PASS/FAIL) **tidak cocok** dengan pemakaian nyata. `production-batches.ts` tidak butuh status ringkas — dia menyusun **audit trail kronologis per event** (tiap baris temp log, tiap dokumen QC, tiap dokumen HACCP, dengan timestamp/summary/statusOrAlert masing-masing) untuk export CSV/JSON, memakai tipe `BatchTrailEvent[]` yang sudah ada di `batch-audit-trail.ts`. Kontrak yang dibuat disesuaikan dengan pemakaian nyata, bukan tebakan awal:
 
-```ts
-export type BatchAssuranceStatus = {
-  qc: { status: 'PASS'|'FAIL'|'PARTIAL'|'NOT_RECORDED'; passCount: number; failCount: number; naCount: number; photoCount?: number };
-  coldChain: { status: 'OK'|'WARN'|'OUT_OF_RANGE'|'CRITICAL'|'NOT_RECORDED'; worstAlert?: string };
-  haccp: { status: 'PASS'|'FAIL'|'PARTIAL'|'NOT_RECORDED'; requiredPhotoMissing?: boolean };
-  overall: 'CLEARED'|'ATTENTION'|'BLOCKED'|'NOT_ASSESSED';
-};
+- [x] Dibuat `lib/kitchen-assurance/index.ts` — `getBatchAssuranceTrail(db, scopeAuth, { productionBatchId, productionPlanId })` → `{ events: BatchTrailEvent[], entityIds: string[] }`. Implementasi di dalamnya masih query `qc_results`/`temperature_logs`/`haccp_results` di lokasi lama (`lib/food-production/*`) — sesuai prinsip "boundary dulu, folder belakangan"
+- [x] `lib/api/handlers/production-batches.ts` tidak lagi impor/query `QC_RESULTS_COLLECTION`/`TEMPERATURE_LOGS_COLLECTION`/`HACCP_RESULTS_COLLECTION` sama sekali — diganti satu panggilan `getBatchAssuranceTrail()`. `entityIds` (untuk korelasi `audit_log`) juga sekarang datang dari kontrak ini, bukan di-assemble manual dari 3 list terpisah
+- [x] Verifikasi: `tsc --noEmit` clean (0 error) di seluruh project setelah perubahan
+- [ ] *(Belum dikerjakan, boleh menyusul kapan saja — tidak wajib bersamaan)*: `kitchen-assurance/attention.ts`/`analytics.ts`/`reports.ts`/`adapters/cold-chain.ts` masih baca `temperature-log.ts` langsung, belum lewat kontrak baru ini — beda kebutuhan (mereka butuh signal real-time untuk monitoring, bukan trail historis), jadi TIDAK di-refactor di step ini, dicatat sebagai potensi penyelarasan lanjutan
+- [x] *(Production Result tetap tidak disentuh — terbukti tidak coupled ke QC/ColdChain/HACCP sama sekali, tidak butuh adapter apa pun)*
 
-export async function getBatchAssuranceStatus(db: Db, tenantId: string, batchId: string): Promise<BatchAssuranceStatus>
+**Commit terpisah untuk Step 1** (jangan gabung dengan Armada/Step 2):
 ```
-
-- [ ] Ubah `lib/api/handlers/production-batches.ts`: dari query langsung 3 collection (`QC_RESULTS_COLLECTION`, `TEMPERATURE_LOGS_COLLECTION`, `HACCP_RESULTS_COLLECTION`) → panggil `getBatchAssuranceStatus(db, tenantId, batchId)`. Ini titik coupling nyata dari dependency audit — inilah yang diselesaikan, bukan lokasi file `qc.ts`.
-- [ ] `kitchen-assurance/attention.ts`/`analytics.ts`/`reports.ts`/`adapters/cold-chain.ts` — boleh mulai pakai kontrak baru ini juga secara bertahap, tidak wajib bersamaan
-- [ ] *(Production Result sendiri tetap tidak disentuh — terbukti tidak coupled ke QC/ColdChain/HACCP sama sekali, tidak butuh adapter apa pun)*
+refactor(kitchen-assurance): decouple production-batches from QC/temp-log/HACCP collections
+```
+Isi: `lib/kitchen-assurance/index.ts` (baru), `lib/api/handlers/production-batches.ts`.
 
 **STEP 2 — Extract Armada** *(risiko: Rendah — 1 consumer, tidak menyentuh transaksi stok)*
 
