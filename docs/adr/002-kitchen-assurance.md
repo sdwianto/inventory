@@ -3,6 +3,7 @@
 **Status:** ACCEPTED  
 **Tanggal:** 2026-07-20  
 **Revisi:** Final architecture lock (exception-driven Monitoring) — 2026-07-20  
+**Revisi:** Klarifikasi Capability Ownership eksplisit, dikonfirmasi oleh implementasi Sprint 2.1 migrasi Food Production Domain Split — 2026-07-28  
 **Owner:** Inventory Domain / Product Architecture  
 **App host:** Inventory App  
 **Relates:** ADR-001 (Food Production owns cold chain / HACCP / QC data)
@@ -23,6 +24,38 @@ Food Production
        v
 Safe Kitchen Operation
 ```
+
+---
+
+## Capability Ownership (klarifikasi eksplisit — 2026-07-28)
+
+Prinsip di atas ("without owning Food Production... domain logic") sudah menyiratkan ini sejak awal, tapi ditulis eksplisit di sini setelah migrasi `docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md` (ADR-001 revisi) memunculkan pertanyaan langsung: apakah Kitchen Assurance seharusnya menjadi *owner* QC/HACCP/Cold Chain? **Jawabannya tidak, dan tidak pernah dimaksudkan begitu.**
+
+> Kitchen Assurance **may aggregate** information from other domains for monitoring, correlation, and attention-raising.
+>
+> Kitchen Assurance **does not own**:
+> - QC (Quality Control)
+> - HACCP
+> - Temperature Log (Cold Chain)
+> - Food Safety Evidence
+>
+> Data di atas tetap dimiliki **Food Production** (ADR-001). Kitchen Assurance hanya mengekspos: **monitoring, attention, timeline/trail, correlation, safety case.**
+
+Ini bukan pembatasan baru — ini nama untuk pola yang sudah diimplementasikan Sprint 2.1 (`lib/kitchen-assurance/index.ts`): `getBatchAssuranceTrail()` dan `countOpenQcResults()` adalah **read model**, membaca `temperature_logs`/`qc_results`/`haccp_results` dari collection Food Production yang sama, tanpa membuat collection/dokumen baru untuk data itu. Read model bukan ownership — pola ini konsisten dengan `Ditolak: Duplikasi Cold Chain / HACCP / WR ke dalam KA` di bawah, yang tetap berlaku.
+
+```
+Food Production
+        │
+        │ owns data
+        ▼
+QC / HACCP / Temperature Log
+        ▲
+        │ query (read model)
+        │
+Kitchen Assurance
+```
+
+**Bukan** arah sebaliknya (KA memiliki salinan/turunan QC/HACCP miliknya sendiri) — itu yang eksplisit ditolak sejak ADR ini pertama ditulis.
 
 ---
 

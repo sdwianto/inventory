@@ -4,7 +4,8 @@
 **Tanggal:** 2026-07-15  
 **Owner:** Inventory Domain / Product Architecture  
 **App host:** Inventory App  
-**Revisi:** Management & Intelligence phase + domain Management — 2026-07-15
+**Revisi:** Management & Intelligence phase + domain Management — 2026-07-15  
+**Revisi:** Post-migrasi Sprint 1–5 — Armada + Delivery keluar ke domain Logistics (ADR-003); Distribution terbelah Dispatch (tetap di sini) / Delivery (Logistics); Service Point diklasifikasi Destination Master / shared supporting domain (tidak dipindah) — 2026-07-28
 
 ---
 
@@ -80,6 +81,56 @@ Food Production
 ```
 
 **Domain stabil.** Roadmap menentukan *kapan* cabang Management diisi — bukan *apakah* dihapus.
+
+---
+
+## Revisi pasca-migrasi Sprint 1–5 (2026-07-28)
+
+Diagram di atas ditulis untuk cakupan Phase 0–3 (2026-07-15) dan tidak pernah di-backfill saat Phase 4/5 menambah Titik Layanan, Distribusi, Cold Chain, HACCP, dan Armada (Sprint 13–24). Eksekusi migrasi `docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md` (Sprint 1–5, selesai 2026-07-28) mengeluarkan sebagian kapabilitas itu ke domain terpisah. Bagian ini mencatat *state* domain saat ini — diagram di atas tetap dipertahankan sebagai catatan sejarah keputusan Phase 0–3, bukan dihapus.
+
+```
+Food Production (domain ini)
+├── Master
+│   ├── Ingredient · Recipe · Menu · Kitchen
+├── Planning
+│   ├── Production Plan              ← aggregate root
+│   ├── Material Requirement
+│   └── Purchase Requirement
+├── Kitchen Operation
+│   ├── Material Issue · Production Result · Production Report
+│   ├── Quality Control (QC) — pencatatan tetap di sini (FP_OPS_WRITE_ROLES)
+│   ├── Cold Chain (Temperature Log)
+│   └── HACCP
+├── Dispatch                          ← barang keluar gudang, BUKAN pengiriman fisik
+│   └── DispatchDoc (lines, fefoConsume/fefoRestore) — lib/food-production/distribution.ts
+└── Management
+    ├── Cost Accounting · Nutrition Analysis · Forecasting · AI Recommendation · Dashboard
+
+Shared / Supporting domain (bukan milik Food Production maupun Logistics)
+└── Service Point (Destination Master) — lib/food-production/service-point.ts
+    Dikonsumsi lintas domain: Dispatch (sizing alokasi) & Logistics/Delivery (routing).
+    Sengaja TIDAK dipindah — Sprint 5.3 Decision Record (docs/migration/…, alasan lengkap di sana).
+    Kalau nanti direstrukturisasi, target folder BUKAN lib/logistics/ — namespace netral
+    (lib/destination/, lib/location/, atau lib/master-data/).
+
+Logistics — domain terpisah, lahir dari pemisahan ini (lihat ADR-003)
+├── Armada          — lib/logistics/armada.ts (Sprint 2 Step 2)
+├── Delivery         — lib/logistics/delivery.ts: loading/armada/stop/drop, rute (Sprint 5.2)
+└── Roles            — lib/logistics/roles.ts: LOGISTICS_DELIVERY_STATUS_ROLES / DRIVER (Sprint 5.4)
+
+Kitchen Assurance — domain terpisah, sudah ada sejak ADR-002 (bukan hasil migrasi ini)
+└── Observer/aggregator atas QC/Cold Chain/HACCP milik Food Production di atas — TIDAK memiliki
+    data itu. Lihat ADR-002 (revisi klarifikasi Capability Ownership) untuk detail batasnya.
+```
+
+**Yang berubah secara konkret**:
+- **Distribution/Dispatch/Delivery split** — dokumen `DispatchDoc` (dulu `DistributionOrderDoc`) tetap di `lib/food-production/distribution.ts`; field `loadings`/`armadas` (rute/jam/armada) diekstrak ke `lib/logistics/delivery.ts` sebagai tipe `Delivery*`. Tiga script FEFO (`dist-fefo-ship.ts`, `dist-fefo-shortfall-reconcile.ts`, `dist-return-fefo-shortfall-reconcile.ts`) diverifikasi hanya bergantung pada Dispatch, nol referensi Armada/route/stop — batas ini yang membuat pemisahan aman.
+- **Armada** keluar total dari Food Production ke `lib/logistics/armada.ts` (Sprint 2 Step 2) — bukan lagi bagian domain ini.
+- **Service Point** dinilai ulang (Sprint 5.3): bukan Kitchen, bukan Dispatch, bukan Logistics secara eksklusif — Destination Master / shared supporting domain. Tetap fisik di `lib/food-production/service-point.ts` untuk sekarang (menghindari churn), tapi klasifikasi konseptualnya sudah dikunci lewat Decision Record, bukan "dilupakan di lokasi lama".
+- **QC / Cold Chain / HACCP TIDAK pindah** — tetap kapabilitas Food Production. Yang berubah hanya *siapa boleh membaca untuk apa*: Kitchen Assurance (ADR-002) membaca lewat `getBatchAssuranceTrail()`/`countOpenQcResults()` (`lib/kitchen-assurance/index.ts`, Sprint 2.1) sebagai read-model, bukan pemilik baru.
+- **DRIVER role** kepemilikan definisinya pindah ke `lib/logistics/roles.ts` (`LOGISTICS_DELIVERY_STATUS_ROLES`, Sprint 5.4) — rute yang diakses DRIVER tidak berubah.
+
+**Dokumen terkait revisi ini**: [docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md](../migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md) (checklist eksekusi lengkap Sprint 1–5), ADR-002 (revisi klarifikasi Kitchen Assurance), ADR-003 (Logistics Domain, baru).
 
 ---
 

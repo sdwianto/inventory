@@ -244,12 +244,15 @@ Setelah tiga hal ini selesai, baru masuk migrasi besar (Sprint 3-5).
 
 ---
 
-## Revisi dokumen arsitektur (setelah Sprint 5 selesai — bukan sekarang)
+## Revisi dokumen arsitektur — ✅ DONE (2026-07-28)
 
-- [ ] Update ADR-001 → "Inventory Production Domain" (Procurement → Dispatch)
-- [ ] Update ADR-002 → "Operational Assurance Layer" (owner QC/Cold Chain/HACCP)
-- [ ] ADR baru untuk domain Logistics
-- [ ] Update Regulatory Support Layer (dokumen terpisah, paused) — titik singgung Organoleptik (`rasa_tekstur`) sekarang di Kitchen Assurance
+**Koreksi arah, penting**: dua item rencana di bawah ini (yang dicoret) ternyata **salah arah** dan tidak dieksekusi seperti tertulis semula. Sebelum revisi dimulai, ditemukan bahwa ADR-002 "Kitchen Assurance" sudah lebih dulu ada sebagai sistem *operational safety guardrail* (Food/People/Operational/Equipment, `ka_safety_cases`) — bukan konsep yang sama dengan "Kitchen Assurance" yang dipakai longgar di seluruh dokumen migrasi ini (audit trail QC/HACCP/Cold-Chain, `lib/kitchen-assurance/index.ts` Sprint 2.1). ADR-002 yang sudah ACCEPTED secara eksplisit **menolak** "Duplikasi Cold Chain/HACCP ke dalam KA" — menjadikan KA "owner" QC/HACCP/Cold-Chain berarti membalik keputusan yang sudah sengaja dibuat sebelumnya, bukan melanjutkannya. Diperiksa ulang: implementasi Sprint 2.1 (`getBatchAssuranceTrail()`/`countOpenQcResults()`) ternyata **sudah** konsisten dengan ADR-002 asli — read model, bukan ownership baru. Jadi yang salah bukan kode atau ADR-002, melainkan rencana di dokumen ini.
+
+- [x] ~~Update ADR-001 → "Inventory Production Domain" (Procurement → Dispatch)~~ → **Dikerjakan dengan judul tetap** "Food Production Domain Architecture" (rename judul tidak diperlukan) + section baru "Revisi pasca-migrasi Sprint 1–5" mencatat state domain saat ini (Dispatch tetap di sini, Armada/Delivery keluar, Service Point diklasifikasi shared)
+- [x] ~~Update ADR-002 → "Operational Assurance Layer" (owner QC/Cold Chain/HACCP)~~ → **Dibatalkan, diganti klarifikasi berlawanan arah**: ADR-002 tetap bernama Kitchen Assurance, ditambahkan section "Capability Ownership" eksplisit yang menegaskan KA **tidak** memiliki QC/HACCP/Cold Chain (tetap Food Production) — KA hanya read model/aggregator. Ini menguatkan, bukan mengubah, batas yang sudah ada
+- [x] ADR-003 dibuat untuk domain Logistics (`docs/adr/003-logistics-domain.md`) — Armada, Delivery, Roles; eksplisit menyatakan Service Point BUKAN cakupan Logistics
+- [x] `docs/adr/REGISTER.md` diupdate: ADR-001/002 ditandai revisi 2026-07-28, ADR-003 ditambahkan
+- [ ] Update Regulatory Support Layer (dokumen terpisah di repo sales.app, paused) — titik singgung Organoleptik (`rasa_tekstur`) sekarang di Kitchen Assurance — **belum dikerjakan**, di luar cakupan revisi ADR inventory-app ini
 
 ---
 

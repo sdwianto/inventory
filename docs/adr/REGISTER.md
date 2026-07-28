@@ -9,8 +9,9 @@
 
 | ID | Judul | Status | Tanggal | Owner | Dokumen |
 |----|-------|--------|---------|-------|---------|
-| **ADR-001** | Food Production Domain Architecture (MBG-first) | **ACCEPTED** | 2026-07-15 | Inventory Domain | [001-food-production-domain.md](./001-food-production-domain.md) |
-| **ADR-002** | Kitchen Assurance (MBG Operational Guardrail) | **ACCEPTED** | 2026-07-20 | Inventory Domain | [002-kitchen-assurance.md](./002-kitchen-assurance.md) |
+| **ADR-001** | Food Production Domain Architecture (MBG-first) | **ACCEPTED** (revisi 2026-07-28) | 2026-07-15 | Inventory Domain | [001-food-production-domain.md](./001-food-production-domain.md) |
+| **ADR-002** | Kitchen Assurance (MBG Operational Guardrail) | **ACCEPTED** (revisi 2026-07-28) | 2026-07-20 | Inventory Domain | [002-kitchen-assurance.md](./002-kitchen-assurance.md) |
+| **ADR-003** | Logistics Domain | **ACCEPTED** | 2026-07-28 | Inventory Domain | [003-logistics-domain.md](./003-logistics-domain.md) |
 
 ### ADR-001 (ringkas)
 
@@ -18,7 +19,8 @@
 |-------|--------|
 | Filosofi | Simple for Kitchen Operators, Powerful for Management |
 | Aggregate Root | Production Plan |
-| Domain | Master · Planning · Operation · **Management** |
+| Domain | Master · Planning · Kitchen Operation (+QC/Cold Chain/HACCP) · **Dispatch** · Management |
+| Revisi 2026-07-28 | Armada + Delivery keluar ke ADR-003; Service Point = Destination Master / shared (tidak dipindah) |
 
 ### ADR-002 (ringkas)
 
@@ -32,3 +34,14 @@
 | Core data | `ka_safety_cases`, `ka_follow_ups` (+ `ka_observations` opsional) |
 | Frozen | Policy Engine, Checklist Engine, Risk, Resolution, Compliance pillar |
 | Roadmap | P1–P5 ✅ (Dashboard → Monitoring → Cases/FU → Automation → Reports → Analytics/AI Rec) |
+| Revisi 2026-07-28 | Capability Ownership eksplisit: KA read-model, tidak own QC/HACCP/Cold Chain (Food Production tetap owner) |
+
+### ADR-003 (ringkas)
+
+| Field | Value |
+|-------|--------|
+| Filosofi | Logistics owns getting food from dispatch point to destination — bukan qty/isi barang |
+| Lahir dari | Pemisahan Food Production (`docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md`, Sprint 1–5) |
+| Domain | Armada · Delivery (loading/armada/stop/drop) · Roles (`LOGISTICS_DELIVERY_STATUS_ROLES`) |
+| Bukan cakupan | Dispatch (tetap Food Production) · Service Point (shared, bukan milik Logistics) |
+| Storage | `Delivery*` masih embedded di `DispatchDoc` (collection `distribution_orders`) — belum dipisah fisik |
