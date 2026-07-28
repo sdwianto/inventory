@@ -627,13 +627,13 @@ export default function AppShell({ children }: AppShellProps) {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-14 bg-white border-b border-bgn-sky flex items-center justify-between px-4 flex-shrink-0 shadow-sm">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setOpen(!open)}>
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <header className="h-14 bg-white border-b border-bgn-sky flex items-center justify-between gap-2 px-4 flex-shrink-0 shadow-sm min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <Button variant="ghost" size="icon" className="md:hidden shrink-0" onClick={() => setOpen(!open)}>
               <Menu className="w-5 h-5" />
             </Button>
-            <div className="text-sm text-slate-600 flex items-center gap-2 flex-wrap">
+            <div className="text-sm text-slate-600 flex items-center gap-2 flex-wrap min-w-0">
               {user.role === 'MASTER' && (
                 <span className="px-2 py-0.5 bg-bgn-gold/20 text-bgn-gold text-xs font-bold rounded border border-bgn-gold/30">MASTER</span>
               )}
@@ -666,7 +666,7 @@ export default function AppShell({ children }: AppShellProps) {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <div className="hidden sm:block text-sm text-slate-600 font-mono">{now ? formatDateTime(now) : '—'}</div>
             <Button
               variant="outline"
@@ -680,7 +680,7 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
         </header>
         <WorkerHealthBanner enabled={user.role === 'MASTER'} />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto min-w-0">{children}</main>
       </div>
     </div>
   );

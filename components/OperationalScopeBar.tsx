@@ -44,20 +44,20 @@ export default function OperationalScopeBar({ className = '' }: OperationalScope
   if (!tenantLabel && !lokasiLabel) return null;
 
   return (
-    <Card className={`bg-orange-50 border-orange-200 ${className}`}>
-      <CardContent className="p-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+    <Card className={`bg-orange-50 border-orange-200 min-w-0 max-w-full ${className}`}>
+      <CardContent className="p-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm min-w-0">
         {tenantLabel ? (
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 min-w-0 max-w-full">
             <Building2 className="w-4 h-4 text-orange-600 shrink-0" />
-            <span className="text-slate-500">Tenant:</span>
-            <span className="font-semibold text-slate-800">{tenantLabel}</span>
+            <span className="text-slate-500 shrink-0">Tenant:</span>
+            <span className="font-semibold text-slate-800 truncate">{tenantLabel}</span>
           </span>
         ) : null}
         {lokasiLabel ? (
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 min-w-0 max-w-full">
             <MapPin className="w-4 h-4 text-orange-600 shrink-0" />
-            <span className="text-slate-500">Lokasi:</span>
-            <span className="font-semibold text-slate-800">{lokasiLabel}</span>
+            <span className="text-slate-500 shrink-0">Lokasi:</span>
+            <span className="font-semibold text-slate-800 truncate">{lokasiLabel}</span>
           </span>
         ) : null}
       </CardContent>
