@@ -6,6 +6,15 @@
  * Retur dicatat per titik (qtyDikembalikan), bukan status dokumen global.
  * W2-2: APPROVED→PROCESSING posts FG OUT + FEFO when linked HSL has FG stock;
  * FOOD_TRAY-only (no FG on HSL) tetap tanpa mutasi stok.
+ *
+ * --- Inventory Dispatch Document (mental model, Sprint 4 STEP 1) ---
+ * docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md: dokumen ini sesungguhnya dua konsep
+ * yang tercampur. Header + lines[] (DistributionLine) + fefoConsume[]/fefoRestore[] =
+ * Dispatch (barang keluar gudang — tetap domain Inventory, dipakai 3 script FEFO yang
+ * sudah diverifikasi HANYA menyentuh field-field ini). loadings[]/armadas[] (rute,
+ * kendaraan, jam drop) = Delivery (domain Logistics, belum diekstrak).
+ * Historical collection name: distribution_orders (belum di-rename — rename tipe/collection
+ * adalah langkah terpisah, menunggu tim nyaman dengan mental model ini, bukan otomatis).
  */
 
 /** Alasan blok create DST dari RPN (HSL sudah ada / DST PLAN masih aktif). */
