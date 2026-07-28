@@ -12,9 +12,7 @@ import {
 } from '@/lib/food-production/production-batch';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
-import { TEMPERATURE_LOGS_COLLECTION, type TemperatureLogDoc } from '@/lib/food-production/temperature-log';
-import { QC_RESULTS_COLLECTION, type QcResultDoc } from '@/lib/food-production/qc';
-import { HACCP_RESULTS_COLLECTION, type HaccpResultDoc } from '@/lib/food-production/haccp';
+import { getBatchAssuranceTrail } from '@/lib/kitchen-assurance';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
 import {
@@ -150,71 +148,19 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
       }
     }
 
-    const tempLogs = await db.collection(TEMPERATURE_LOGS_COLLECTION)
-      .find(withTenantFilter(scopeAuth, { productionBatchId: batchId }))
-      .sort({ recordedAt: 1 })
-      .limit(200)
-      .toArray() as unknown as TemperatureLogDoc[];
-    for (const t of tempLogs) {
-      events.push({
-        at: t.recordedAt instanceof Date ? t.recordedAt.toISOString() : String(t.tanggal),
-        eventType: 'TEMP_LOG',
-        entityType: 'temperature_log',
-        entityId: t.id,
-        refNo: t.stage,
-        summary: `Suhu ${t.stage} ${t.suhuC}°C`,
-        statusOrAlert: t.alertStatus,
-      });
-    }
-
-    const qcFilter: Record<string, unknown> = {};
-    if (batch.productionPlanId) qcFilter.productionPlanId = batch.productionPlanId;
-    const qcList = qcFilter.productionPlanId
-      ? await db.collection(QC_RESULTS_COLLECTION)
-        .find(withTenantFilter(scopeAuth, qcFilter))
-        .sort({ createdAt: 1 })
-        .limit(100)
-        .toArray() as unknown as QcResultDoc[]
-      : [];
-    for (const q of qcList) {
-      events.push({
-        at: q.createdAt instanceof Date ? q.createdAt.toISOString() : String(q.tanggal),
-        eventType: 'QC',
-        entityType: 'qc_result',
-        entityId: q.id,
-        refNo: q.noDokumen,
-        summary: `QC ${q.noDokumen} (${q.templateKode || q.category})`,
-        statusOrAlert: q.status,
-      });
-    }
-
-    const haccpList = await db.collection(HACCP_RESULTS_COLLECTION)
-      .find(withTenantFilter(scopeAuth, { productionBatchId: batchId }))
-      .sort({ createdAt: 1 })
-      .limit(100)
-      .toArray() as unknown as HaccpResultDoc[];
-    for (const h of haccpList) {
-      const firstPhoto = (h.evidenceUrls || [])[0];
-      events.push({
-        at: h.createdAt instanceof Date ? h.createdAt.toISOString() : String(h.tanggal),
-        eventType: 'HACCP',
-        entityType: 'haccp_result',
-        entityId: h.id,
-        refNo: h.noDokumen,
-        summary: `HACCP ${h.noDokumen} (${h.templateKode || h.category}) · foto ${h.summary?.photoCount || 0}`,
-        statusOrAlert: h.status,
-        evidenceUrl: firstPhoto,
-        userName: h.createdByName,
-      });
-    }
+    // Kitchen Assurance boundary — production-batches.ts no longer queries
+    // qc_results / temperature_logs / haccp_results directly (Sprint 2 Step 1).
+    const assurance = await getBatchAssuranceTrail(db, scopeAuth, {
+      productionBatchId: batchId,
+      productionPlanId: batch.productionPlanId,
+    });
+    events.push(...assurance.events);
 
     const entityIds = [
       batch.id,
       batch.productionPlanId,
       batch.productionResultId,
-      ...haccpList.map((h) => h.id),
-      ...qcList.map((q) => q.id),
-      ...tempLogs.map((t) => t.id),
+      ...assurance.entityIds,
     ].filter(Boolean);
 
     const auditRows = await db.collection('audit_log')
