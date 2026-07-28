@@ -7,7 +7,7 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   DISTRIBUTION_ORDERS_COLLECTION,
-  type DistributionOrderDoc,
+  type DispatchDoc,
 } from '@/lib/food-production/distribution';
 
 export const DIST_RETURN_FEFO_SHORTFALL_REPORTS_COLLECTION = 'dist_return_fefo_shortfall_reports';
@@ -38,7 +38,7 @@ export type DistReturnFefoShortfallReport = {
 };
 
 function isRestoreShortfallLine(
-  row: NonNullable<DistributionOrderDoc['fefoRestore']>[number],
+  row: NonNullable<DispatchDoc['fefoRestore']>[number],
 ): boolean {
   return Number(row.shortfall || 0) > 0.001;
 }
@@ -61,7 +61,7 @@ export async function detectDistReturnFefoShortfalls(
     })
     .sort({ updatedAt: -1 })
     .limit(500)
-    .toArray()) as unknown as DistributionOrderDoc[];
+    .toArray()) as unknown as DispatchDoc[];
 
   const mismatches: DistReturnFefoShortfallMismatch[] = [];
   const orderIds = new Set<string>();

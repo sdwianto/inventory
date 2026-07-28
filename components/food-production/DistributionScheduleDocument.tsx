@@ -7,7 +7,7 @@ import {
   resolveDistLoadings,
   type DistributionArmada,
   type DistributionLoading,
-  type DistributionStatus,
+  type DispatchStatus,
 } from '@/lib/food-production/distribution';
 import {
   KATEGORI_PORSI_OPTIONS,
@@ -24,7 +24,7 @@ export type DistSchedulePrintDoc = {
   productionPlanNo?: string;
   productionResultNo?: string;
   kitchenNama?: string;
-  status: DistributionStatus;
+  status: DispatchStatus;
   catatan?: string;
   loadings?: DistributionLoading[] | null;
   armadas?: DistributionArmada[] | null;

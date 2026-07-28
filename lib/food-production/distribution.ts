@@ -9,7 +9,7 @@
  *
  * --- Inventory Dispatch Document (mental model, Sprint 4 STEP 1) ---
  * docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md: dokumen ini sesungguhnya dua konsep
- * yang tercampur. Header + lines[] (DistributionLine) + fefoConsume[]/fefoRestore[] =
+ * yang tercampur. Header + lines[] (DispatchLine) + fefoConsume[]/fefoRestore[] =
  * Dispatch (barang keluar gudang — tetap domain Inventory, dipakai 3 script FEFO yang
  * sudah diverifikasi HANYA menyentuh field-field ini). loadings[]/armadas[] (rute,
  * kendaraan, jam drop) = Delivery (domain Logistics, belum diekstrak).
@@ -54,10 +54,10 @@ export const DISTRIBUTION_ORDERS_COLLECTION = 'distribution_orders';
 export const FOOD_TRAY_ID = 'FOOD_TRAY';
 export const FOOD_TRAY_LABEL = 'Food Tray';
 
-export type DistributionSourceType = 'PLAN' | 'RESULT';
-export type DistributionStatus = FpDocStatus;
+export type DispatchSourceType = 'PLAN' | 'RESULT';
+export type DispatchStatus = FpDocStatus;
 
-export interface DistributionLine {
+export interface DispatchLine {
   servicePointId: string;
   servicePointKode?: string;
   servicePointNama?: string;
@@ -138,7 +138,7 @@ export interface DistributionLoading {
   servicePointCount: number;
 }
 
-export interface DistributionOrderDoc {
+export interface DispatchDoc {
   id: string;
   tenantId: string;
   /** Kosong sampai Terjadwal — nomor DST via nextFpDocNumber. */
@@ -146,17 +146,17 @@ export interface DistributionOrderDoc {
   tanggal: string;
   kitchenId: string;
   kitchenNama?: string;
-  sourceType: DistributionSourceType;
+  sourceType: DispatchSourceType;
   productionPlanId?: string;
   productionPlanNo?: string;
   productionResultId?: string;
   productionResultNo?: string;
-  lines: DistributionLine[];
+  lines: DispatchLine[];
   /** Jadwal lapangan: gelombang loading → armada → rute jam makan. */
   loadings?: DistributionLoading[];
   /** @deprecated legacy — dipakai bila loadings kosong (1 loading default). */
   armadas?: DistributionArmada[];
-  status: DistributionStatus;
+  status: DispatchStatus;
   history: DocHistoryEntry[];
   summary: {
     lineCount: number;
@@ -210,7 +210,7 @@ export const DIST_STATUS_TRANSITIONS: Record<string, string[]> = {
   COMPLETED: [],
 };
 
-export const DIST_STATUS_LABELS: Record<DistributionStatus, string> = {
+export const DIST_STATUS_LABELS: Record<DispatchStatus, string> = {
   DRAFT: 'Draft',
   SUBMITTED: 'Draft',
   APPROVED: 'Terjadwal',
@@ -219,21 +219,21 @@ export const DIST_STATUS_LABELS: Record<DistributionStatus, string> = {
   CANCELLED: 'Dibatalkan',
 };
 
-export const DIST_UI_STATUS_NEXT: Partial<Record<DistributionStatus, DistributionStatus>> = {
+export const DIST_UI_STATUS_NEXT: Partial<Record<DispatchStatus, DispatchStatus>> = {
   DRAFT: 'APPROVED',
   SUBMITTED: 'APPROVED',
   APPROVED: 'PROCESSING',
   PROCESSING: 'COMPLETED',
 };
 
-export const DIST_UI_STATUS_NEXT_LABEL: Partial<Record<DistributionStatus, string>> = {
+export const DIST_UI_STATUS_NEXT_LABEL: Partial<Record<DispatchStatus, string>> = {
   DRAFT: 'Jadwalkan',
   SUBMITTED: 'Jadwalkan',
   APPROVED: 'Dikirim',
   PROCESSING: 'Selesaikan titik',
 };
 
-export const DIST_STATUS_BADGE: Record<DistributionStatus, string> = {
+export const DIST_STATUS_BADGE: Record<DispatchStatus, string> = {
   DRAFT: 'bg-slate-100 text-slate-700 border-slate-300',
   SUBMITTED: 'bg-slate-100 text-slate-700 border-slate-300',
   APPROVED: 'bg-emerald-100 text-emerald-800 border-emerald-300',
@@ -282,7 +282,7 @@ export function canPromoteDistToScheduled(input: {
 }
 
 /** Titik sudah diselesaikan bila diterima+kembali menutup qty dikirim. */
-export function isDistLineSettled(line: DistributionLine): boolean {
+export function isDistLineSettled(line: DispatchLine): boolean {
   if (line.qtyDiterima == null && line.qtyDikembalikan == null) return false;
   const sent = roundQty(Number(line.qtyDikirim ?? line.qtyPorsi) || 0);
   const recv = roundQty(Number(line.qtyDiterima) || 0);
@@ -290,12 +290,12 @@ export function isDistLineSettled(line: DistributionLine): boolean {
   return Math.abs(roundQty(recv + ret) - sent) < 0.0001;
 }
 
-export function allDistLinesSettled(lines: DistributionLine[]): boolean {
+export function allDistLinesSettled(lines: DispatchLine[]): boolean {
   return (lines || []).length > 0 && (lines || []).every(isDistLineSettled);
 }
 
 export function summarizeDistLines(
-  lines: DistributionLine[],
+  lines: DispatchLine[],
   opts?: { armadas?: DistributionArmada[]; loadings?: DistributionLoading[] },
 ) {
   const list = lines || [];
@@ -472,7 +472,7 @@ export type DistLoadingInput = {
  */
 export function buildDistributionLoadings(input: {
   loadings: DistLoadingInput[];
-  lines: DistributionLine[];
+  lines: DispatchLine[];
   /** Master jam pengiriman per servicePointId (fallback bila stopDrops tidak dikirim). */
   dropsByServicePointId?: Record<string, Array<{
     dropId: string;
@@ -481,12 +481,12 @@ export function buildDistributionLoadings(input: {
     qtyHint?: number;
     qtyPorsi?: number;
   }>>;
-}): { loadings: DistributionLoading[]; armadas: DistributionArmada[]; lines: DistributionLine[] } | { error: string } {
+}): { loadings: DistributionLoading[]; armadas: DistributionArmada[]; lines: DispatchLine[] } | { error: string } {
   const rawLoadings = input.loadings || [];
   if (!rawLoadings.length) return { error: 'Minimal satu gelombang loading wajib' };
 
   const qtyBySp = new Map<string, number>();
-  const metaBySp = new Map<string, DistributionLine>();
+  const metaBySp = new Map<string, DispatchLine>();
   for (const line of input.lines || []) {
     const id = String(line.servicePointId || '').trim();
     if (!id) continue;
@@ -644,8 +644,8 @@ export function buildDistributionLoadings(input: {
 /** Legacy helper — wrap ke satu loading default. */
 export function buildDistributionArmadas(input: {
   assignments: DistLoadingArmadaInput[];
-  lines: DistributionLine[];
-}): { armadas: DistributionArmada[]; lines: DistributionLine[] } | { error: string } {
+  lines: DispatchLine[];
+}): { armadas: DistributionArmada[]; lines: DispatchLine[] } | { error: string } {
   const built = buildDistributionLoadings({
     loadings: [{
       urutan: 1,
@@ -668,9 +668,9 @@ function optionalNonNegQty(raw: unknown): number | undefined {
   return Math.round(n);
 }
 
-export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: string } {
+export function normalizeDistLines(raw: unknown): DispatchLine[] | { error: string } {
   if (!Array.isArray(raw) || !raw.length) return { error: 'Minimal satu baris distribusi' };
-  const out: DistributionLine[] = [];
+  const out: DispatchLine[] = [];
   const seen = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
@@ -730,7 +730,7 @@ export function normalizeDistLines(raw: unknown): DistributionLine[] | { error: 
 
 /** Apply qty dikirim per line (status → Dikirim). */
 export function applyDistLineActuals(
-  lines: DistributionLine[],
+  lines: DispatchLine[],
   toStatus: string,
   actuals?: Array<{
     servicePointId: string;
@@ -740,7 +740,7 @@ export function applyDistLineActuals(
     qty: number;
     notes?: string;
   }>,
-): DistributionLine[] | { error: string } {
+): DispatchLine[] | { error: string } {
   if (toStatus === 'COMPLETED') {
     return { error: 'Gunakan settle per titik (diterima + dikembalikan) untuk menyelesaikan distribusi' };
   }
@@ -775,7 +775,7 @@ export function applyDistLineActuals(
  * Selesaikan per titik: isi qtyDiterima + qtyDikembalikan (jumlah harus = qtyDikirim).
  */
 export function applyDistSettleLines(
-  lines: DistributionLine[],
+  lines: DispatchLine[],
   settles?: Array<{
     servicePointId: string;
     menuId?: string;
@@ -785,7 +785,7 @@ export function applyDistSettleLines(
     qtyDikembalikan: number;
     notes?: string;
   }>,
-): DistributionLine[] | { error: string } {
+): DispatchLine[] | { error: string } {
   const byKey = new Map<string, {
     qtyDiterima: number;
     qtyDikembalikan: number;
@@ -810,7 +810,7 @@ export function applyDistSettleLines(
     });
   }
 
-  const out: DistributionLine[] = [];
+  const out: DispatchLine[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const key = `${line.servicePointId}|${distLineKey(line)}`;
@@ -843,7 +843,7 @@ export function applyDistSettleLines(
 }
 
 /** Movement qty for a status step (sum of relevant actual field). */
-export function movementQtyForStatus(lines: DistributionLine[], toStatus: string): number {
+export function movementQtyForStatus(lines: DispatchLine[], toStatus: string): number {
   if (toStatus === 'PROCESSING') {
     return roundQty(lines.reduce((s, l) => s + (Number(l.qtyDikirim ?? l.qtyPorsi) || 0), 0));
   }
@@ -900,12 +900,12 @@ export function allocatePorsiAcrossPoints(input: {
     drops?: Array<{ jamKirim?: string }>;
     porsiByKategori?: ServicePointPorsiByKategori;
   }>;
-}): DistributionLine[] | { error: string } {
+}): DispatchLine[] | { error: string } {
   if (!input.items.length) return { error: 'Tidak ada menu/hasil untuk dialokasikan' };
   if (!input.servicePoints.length) return { error: 'Pilih minimal satu titik layanan' };
 
   const points = input.servicePoints;
-  const out: DistributionLine[] = [];
+  const out: DispatchLine[] = [];
 
   for (const item of input.items) {
     const total = Math.round(Number(item.qtyPorsi) || 0);
@@ -986,7 +986,7 @@ export function remainingSourceItems(
     finishedGoodNama?: string;
     qtyPorsi: number;
   }>,
-  existingConsumedLines?: DistributionLine[],
+  existingConsumedLines?: DispatchLine[],
 ): Array<{
   menuId?: string;
   menuKode?: string;
@@ -1050,9 +1050,9 @@ export function assertDistQtyWithinSource(input: {
     recipeId?: string;
     qtyPorsi: number;
   }>;
-  newLines: DistributionLine[];
+  newLines: DispatchLine[];
   /** Non-CANCELLED lines already allocated (open + completed). */
-  existingConsumedLines?: DistributionLine[];
+  existingConsumedLines?: DispatchLine[];
 }): string | null {
   if (!input.sourceItems.length) {
     return 'Sumber alokasi tidak ditemukan';
@@ -1065,7 +1065,7 @@ export function assertDistQtyWithinSource(input: {
   }
 
   const used = new Map<string, number>();
-  const bump = (lines: DistributionLine[]) => {
+  const bump = (lines: DispatchLine[]) => {
     for (const l of lines) {
       const key = distLineKey(l);
       used.set(key, roundQty((used.get(key) || 0) + (Number(l.qtyPorsi) || 0)));

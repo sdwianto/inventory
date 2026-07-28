@@ -2,7 +2,7 @@
  * W2-2 / W2-3 — FG ship & return needs for DST (Food Tray lines; FG on linked HSL).
  */
 
-import { FOOD_TRAY_ID, type DistributionLine } from '@/lib/food-production/distribution';
+import { FOOD_TRAY_ID, type DispatchLine } from '@/lib/food-production/distribution';
 import { roundQty } from '@/lib/food-production/material-requirement';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 
@@ -25,7 +25,7 @@ export type DistFgShipNeed = {
   needQty: number;
 };
 
-function trayQtyFromDistLines(lines: DistributionLine[]): number {
+function trayQtyFromDistLines(lines: DispatchLine[]): number {
   return roundQty(
     (lines || []).reduce((s, l) => {
       const shipped = l.qtyDikirim != null ? Number(l.qtyDikirim) : Number(l.qtyPorsi);
@@ -78,7 +78,7 @@ export function hslFgStockLines(lines: HslFgLine[]): Array<{
  * Ratio clamped to [0, 1]. Full ship → needQty = hslQty.
  */
 export function computeDistFgShipNeeds(input: {
-  distLines: DistributionLine[];
+  distLines: DispatchLine[];
   hslLines: HslFgLine[];
 }): DistFgShipNeed[] {
   const fg = hslFgStockLines(input.hslLines);
@@ -99,7 +99,7 @@ export function computeDistFgShipNeeds(input: {
   })).filter((r) => r.needQty > 0);
 }
 
-function trayReturnQtyFromDistLines(lines: DistributionLine[]): number {
+function trayReturnQtyFromDistLines(lines: DispatchLine[]): number {
   return roundQty(
     (lines || []).reduce((s, l) => {
       const ret = Number(l.qtyDikembalikan) || 0;
@@ -113,7 +113,7 @@ function trayReturnQtyFromDistLines(lines: DistributionLine[]): number {
  * Caps each FG at shipped needQty when `shippedByStok` provided.
  */
 export function computeDistFgReturnNeeds(input: {
-  distLines: DistributionLine[];
+  distLines: DispatchLine[];
   hslLines: HslFgLine[];
   /** Optional cap from W2-2 fefoConsume.needQty per stokId. */
   shippedByStok?: Record<string, number>;

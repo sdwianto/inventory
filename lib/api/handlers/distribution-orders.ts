@@ -30,9 +30,9 @@ import {
   planDistCreateBlockedReason,
   FOOD_TRAY_ID,
   FOOD_TRAY_LABEL,
-  type DistributionOrderDoc,
-  type DistributionStatus,
-  type DistributionLine,
+  type DispatchDoc,
+  type DispatchStatus,
+  type DispatchLine,
   type DistributionArmada,
   type DistributionLoading,
   type DistLoadingInput,
@@ -183,7 +183,7 @@ async function loadConsumedDistLinesForSource(
   scopeAuth: ScopeAuth,
   source: { productionPlanId?: string; productionResultId?: string },
   excludeId?: string,
-): Promise<DistributionLine[]> {
+): Promise<DispatchLine[]> {
   const sourceFilter: Record<string, unknown> = source.productionResultId
     ? { productionResultId: source.productionResultId }
     : source.productionPlanId
@@ -200,14 +200,14 @@ async function loadConsumedDistLinesForSource(
   const docs = await db.collection(DISTRIBUTION_ORDERS_COLLECTION)
     .find(withTenantFilter(scopeAuth, filter))
     .project({ lines: 1 })
-    .toArray() as unknown as Pick<DistributionOrderDoc, 'lines'>[];
+    .toArray() as unknown as Pick<DispatchDoc, 'lines'>[];
   return docs.flatMap((d) => d.lines || []);
 }
 
 async function assertServicePointsForKitchen(
   db: HandlerContext['db'],
   scopeAuth: ScopeAuth,
-  lines: DistributionLine[],
+  lines: DispatchLine[],
   kitchenId: string,
 ): Promise<string | null> {
   const ids = [...new Set(lines.map((l) => l.servicePointId).filter(Boolean))];
@@ -386,7 +386,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       kitchenNama = kitchen.nama;
     }
 
-    let lines: DistributionLine[];
+    let lines: DispatchLine[];
     // Explicit lines take precedence over allocate / servicePointIds.
     if (Array.isArray(distBody.lines)) {
       const normalized = normalizeDistLines(distBody.lines);
@@ -633,7 +633,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       userName: actor.userName,
       note: `${draftNote}${createNote ? ` · ${createNote}` : ''}`,
     });
-    let status: DistributionStatus = 'DRAFT';
+    let status: DispatchStatus = 'DRAFT';
     if (scheduleOnCreate && noDokumen) {
       history = appendDocHistory(history, {
         at: now,
@@ -646,7 +646,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       status = 'APPROVED';
     }
 
-    const doc: DistributionOrderDoc = {
+    const doc: DispatchDoc = {
       id: uuidv4(),
       tenantId,
       ...(noDokumen ? { noDokumen } : {}),
@@ -729,7 +729,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     const id = path[1];
     const existing = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
-    ) as DistributionOrderDoc | null;
+    ) as DispatchDoc | null;
     if (!existing) return err('Distribusi tidak ditemukan', 404);
     if (!isDistEditable(existing.status)) return err('Dokumen tidak dapat diubah', 400);
 
@@ -822,12 +822,12 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     if (!scopeAuth) return err('Scope tidak valid', 400);
 
     const id = path[1];
-    const toStatus = String(distBody.status || '').trim() as DistributionStatus;
+    const toStatus = String(distBody.status || '').trim() as DispatchStatus;
     if (!toStatus || !KNOWN_STATUSES.has(toStatus)) return err('status tidak valid', 400);
 
     const existing = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
-    ) as DistributionOrderDoc | null;
+    ) as DispatchDoc | null;
     if (!existing) return err('Distribusi tidak ditemukan', 404);
     if (existing.status === toStatus) {
       return ok(clean(existing as unknown as Record<string, unknown>));
@@ -913,7 +913,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
             : 'Status distribusi diperbarui';
 
     const rawActuals = Array.isArray(distBody.lineActuals) ? distBody.lineActuals : [];
-    let nextLines: DistributionLine[];
+    let nextLines: DispatchLine[];
     if (toStatus === 'APPROVED' || toStatus === 'CANCELLED') {
       nextLines = existing.lines || [];
     } else if (toStatus === 'COMPLETED') {
@@ -1378,7 +1378,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
 
     const existing = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
-    ) as DistributionOrderDoc | null;
+    ) as DispatchDoc | null;
     if (!existing) return err('Distribusi tidak ditemukan', 404);
     if (existing.status === 'COMPLETED') return err('Distribusi selesai tidak dapat dibatalkan', 400);
     if (existing.status === 'PROCESSING') {

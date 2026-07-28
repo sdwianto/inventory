@@ -33,7 +33,7 @@ import {
   hasDistDokumenNo,
   loadingLabel,
   resolveDistLoadings,
-  type DistributionStatus,
+  type DispatchStatus,
   type DistributionArmada,
   type DistributionLoading,
 } from '@/lib/food-production/distribution';
@@ -205,7 +205,7 @@ interface DistRow {
   productionResultId?: string;
   productionResultNo?: string;
   kitchenNama?: string;
-  status: DistributionStatus;
+  status: DispatchStatus;
   lines?: DistLine[];
   loadings?: DistributionLoading[];
   armadas?: DistributionArmada[];
@@ -267,7 +267,7 @@ function DistributionPageContent() {
   const [detail, setDetail] = useState<DistRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [printRow, setPrintRow] = useState<DistRow | null>(null);
-  const [statusTarget, setStatusTarget] = useState<{ row: DistRow; next: DistributionStatus } | null>(null);
+  const [statusTarget, setStatusTarget] = useState<{ row: DistRow; next: DispatchStatus } | null>(null);
   const [statusPhotos, setStatusPhotos] = useState<string[]>([]);
   const [statusLineQtys, setStatusLineQtys] = useState<StatusLineQty[]>([]);
   const [statusSaving, setStatusSaving] = useState(false);
@@ -448,7 +448,7 @@ function DistributionPageContent() {
     }
   }
 
-  function defaultQtyForStatus(line: DistLine, next: DistributionStatus): number {
+  function defaultQtyForStatus(line: DistLine, next: DispatchStatus): number {
     if (next === 'PROCESSING') {
       return Math.round(Number(line.qtyDikirim ?? line.qtyPorsi) || 0);
     }
@@ -458,7 +458,7 @@ function DistributionPageContent() {
     return Math.round(Number(line.qtyDikembalikan ?? line.qtyDiterima ?? line.qtyDikirim ?? line.qtyPorsi) || 0);
   }
 
-  function buildStatusLineQtys(row: DistRow, next: DistributionStatus): StatusLineQty[] {
+  function buildStatusLineQtys(row: DistRow, next: DispatchStatus): StatusLineQty[] {
     return (row.lines || []).map((line, idx) => {
       const qtyDikirim = Math.round(Number(line.qtyDikirim ?? line.qtyPorsi) || 0);
       const qtyDiterima = next === 'COMPLETED'
@@ -496,7 +496,7 @@ function DistributionPageContent() {
     });
   }
 
-  async function openStatusDialog(row: DistRow, next: DistributionStatus) {
+  async function openStatusDialog(row: DistRow, next: DispatchStatus) {
     setStatusPhotos([]);
     setScheduleResultId(row.productionResultId || '');
     let full = row;
@@ -825,7 +825,7 @@ function DistributionPageContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal');
       const displayNo = distDocDisplayNo(data);
-      const statusLabel = DIST_STATUS_LABELS[data.status as DistributionStatus] || data.status;
+      const statusLabel = DIST_STATUS_LABELS[data.status as DispatchStatus] || data.status;
       toast.success(
         `${displayNo} · ${statusLabel} · ${data.summary?.qtyPorsiTotal || 0} porsi · `
         + `${data.summary?.loadingCount || drafts.length} loading · `
@@ -1399,9 +1399,9 @@ function DistributionPageContent() {
                           </span>
                           <span>
                             {h.fromStatus
-                              ? `${DIST_STATUS_LABELS[h.fromStatus as DistributionStatus] || h.fromStatus} → `
+                              ? `${DIST_STATUS_LABELS[h.fromStatus as DispatchStatus] || h.fromStatus} → `
                               : ''}
-                            {DIST_STATUS_LABELS[h.toStatus as DistributionStatus] || h.toStatus || '—'}
+                            {DIST_STATUS_LABELS[h.toStatus as DispatchStatus] || h.toStatus || '—'}
                             {h.userName ? ` · ${h.userName}` : ''}
                             {h.movementQtyPorsi != null ? ` · ${h.movementQtyPorsi} porsi` : ''}
                             {h.note ? ` — ${h.note}` : ''}
@@ -1448,7 +1448,7 @@ function DistributionPageContent() {
                     variant="outline"
                     onClick={() => void openStatusDialog(
                       detail,
-                      DIST_UI_STATUS_NEXT[detail.status] as DistributionStatus,
+                      DIST_UI_STATUS_NEXT[detail.status] as DispatchStatus,
                     )}
                   >
                     {DIST_UI_STATUS_NEXT_LABEL[detail.status] || 'Lanjut'}

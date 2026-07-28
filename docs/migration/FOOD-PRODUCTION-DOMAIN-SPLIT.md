@@ -145,23 +145,54 @@ Isi: `lib/food-production/distribution.ts` (komentar mental model).
 
 ---
 
-## Sprint 5 — Dispatch/Logistics Rename & Extraction *(belum dimulai — menunggu kesiapan tim, bukan blocker teknis)*
+## Sprint 5 — Dispatch/Logistics Rename & Extraction
 
-Prasyarat sebelum sprint ini dimulai: mental model "Distribution = Inventory Dispatch" (Sprint 4) sudah jadi acuan bersama tim, bukan sekadar komentar di kode.
+**Gerbang dibuka**: prasyarat "mental model sudah jadi acuan tim" dinyatakan terpenuhi oleh Principal. Dikerjakan bertahap 5.1 → 5.2 → 5.3 → 5.4, masing-masing commit terpisah dengan satu tujuan, bukan satu refactor besar.
 
-**Distribution rename** (setelah prasyarat terpenuhi):
-- [ ] Rename tipe (`DistributionOrderDoc`→`DispatchDoc`, dst.) — commit **terpisah**, isinya rename saja (tidak dicampur logic change), supaya mudah direview
-- [ ] Rename collection Mongo (`distribution_orders`→...) — **paling akhir**, terpisah lagi, dengan migration script sendiri
+### Sprint 5.1 — Rename language — ✅ DONE
 
-**Service Point — masih coupling terbesar, jangan dipindah sebelum jelas domainnya.** Service Point menyentuh Distribution, Kitchen, Production, Portal, Planning, Delivery, Reporting, kemungkinan Dashboard — sebelum dipindah harus jelas dulu: Service Point itu konsep Delivery, Kitchen, atau Distribution? Kalau belum yakin, jangan dipindah.
+Target: selaraskan ubiquitous language, **tanpa** pindah folder, **tanpa** ubah behavior.
 
-Baru setelah domain Service Point jelas dan rename Distribution stabil:
-- [ ] Ekstrak `DistributionLoading`/`DistributionArmada`/`DistributionArmadaStop`/`DistributionStopDrop` → `lib/logistics/delivery.ts`, mereferensikan `dispatchId` (FK), tidak mewarisi struktur
-- [ ] Pindahkan Service Point → Logistics (atau domain lain yang sudah dikonfirmasi jelas)
-- [ ] Pindahkan role `DRIVER` → role-set Logistics
-- [ ] Pindahkan `DistributionScheduleDocument.tsx` → Logistics
+Tipe yang di-rename (envelope dokumen — genuinely domain Dispatch/Inventory per mental model Sprint 4):
+- `DistributionOrderDoc` → `DispatchDoc`
+- `DistributionSourceType` → `DispatchSourceType`
+- `DistributionStatus` → `DispatchStatus`
+- `DistributionLine` → `DispatchLine`
+
+**Sengaja TIDAK di-rename** (nested types — domain Delivery/Logistics per mental model, menunggu ekstraksi fisik di 5.2 baru dapat nama yang pas di konteks Logistics, bukan "Dispatch*" yang salah domain): `DistributionLoading`, `DistributionArmada`, `DistributionArmadaStop`, `DistributionStopDrop`, `buildDistributionLoadings`, `buildDistributionArmadas`. Juga **tidak** disentuh: nama file (`distribution.ts`, sesuai "tidak ada perpindahan folder"), dan `DISTRIBUTION_ORDERS_COLLECTION`/collection Mongo `distribution_orders` (rename storage adalah langkah terpisah paling akhir, di luar Sprint 5.1).
+
+- [x] Katalog lengkap 9 export bernama `Distribution*` di `distribution.ts` — 4 di-rename, 5 dibiarkan (lihat pembagian di atas)
+- [x] 7 file consumer diupdate: `lib/food-production/distribution.ts`, `dist-fefo-ship.ts`, `lib/api/dist-fefo-shortfall-reconcile.ts`, `lib/api/dist-return-fefo-shortfall-reconcile.ts`, `lib/api/handlers/distribution-orders.ts`, `app/food-production/distribution/page.tsx`, `components/food-production/DistributionScheduleDocument.tsx`
+- [x] Verifikasi: sweep repo-wide untuk 4 nama lama mengonfirmasi nol residu; `tsc --noEmit` clean (0 error); 41/41 test terkait hijau (`w2-2`/`w2-3`/`w2-14`-distribution-fefo, `food-production-enterprise-gate`, `food-production-phase5-sprint19`)
+- [x] Test files dicek terpisah — tidak ada test yang mengimpor tipe-tipe ini langsung (semua lewat runtime/collection), jadi tidak perlu diedit
+
+**Commit untuk Sprint 5.1** (rename saja, tidak dicampur logic change):
+```
+refactor(distribution): rename document envelope types to Dispatch (Sprint 5.1)
+```
+Isi: 7 file di atas.
+
+**Status Sprint 5.1**: ✅ DONE.
+
+### Sprint 5.2 — Logistics extraction *(belum dikerjakan)*
+
+- [ ] Ekstrak `DistributionLoading`/`DistributionArmada`/`DistributionArmadaStop`/`DistributionStopDrop` + `buildDistributionLoadings`/`buildDistributionArmadas` → `lib/logistics/delivery.ts`, dengan nama baru yang pas domain Logistics (mis. `DeliveryLoading`/`DeliveryArmadaAssignment`/dst. — diputuskan saat eksekusi)
+- [ ] Referensi ke `DispatchDoc` via `dispatchId` (FK), tidak mewarisi struktur
+- [ ] Masih **tanpa** menyentuh Service Point
+
+### Sprint 5.3 — Service Point assessment *(belum dikerjakan — review domain dulu, bukan otomatis implementasi)*
+
+Pertanyaan yang harus dijawab dulu: Service Point itu konsep **Kitchen**, **Delivery**, **Distribution/Dispatch**, **Planning**, atau **Shared Location**? Service Point menyentuh Distribution, Kitchen, Production, Portal, Planning, Delivery, Reporting, kemungkinan Dashboard — coupling dua arah yang sudah dikonfirmasi di dependency audit sebelumnya.
+
+- [ ] Review domain (bukan kode) — tentukan pemilik konseptual Service Point
+- [ ] **Hanya jika** hasil review = Logistics: pindahkan. Kalau belum jelas, **biarkan di tempatnya** — jangan pindah demi "merapikan struktur"
+
+### Sprint 5.4 — Role cleanup *(belum dikerjakan — setelah domain selesai)*
+
+- [ ] Pindahkan role `DRIVER` → role-set Logistics (mengikuti hasil 5.2/5.3, bukan mendahului)
+- [ ] Rapikan nav/permission mengikuti struktur akhir domain
 - [ ] Sederhanakan nav `Jadwal Pengiriman` jadi tampilan Dispatch murni (jumlah/tujuan/barang keluar) untuk operator
-- [ ] Regression check: pastikan 3 script FEFO tetap 100% di sisi Dispatch setelah split
+- [ ] Regression check final: pastikan 3 script FEFO tetap 100% di sisi Dispatch setelah seluruh split Sprint 5 selesai
 
 ---
 
