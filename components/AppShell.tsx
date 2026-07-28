@@ -15,8 +15,8 @@ import {
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
-  Eraser, Activity, Shield, ChefHat, Apple, BadgeCheck, LineChart, LayoutGrid, ClipboardList,
-  PackageOpen, KeyRound, Lightbulb, MapPinned, Thermometer, ShieldCheck, Car,
+  Eraser, Activity, Shield, ChefHat, Apple, LineChart, LayoutGrid, ClipboardList,
+  PackageOpen, KeyRound, MapPinned,
   ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -93,17 +93,17 @@ const NAV: NavEntry[] = [
       { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
       // Transfer Dapur disembunyikan — belum dipakai operasional (route/API tetap ada).
       { href: '/food-production/service-point', label: 'Titik Layanan', icon: MapPinned },
-      { href: '/food-production/armada', label: 'Armada', icon: Car },
+      // Armada disembunyikan — pindah ke domain Logistics (route/API tetap ada; docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 2).
       { href: '/food-production/distribution', label: 'Jadwal Pengiriman', icon: Truck },
-      { href: '/food-production/cold-chain', label: 'Cold Chain', icon: Thermometer },
-      { href: '/food-production/haccp', label: 'HACCP', icon: ShieldCheck },
+      // Cold Chain disembunyikan — pindah ke domain Kitchen Assurance (route/API tetap ada; migration plan Sprint 2).
+      // HACCP disembunyikan — pindah ke domain Kitchen Assurance (route/API tetap ada; migration plan Sprint 2).
       { href: '/food-production/batch', label: 'Batch & Expiry', icon: PackageOpen },
       { href: '/food-production/nutrition', label: 'Gizi (MBG)', icon: Apple },
       { href: '/food-production/cost', label: 'Biaya Pangan', icon: Calculator },
       { href: '/food-production/price-book', label: 'Price Book', icon: BookOpen },
-      { href: '/food-production/qc', label: 'Quality Control', icon: BadgeCheck },
-      { href: '/food-production/forecast', label: 'Forecast Bahan', icon: LineChart },
-      { href: '/food-production/recommendations', label: 'Rekomendasi', icon: Lightbulb },
+      // Quality Control disembunyikan — pindah ke domain Kitchen Assurance (route/API tetap ada; migration plan Sprint 2).
+      // Forecast Bahan disembunyikan — backend support saja, bukan menu operator (migration plan Sprint 1).
+      // Rekomendasi disembunyikan — backend support saja, bukan menu operator (migration plan Sprint 1).
       { href: '/food-production/dashboard', label: 'Dashboard FP', icon: LayoutGrid },
     ],
   },
@@ -157,13 +157,18 @@ const DEFAULT_EXPANDED: Record<string, boolean> = Object.fromEntries(
   NAV.filter((item): item is NavGroup => item.type === 'group').map((item) => [item.key, true]),
 );
 
-/** Master / Planning / Operation (+ QC dapur). */
+/**
+ * Master / Planning / Operation.
+ * Armada/Cold Chain/HACCP/QC sengaja TIDAK di sini — pindah ke domain Logistics/Kitchen Assurance
+ * (docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 1 STEP 0). Route/API-nya sendiri tetap ada,
+ * hanya tidak lagi termasuk akses default role operasional SPPG (GUDANG/SUPERVISOR via FP_OPS_ROUTES).
+ */
 const FP_OPS_ROUTES = [
   '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
   '/food-production/report', '/food-production/calendar',
-  '/food-production/service-point', '/food-production/armada', '/food-production/distribution', '/food-production/cold-chain',
-  '/food-production/haccp', '/food-production/batch', '/food-production/qc',
+  '/food-production/service-point', '/food-production/distribution',
+  '/food-production/batch',
 ] as const;
 
 /** Kitchen Assurance — ops band (ADR-002). */
