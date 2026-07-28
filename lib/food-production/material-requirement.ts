@@ -189,6 +189,16 @@ export function roundQty(n: number, digits = 4): number {
 }
 
 /**
+ * Qty belanja/pengadaan — selalu bilangan bulat ke atas (hindari pecahan di PO).
+ * Epsilon kecil supaya 80.0000001 dari float tidak jadi 81.
+ */
+export function ceilProcurementQty(n: number): number {
+  const q = Number(n) || 0;
+  if (!(q > 0)) return 0;
+  return Math.ceil(q - 1e-9);
+}
+
+/**
  * Gross ingredient need from one recipe scaled to recipe portions needed.
  * qty = line.qty * (recipePorsiNeeded / yieldQty) * (1 + waste%/100)
  */
@@ -330,9 +340,10 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
 
   const lines: MaterialRequirementLine[] = [...acc.entries()]
     .map(([productId, row]) => {
-      const qtyGross = roundQty(row.qtyGross);
+      // Gross/net pengadaan = bilangan bulat ke atas (satu kali di agregat produk).
+      const qtyGross = ceilProcurementQty(row.qtyGross);
       const qtyOnHand = roundQty(Number(onHandByProduct.get(productId) || 0));
-      const qtyNet = roundQty(Math.max(0, qtyGross - qtyOnHand));
+      const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand));
       return {
         productId,
         productKode: row.productKode,

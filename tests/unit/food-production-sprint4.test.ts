@@ -3,9 +3,11 @@ import {
   explodeMaterialRequirements,
   scaleRecipeIngredientQty,
   roundQty,
+  ceilProcurementQty,
   decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
 } from '@/lib/food-production/material-requirement';
+import { recipeIngredientNeeds } from '@/lib/food-production/rencana-kebutuhan';
 import { FP_DOC_PREFIX, FP_DOC_TYPES } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
 import type { RecipeDoc } from '@/lib/food-production/recipe';
@@ -19,6 +21,46 @@ describe('food-production sprint 4 — MRP', () => {
     // 200 porsi needed, yield 100 → 2 batches; line 5kg; waste 10% → 11
     expect(scaleRecipeIngredientQty(5, 200, 100, 10)).toBe(11);
     expect(roundQty(scaleRecipeIngredientQty(1, 50, 100, 0))).toBe(0.5);
+  });
+
+  it('ceils procurement qty (no fractional PO units)', () => {
+    expect(ceilProcurementQty(80.34)).toBe(81);
+    expect(ceilProcurementQty(16.068)).toBe(17);
+    expect(ceilProcurementQty(10)).toBe(10);
+    expect(ceilProcurementQty(0)).toBe(0);
+  });
+
+  it('recipeIngredientNeeds ceils total qty for rencana menu card', () => {
+    const lines = recipeIngredientNeeds({
+      recipe: {
+        yieldQty: 100,
+        wastePct: 0,
+        lines: [{
+          productId: 'abon',
+          productKode: 'B1',
+          productNama: 'Abon',
+          qty: 8.5,
+          qtyBesar: 8.5,
+          pctKecil: 70,
+          qtyKecil: 5.95,
+          satuan: 'PCS',
+        }],
+      },
+      menuTargetPorsi: 200,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: { PORSI_BESAR: 100, PORSI_KECIL: 100 },
+      bufferPct: 3,
+    });
+    expect(lines).toHaveLength(1);
+    // besar+kecil+buffer can be fractional; card qty must be integer ceil
+    expect(Number.isInteger(lines[0].qty)).toBe(true);
+    expect(lines[0].qty).toBe(ceilProcurementQty(
+      Number(lines[0].qtyBesarPart) + Number(lines[0].qtyKecilPart),
+    ));
+    expect(lines[0].qty).toBeGreaterThanOrEqual(
+      Number(lines[0].qtyBesarPart) + Number(lines[0].qtyKecilPart) - 1e-9,
+    );
   });
 
   it('explodes plan → menu → recipe → net vs stock', () => {
@@ -87,10 +129,10 @@ describe('food-production sprint 4 — MRP', () => {
     expect(beras?.qtyOnHand).toBe(15);
     expect(beras?.qtyNet).toBe(5);
     expect(beras?.shortage).toBe(true);
-    // garam 200/100 * 0.2 = 0.4
+    // garam 200/100 * 0.2 = 0.4 → ceil pengadaan = 1
     const garam = result.lines.find((l) => l.productId === 'garam');
-    expect(garam?.qtyGross).toBe(0.4);
-    expect(garam?.qtyNet).toBe(0.4);
+    expect(garam?.qtyGross).toBe(1);
+    expect(garam?.qtyNet).toBe(1);
     expect(result.summary.shortageCount).toBe(2);
     expect(result.summary.lineCount).toBe(2);
   });

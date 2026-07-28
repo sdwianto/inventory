@@ -7,6 +7,7 @@ import {
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
 import {
+  ceilProcurementQty,
   computeRecipeLineContributions,
   roundQty,
   scaleRecipeIngredientQty,
@@ -134,10 +135,13 @@ export function buildRencanaKebutuhanLines(input: {
     }
   }
 
-  const lines = [...acc.values()].sort((a, b) =>
-    String(a.productNama || a.productKode || a.productId)
-      .localeCompare(String(b.productNama || b.productKode || b.productId), 'id'),
-  );
+  const lines = [...acc.values()]
+    .map((line) => ({ ...line, qty: ceilProcurementQty(line.qty) }))
+    .filter((line) => line.qty > 0)
+    .sort((a, b) =>
+      String(a.productNama || a.productKode || a.productId)
+        .localeCompare(String(b.productNama || b.productKode || b.productId), 'id'),
+    );
   return { lines, errors: [...new Set(errors)] };
 }
 
@@ -188,7 +192,9 @@ export function recipeIngredientNeeds(input: {
         yieldQty,
         wastePct,
       ), bufferPct));
-      const qty = roundQty(qtyBesarPart + qtyKecilPart);
+      // Qty input rencana = bilangan bulat ke atas (pengadaan tidak pakai pecahan).
+      // Breakdown besar/kecil tetap pecahan untuk transparansi hitungan.
+      const qty = ceilProcurementQty(qtyBesarPart + qtyKecilPart);
       return {
         productId: rLine.productId,
         productKode: rLine.productKode,
