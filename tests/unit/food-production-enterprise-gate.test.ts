@@ -108,8 +108,6 @@ describe('food-production enterprise gate', () => {
     expect(src).toContain("/food-production/batch");
     expect(src).toContain("/food-production/service-point");
     expect(src).toContain("/food-production/distribution");
-    expect(src).toContain("/food-production/cold-chain");
-    expect(src).toContain("/food-production/haccp");
     expect(src).toContain("/food-production/price-book");
     expect(src).not.toContain("/food-production/mobile");
     expect(src).toContain("/utiliti/api-keys");
@@ -121,6 +119,21 @@ describe('food-production enterprise gate', () => {
     expect(gudangBlock).not.toContain('FP_MGMT_ROUTES');
     expect(gudangBlock).not.toContain('/food-production/recommendations');
     expect(gudangBlock).not.toContain('/food-production/price-book');
+  });
+
+  // docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 1 STEP 0 + Sprint 2 STEP 2:
+  // QC/Cold Chain/HACCP/Armada sengaja dikeluarkan dari FP_OPS_ROUTES/nav Food Production
+  // (pindah ke domain Kitchen Assurance / Logistics). Test lama yang menjaga keberadaan
+  // route-route ini di AppShell.tsx sudah tidak relevan — diganti test ini.
+  it('QC/Cold Chain/HACCP/Armada moved out of Food Production ops routes; Logistics group exists', () => {
+    const src = readFileSync(resolve(ROOT, 'components/AppShell.tsx'), 'utf8');
+    const fpOpsBlock = src.slice(src.indexOf('const FP_OPS_ROUTES'), src.indexOf('const KA_OPS_ROUTES'));
+    expect(fpOpsBlock).not.toContain("/food-production/qc'");
+    expect(fpOpsBlock).not.toContain("/food-production/cold-chain'");
+    expect(fpOpsBlock).not.toContain("/food-production/haccp'");
+    expect(fpOpsBlock).not.toContain("/food-production/armada'");
+    expect(src).toContain("key: 'logistics'");
+    expect(src).toContain("/logistics/armada");
   });
 
   it('management APIs require FP_MGMT_READ_ROLES', () => {

@@ -111,3 +111,20 @@ export async function getBatchAssuranceTrail(
 
   return { events, entityIds };
 }
+
+/** Same "open" lifecycle statuses used across Food Production docs (Plan/Issue/Result/QC). */
+const QC_OPEN_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'PROCESSING'];
+
+/**
+ * Count of QC results not yet closed — used by food-dashboard.ts's "openQc" KPI tile.
+ * Sprint 3 (docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md): second consumer moved off
+ * QC_RESULTS_COLLECTION onto the Kitchen Assurance boundary.
+ */
+export async function countOpenQcResults(
+  db: Db,
+  scopeAuth: AuthContext | null | undefined,
+): Promise<number> {
+  return db.collection(QC_RESULTS_COLLECTION).countDocuments(
+    withTenantFilter(scopeAuth, { status: { $in: QC_OPEN_STATUSES } }),
+  );
+}

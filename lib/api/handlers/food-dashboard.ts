@@ -17,7 +17,7 @@ import {
 } from '@/lib/food-production/production-plan';
 import { MATERIAL_ISSUES_COLLECTION, type MaterialIssueDoc } from '@/lib/food-production/material-issue';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
-import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
+import { countOpenQcResults } from '@/lib/kitchen-assurance';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
@@ -49,7 +49,7 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
       db.collection(PRODUCTION_PLANS_COLLECTION).countDocuments({ ...tf, status: 'PROCESSING' }),
       db.collection(MATERIAL_ISSUES_COLLECTION).countDocuments({ ...tf, status: { $in: OPEN } }),
       db.collection(PRODUCTION_RESULTS_COLLECTION).countDocuments({ ...tf, status: { $in: OPEN } }),
-      db.collection(QC_RESULTS_COLLECTION).countDocuments({ ...tf, status: { $in: OPEN } }),
+      countOpenQcResults(db, scopeAuth),
       db.collection('products').countDocuments({
         ...tf,
         aktif: { $ne: false },

@@ -1,4 +1,10 @@
-/** Daily portion targets by beneficiary category — acuan rencana produksi. */
+/**
+ * Daily portion targets by beneficiary category — acuan rencana produksi.
+ *
+ * Core submodule (confirmed docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 3):
+ * feeds directly into Production Plan / Material Requirement, part of the
+ * Procurement → Production → Dispatch flow. Not a candidate for extraction.
+ */
 
 import {
   KATEGORI_PORSI_OPTIONS,

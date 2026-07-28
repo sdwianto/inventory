@@ -95,13 +95,23 @@ Isi: `lib/logistics/armada.ts` (baru), `app/logistics/armada/page.tsx` (baru), h
 
 ---
 
-## Sprint 3 — Food Production Core Cleanup
+## Sprint 3 — Food Production Core Cleanup — ✅ DONE
 
-- [ ] Rapikan MRP embedded ke Plan (sudah begitu di UI — pastikan tidak ada jejak nav/dokumentasi yang menyiratkan halaman berdiri sendiri)
-- [ ] Konsolidasi `rencana-kebutuhan.ts` → `material-requirement.ts` (duplikasi logic explode resep)
-- [ ] `portion-target.ts` — dikonfirmasi tetap Core, didokumentasikan sebagai submodule resmi
-- [ ] Hapus stub kosong `app/food-production/mobile/{issue,qc,result}` (diklaim "DONE" ADR-001 Sprint 24, tidak ada `page.tsx`)
-- [ ] Dashboard: arahkan `food-dashboard.ts` (1 KPI QC) ke `getBatchAssuranceStatus()`/kontrak KA, bukan query `QC_RESULTS_COLLECTION` langsung
+- [x] **Rapikan MRP embedded ke Plan** — diverifikasi, sudah bersih. `app/food-production/mrp/page.tsx` tetap redirect murni ke `/food-production/plan`; sweep `grep "Kebutuhan Bahan"` di seluruh `app`/`components` tidak menemukan referensi standalone lain. Tidak ada perubahan kode, murni verifikasi.
+- [x] **`rencana-kebutuhan.ts` vs `material-requirement.ts`** — diinvestigasi, **tidak dikonsolidasi** (koreksi dari rencana awal). Bukan duplikasi murni: `rencana-kebutuhan.ts` mengagregasi **banyak Plan sekaligus** untuk preview/print (`buildRencanaKebutuhanLines(plans: [...])`), sedangkan `material-requirement.ts`'s `explodeMaterialRequirements()` bekerja per **satu Plan** untuk dokumen MRP resmi. Keduanya sudah pure function dan sudah berbagi helper level-bawah (`scaleRecipeIngredientQty`, `roundQty`). Konsolidasi yang aman berarti menulis ulang loop multi-plan agar memanggil `explodeMaterialRequirements()` per plan lalu digabung — refactor nyata, bukan sekadar hapus duplikasi, berisiko mengubah angka kebutuhan bahan. **Ditunda**, tetap tercatat sebagai technical debt "kerjakan kapan longgar" sesuai rencana awal — sengaja tidak dipaksakan di sesi ini.
+- [x] `portion-target.ts` — dikonfirmasi tetap Core, ditambahkan doc-comment header resmi di file (bukan hanya di dokumen migrasi)
+- [x] Hapus stub kosong `app/food-production/mobile/{issue,qc,result}` — dikonfirmasi ada test regresi (`food-production-phase5-sprint24.test.ts`) yang justru **menegaskan** file-file itu seharusnya sudah tidak ada; penghapusan folder kosong konsisten dengan intent yang sudah terdokumentasi, test tetap hijau (4/4) setelahnya
+- [x] Dashboard: `food-dashboard.ts` KPI `openQc` tidak lagi query `QC_RESULTS_COLLECTION` langsung — diganti `countOpenQcResults(db, scopeAuth)`, fungsi baru di `lib/kitchen-assurance/index.ts` (kontrak Sprint 2 Step 1 diperluas dengan consumer kedua)
+- [x] **Ditemukan & diperbaiki di luar rencana**: `tests/unit/food-production-enterprise-gate.test.ts` sudah **pecah sejak Sprint 1** (bukan dari Sprint 3) — test lama menjaga `/food-production/cold-chain`/`/food-production/haccp` tetap ada di `AppShell.tsx`, padahal Sprint 1 sengaja menghapusnya. Test diupdate untuk menjaga arsitektur baru (QC/Cold Chain/HACCP/Armada keluar dari `FP_OPS_ROUTES`, grup nav Logistics ada) alih-alih membatalkan migrasi
+- [x] Verifikasi: `tsc --noEmit` clean (0 error); seluruh 14 file test `food-production-*` hijau (termasuk yang diperbaiki); 12 test gagal lain (`w2-1`/`w2-4`/`w2-5`/`w2-7`/dll.) dikonfirmasi **tidak terkait** — `ReferenceError: crypto is not defined` di package `uuid`, masalah environment pre-existing
+
+**Commit terpisah untuk Sprint 3** (jangan gabung dengan Sprint 1/2):
+```
+refactor(food-production): Sprint 3 core cleanup — mobile stub, portion-target docs, dashboard KA boundary
+```
+Isi: hapus `app/food-production/mobile/`, `lib/food-production/portion-target.ts`, `lib/api/handlers/food-dashboard.ts`, `lib/kitchen-assurance/index.ts`, `tests/unit/food-production-enterprise-gate.test.ts`.
+
+**Status Sprint 3**: ✅ DONE — kecuali item `rencana-kebutuhan.ts` konsolidasi yang sengaja ditunda (technical debt, tidak menghambat).
 
 ---
 
