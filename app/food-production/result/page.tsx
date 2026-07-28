@@ -385,10 +385,13 @@ function FoodProductionResultPageContent() {
       setCompleteOpen(false);
       setCompleteTarget(null);
       await load();
-      if (status === 'CANCELLED') {
-        if (detail?.id === row.id) setDetail(null);
-      } else if (detail?.id === row.id || status === 'COMPLETED') {
-        // Keep detail open on COMPLETED so AKG aktual / porsi remains visible.
+      if (status === 'COMPLETED' || status === 'CANCELLED') {
+        // Selesai/batal: tutup card detail (jangan biarkan modal tetap terbuka).
+        if (detail?.id === row.id) {
+          setDetail(null);
+          setEditLines([]);
+        }
+      } else if (detail?.id === row.id) {
         setDetail(data as ResultRow);
         setEditLines(data.lines || []);
       }
