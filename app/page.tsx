@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Store, Package, BarChart3, Loader2, Truck, Warehouse } from 'lucide-react';
+import { Store, Loader2, Truck, Warehouse, ChefHat, Route } from 'lucide-react';
 import { toast } from 'sonner';
 import { setUser, getUser, syncSessionUser } from '@/lib/auth-client';
 import type { LoginTenantOption } from '@/lib/api/user-email';
@@ -90,52 +90,52 @@ export default function LoginPage() {
             </div>
             <div>
               <h1 className='text-3xl font-bold'>Inventory App</h1>
-              <p className='text-slate-300 text-sm'>Customer Gudang & GRN</p>
+              <p className='text-slate-300 text-sm'>Gudang · Pengadaan · Food Production</p>
             </div>
           </div>
           <h2 className='text-4xl font-bold leading-tight'>
-            Terima Barang dari
+            Operasikan gudang & dapur
             <br />
-            sales.app — Otomatis via Webhook
+            dalam satu platform
           </h2>
           <p className='text-slate-300 leading-relaxed'>
-            Kelola penerimaan barang (GRN), stok gudang kering & basah, PO ke vendor,
-            release inventory, dan integrasi otomatis dengan sales.app.
+            Dari GRN & PO vendor (terintegrasi sales.app), stok gudang kering & basah,
+            hingga rencana/hasil produksi MBG dan distribusi ke titik layanan.
           </p>
           <div className='grid grid-cols-2 gap-4 pt-4'>
             <div className='flex items-start gap-3'>
               <Truck className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>Penerimaan GRN</div>
+                <div className='font-semibold text-sm'>Pengadaan B2B</div>
                 <div className='text-xs text-slate-400'>
-                  Webhook dari sales.app
+                  GRN, PO & tagihan vendor
                 </div>
               </div>
             </div>
             <div className='flex items-start gap-3'>
               <Warehouse className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>Gudang Kering & Basah</div>
+                <div className='font-semibold text-sm'>Stok Operasional</div>
                 <div className='text-xs text-slate-400'>
-                  Saldo & release per gudang
+                  Gudang kering & basah
                 </div>
               </div>
             </div>
             <div className='flex items-start gap-3'>
-              <Package className='w-5 h-5 text-orange-400 mt-0.5' />
+              <ChefHat className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>PO & Hutang Vendor</div>
+                <div className='font-semibold text-sm'>Food Production</div>
                 <div className='text-xs text-slate-400'>
-                  Approval & 3-way match
+                  Resep, rencana & hasil
                 </div>
               </div>
             </div>
             <div className='flex items-start gap-3'>
-              <BarChart3 className='w-5 h-5 text-orange-400 mt-0.5' />
+              <Route className='w-5 h-5 text-orange-400 mt-0.5' />
               <div>
-                <div className='font-semibold text-sm'>Dashboard Pengadaan</div>
+                <div className='font-semibold text-sm'>Distribusi</div>
                 <div className='text-xs text-slate-400'>
-                  KPI & grafik stok
+                  Jadwal kirim & titik layanan
                 </div>
               </div>
             </div>

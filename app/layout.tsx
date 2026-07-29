@@ -3,8 +3,9 @@ import './globals.css';
 import { Providers } from './providers';
 
 export const metadata = {
-  title: 'Inventory App — Customer Gudang',
-  description: 'Penerimaan barang dari sales.app & manajemen stok customer',
+  title: 'Inventory App — Gudang & Food Production',
+  description:
+    'Gudang, pengadaan B2B, food production MBG, dan distribusi — terintegrasi sales.app',
   manifest: '/manifest.json',
 };
 
