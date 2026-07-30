@@ -154,7 +154,7 @@ export default function PoFormDialog({
                           </div>
                         )}
                       </div>
-                      <div className="w-full sm:w-auto shrink-0">
+                      <div className="w-full min-w-0 sm:w-full shrink-0">
                         <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Estimasi harga</Label>
                         <Input
                           type="number"
@@ -162,7 +162,7 @@ export default function PoFormDialog({
                           step={1}
                           disabled={!l.product}
                           placeholder={suggestedHarga || 'Rp / satuan'}
-                          className="input-spin-end text-right h-9 tabular-nums placeholder:text-slate-400"
+                          className="input-spin-end w-full text-right h-9 tabular-nums placeholder:text-slate-400"
                           value={isManual ? suggestedHarga : ''}
                           onChange={(e) => {
                             const v = e.target.value;

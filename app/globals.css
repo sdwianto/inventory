@@ -88,15 +88,16 @@ body {
     @apply bg-bgn-sky-light border-bgn-sky;
   }
 
-  /* Number input: spinner mepet kanan, angka ada jarak ke spinner */
+  /* Number input: spinner mepet ke tepi kanan; jarak angka↔spinner via margin spin */
   .input-spin-end {
     text-align: right;
-    /* spinner ~1rem + jarak ~0.5–0.75rem antar angka ↔ spinner */
-    padding-right: 1.85rem !important;
+    padding-left: 0.5rem !important;
+    padding-right: 0 !important;
   }
   .input-spin-end::-webkit-inner-spin-button {
     margin: 0;
-    margin-inline-start: 0.5rem;
+    margin-inline-end: 0;
+    margin-inline-start: 0.4rem;
     opacity: 1;
     cursor: pointer;
   }
