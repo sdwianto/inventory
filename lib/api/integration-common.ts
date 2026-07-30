@@ -44,10 +44,15 @@ export function withIntegrationCorrelation<T extends Record<string, unknown>>(pa
   return { ...payload, correlationId };
 }
 
+/** Baca env runtime — hindari inlining Next/webpack `process.env.NAME` saat image build. */
+function readServerEnv(name: string): string {
+  return String(process.env[name] ?? '').trim();
+}
+
 export function getSetupToken(): string | null {
-  const configured = (process.env.INTEGRATION_SETUP_TOKEN || '').trim();
+  const configured = readServerEnv('INTEGRATION_SETUP_TOKEN');
   if (configured) return configured;
-  if (process.env.NODE_ENV === 'production') return null;
+  if (readServerEnv('NODE_ENV') === 'production') return null;
   return 'dev_pair_token_local_only';
 }
 
