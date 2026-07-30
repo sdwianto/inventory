@@ -15,9 +15,14 @@ import { Package, Plus, Trash2 } from 'lucide-react';
 import { formatArrivalLabel } from '@/lib/po-calendar';
 import { toDateInputValue } from '@/lib/pembelian-po/helpers';
 import { formatIDR, formatNumber } from '@/lib/format';
-import { getEstimasiHargaHint, formatBeliDeltaSign } from '@/lib/po-estimasi-harga';
+import {
+  getEstimasiHargaHint,
+  formatBeliDeltaSign,
+  poEstimasiFromProduct,
+} from '@/lib/po-estimasi-harga';
 import { vendorDisplayName } from '@/lib/vendor-display';
 import type { ProductUom } from '@/lib/uom/types';
+import { lineUomFactor } from '@/lib/uom/line-patch';
 import { cn } from '@/lib/utils';
 
 type PoLineDetail = JsonObject & { product: JsonObject | null };
@@ -96,12 +101,7 @@ export default function PoFormDialog({
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-sm font-semibold">Detail barang</Label>
-              <Button variant="outline" size="sm" type="button" onClick={onAddLine}>
-                <Plus className="w-3.5 h-3.5 mr-1" /> Tambah baris
-              </Button>
-            </div>
+            <Label className="text-sm font-semibold">Detail barang</Label>
 
             <div className="border rounded-lg overflow-hidden">
               <div className="hidden sm:grid sm:grid-cols-[2rem_minmax(0,1fr)_8.5rem_5.5rem_4.5rem_2.5rem] gap-x-3 gap-y-0 px-3 py-2 bg-slate-100 text-[11px] uppercase tracking-wide text-slate-600 font-medium items-end">
@@ -114,13 +114,15 @@ export default function PoFormDialog({
               </div>
               <div className="divide-y">
                 {lineDetails.map((l, i) => {
+                  const isManual = !!l.estimasiManual;
+                  const suggestedHarga = str(l.estimasiHarga);
                   const hint = l.product
                     ? getEstimasiHargaHint(
                       l.product,
                       vendorTierMap as Record<string, string>,
                       defaultTier,
-                      !!l.estimasiManual,
-                      str(l.estimasiHarga),
+                      isManual,
+                      suggestedHarga,
                     )
                     : null;
                   return (
@@ -159,13 +161,33 @@ export default function PoFormDialog({
                           min={0}
                           step={1}
                           disabled={!l.product}
-                          placeholder="Rp / satuan"
-                          className="text-right h-9 tabular-nums"
-                          value={str(l.estimasiHarga)}
-                          onChange={(e) => onUpdateLine(i, {
-                            estimasiHarga: e.target.value,
-                            estimasiManual: true,
-                          })}
+                          placeholder={suggestedHarga || 'Rp / satuan'}
+                          className="text-right h-9 tabular-nums pr-7 placeholder:text-slate-400"
+                          value={isManual ? suggestedHarga : ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') {
+                              const base = l.product
+                                ? poEstimasiFromProduct(
+                                  l.product,
+                                  vendorTierMap as Record<string, string>,
+                                  defaultTier,
+                                )
+                                : 0;
+                              const scaled = Math.round(base * lineUomFactor(
+                                typeof l.factorToBase === 'number' ? l.factorToBase : undefined,
+                              ));
+                              onUpdateLine(i, {
+                                estimasiHarga: scaled > 0 ? String(scaled) : '',
+                                estimasiManual: false,
+                              });
+                              return;
+                            }
+                            onUpdateLine(i, {
+                              estimasiHarga: v,
+                              estimasiManual: true,
+                            });
+                          }}
                         />
                         {hint && (
                           <p className="mt-1 text-[10px] text-slate-500 text-right leading-snug">
@@ -245,6 +267,11 @@ export default function PoFormDialog({
                     </div>
                   );
                 })}
+              </div>
+              <div className="px-3 py-2.5 border-t bg-slate-50/60">
+                <Button variant="outline" size="sm" type="button" onClick={onAddLine}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Tambah baris
+                </Button>
               </div>
             </div>
 

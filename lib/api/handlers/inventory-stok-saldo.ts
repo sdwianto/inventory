@@ -22,13 +22,18 @@ interface TrendBucket {
   keringKeluarQty: number;
   basahMasukQty: number;
   basahKeluarQty: number;
+  janitorMasukQty: number;
+  janitorKeluarQty: number;
   keringMasukNilai: number;
   keringKeluarNilai: number;
   basahMasukNilai: number;
   basahKeluarNilai: number;
+  janitorMasukNilai: number;
+  janitorKeluarNilai: number;
   transaksi: number;
   keringNetQty?: number;
   basahNetQty?: number;
+  janitorNetQty?: number;
 }
 
 interface TrendPeriod extends TrendBucket {
@@ -36,6 +41,7 @@ interface TrendPeriod extends TrendBucket {
   saldoNilaiKumulatif: number;
   keringSaldoKumulatif: number;
   basahSaldoKumulatif: number;
+  janitorSaldoKumulatif: number;
 }
 
 function periodKey(date: Date | string, granularity: string): string {
@@ -61,10 +67,14 @@ function emptyTrendBucket(key: string, label: string): TrendBucket {
     keringKeluarQty: 0,
     basahMasukQty: 0,
     basahKeluarQty: 0,
+    janitorMasukQty: 0,
+    janitorKeluarQty: 0,
     keringMasukNilai: 0,
     keringKeluarNilai: 0,
     basahMasukNilai: 0,
     basahKeluarNilai: 0,
+    janitorMasukNilai: 0,
+    janitorKeluarNilai: 0,
     transaksi: 0,
   };
 }
@@ -133,6 +143,7 @@ async function buildStockTrend(
                 branches: [
                   { case: { $regexMatch: { input: '$$loc', regex: 'GKERING' } }, then: 'GKERING' },
                   { case: { $regexMatch: { input: '$$loc', regex: 'GBASAH' } }, then: 'GBASAH' },
+                  { case: { $regexMatch: { input: '$$loc', regex: 'GJANITOR' } }, then: 'GJANITOR' },
                 ],
                 default: 'OTHER',
               },
@@ -156,10 +167,14 @@ async function buildStockTrend(
         keringKeluarQty: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, '$keluarN', 0] } },
         basahMasukQty: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, '$masukN', 0] } },
         basahKeluarQty: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, '$keluarN', 0] } },
+        janitorMasukQty: { $sum: { $cond: [{ $eq: ['$wh', 'GJANITOR'] }, '$masukN', 0] } },
+        janitorKeluarQty: { $sum: { $cond: [{ $eq: ['$wh', 'GJANITOR'] }, '$keluarN', 0] } },
         keringMasukNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, { $multiply: ['$masukN', '$hargaN'] }, 0] } },
         keringKeluarNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GKERING'] }, { $multiply: ['$keluarN', '$hargaN'] }, 0] } },
         basahMasukNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, { $multiply: ['$masukN', '$hargaN'] }, 0] } },
         basahKeluarNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GBASAH'] }, { $multiply: ['$keluarN', '$hargaN'] }, 0] } },
+        janitorMasukNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GJANITOR'] }, { $multiply: ['$masukN', '$hargaN'] }, 0] } },
+        janitorKeluarNilai: { $sum: { $cond: [{ $eq: ['$wh', 'GJANITOR'] }, { $multiply: ['$keluarN', '$hargaN'] }, 0] } },
       },
     },
     { $sort: { _id: 1 } },
@@ -185,10 +200,14 @@ async function buildStockTrend(
       keringKeluarQty: row.keringKeluarQty || 0,
       basahMasukQty: row.basahMasukQty || 0,
       basahKeluarQty: row.basahKeluarQty || 0,
+      janitorMasukQty: row.janitorMasukQty || 0,
+      janitorKeluarQty: row.janitorKeluarQty || 0,
       keringMasukNilai: row.keringMasukNilai || 0,
       keringKeluarNilai: row.keringKeluarNilai || 0,
       basahMasukNilai: row.basahMasukNilai || 0,
       basahKeluarNilai: row.basahKeluarNilai || 0,
+      janitorMasukNilai: row.janitorMasukNilai || 0,
+      janitorKeluarNilai: row.janitorKeluarNilai || 0,
       transaksi: row.transaksi || 0,
     });
   }
@@ -197,6 +216,7 @@ async function buildStockTrend(
   let runningNilai = 0;
   let runningKering = opening.kering;
   let runningBasah = opening.basah;
+  let runningJanitor = opening.janitor;
   const periods: TrendPeriod[] = [];
 
   const cursor = new Date(since);
@@ -211,11 +231,13 @@ async function buildStockTrend(
     row.netNilai = row.masukNilai - row.keluarNilai;
     row.keringNetQty = row.keringMasukQty - row.keringKeluarQty;
     row.basahNetQty = row.basahMasukQty - row.basahKeluarQty;
+    row.janitorNetQty = row.janitorMasukQty - row.janitorKeluarQty;
 
     runningQty += row.netQty;
     runningNilai += row.netNilai;
     runningKering += row.keringNetQty;
     runningBasah += row.basahNetQty;
+    runningJanitor += row.janitorNetQty;
 
     periods.push({
       ...row,
@@ -224,6 +246,7 @@ async function buildStockTrend(
       saldoNilaiKumulatif: runningNilai,
       keringSaldoKumulatif: runningKering,
       basahSaldoKumulatif: runningBasah,
+      janitorSaldoKumulatif: runningJanitor,
     });
 
     if (granularity === 'day') {
@@ -244,11 +267,15 @@ async function buildStockTrend(
     keringKeluarQty: acc.keringKeluarQty + p.keringKeluarQty,
     basahMasukQty: acc.basahMasukQty + p.basahMasukQty,
     basahKeluarQty: acc.basahKeluarQty + p.basahKeluarQty,
+    janitorMasukQty: acc.janitorMasukQty + p.janitorMasukQty,
+    janitorKeluarQty: acc.janitorKeluarQty + p.janitorKeluarQty,
     transaksi: acc.transaksi + p.transaksi,
   }), {
     masukQty: 0, keluarQty: 0, netQty: 0,
     masukNilai: 0, keluarNilai: 0, netNilai: 0,
-    keringMasukQty: 0, keringKeluarQty: 0, basahMasukQty: 0, basahKeluarQty: 0,
+    keringMasukQty: 0, keringKeluarQty: 0,
+    basahMasukQty: 0, basahKeluarQty: 0,
+    janitorMasukQty: 0, janitorKeluarQty: 0,
     transaksi: 0,
   });
 
@@ -270,7 +297,7 @@ export async function handleStokSaldo({
   auth,
   request,
 }: HandlerContext): Promise<NextResponse | null> {
-  // GET /stok/by-products?ids=a,b,c — qty on-hand per gudang (GKERING / GBASAH)
+  // GET /stok/by-products?ids=a,b,c — qty on-hand per gudang (GKERING / GBASAH / GJANITOR)
   if (route === '/stok/by-products' && method === 'GET') {
     const { denied, tenantId: tid } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;

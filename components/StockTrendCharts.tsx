@@ -34,6 +34,12 @@ const BASAH_CONFIG = {
   saldo: { label: 'Saldo', color: '#0284c7' },
 };
 
+const JANITOR_CONFIG = {
+  masuk: { label: 'Masuk', color: '#059669' },
+  keluar: { label: 'Keluar', color: '#dc2626' },
+  saldo: { label: 'Saldo', color: '#059669' },
+};
+
 const LEGEND_ORDER = ['saldo', 'masuk', 'keluar'];
 
 function ChartSeriesLegend({ config }) {
@@ -204,6 +210,11 @@ function WarehouseComposedChart({
   );
 }
 
+function netLabel(masuk = 0, keluar = 0) {
+  const net = masuk - keluar;
+  return `${net >= 0 ? '+' : ''}${formatNumber(net)}`;
+}
+
 export default function StockTrendCharts({ trend }) {
   const data = trend?.periods || [];
 
@@ -216,7 +227,8 @@ export default function StockTrendCharts({ trend }) {
     );
   }
 
-  const opening = trend.opening || { kering: 0, basah: 0, total: 0 };
+  const opening = trend.opening || { kering: 0, basah: 0, janitor: 0, total: 0 };
+  const totals = trend.totals || {};
 
   return (
     <div className="space-y-4">
@@ -225,10 +237,11 @@ export default function StockTrendCharts({ trend }) {
         per hari (sumbu kanan). Jika transaksi jarang, grafik otomatis menampilkan{' '}
         <strong>hari aktif</strong> atau <strong>agregasi mingguan</strong>.
         Saldo awal periode: {warehouseName('GKERING')} {formatNumber(opening.kering)},
-        {' '}{warehouseName('GBASAH')} {formatNumber(opening.basah)}.
+        {' '}{warehouseName('GBASAH')} {formatNumber(opening.basah)},
+        {' '}{warehouseName('GJANITOR')} {formatNumber(opening.janitor)}.
       </p>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <WarehouseComposedChart
           title={warehouseName('GKERING')}
           subtitle="Area saldo + batang masuk/keluar"
@@ -249,28 +262,44 @@ export default function StockTrendCharts({ trend }) {
           config={BASAH_CONFIG}
           accentClass="bg-gradient-to-br from-blue-50/80 to-white"
         />
+        <WarehouseComposedChart
+          title={warehouseName('GJANITOR')}
+          subtitle="Area saldo + batang masuk/keluar"
+          rawData={data}
+          masukKey="janitorMasukQty"
+          keluarKey="janitorKeluarQty"
+          saldoKey="janitorSaldoKumulatif"
+          config={JANITOR_CONFIG}
+          accentClass="bg-gradient-to-br from-emerald-50/80 to-white"
+        />
       </div>
 
       {trend?.totals && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           {[
             {
               label: `${warehouseName('GKERING')} — net`,
-              value: `${trend.totals.keringMasukQty - trend.totals.keringKeluarQty >= 0 ? '+' : ''}${formatNumber(trend.totals.keringMasukQty - trend.totals.keringKeluarQty)}`,
-              sub: `${formatNumber(trend.totals.keringMasukQty)} masuk / ${formatNumber(trend.totals.keringKeluarQty)} keluar`,
+              value: netLabel(totals.keringMasukQty, totals.keringKeluarQty),
+              sub: `${formatNumber(totals.keringMasukQty || 0)} masuk / ${formatNumber(totals.keringKeluarQty || 0)} keluar`,
               color: 'text-amber-800',
             },
             {
               label: `${warehouseName('GBASAH')} — net`,
-              value: `${trend.totals.basahMasukQty - trend.totals.basahKeluarQty >= 0 ? '+' : ''}${formatNumber(trend.totals.basahMasukQty - trend.totals.basahKeluarQty)}`,
-              sub: `${formatNumber(trend.totals.basahMasukQty)} masuk / ${formatNumber(trend.totals.basahKeluarQty)} keluar`,
+              value: netLabel(totals.basahMasukQty, totals.basahKeluarQty),
+              sub: `${formatNumber(totals.basahMasukQty || 0)} masuk / ${formatNumber(totals.basahKeluarQty || 0)} keluar`,
               color: 'text-blue-800',
             },
             {
+              label: `${warehouseName('GJANITOR')} — net`,
+              value: netLabel(totals.janitorMasukQty, totals.janitorKeluarQty),
+              sub: `${formatNumber(totals.janitorMasukQty || 0)} masuk / ${formatNumber(totals.janitorKeluarQty || 0)} keluar`,
+              color: 'text-emerald-800',
+            },
+            {
               label: 'Total net periode',
-              value: `${trend.totals.netQty >= 0 ? '+' : ''}${formatNumber(trend.totals.netQty)}`,
-              sub: `${formatNumber(trend.totals.transaksi)} transaksi kartu stok`,
-              color: trend.totals.netQty >= 0 ? 'text-green-700' : 'text-red-600',
+              value: `${(totals.netQty || 0) >= 0 ? '+' : ''}${formatNumber(totals.netQty || 0)}`,
+              sub: `${formatNumber(totals.transaksi || 0)} transaksi kartu stok`,
+              color: (totals.netQty || 0) >= 0 ? 'text-green-700' : 'text-red-600',
             },
             {
               label: 'Hari dalam grafik',

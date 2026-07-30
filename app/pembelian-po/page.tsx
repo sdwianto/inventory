@@ -72,6 +72,8 @@ function CustomerPoPageContent() {
     submitPo,
     vendorNameById,
     closeFormDialog,
+    dismissFormWithAutosave,
+    deleteDraftPo,
   } = useCustomerPoPage();
 
   return (
@@ -181,6 +183,7 @@ function CustomerPoPageContent() {
                       onSyncSoLines={() => syncSoLinesPo(poId)}
                       onApprove={() => approvePo(poId)}
                       onReject={(reason) => rejectPo(poId, reason)}
+                      onDeleteDraft={() => deleteDraftPo(poId)}
                       tenantName={str(user?.tenantName || user?.name)}
                     />
                   );
@@ -201,8 +204,11 @@ function CustomerPoPageContent() {
       <PoFormDialog
         open={createOpen}
         onOpenChange={(open) => {
-          setCreateOpen(open);
-          if (!open) closeFormDialog();
+          if (open) {
+            setCreateOpen(true);
+            return;
+          }
+          void dismissFormWithAutosave();
         }}
         editingPo={editingPo}
         createDate={createDate}

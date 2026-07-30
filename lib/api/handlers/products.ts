@@ -246,7 +246,7 @@ export async function handleProducts({
       ? String(productBody.gudangKode).trim().toUpperCase()
       : inferGudangKodeFromProduct(draft);
     if (!isValidProductGudang(gudangKode)) {
-      return err('Pilih gudang produk: GKERING (Kering) atau GBASAH (Basah)', 400);
+      return err('Pilih gudang produk: GKERING (Kering), GBASAH (Basah), atau GJANITOR (Janitor)', 400);
     }
 
     const productId = uuidv4();
@@ -525,7 +525,7 @@ export async function handleProducts({
       if (update.gudangKode !== undefined) {
         const nextGudang = String(update.gudangKode || '').trim().toUpperCase();
         if (!isValidProductGudang(nextGudang)) {
-          return err('Gudang produk tidak valid (GKERING atau GBASAH)', 400);
+          return err('Gudang produk tidak valid (GKERING / GBASAH / GJANITOR)', 400);
         }
         if (nextGudang !== resolveProductGudangKode(existing)) {
           const otherRows = await db.collection<{ qty?: number | string }>('stok_lokasi').find({

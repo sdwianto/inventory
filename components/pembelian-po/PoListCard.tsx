@@ -10,7 +10,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  CheckCircle2, ChevronDown, ChevronRight, Pencil, Printer, RefreshCw, Send, XCircle,
+  CheckCircle2, ChevronDown, ChevronRight, Pencil, Printer, RefreshCw, Send, Trash2, XCircle,
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
@@ -41,6 +41,7 @@ export type PoListCardProps = {
   onSyncSoLines?: () => void;
   onApprove: () => void;
   onReject: (reason: string) => void;
+  onDeleteDraft?: () => void;
   tenantName?: string;
 };
 
@@ -63,10 +64,12 @@ export default function PoListCard({
   onSyncSoLines,
   onApprove,
   onReject,
+  onDeleteDraft,
   tenantName,
 }: PoListCardProps) {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [printing, setPrinting] = useState(false);
 
   const poId = str(po.id);
@@ -161,6 +164,18 @@ export default function PoListCard({
           <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit}>
             <Pencil className="w-3 h-3 mr-1" />
             Edit
+          </Button>
+        )}
+        {poStatus === 'DRAFT' && canEdit && !isOptimistic && onDeleteDraft && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+            onClick={() => setDeleteDialogOpen(true)}
+            disabled={isSubmitting}
+            title="Hapus PO draft"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
           </Button>
         )}
         {(canRequestApprovalPoStatus(poStatus)) && canRequest && !isOptimistic && (
@@ -423,6 +438,28 @@ export default function PoListCard({
             </AlertDialogCancel>
             <AlertDialogAction onClick={handleReject}>
               Tolak
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus PO draft?</AlertDialogTitle>
+            <AlertDialogDescription>
+              PO {str(po.noPO)} akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                onDeleteDraft?.();
+              }}
+            >
+              Hapus
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

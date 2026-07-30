@@ -34,7 +34,7 @@ export async function handleLokasi({
   }
 
   if (route === '/lokasi' && method === 'POST') {
-    return err('Gudang tetap GKERING & GBASAH — tidak bisa menambah lokasi baru. Edit keterangan via PUT jika perlu.', 400);
+    return err('Gudang tetap GKERING / GBASAH / GJANITOR — tidak bisa menambah lokasi baru. Edit keterangan via PUT jika perlu.', 400);
   }
 
   if (path[0] === 'lokasi' && path.length === 2) {
@@ -47,7 +47,7 @@ export async function handleLokasi({
       const lokExisting = access.doc;
       const kode = normalizeWarehouseKode(String(lokExisting.kode || ''));
       if (!isValidWarehouseKode(kode)) {
-        return err('Hanya gudang GKERING & GBASAH yang dapat diedit', 400);
+        return err('Hanya gudang GKERING / GBASAH / GJANITOR yang dapat diedit', 400);
       }
       const update: Record<string, unknown> = { updatedAt: new Date() };
       if (invBody?.keterangan !== undefined) update.keterangan = invBody.keterangan;

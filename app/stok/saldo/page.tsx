@@ -25,6 +25,8 @@ interface SaldoSummary {
   nilaiKering?: number;
   qtyBasah?: number;
   nilaiBasah?: number;
+  qtyJanitor?: number;
+  nilaiJanitor?: number;
   qtyTotal?: number;
   nilaiTotal?: number;
   skuAktif?: number;
@@ -43,11 +45,19 @@ interface StockRow {
   stokTotal?: number;
   stokGudangKering?: number;
   stokGudangBasah?: number;
+  stokGudangJanitor?: number;
   stokDisplay?: string;
   nilaiStok?: number;
   nilaiTotal?: number;
   nilaiGudangKering?: number;
   nilaiGudangBasah?: number;
+  nilaiGudangJanitor?: number;
+}
+
+function gudangBadgeClass(kode?: string | null): string {
+  if (kode === 'GBASAH') return 'bg-blue-50 text-blue-800';
+  if (kode === 'GJANITOR') return 'bg-emerald-50 text-emerald-800';
+  return 'bg-amber-50 text-amber-800';
 }
 
 interface StockTrend {
@@ -164,7 +174,7 @@ export default function SaldoGudangPage() {
         </div>
         <OperationalScopeBar />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
           <SummaryCard
             title="Gudang Kering"
             qty={summary?.qtyKering ?? 0}
@@ -178,6 +188,13 @@ export default function SaldoGudangPage() {
             nilai={summary?.nilaiBasah ?? 0}
             qtyClass="text-blue-700"
             nilaiClass="text-blue-600"
+          />
+          <SummaryCard
+            title="Gudang Janitor"
+            qty={summary?.qtyJanitor ?? 0}
+            nilai={summary?.nilaiJanitor ?? 0}
+            qtyClass="text-emerald-700"
+            nilaiClass="text-emerald-600"
           />
           <SummaryCard
             title="Total Semua Gudang"
@@ -285,6 +302,7 @@ export default function SaldoGudangPage() {
                     <>
                       <th className="px-3 py-2 text-right">Qty Kering</th>
                       <th className="px-3 py-2 text-right">Qty Basah</th>
+                      <th className="px-3 py-2 text-right">Qty Janitor</th>
                     </>
                   )}
                   <th className="px-3 py-2 text-center">Satuan</th>
@@ -295,10 +313,10 @@ export default function SaldoGudangPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={showAllGudang ? 9 : 7} className="text-center py-10 text-slate-400">Memuat...</td></tr>
+                  <tr><td colSpan={showAllGudang ? 10 : 7} className="text-center py-10 text-slate-400">Memuat...</td></tr>
                 )}
                 {!loading && !stockRows.length && (
-                  <tr><td colSpan={showAllGudang ? 9 : 7} className="text-center py-10 text-slate-400">
+                  <tr><td colSpan={showAllGudang ? 10 : 7} className="text-center py-10 text-slate-400">
                     {!WAREHOUSES.some((w) => gudangFilter[w.kode])
                       ? 'Pilih minimal satu gudang'
                       : 'Belum ada stok di gudang yang dipilih'}
@@ -309,11 +327,7 @@ export default function SaldoGudangPage() {
                     <td className="px-3 py-2 font-mono text-xs">{r.kode}</td>
                     <td className="px-3 py-2">{r.nama}</td>
                     <td className="px-3 py-2 text-xs">
-                      <span className={`px-2 py-0.5 rounded font-medium ${
-                        (r.gudangKode || 'GKERING') === 'GBASAH'
-                          ? 'bg-blue-50 text-blue-800'
-                          : 'bg-amber-50 text-amber-800'
-                      }`}>
+                      <span className={`px-2 py-0.5 rounded font-medium ${gudangBadgeClass(r.gudangKode || 'GKERING')}`}>
                         {r.gudangNama || warehouseName(r.gudangKode || 'GKERING')}
                       </span>
                     </td>
@@ -321,6 +335,7 @@ export default function SaldoGudangPage() {
                       <>
                         <td className="px-3 py-2 text-right font-mono text-amber-800">{formatNumber(r.stokGudangKering ?? 0)}</td>
                         <td className="px-3 py-2 text-right font-mono text-blue-800">{formatNumber(r.stokGudangBasah ?? 0)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-emerald-800">{formatNumber(r.stokGudangJanitor ?? 0)}</td>
                       </>
                     )}
                     <td className="px-3 py-2 text-center text-xs">{r.satuan}</td>
@@ -333,7 +348,7 @@ export default function SaldoGudangPage() {
                 ))}
                 {!loading && stockRows.length > 0 && (
                   <tr className="border-t bg-slate-50 font-semibold">
-                    <td className="px-3 py-2" colSpan={showAllGudang ? 6 : 4}>
+                    <td className="px-3 py-2" colSpan={showAllGudang ? 7 : 4}>
                       Total ({filteredTotals.sku} SKU
                       {!showAllGudang && ' — filter gudang'})
                     </td>

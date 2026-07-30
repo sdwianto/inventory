@@ -227,5 +227,38 @@ export function usePoMutations(
     );
   }, [withOptimistic]);
 
-  return { requestApproval, approve, reject, submit, syncVendor, syncVendorForVendor, syncSoLines, createPO, updatePO };
+  const deleteDraftPO = useCallback(async (id: string) => {
+    assertPersistedPoId(id);
+    let snapshot: JsonObject[] = [];
+    setList((prev) => {
+      snapshot = prev;
+      return prev.filter((row) => String(row.id) !== id);
+    });
+    try {
+      const res = await fetchOrQueue(`/api/customer-purchase-orders/${id}`, {
+        method: 'DELETE',
+        offlineLabel: `Hapus PO draft ${id}`,
+      });
+      const { data, ok } = await parseJsonResponse(res);
+      if (!ok) throw new Error(String(data.error || 'Gagal menghapus PO'));
+      return data as JsonObject;
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) throw e;
+      setList(snapshot);
+      throw e;
+    }
+  }, [setList]);
+
+  return {
+    requestApproval,
+    approve,
+    reject,
+    submit,
+    syncVendor,
+    syncVendorForVendor,
+    syncSoLines,
+    createPO,
+    updatePO,
+    deleteDraftPO,
+  };
 }

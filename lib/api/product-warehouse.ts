@@ -1,4 +1,4 @@
-// Produk inventory — setiap SKU hanya boleh di satu gudang (GKERING atau GBASAH).
+// Produk inventory — setiap SKU hanya boleh di satu gudang (GKERING / GBASAH / GJANITOR).
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';

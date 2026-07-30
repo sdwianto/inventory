@@ -18,10 +18,15 @@ export function WarehousePicker({
 }) {
   const current = value || 'GKERING';
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-3 gap-2">
       {WAREHOUSES.map((w) => {
         const selected = current === w.kode;
-        const basah = w.kode === 'GBASAH';
+        const accent =
+          w.kode === 'GBASAH'
+            ? { border: 'border-blue-500 bg-blue-50', text: 'text-blue-800' }
+            : w.kode === 'GJANITOR'
+              ? { border: 'border-emerald-500 bg-emerald-50', text: 'text-emerald-800' }
+              : { border: 'border-amber-500 bg-amber-50', text: 'text-amber-800' };
         return (
           <button
             key={w.kode}
@@ -29,13 +34,11 @@ export function WarehousePicker({
             onClick={() => onChange(w.kode)}
             className={`rounded-lg border-2 px-3 py-2.5 text-left transition-all ${
               selected
-                ? basah
-                  ? 'border-blue-500 bg-blue-50 shadow-sm'
-                  : 'border-amber-500 bg-amber-50 shadow-sm'
+                ? `${accent.border} shadow-sm`
                 : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
             }`}
           >
-            <span className={`text-sm font-semibold ${basah ? 'text-blue-800' : 'text-amber-800'}`}>
+            <span className={`text-sm font-semibold ${selected ? accent.text : 'text-slate-700'}`}>
               {w.nama}
             </span>
           </button>

@@ -498,7 +498,9 @@ export default function PenerimaanPage() {
                   <div className={`h-9 px-2 flex items-center rounded-md border text-xs font-medium truncate ${
                     str(gudangMap[rowKey], 'GKERING') === 'GBASAH'
                       ? 'bg-blue-50 text-blue-800 border-blue-200'
-                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                      : str(gudangMap[rowKey], 'GKERING') === 'GJANITOR'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
                   }`}>
                     {warehouseName(str(gudangMap[rowKey], 'GKERING'))}
                   </div>

@@ -58,6 +58,7 @@ export const DEMO_PRODUCTS = [
 export const LOKASI_DEFAULTS = [
   { kode: 'GKERING', nama: 'Gudang Kering', keterangan: 'Penyimpanan barang kering', tipe: 'KERING', isWarehouse: true },
   { kode: 'GBASAH', nama: 'Gudang Basah', keterangan: 'Penyimpanan barang basah / perishable', tipe: 'BASAH', isWarehouse: true },
+  { kode: 'GJANITOR', nama: 'Gudang Janitor', keterangan: 'Penyimpanan alat kebersihan', tipe: 'JANITOR', isWarehouse: true },
 ];
 
 const MASTER_COLLECTIONS = [

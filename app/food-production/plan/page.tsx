@@ -2573,7 +2573,22 @@ function FoodProductionPlanPageContent() {
         </div>
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (next) {
+            setOpen(true);
+            return;
+          }
+          // Klik luar / Escape / X → autosave bila form valid; Batal pakai setOpen(false) langsung (buang).
+          if (saving) return;
+          if (!canSave) {
+            setOpen(false);
+            return;
+          }
+          void save();
+        }}
+      >
         <DialogContent className="max-w-5xl w-[min(96vw,64rem)] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? 'Ubah Rencana' : 'Buat Rencana Produksi'}</DialogTitle>

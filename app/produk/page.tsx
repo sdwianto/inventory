@@ -68,7 +68,9 @@ export default function ProdukPage() {
   const [newSatuan, setNewSatuan] = useState('');
   const [metaTenantId, setMetaTenantId] = useState('');
   const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [gudangFilter, setGudangFilter] = useState({ GKERING: true, GBASAH: true });
+  const [gudangFilter, setGudangFilter] = useState(() => (
+    Object.fromEntries(WAREHOUSES.map((w) => [w.kode, true])) as Record<string, boolean>
+  ));
   const [itemRoleFilter, setItemRoleFilter] = useState('');
   const selection = useListSelection((item: { id: string }) => item.id);
 
@@ -442,14 +444,14 @@ export default function ProdukPage() {
   const toggleGudang = (kode: string, checked: boolean) => {
     setGudangFilter((prev) => {
       const next = { ...prev, [kode]: checked };
-      if (!next.GKERING && !next.GBASAH) return prev;
+      if (!WAREHOUSES.some((w) => next[w.kode])) return prev;
       return next;
     });
   };
 
   const filteredProducts = useMemo(() => products.filter((p) => {
     const g = str(p.gudangKode, 'GKERING');
-    if (!gudangFilter[g as keyof typeof gudangFilter]) return false;
+    if (!gudangFilter[g]) return false;
     if (itemRoleFilter) {
       const role = normalizeItemRole(p.itemRole);
       if (role !== itemRoleFilter) return false;
@@ -457,7 +459,7 @@ export default function ProdukPage() {
     return true;
   }), [products, gudangFilter, itemRoleFilter]);
 
-  const showAllGudang = gudangFilter.GKERING && gudangFilter.GBASAH;
+  const showAllGudang = WAREHOUSES.every((w) => gudangFilter[w.kode]);
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(str(p.id)));
   const isVendorSynced = (p: JsonObject) => p?.syncSource === 'sales.app';
   const displayHargaBeli = (p: JsonObject) => {
@@ -590,13 +592,19 @@ export default function ProdukPage() {
                   className={
                     w.kode === 'GBASAH'
                       ? 'border-blue-400 data-[state=checked]:bg-blue-600'
-                      : 'border-amber-500 data-[state=checked]:bg-amber-600'
+                      : w.kode === 'GJANITOR'
+                        ? 'border-emerald-400 data-[state=checked]:bg-emerald-600'
+                        : 'border-amber-500 data-[state=checked]:bg-amber-600'
                   }
                 />
                 <Label
                   htmlFor={`produk-gudang-${w.kode}`}
                   className={`text-sm font-medium cursor-pointer ${
-                    w.kode === 'GBASAH' ? 'text-blue-800' : 'text-amber-800'
+                    w.kode === 'GBASAH'
+                      ? 'text-blue-800'
+                      : w.kode === 'GJANITOR'
+                        ? 'text-emerald-800'
+                        : 'text-amber-800'
                   }`}
                 >
                   {w.nama}
@@ -681,7 +689,9 @@ export default function ProdukPage() {
                       <span className={`px-2 py-0.5 rounded font-medium ${
                         str(p.gudangKode, 'GKERING') === 'GBASAH'
                           ? 'bg-blue-50 text-blue-800'
-                          : 'bg-amber-50 text-amber-800'
+                          : str(p.gudangKode, 'GKERING') === 'GJANITOR'
+                            ? 'bg-emerald-50 text-emerald-800'
+                            : 'bg-amber-50 text-amber-800'
                       }`}>
                         {warehouseName(str(p.gudangKode, 'GKERING'))}
                       </span>

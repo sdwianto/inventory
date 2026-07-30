@@ -609,6 +609,27 @@ export async function handleCustomerPo({
     return ok(clean(updated));
   }
 
+  // DELETE /customer-purchase-orders/:id — hapus permanen hanya DRAFT
+  if (path[0] === 'customer-purchase-orders' && path.length === 2 && method === 'DELETE') {
+    const deniedRole = requireRole(auth, PO_EDIT_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+
+    const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
+    if (!po) return err('PO tidak ditemukan', 404);
+    if (String(po.status || '') !== 'DRAFT') {
+      return err('Hanya PO DRAFT yang bisa dihapus', 400);
+    }
+    if (!canEditPo(scopeAuth!, po)) {
+      return err('Tidak diizinkan menghapus PO ini', 403);
+    }
+
+    await db.collection('customer_purchase_orders').deleteOne({ id: po.id });
+    await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
+    return ok({ deleted: true, id: po.id, noPO: po.noPO || null });
+  }
+
   // POST /customer-purchase-orders/:id/request-approval — Supervisor ajukan ke Admin
   if (path[0] === 'customer-purchase-orders' && path[2] === 'request-approval' && method === 'POST') {
     const deniedRole = requireRole(auth, PO_REQUEST_APPROVAL_ROLES);

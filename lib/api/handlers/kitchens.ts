@@ -85,7 +85,7 @@ export async function handleKitchens({
     const nama = String(kitchenBody.nama || '').trim();
     if (!nama) return err('Nama dapur wajib diisi');
     const wh = normalizeKitchenWarehouse(kitchenBody.defaultWarehouseKode);
-    if (!wh) return err('Gudang default wajib GKERING atau GBASAH', 400);
+    if (!wh) return err('Gudang default wajib GKERING, GBASAH, atau GJANITOR', 400);
     const kitchenType = normalizeKitchenType(kitchenBody.kitchenType);
     const kode = normalizeKitchenKode(kitchenBody.kode);
     const centralKitchenId = kitchenType === 'SATELLITE'
@@ -156,7 +156,7 @@ export async function handleKitchens({
     }
     if (kitchenBody.defaultWarehouseKode !== undefined) {
       const wh = normalizeKitchenWarehouse(kitchenBody.defaultWarehouseKode);
-      if (!wh) return err('Gudang default wajib GKERING atau GBASAH', 400);
+      if (!wh) return err('Gudang default wajib GKERING, GBASAH, atau GJANITOR', 400);
       update.defaultWarehouseKode = wh;
     }
     if (kitchenBody.pic !== undefined) {

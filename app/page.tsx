@@ -99,7 +99,7 @@ export default function LoginPage() {
             dalam satu platform
           </h2>
           <p className='text-slate-300 leading-relaxed'>
-            Dari GRN & PO vendor (terintegrasi sales.app), stok gudang kering & basah,
+            Dari GRN & PO vendor (terintegrasi sales.app), stok gudang kering, basah & janitor,
             hingga rencana/hasil produksi MBG dan distribusi ke titik layanan.
           </p>
           <div className='grid grid-cols-2 gap-4 pt-4'>
@@ -117,7 +117,7 @@ export default function LoginPage() {
               <div>
                 <div className='font-semibold text-sm'>Stok Operasional</div>
                 <div className='text-xs text-slate-400'>
-                  Gudang kering & basah
+                  Gudang kering, basah & janitor
                 </div>
               </div>
             </div>

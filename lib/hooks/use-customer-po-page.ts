@@ -771,6 +771,31 @@ export function useCustomerPoPage() {
     setEditingPo(null);
   };
 
+  /** Klik luar / Escape / X: simpan otomatis bila sudah ada baris valid; Batal tetap discard. */
+  const dismissFormWithAutosave = async () => {
+    if (saving) return;
+    const items = buildItemsPayload();
+    if (!items.length || !createDate) {
+      closeFormDialog();
+      return;
+    }
+    if (editingPo) await saveEditPo();
+    else await createPo();
+  };
+
+  const deleteDraftPo = async (id: string) => {
+    setSubmitting(id);
+    try {
+      const data = await poMutations.deleteDraftPO(id);
+      toast.success(`PO ${str(data.noPO) || ''} dihapus`);
+      if (expandedId === id) setExpandedId(null);
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal menghapus PO');
+    }
+    setSubmitting('');
+  };
+
   return {
     user,
     list,
@@ -828,5 +853,7 @@ export function useCustomerPoPage() {
     submitPo,
     vendorNameById,
     closeFormDialog,
+    dismissFormWithAutosave,
+    deleteDraftPo,
   };
 }

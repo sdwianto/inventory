@@ -270,6 +270,7 @@ export default function FoodProductionKitchenPage() {
                 <SelectContent>
                   <SelectItem value="GKERING">Gudang Kering (GKERING)</SelectItem>
                   <SelectItem value="GBASAH">Gudang Basah (GBASAH)</SelectItem>
+                  <SelectItem value="GJANITOR">Gudang Janitor (GJANITOR)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
