@@ -162,7 +162,7 @@ export default function PoFormDialog({
                           step={1}
                           disabled={!l.product}
                           placeholder={suggestedHarga || 'Rp / satuan'}
-                          className="text-right h-9 tabular-nums pr-7 placeholder:text-slate-400"
+                          className="input-spin-end text-right h-9 tabular-nums placeholder:text-slate-400"
                           value={isManual ? suggestedHarga : ''}
                           onChange={(e) => {
                             const v = e.target.value;

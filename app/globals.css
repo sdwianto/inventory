@@ -87,6 +87,22 @@ body {
   .surface-bgn {
     @apply bg-bgn-sky-light border-bgn-sky;
   }
+
+  /* Number input: spinner mepet kanan, angka ada jarak ke spinner */
+  .input-spin-end {
+    text-align: right;
+    /* spinner ~1rem + jarak ~0.5–0.75rem antar angka ↔ spinner */
+    padding-right: 1.85rem !important;
+  }
+  .input-spin-end::-webkit-inner-spin-button {
+    margin: 0;
+    margin-inline-start: 0.5rem;
+    opacity: 1;
+    cursor: pointer;
+  }
+  .input-spin-end::-webkit-outer-spin-button {
+    margin: 0;
+  }
 }
 
 /* -------- Print Styles for Receipt (thermal / Epson TM-U220 impact) -------- */
