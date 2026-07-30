@@ -220,13 +220,13 @@ export default function PoFormDialog({
                           </p>
                         )}
                       </div>
-                      <div className="w-full sm:w-auto shrink-0">
+                      <div className="w-full min-w-0 sm:w-full shrink-0">
                         <Label className="text-[10px] text-slate-500 uppercase sm:sr-only mb-1 block">Qty</Label>
                         <Input
                           type="number"
                           min={0.01}
                           step="any"
-                          className="text-right h-9 w-full sm:w-full tabular-nums"
+                          className="input-spin-end w-full text-right h-9 tabular-nums"
                           value={str(l.qty)}
                           onChange={(e) => onUpdateLine(i, { qty: e.target.value })}
                         />

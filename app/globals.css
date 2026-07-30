@@ -97,7 +97,7 @@ body {
   .input-spin-end::-webkit-inner-spin-button {
     margin: 0;
     margin-inline-end: 0;
-    margin-inline-start: 0.4rem;
+    margin-inline-start: 0.7rem;
     opacity: 1;
     cursor: pointer;
   }
