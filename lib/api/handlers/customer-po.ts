@@ -208,8 +208,9 @@ async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
     let vendorTenantId = it.vendorTenantId;
     let vendorUomId = it.vendorUomId || '';
     let satuan = it.satuan;
+    let prod: Record<string, unknown> | undefined;
     if (it.localStokId) {
-      const prod = prodById.get(String(it.localStokId));
+      prod = prodById.get(String(it.localStokId)) as Record<string, unknown> | undefined;
       if (prod) {
         vendorStokId = prod.vendorStokId || vendorStokId;
         vendorKode = prod.kode || vendorKode;
@@ -221,6 +222,13 @@ async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
       if (localUom) {
         satuan = localUom.satuan;
         vendorUomId = localUom.vendorUomId || vendorUomId;
+      }
+    }
+    // Fallback: ID satuan dasar dari snapshot katalog sales (setelah Sync Katalog)
+    if (!vendorUomId || String(vendorUomId).startsWith('legacy:')) {
+      const fromProduct = prod?.vendorBaseUomId != null ? String(prod.vendorBaseUomId).trim() : '';
+      if (fromProduct && !fromProduct.startsWith('legacy:')) {
+        vendorUomId = fromProduct;
       }
     }
     return computeLineEstimasi({

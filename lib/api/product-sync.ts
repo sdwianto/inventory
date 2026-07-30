@@ -76,6 +76,7 @@ export async function upsertProductFromVendor(
     vendorStokId: snap.id,
     vendorTenantId: vTenant,
     vendorTenantName: snap.vendorTenantName || vTenant,
+    vendorBaseUomId: resolveVendorBaseUomId(product, snap),
     vendorHargaBeli: snap.hargaBeli,
     vendorHargaGrosir: snap.hargaGrosir,
     vendorHargaSpesial: snap.hargaSpesial,
@@ -238,9 +239,15 @@ export async function syncVendorProductUoms(
   }
   const base = pickBaseUom(uomDocs);
   if (base) {
+    const vendorBaseUomId = resolveVendorBaseUomId(vendorProduct, snap);
     await db.collection('products').updateOne(
       { id: localProductId },
-      { $set: productDenormFromBaseUom(base) },
+      {
+        $set: {
+          ...productDenormFromBaseUom(base),
+          vendorBaseUomId,
+        },
+      },
     );
   }
 }

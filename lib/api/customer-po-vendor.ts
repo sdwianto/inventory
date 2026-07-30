@@ -5,7 +5,17 @@ import type { JsonObject } from '@/types/json';
 import { findProductUomsByIds, listProductUomsByProductIds } from '@/lib/api/product-uom';
 import type { ProductUom } from '@/lib/uom/types';
 
-type ProductDoc = JsonObject & { id?: string; kode?: string; nama?: string; vendorStokId?: string; vendorTenantId?: string; syncSource?: string };
+type ProductDoc = JsonObject & {
+  id?: string;
+  kode?: string;
+  nama?: string;
+  satuan?: string;
+  vendorStokId?: string;
+  vendorTenantId?: string;
+  vendorBaseUomId?: string;
+  syncSource?: string;
+  aktif?: boolean;
+};
 
 async function loadProductsBatch(db: Db, tenantId: string, items: JsonObject[]) {
   const tid = tenantId || 'default';
@@ -100,28 +110,75 @@ function normSatuan(s?: string | null): string {
   return String(s || '').trim().toUpperCase();
 }
 
+/** vendorUomId valid untuk push — bukan kosong, bukan ID lokal yang keliru. */
+function isUsableVendorUomId(id?: string | null, localUomId?: string): boolean {
+  const v = String(id || '').trim();
+  if (!v) return false;
+  if (localUomId && v === localUomId) return false;
+  return true;
+}
+
+/** ID satuan sales.app nyata (bukan placeholder legacy:). */
+function isRealVendorUomId(id?: string | null, localUomId?: string): boolean {
+  const v = String(id || '').trim();
+  if (!isUsableVendorUomId(v, localUomId)) return false;
+  return !v.startsWith('legacy:');
+}
+
 /** Cari vendorUomId untuk push PO — toleran data lama / uomId stale setelah sync. */
-function resolveVendorUomId(
+export function resolveVendorUomId(
   prod: ProductDoc,
   localUom: ProductUom | undefined,
   productUoms: ProductUom[],
   satuanHint?: string,
+  lineVendorUomId?: string,
 ): string | undefined {
-  if (localUom?.vendorUomId) return localUom.vendorUomId;
+  // 1) ID eksplisit di baris PO (hasil map saat buat/edit) — utamakan non-legacy
+  if (isRealVendorUomId(lineVendorUomId, localUom?.id)) {
+    return String(lineVendorUomId).trim();
+  }
+
+  // 2) Mapping di product_uom yang sudah punya vendorUomId nyata
+  if (isRealVendorUomId(localUom?.vendorUomId, localUom?.id)) {
+    return String(localUom!.vendorUomId).trim();
+  }
 
   const target = normSatuan(localUom?.satuan || satuanHint);
-  const linked = productUoms.find((u) => normSatuan(u.satuan) === target && u.vendorUomId);
-  if (linked?.vendorUomId) return linked.vendorUomId;
 
-  const baseLinked = productUoms.find((u) => u.isBase && u.vendorUomId);
+  const linked = productUoms.find(
+    (u) => normSatuan(u.satuan) === target && isRealVendorUomId(u.vendorUomId, u.id),
+  );
+  if (linked?.vendorUomId) return String(linked.vendorUomId).trim();
+
+  const baseLinked = productUoms.find((u) => u.isBase && isRealVendorUomId(u.vendorUomId, u.id));
   if (baseLinked?.vendorUomId && (!target || normSatuan(baseLinked.satuan) === target)) {
-    return baseLinked.vendorUomId;
+    return String(baseLinked.vendorUomId).trim();
+  }
+
+  // 3) vendorBaseUomId dari snapshot katalog sales (disimpan saat Sync Katalog)
+  const prodVendorBase = String(prod.vendorBaseUomId || '').trim();
+  if (isRealVendorUomId(prodVendorBase)) {
+    const prodSat = normSatuan(prod.satuan);
+    if (!target || target === prodSat || localUom?.isBase) {
+      return prodVendorBase;
+    }
+  }
+
+  // 4) Legacy / baris PO yang masih pakai legacy: — last resort
+  if (isUsableVendorUomId(lineVendorUomId, localUom?.id)) {
+    return String(lineVendorUomId).trim();
+  }
+  if (isUsableVendorUomId(localUom?.vendorUomId, localUom?.id)) {
+    return String(localUom!.vendorUomId).trim();
   }
 
   const vendorStokId = String(prod.vendorStokId || '').trim();
   if (prod.syncSource === 'sales.app' && vendorStokId && localUom?.isBase !== false) {
     const base = productUoms.find((u) => u.isBase) || productUoms[0];
     if (base && (!target || normSatuan(base.satuan) === target)) {
+      return `legacy:${vendorStokId}`;
+    }
+    if (!productUoms.length && (!target || normSatuan(String(prod.satuan || '')) === target || !target)) {
       return `legacy:${vendorStokId}`;
     }
   }
@@ -183,17 +240,24 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
         || productUoms[0];
     }
 
-    if (localUom || it.uomId || it.satuan) {
+    if (localUom || it.uomId || it.satuan || it.vendorUomId) {
       if (localUom) satuan = localUom.satuan;
       vendorUomId = resolveVendorUomId(
         prod || { vendorStokId, syncSource: 'sales.app' },
         localUom,
         productUoms,
         it.satuan ? String(it.satuan) : undefined,
+        it.vendorUomId ? String(it.vendorUomId) : undefined,
       );
       if (!vendorUomId) {
         return {
           error: `Satuan "${localUom?.satuan || it.satuan || '?'}" untuk "${it.nama || vendorKode}" belum terhubung ke sales.app — jalankan Sync Katalog.`,
+        };
+      }
+      // legacy: sering ditolak sales jika produk sudah punya UOM nyata — minta sync ulang
+      if (vendorUomId.startsWith('legacy:') && !productUoms.some((u) => isRealVendorUomId(u.vendorUomId, u.id))) {
+        return {
+          error: `Satuan "${satuan || '?'}" untuk "${it.nama || vendorKode}" belum punya uomId sales.app — jalankan Sync Katalog, lalu Retry kirim PO.`,
         };
       }
     }

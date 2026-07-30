@@ -301,6 +301,11 @@ async function mapCpoItemsFromProducts(
     const matchedUom = satuanWant
       ? uoms.find((u) => String(u.satuan || '').trim().toLowerCase() === satuanWant)
       : uoms.find((u) => u.isBase) || uoms[0];
+    let vendorUomId = matchedUom?.vendorUomId || '';
+    if (!vendorUomId || String(vendorUomId).startsWith('legacy:')) {
+      const fromProduct = prod.vendorBaseUomId != null ? String(prod.vendorBaseUomId).trim() : '';
+      if (fromProduct && !fromProduct.startsWith('legacy:')) vendorUomId = fromProduct;
+    }
     return computeLineEstimasi({
       lineId: uuidv4(),
       localStokId: it.localStokId,
@@ -311,7 +316,7 @@ async function mapCpoItemsFromProducts(
       nama: (prod.nama != null ? String(prod.nama) : it.nama) || undefined,
       satuan: matchedUom?.satuan || it.satuan || (prod.satuan != null ? String(prod.satuan) : undefined),
       uomId: matchedUom?.id || '',
-      vendorUomId: matchedUom?.vendorUomId || '',
+      vendorUomId,
       qty: it.qty,
       estimasiHarga: hargaBeli,
       hargaBeliReferensi: hargaBeli,

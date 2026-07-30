@@ -201,10 +201,134 @@ describe('enrichPoItemsForVendor', () => {
       satuan: 'PCS',
     }]);
 
+    // legacy: tanpa Sync Katalog penuh ditolak di sisi inventory (sales menolak uomId tidak dikenal)
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/Sync Katalog/i);
+    }
+  });
+
+  it('uses vendorBaseUomId from product when product_uom belum punya vendorUomId', async () => {
+    const dbWithBase = {
+      collection: (name: string) => ({
+        find: () => ({
+          toArray: async () => {
+            if (name === 'products') {
+              return [{
+                id: 'lp1',
+                tenantId: 'sppg',
+                kode: 'A1',
+                nama: 'Barang',
+                satuan: 'KG',
+                vendorStokId: 'vp1',
+                vendorTenantId: 'uddawam',
+                vendorBaseUomId: 'sales-uom-kg-1',
+                syncSource: 'sales.app',
+              }];
+            }
+            return [];
+          },
+        }),
+      }),
+    };
+    mockedFindUoms.mockResolvedValue(new Map([
+      ['local-kg', {
+        id: 'local-kg',
+        tenantId: 'sppg',
+        productId: 'lp1',
+        satuan: 'KG',
+        factorToBase: 1,
+        vendorUomId: undefined,
+        isBase: true,
+        hargaEcer: 0,
+        hargaGrosir: 0,
+        hargaSpesial: 0,
+        barcode: '',
+        sortOrder: 0,
+        aktif: true,
+      }],
+    ]));
+    mockedListUoms.mockResolvedValue(new Map([
+      ['lp1', [{
+        id: 'local-kg',
+        tenantId: 'sppg',
+        productId: 'lp1',
+        satuan: 'KG',
+        factorToBase: 1,
+        vendorUomId: undefined,
+        isBase: true,
+        hargaEcer: 0,
+        hargaGrosir: 0,
+        hargaSpesial: 0,
+        barcode: '',
+        sortOrder: 0,
+        aktif: true,
+      }]],
+    ]));
+
+    const result = await enrichPoItemsForVendor(dbWithBase as never, 'sppg', [{
+      localStokId: 'lp1',
+      uomId: 'local-kg',
+      qty: 135,
+      nama: 'Ayam Fillet',
+      satuan: 'KG',
+    }]);
+
     expect('items' in result).toBe(true);
     if ('items' in result) {
-      expect(result.items?.[0]?.uomId).toBe('legacy:vp1');
-      expect(result.items?.[0]?.satuan).toBe('PCS');
+      expect(result.items?.[0]?.uomId).toBe('sales-uom-kg-1');
+      expect(result.items?.[0]?.satuan).toBe('KG');
+    }
+  });
+
+  it('prefers line vendorUomId over stale local mapping', async () => {
+    mockedFindUoms.mockResolvedValue(new Map([
+      ['local-kg', {
+        id: 'local-kg',
+        tenantId: 'sppg',
+        productId: 'lp1',
+        satuan: 'KG',
+        factorToBase: 1,
+        vendorUomId: 'legacy:vp1',
+        isBase: true,
+        hargaEcer: 0,
+        hargaGrosir: 0,
+        hargaSpesial: 0,
+        barcode: '',
+        sortOrder: 0,
+        aktif: true,
+      }],
+    ]));
+    mockedListUoms.mockResolvedValue(new Map([
+      ['lp1', [{
+        id: 'local-kg',
+        tenantId: 'sppg',
+        productId: 'lp1',
+        satuan: 'KG',
+        factorToBase: 1,
+        vendorUomId: 'legacy:vp1',
+        isBase: true,
+        hargaEcer: 0,
+        hargaGrosir: 0,
+        hargaSpesial: 0,
+        barcode: '',
+        sortOrder: 0,
+        aktif: true,
+      }]],
+    ]));
+
+    const result = await enrichPoItemsForVendor(productDb() as never, 'sppg', [{
+      localStokId: 'lp1',
+      uomId: 'local-kg',
+      vendorUomId: 'sales-real-uom',
+      qty: 10,
+      satuan: 'KG',
+      nama: 'Barang',
+    }]);
+
+    expect('items' in result).toBe(true);
+    if ('items' in result) {
+      expect(result.items?.[0]?.uomId).toBe('sales-real-uom');
     }
   });
 
