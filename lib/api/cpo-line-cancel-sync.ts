@@ -243,6 +243,24 @@ export function syncCpoFromSoPayload(
   };
 }
 
+function vendorScopedCancelRecords(
+  poItems: CpoLine[],
+  vendor: string,
+  reason: string,
+): CpoLineCancelRecord[] {
+  const candidates = poItems.filter((l) => !l.cancelled);
+  const scoped = vendor
+    ? candidates.filter((l) => String(l.vendorTenantId || '') === vendor)
+    : candidates;
+  return scoped.map((l) => ({
+    lineId: l.lineId ? String(l.lineId) : undefined,
+    kode: l.kode ? String(l.kode) : undefined,
+    nama: l.nama ? String(l.nama) : undefined,
+    qty: parseQty(l.qtyOriginal ?? l.qty),
+    reason,
+  }));
+}
+
 /** Webhook sales_order.cancelled — batalkan baris terkait SO/vendor saja (bukan seluruh PO multi-vendor). */
 export function applySoCancelledWebhookToPoItems(
   poItems: CpoLine[],
@@ -262,19 +280,20 @@ export function applySoCancelledWebhookToPoItems(
   const reason = String(payload.reason || payload.cancelReason || 'SO dibatalkan di sales.app');
   const vendor = String(payload.vendorTenantId || '').trim();
 
+  const candidates = poItems.filter((l) => !l.cancelled);
+  const scoped = vendor
+    ? candidates.filter((l) => String(l.vendorTenantId || '') === vendor)
+    : candidates;
+
   let toApply = explicit;
   if (!explicit.length) {
-    const candidates = poItems.filter((l) => !l.cancelled);
-    const scoped = vendor
-      ? candidates.filter((l) => String(l.vendorTenantId || '') === vendor)
-      : candidates;
-    toApply = scoped.map((l) => ({
-      lineId: l.lineId ? String(l.lineId) : undefined,
-      kode: l.kode ? String(l.kode) : undefined,
-      nama: l.nama ? String(l.nama) : undefined,
-      qty: parseQty(l.qtyOriginal ?? l.qty),
-      reason,
-    }));
+    toApply = vendorScopedCancelRecords(poItems, vendor, reason);
+  } else {
+    // lineId SO sales sering ≠ lineId PO inventory — jika tidak ada yang cocok, batalkan semua baris vendor.
+    const matched = scoped.some((l) => explicit.some((c) => matchesCancelRecord(l, c)));
+    if (!matched) {
+      toApply = vendorScopedCancelRecords(poItems, vendor, reason);
+    }
   }
 
   const items = applyCancelledLinesToPoItems(poItems, toApply, meta, now);

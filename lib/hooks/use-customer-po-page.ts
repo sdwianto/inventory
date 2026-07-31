@@ -703,9 +703,18 @@ export function useCustomerPoPage() {
   const syncSoLinesPo = async (id: string) => {
     setSubmitting(id);
     try {
+      const before = list.find((p) => str(p.id) === id);
+      const prevStatus = str(before?.status);
       const data = await poMutations.syncSoLines(id);
+      const nextStatus = str(data.status);
       if (data.synced) {
-        toast.success('Baris PO diselaraskan dengan SO sales.app');
+        if (nextStatus === 'CANCELLED' && prevStatus !== 'CANCELLED') {
+          toast.warning(`PO ${str(data.noPO) || id}: semua SO vendor dibatalkan — status jadi CANCELLED`);
+        } else if (nextStatus === 'PARTIAL_CANCELLED' && prevStatus !== 'PARTIAL_CANCELLED') {
+          toast.warning(`PO ${str(data.noPO) || id}: sebagian SO dibatalkan — status jadi PARTIAL_CANCELLED`);
+        } else {
+          toast.success('Baris PO diselaraskan dengan SO sales.app');
+        }
       } else {
         toast.info(typeof data.message === 'string' ? data.message : 'Sudah selaras dengan SO sales.app');
       }

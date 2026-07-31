@@ -99,4 +99,35 @@ describe('applySoCancelledWebhookToPoItems', () => {
     expect(result.items.find((r) => r.kode === 'B711755')?.cancelled).toBe(true);
     expect(result.items.find((r) => r.kode === 'B553057')?.cancelled).toBeFalsy();
   });
+
+  it('falls back to vendor-scoped cancel when cancelledItems lineIds do not match', () => {
+    const result = applySoCancelledWebhookToPoItems(
+      [
+        { lineId: 'po-l1', kode: 'B553057', nama: 'Abon', qty: 2, vendorTenantId: 'uddawam' },
+        { lineId: 'po-l2', kode: 'B711755', nama: 'Tempe', qty: 1, vendorTenantId: 'tempe' },
+      ],
+      {
+        cancelledItems: [{ lineId: 'sales-line-x', kode: '', qty: 2, reason: 'Batal vendor' }],
+        vendorTenantId: 'uddawam',
+      },
+      { salesOrderId: 'so-1', noSO: 'SO001' },
+      'SUBMITTED',
+    );
+    expect(result.status).toBe('PARTIAL_CANCELLED');
+    expect(result.items.find((r) => r.kode === 'B553057')?.cancelled).toBe(true);
+    expect(result.items.find((r) => r.kode === 'B711755')?.cancelled).toBeFalsy();
+  });
+
+  it('returns CANCELLED when all vendor lines are cancelled', () => {
+    const result = applySoCancelledWebhookToPoItems(
+      [
+        { lineId: 'l1', kode: 'B553057', nama: 'Abon', qty: 1, vendorTenantId: 'uddawam' },
+      ],
+      { vendorTenantId: 'uddawam', reason: 'SO dibatalkan' },
+      { salesOrderId: 'so-1', noSO: 'SO001' },
+      'SUBMITTED',
+    );
+    expect(result.status).toBe('CANCELLED');
+    expect(result.items.every((r) => r.cancelled)).toBe(true);
+  });
 });

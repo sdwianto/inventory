@@ -6,6 +6,7 @@ import {
   rollupPartialCancelStatus,
   diffPoItemsAgainstActiveSo,
   applyCancelledLinesToPoItems,
+  applySoCancelledWebhookToPoItems,
   type CpoLineCancelRecord,
 } from '@/lib/api/cpo-line-cancel-sync';
 import { fetchSoStatusForCustomerPo } from '@/lib/api/cpo-so-fetch';
@@ -210,22 +211,45 @@ export async function pullSoCancelStateForPo(
       ...(Array.isArray(payload.cancelledItems) ? payload.cancelledItems : []),
       ...(Array.isArray(payload.cancelledLines) ? payload.cancelledLines : []),
     ] as CpoLineCancelRecord[];
+    const soStatus = String(payload.status || '').toUpperCase();
 
-    if (cancelledRaw.length) {
-      items = applyCancelledLinesToPoItems(items, cancelledRaw, meta, now) as CpoLine[];
-    }
-
-    const activeItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
-    if (activeItems.length) {
-      items = diffPoItemsAgainstActiveSo(
+    // SO penuh CANCELLED di sales — batalkan baris vendor (bukan hanya match lineId).
+    if (soStatus === 'CANCELLED') {
+      const cancelSync = applySoCancelledWebhookToPoItems(
         items,
-        activeItems,
+        {
+          cancelledItems: cancelledRaw,
+          reason: String(payload.cancelReason || payload.reason || 'SO dibatalkan di sales.app'),
+          vendorTenantId: vendorId || undefined,
+        },
         meta,
+        String(po.status || 'SUBMITTED'),
         now,
-        vendorId
-          ? { vendorTenantId: vendorId, onlyVendorLines: multi }
-          : undefined,
-      ) as CpoLine[];
+      );
+      items = cancelSync.items as CpoLine[];
+      if (cancelSync.cancelledSoLines?.length) {
+        cancelledSoLines = [
+          ...(cancelledSoLines || []),
+          ...cancelSync.cancelledSoLines,
+        ];
+      }
+    } else {
+      if (cancelledRaw.length) {
+        items = applyCancelledLinesToPoItems(items, cancelledRaw, meta, now) as CpoLine[];
+      }
+
+      const activeItems = Array.isArray(payload.items) ? payload.items as JsonObject[] : [];
+      if (activeItems.length) {
+        items = diffPoItemsAgainstActiveSo(
+          items,
+          activeItems,
+          meta,
+          now,
+          vendorId
+            ? { vendorTenantId: vendorId, onlyVendorLines: multi }
+            : undefined,
+        ) as CpoLine[];
+      }
     }
 
     const snap = buildVendorSoSnapshot({
