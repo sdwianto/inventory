@@ -333,6 +333,12 @@ export default function PoListCard({
               Nomor SO belum tersinkron dari sales.app. Refresh halaman atau gunakan tombol <strong>Sync SO</strong>.
             </p>
           )}
+          {!!po.purchaseRequirementNo && (
+            <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">
+              <span className="font-medium text-slate-700">Dari Kebutuhan Beli (Rencana Produksi):</span>{' '}
+              <span className="font-mono">{str(po.purchaseRequirementNo)}</span>
+            </p>
+          )}
           {!!po.revisedFromNoPO && (
             <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">
               <span className="font-medium text-slate-700">Revisi dari:</span>{' '}

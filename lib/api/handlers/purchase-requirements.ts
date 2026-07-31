@@ -676,12 +676,33 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
       note: `Draft CPO ${String(prepared.insertDoc.noPO)} dibuat ulang`,
     });
 
+    const previousCpoId = String(existing.draftCpoId || '').trim();
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         await txDb.collection('customer_purchase_orders').insertOne(
           prepared.insertDoc,
           txOpts(session),
         );
+        // Tandai CPO lama yang CANCELLED digantikan — cegah "Buat ulang" ganda dari history.
+        if (previousCpoId && previousCpoId !== String(prepared.insertDoc.id)) {
+          await txDb.collection('customer_purchase_orders').updateOne(
+            {
+              id: previousCpoId,
+              tenantId,
+              status: 'CANCELLED',
+              supersededByPoId: { $exists: false },
+            },
+            {
+              $set: {
+                supersededByPoId: prepared.insertDoc.id,
+                supersededByNoPO: prepared.insertDoc.noPO,
+                supersededAt: now,
+                updatedAt: now,
+              },
+            },
+            txOpts(session),
+          );
+        }
         const upd = await txDb.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
           withTenantFilter(scopeAuth, { id }),
           {

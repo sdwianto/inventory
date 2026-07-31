@@ -27,7 +27,9 @@ import {
   buildRevisedPoItemPayloads,
   buildReviseCatatan,
   canReviseCancelledPoStatus,
+  foodProductionLineageFromPo,
 } from '@/lib/pembelian-po/revise-from-cancelled';
+import { PURCHASE_REQUIREMENTS_COLLECTION } from '@/lib/food-production/purchase-requirement';
 import {
   parseCursorPageParams,
   applyDescDateIdCursor,
@@ -884,6 +886,14 @@ export async function handleCustomerPo({
       created = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const noPO = await nextDocNumber(txDb, tenantId, 'CPO', 'CPO', session);
         const poItems = await mapPoItems(txDb, tenantId, itemPayloads);
+        const lineage = foodProductionLineageFromPo(source as {
+          purchaseRequirementId?: unknown;
+          purchaseRequirementNo?: unknown;
+          materialRequirementId?: unknown;
+          productionPlanId?: unknown;
+          maintenanceRequestId?: unknown;
+          assetId?: unknown;
+        });
         const doc = {
           id: uuidv4(),
           tenantId,
@@ -895,10 +905,7 @@ export async function handleCustomerPo({
           estimasiTotal: sumPoEstimasi(poItems),
           catatan: buildReviseCatatan(sourceNoPO, String(source.catatan || '')),
           paymentTerms: source.paymentTerms || 'KREDIT',
-          ...vendorPoWriteFields({
-            maintenanceRequestId: source.maintenanceRequestId || null,
-            assetId: source.assetId || null,
-          }),
+          ...vendorPoWriteFields(lineage),
           revisedFromPoId: source.id,
           revisedFromNoPO: sourceNoPO || null,
           createdBy: creator,
@@ -918,6 +925,25 @@ export async function handleCustomerPo({
           },
           txOpts(session),
         );
+        // Food Production: arahkan PR.draftCpo* ke draft baru agar Rencana Produksi tidak stuck di PO lama.
+        const prId = String(source.purchaseRequirementId || '').trim();
+        if (prId) {
+          await txDb.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
+            {
+              id: prId,
+              tenantId,
+              draftCpoId: source.id,
+            },
+            {
+              $set: {
+                draftCpoId: doc.id,
+                draftCpoNo: noPO,
+                updatedAt: now,
+              },
+            },
+            txOpts(session),
+          );
+        }
         return doc as JsonObject;
       });
     } catch (e: unknown) {

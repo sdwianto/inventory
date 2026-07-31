@@ -3,6 +3,7 @@ import {
   buildRevisedPoItemPayloads,
   buildReviseCatatan,
   canReviseCancelledPoStatus,
+  foodProductionLineageFromPo,
 } from '@/lib/pembelian-po/revise-from-cancelled';
 
 describe('revise-from-cancelled', () => {
@@ -54,5 +55,22 @@ describe('revise-from-cancelled', () => {
     expect(buildReviseCatatan('CPO2607000003', 'Urgent')).toBe(
       'Revisi dari CPO2607000003\nUrgent',
     );
+  });
+
+  it('copies food-production lineage fields for revise', () => {
+    const lineage = foodProductionLineageFromPo({
+      purchaseRequirementId: 'pr-1',
+      purchaseRequirementNo: 'PRB2607000001',
+      materialRequirementId: 'mrp-1',
+      productionPlanId: 'plan-1',
+      maintenanceRequestId: null,
+      assetId: '',
+    });
+    expect(lineage.purchaseRequirementId).toBe('pr-1');
+    expect(lineage.purchaseRequirementNo).toBe('PRB2607000001');
+    expect(lineage.materialRequirementId).toBe('mrp-1');
+    expect(lineage.productionPlanId).toBe('plan-1');
+    expect(lineage.maintenanceRequestId).toBeNull();
+    expect(lineage.assetId).toBeNull();
   });
 });

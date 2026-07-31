@@ -49,3 +49,28 @@ export function buildReviseCatatan(sourceNoPO: string, existingCatatan?: string)
   if (prev.includes(note)) return prev;
   return `${note}\n${prev}`;
 }
+
+/** Field jejak Food Production / PR yang wajib ikut ke draft revisi. */
+export function foodProductionLineageFromPo(source: {
+  purchaseRequirementId?: unknown;
+  purchaseRequirementNo?: unknown;
+  materialRequirementId?: unknown;
+  productionPlanId?: unknown;
+  maintenanceRequestId?: unknown;
+  assetId?: unknown;
+}): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const prId = String(source.purchaseRequirementId || '').trim();
+  const prNo = String(source.purchaseRequirementNo || '').trim();
+  const mrpId = String(source.materialRequirementId || '').trim();
+  const planId = String(source.productionPlanId || '').trim();
+  const wrId = String(source.maintenanceRequestId || '').trim();
+  const assetId = String(source.assetId || '').trim();
+  if (prId) out.purchaseRequirementId = prId;
+  if (prNo) out.purchaseRequirementNo = prNo;
+  if (mrpId) out.materialRequirementId = mrpId;
+  if (planId) out.productionPlanId = planId;
+  out.maintenanceRequestId = wrId || null;
+  out.assetId = assetId || null;
+  return out;
+}
