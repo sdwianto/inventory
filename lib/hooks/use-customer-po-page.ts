@@ -19,6 +19,7 @@ import {
   PO_CAN_DIRECT_SUBMIT,
   PO_CAN_REQUEST,
 } from '@/lib/pembelian-po/constants';
+import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cancelled';
 import {
   toDateInputValue,
   mergeFormLinesFromPo,
@@ -805,6 +806,30 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
+  const reviseCancelledPo = async (id: string) => {
+    setSubmitting(id);
+    try {
+      const data = await poMutations.reviseFromCancelled(id);
+      toast.success(
+        typeof data.message === 'string'
+          ? data.message
+          : `Draft ${str(data.noPO)} dibuat — history PO lama tetap ada`,
+      );
+      setExpandedId(str(data.id) || null);
+      openEdit(data);
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : 'Gagal membuat revisi PO');
+    }
+    setSubmitting('');
+  };
+
+  const canRevisePo = (po: JsonObject) => {
+    if (!canCreate) return false;
+    if (po.supersededByPoId) return false;
+    return canReviseCancelledPoStatus(str(po.status));
+  };
+
   return {
     user,
     list,
@@ -864,5 +889,7 @@ export function useCustomerPoPage() {
     closeFormDialog,
     dismissFormWithAutosave,
     deleteDraftPo,
+    reviseCancelledPo,
+    canRevisePo,
   };
 }

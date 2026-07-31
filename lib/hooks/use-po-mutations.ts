@@ -249,6 +249,18 @@ export function usePoMutations(
     }
   }, [setList]);
 
+  const reviseFromCancelled = useCallback(async (id: string): Promise<JsonObject> => {
+    assertPersistedPoId(id);
+    const res = await fetchOrQueue(`/api/customer-purchase-orders/${id}/revise`, {
+      method: 'POST',
+      offlineLabel: `Revisi PO ${id}`,
+    });
+    const { data, ok } = await parseJsonResponse(res);
+    if (!ok) throw new Error(String(data.error || 'Gagal membuat revisi PO'));
+    await reload();
+    return data;
+  }, [reload]);
+
   return {
     requestApproval,
     approve,
@@ -260,5 +272,6 @@ export function usePoMutations(
     createPO,
     updatePO,
     deleteDraftPO,
+    reviseFromCancelled,
   };
 }

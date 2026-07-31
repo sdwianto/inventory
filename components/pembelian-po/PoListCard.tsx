@@ -10,12 +10,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  CheckCircle2, ChevronDown, ChevronRight, Pencil, Printer, RefreshCw, Send, Trash2, XCircle,
+  CheckCircle2, ChevronDown, ChevronRight, CopyPlus, Pencil, Printer, RefreshCw, Send, Trash2, XCircle,
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
 import { poCreatorLabel, formatPoVendorSoDisplay, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
 import { canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
+import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cancelled';
 import PrintPortal from '@/components/PrintPortal';
 import CustomerPoDocument from '@/components/CustomerPoDocument';
 import { printDocument } from '@/lib/doc-print';
@@ -42,6 +43,8 @@ export type PoListCardProps = {
   onApprove: () => void;
   onReject: (reason: string) => void;
   onDeleteDraft?: () => void;
+  onRevise?: () => void;
+  canRevise?: boolean;
   tenantName?: string;
 };
 
@@ -65,11 +68,14 @@ export default function PoListCard({
   onApprove,
   onReject,
   onDeleteDraft,
+  onRevise,
+  canRevise = false,
   tenantName,
 }: PoListCardProps) {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [reviseDialogOpen, setReviseDialogOpen] = useState(false);
   const [printing, setPrinting] = useState(false);
 
   const poId = str(po.id);
@@ -164,6 +170,19 @@ export default function PoListCard({
           <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit}>
             <Pencil className="w-3 h-3 mr-1" />
             Edit
+          </Button>
+        )}
+        {canRevise && onRevise && !isOptimistic && canReviseCancelledPoStatus(poStatus) && !po.supersededByPoId && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 border-orange-300 text-orange-800 hover:bg-orange-50"
+            onClick={() => setReviseDialogOpen(true)}
+            disabled={isSubmitting}
+            title="Buat draft baru dengan nomor PO baru — history lama tetap ada"
+          >
+            <CopyPlus className={`w-3 h-3 mr-1 ${isSubmitting ? 'animate-pulse' : ''}`} />
+            Buat ulang
           </Button>
         )}
         {poStatus === 'DRAFT' && canEdit && !isOptimistic && onDeleteDraft && (
@@ -314,6 +333,19 @@ export default function PoListCard({
               Nomor SO belum tersinkron dari sales.app. Refresh halaman atau gunakan tombol <strong>Sync SO</strong>.
             </p>
           )}
+          {!!po.revisedFromNoPO && (
+            <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">
+              <span className="font-medium text-slate-700">Revisi dari:</span>{' '}
+              <span className="font-mono">{str(po.revisedFromNoPO)}</span>
+            </p>
+          )}
+          {!!po.supersededByNoPO && (
+            <p className="text-xs text-amber-800 mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5">
+              <span className="font-medium">Digantikan oleh:</span>{' '}
+              <span className="font-mono">{str(po.supersededByNoPO)}</span>
+              {' — history PO ini tetap disimpan'}
+            </p>
+          )}
           {!!po.catatan && (
             <p className="text-xs text-slate-600 mb-2">
               <span className="font-medium">Catatan:</span> {str(po.catatan)}
@@ -460,6 +492,29 @@ export default function PoListCard({
               }}
             >
               Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={reviseDialogOpen} onOpenChange={setReviseDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Buat ulang PO?</AlertDialogTitle>
+            <AlertDialogDescription>
+              PO {str(po.noPO)} tetap tersimpan sebagai history ({poStatus}). Sistem akan membuat
+              draft baru dengan nomor PO baru; item disalin agar bisa direvisi lalu diajukan ulang.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-orange-600 hover:bg-orange-700"
+              onClick={() => {
+                setReviseDialogOpen(false);
+                onRevise?.();
+              }}
+            >
+              Buat draft baru
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

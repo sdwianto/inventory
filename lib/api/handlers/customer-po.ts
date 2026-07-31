@@ -24,6 +24,11 @@ import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
 import { orchestrateEnsurePushCancelSoAfterCommit } from '@/lib/api/cpo-cancel-push-integration';
 import { canEditCustomerPo, canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 import {
+  buildRevisedPoItemPayloads,
+  buildReviseCatatan,
+  canReviseCancelledPoStatus,
+} from '@/lib/pembelian-po/revise-from-cancelled';
+import {
   parseCursorPageParams,
   applyDescDateIdCursor,
   sliceCursorPage,
@@ -837,6 +842,95 @@ export async function handleCustomerPo({
       message: retried.vendorSynced
         ? `Vendor ${vendorTenantId} tersinkron`
         : 'Masih ada vendor lain yang gagal',
+    });
+  }
+
+  // POST /customer-purchase-orders/:id/revise — buat DRAFT baru (noPO baru) dari PO dibatalkan
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'revise' && method === 'POST') {
+    const deniedRole = requireRole(auth, PO_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+
+    const source = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    );
+    if (!source) return err('PO tidak ditemukan', 404);
+    const sourceStatus = String(source.status || '');
+    if (!canReviseCancelledPoStatus(sourceStatus)) {
+      return err(`Hanya PO CANCELLED / PARTIAL_CANCELLED yang bisa direvisi (status: ${sourceStatus})`, 400);
+    }
+    if (source.supersededByPoId) {
+      return err(
+        `PO sudah digantikan oleh ${source.supersededByNoPO || source.supersededByPoId} — buka dokumen tersebut`,
+        409,
+      );
+    }
+
+    const itemPayloads = buildRevisedPoItemPayloads(Array.isArray(source.items) ? source.items : []);
+    if (!itemPayloads.length) return err('PO sumber tidak punya item yang bisa disalin', 400);
+
+    const tenantId = String(source.tenantId || tenantIdForWrite(scopeAuth, poBody) || 'default');
+    const now = new Date();
+    const locked = await guardPosting(db, scopeAuth, poBody, source.tanggalKedatangan || source.tanggal);
+    if (locked) return locked;
+
+    const { runInTransactionOrFallback, txOpts } = await import('@/lib/api/transaction');
+    const creator = await actorSnapshot(db, auth);
+    const sourceNoPO = String(source.noPO || '');
+
+    let created: JsonObject;
+    try {
+      created = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const noPO = await nextDocNumber(txDb, tenantId, 'CPO', 'CPO', session);
+        const poItems = await mapPoItems(txDb, tenantId, itemPayloads);
+        const doc = {
+          id: uuidv4(),
+          tenantId,
+          noPO,
+          tanggal: now,
+          tanggalKedatangan: source.tanggalKedatangan || now,
+          status: 'DRAFT',
+          items: poItems,
+          estimasiTotal: sumPoEstimasi(poItems),
+          catatan: buildReviseCatatan(sourceNoPO, String(source.catatan || '')),
+          paymentTerms: source.paymentTerms || 'KREDIT',
+          ...vendorPoWriteFields({
+            maintenanceRequestId: source.maintenanceRequestId || null,
+            assetId: source.assetId || null,
+          }),
+          revisedFromPoId: source.id,
+          revisedFromNoPO: sourceNoPO || null,
+          createdBy: creator,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await txDb.collection('customer_purchase_orders').insertOne(doc, txOpts(session));
+        await txDb.collection('customer_purchase_orders').updateOne(
+          { id: source.id },
+          {
+            $set: {
+              supersededByPoId: doc.id,
+              supersededByNoPO: noPO,
+              supersededAt: now,
+              updatedAt: now,
+            },
+          },
+          txOpts(session),
+        );
+        return doc as JsonObject;
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(msg || 'Gagal membuat revisi PO', 400);
+    }
+
+    await invalidateDashboardSnapshot(db, tenantId);
+    return ok({
+      ...(await enrichOnePo(db, created)),
+      revisedFromPoId: source.id,
+      revisedFromNoPO: sourceNoPO || null,
+      message: `Draft ${created.noPO} dibuat dari ${sourceNoPO || source.id}`,
     });
   }
 

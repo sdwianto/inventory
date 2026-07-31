@@ -74,6 +74,8 @@ function CustomerPoPageContent() {
     closeFormDialog,
     dismissFormWithAutosave,
     deleteDraftPo,
+    reviseCancelledPo,
+    canRevisePo,
   } = useCustomerPoPage();
 
   return (
@@ -184,6 +186,8 @@ function CustomerPoPageContent() {
                       onApprove={() => approvePo(poId)}
                       onReject={(reason) => rejectPo(poId, reason)}
                       onDeleteDraft={() => deleteDraftPo(poId)}
+                      canRevise={canRevisePo(po)}
+                      onRevise={() => reviseCancelledPo(poId)}
                       tenantName={str(user?.tenantName || user?.name)}
                     />
                   );
