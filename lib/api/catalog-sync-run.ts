@@ -99,8 +99,10 @@ async function fetchAllCatalogVendorKeys(
       updatedSince: null,
       correlationId,
     });
+    // Partial keys + ok:true akan menonaktifkan produk yang belum ter-scan (false orphan).
+    // Gagal di tengah pagination → batalkan reconcile sepenuhnya.
     if (!pageRes.ok) {
-      return { keys, ok: keys.size > 0 };
+      return { keys, ok: false };
     }
 
     const data = pageRes.data;

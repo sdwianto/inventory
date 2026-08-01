@@ -209,8 +209,11 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
 
     if (prod && prod.aktif === false) {
       const label = String(prod.nama || prod.kode || it.nama || it.kode || '?');
+      const kode = String(prod.kode || it.kode || it.vendorKode || '');
       return {
-        error: `Produk "${label}" sudah tidak aktif di sales.app — jalankan Sync Katalog atau pilih produk lain.`,
+        error: `Produk "${label}"${kode ? ` (${kode})` : ''} sudah tidak aktif di katalog sales.app. `
+          + `Di sales.app aktifkan lagi produk tersebut lalu Sync Katalog, `
+          + `atau Edit PO ini dan ganti/hapus baris produk itu sebelum Setujui.`,
       };
     }
 

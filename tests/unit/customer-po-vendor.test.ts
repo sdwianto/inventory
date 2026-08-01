@@ -364,6 +364,7 @@ describe('enrichPoItemsForVendor', () => {
     expect('error' in result).toBe(true);
     if ('error' in result) {
       expect(result.error).toMatch(/tidak aktif/i);
+      expect(result.error).toMatch(/Edit PO|Sync Katalog/i);
     }
   });
 });
