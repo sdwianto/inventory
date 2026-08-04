@@ -11,11 +11,33 @@ import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from
 import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
+import { storeBase64Image } from '@/lib/api/media-storage';
 import type { HandlerContext } from '@/types/api/handler';
 
 interface GrnPostBody extends Record<string, unknown> {
   asyncInvoice?: boolean;
   items?: unknown[];
+  photos?: unknown[];
+}
+
+const MAX_GRN_PHOTOS = 5;
+
+/** Simpan foto data-URL ke media storage; URL /api/media yang sudah ada dibiarkan. */
+async function persistGrnPhotos(tenantId: string, raw: unknown[]): Promise<string[] | { error: string }> {
+  if (raw.length > MAX_GRN_PHOTOS) return { error: `Maksimal ${MAX_GRN_PHOTOS} foto untuk penerimaan barang` };
+  const urls: string[] = [];
+  for (const item of raw) {
+    const s = String(item || '').trim();
+    if (!s) continue;
+    if (s.startsWith('/api/media/') || s.startsWith('http://') || s.startsWith('https://')) {
+      urls.push(s);
+      continue;
+    }
+    const stored = await storeBase64Image(tenantId, s, { prefix: 'grn', maxBytes: 768_000 });
+    if ('error' in stored) return { error: `Foto: ${stored.error}` };
+    urls.push(stored.url);
+  }
+  return urls;
 }
 
 export async function handleGoodsReceipts({
@@ -176,6 +198,12 @@ export async function handleGoodsReceipts({
     }
 
     const tenantId = grn.tenantId || tenantIdForWrite(scopeAuth, grnBody);
+
+    if (Array.isArray(grnBody.photos) && grnBody.photos.length) {
+      const photoResult = await persistGrnPhotos(tenantId, grnBody.photos);
+      if ('error' in photoResult) return err(photoResult.error, 400);
+      grnBody.photoUrls = photoResult;
+    }
 
     const posted = await postGoodsReceipt(db, {
       grn,

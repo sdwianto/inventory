@@ -29,6 +29,7 @@ import LineUomSelect from '@/components/uom/LineUomSelect';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
 import type { ProductUom } from '@/lib/uom/types';
+import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -133,6 +134,7 @@ export default function PenerimaanPage() {
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [qtyMap, setQtyMap] = useState<JsonObject>({});
   const [gudangMap, setGudangMap] = useState<JsonObject>({});
+  const [photos, setPhotos] = useState<string[]>([]);
   const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
   const [doView, setDoView] = useState<JsonObject | null>(null);
   const [loadingDo, setLoadingDo] = useState('');
@@ -284,6 +286,7 @@ export default function PenerimaanPage() {
       setQtyMap(initQty);
       setGudangMap(initGudang);
       setUomMap(initUom);
+      setPhotos([]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -307,7 +310,7 @@ export default function PenerimaanPage() {
     }).filter((it) => it.qty > 0);
 
     try {
-      const data = await postGrnMutation(grnId, items);
+      const data = await postGrnMutation(grnId, items, photos);
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
       if (data.noInvoice || data.invoiceSyncStatus === 'DONE') {
@@ -550,6 +553,14 @@ export default function PenerimaanPage() {
               );
             })}
           </div>
+          <PhotoUploadField
+            label="Foto Terima Barang"
+            hint="Opsional — bukti kondisi barang saat diterima (maks 5 foto)"
+            photos={photos}
+            onChange={setPhotos}
+            maxPhotos={5}
+            disabled={!!posting}
+          />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetail(null)}>Batal</Button>
             <Button onClick={postGrn} disabled={!!posting} className="bg-orange-500 hover:bg-orange-600">
@@ -648,6 +659,20 @@ export default function PenerimaanPage() {
               )}
             </table>
           </div>
+
+          {asArray(doView?.photos).length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Foto Terima Barang</p>
+              <div className="flex flex-wrap gap-2">
+                {(asArray(doView?.photos) as string[]).map((src) => (
+                  <a key={src} href={src} target="_blank" rel="noreferrer" className="block w-20 h-20 rounded-lg border overflow-hidden bg-slate-50">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={src} alt="Foto terima barang" className="w-full h-full object-cover" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDoView(null)}>Tutup</Button>

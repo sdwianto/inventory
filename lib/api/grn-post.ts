@@ -105,6 +105,7 @@ export async function postGoodsReceipt(
           lokasiKodes: [...lokasiSet],
           postedAt: now,
           userName: body?.userName,
+          ...(Array.isArray(body?.photoUrls) && body.photoUrls.length ? { photos: body.photoUrls } : {}),
           ...invoicePatch,
         },
       },

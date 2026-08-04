@@ -50,6 +50,7 @@ export function useGrnMutations(
   const postGrn = useCallback(async (
     grnId: string,
     items: Array<{ lineId?: unknown; lineIndex: number; qty: number; lokasiKode: string }>,
+    photos?: string[],
   ) => {
     const previous = qc.getQueryData<GrnPages>(listKey);
     qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, grnId, {
@@ -62,7 +63,7 @@ export function useGrnMutations(
       const res = await fetchOrQueue(`/api/goods-receipts/${grnId}/post`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items, ...(photos?.length ? { photos } : {}) }),
         offlineLabel: `Post GRN ${grnId}`,
       });
       const data = await res.json();
