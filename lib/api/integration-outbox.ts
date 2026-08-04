@@ -263,12 +263,24 @@ export async function drainEnsureGrnInvoice(
   const existing = await getEnsureGrnInvoiceOutbox(db, input.grnId);
   if (existing?.status === 'DONE') {
     const grn = await db.collection('goods_receipts').findOne({ id: input.grnId });
+    // Self-heal: outbox sudah DONE (invoice sudah terbuat) tapi goods_receipts.invoiceSyncStatus
+    // belum konsisten — bisa terjadi kalau replay/drain lain sempat me-reset status ke SYNCING
+    // di antara sync inline yang masih jalan dan outbox-nya baru selesai. Outbox DONE tidak akan
+    // diproses ulang lagi, jadi tanpa ini GRN macet permanen tampil "Menyinkronkan...".
+    let status = grn?.invoiceSyncStatus || 'DONE';
+    if (grn && status !== 'DONE' && status !== 'SKIPPED') {
+      await db.collection('goods_receipts').updateOne(
+        { id: input.grnId },
+        { $set: { invoiceSyncStatus: 'DONE', invoiceSyncError: null, invoiceSyncAt: new Date() } },
+      );
+      status = 'DONE';
+    }
     return {
       invoiceSync: {
         alreadyDone: true,
         noInvoice: grn?.noInvoice || null,
         invoiceId: grn?.vendorInvoiceId || null,
-        status: grn?.invoiceSyncStatus || 'DONE',
+        status,
       },
       outboxId: existing.id,
       claimed: false,
