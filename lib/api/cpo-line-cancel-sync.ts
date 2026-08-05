@@ -177,7 +177,10 @@ function rollupPartialCancelStatus(items: CpoLine[], currentStatus?: string): st
   const st = String(currentStatus || '');
   if (!cancelled.length) return st || 'SUBMITTED';
   if (!active.length) return 'CANCELLED';
-  if (['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED', 'CANCELLED'].includes(st)) {
+  if ([
+    'SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED',
+    'PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED', 'CANCELLED',
+  ].includes(st)) {
     return 'PARTIAL_CANCELLED';
   }
   return st;

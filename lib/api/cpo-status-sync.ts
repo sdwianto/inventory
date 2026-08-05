@@ -220,7 +220,12 @@ export async function syncCpoFromVendorEvent(
       });
     }
   } else if (event === 'invoice.posted') {
-    patch.status = 'INVOICED';
+    // PO multi-vendor: jangan paksa INVOICED kalau masih ada item vendor lain
+    // yang aktif (belum shipped/received) atau baru dibatalkan — ikuti rollup
+    // ship/receive sebenarnya, baru INVOICED kalau semua item aktif sudah RECEIVED.
+    const items = (Array.isArray(po.items) ? po.items : []) as CpoLine[];
+    const receiveStatus = rollupReceiveStatus(items);
+    patch.status = receiveStatus === 'RECEIVED' ? 'INVOICED' : receiveStatus;
     patch.invoicedAt = payload.postedAt ? new Date(String(payload.postedAt)) : now;
     patch.vendorNoInvoice = payload.noInvoice || po.vendorNoInvoice;
     patch.vendorInvoiceId = payload.invoiceId || po.vendorInvoiceId;
