@@ -85,6 +85,33 @@ describe('syncCpoFromVendorEvent', () => {
     expect(items.find((r) => r.kode === 'B553057')?.cancelled).toBeFalsy();
   });
 
+  it('does not mark other vendors CANCELLED just because they share the same noSO number', async () => {
+    const multiVendorPo = {
+      ...basePo,
+      status: 'CONFIRMED',
+      items: [
+        { lineId: 'l1', kode: 'B553057', nama: 'Abon', qty: 1, vendorTenantId: 'uddawam' },
+        { lineId: 'l2', kode: 'B711755', nama: 'Tempe', qty: 1, vendorTenantId: 'zulmy' },
+      ],
+      vendorSubmissions: [
+        { vendorTenantId: 'uddawam', vendorSoId: 'so-uddawam-1', vendorNoSO: 'SO2608000001', status: 'CONFIRMED' },
+        { vendorTenantId: 'zulmy', vendorSoId: 'so-zulmy-1', vendorNoSO: 'SO2608000001', status: 'CONFIRMED' },
+      ],
+    };
+    const { db, updates } = mockDb(multiVendorPo);
+    await syncCpoFromVendorEvent(db as never, 'sppg', 'sales_order.cancelled', {
+      customerPoId: 'cpo-1',
+      salesOrderId: 'so-uddawam-1',
+      noSO: 'SO2608000001',
+      vendorTenantId: 'uddawam',
+      cancelledItems: [{ kode: 'B553057', qty: 1, reason: 'so ulANG' }],
+      reason: 'so ulANG',
+    });
+    const subs = updates[0]?.vendorSubmissions as Array<{ vendorTenantId?: string; status?: string }>;
+    expect(subs.find((s) => s.vendorTenantId === 'uddawam')?.status).toBe('CANCELLED');
+    expect(subs.find((s) => s.vendorTenantId === 'zulmy')?.status).toBe('CONFIRMED');
+  });
+
   it('marks all PO lines on sales_order.cancelled when every line cancelled', async () => {
     const singleItemPo = {
       ...basePo,

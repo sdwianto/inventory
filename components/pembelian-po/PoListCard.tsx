@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
-import { poCreatorLabel, formatPoVendorSoDisplay, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
+import { poCreatorLabel, formatPoVendorSoDisplay, getPoVendorSoSegments, isPendingOptimisticPo } from '@/lib/pembelian-po/helpers';
 import { canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cancelled';
 import PrintPortal from '@/components/PrintPortal';
@@ -83,6 +83,7 @@ export default function PoListCard({
   const arrival = getPoArrivalDate(po);
   const poStatus = str(po.status);
   const vendorSoLabel = formatPoVendorSoDisplay(po, vendorNameById);
+  const vendorSoSegments = getPoVendorSoSegments(po, vendorNameById);
   const createdBy = asObject(po.createdBy);
   const approvedBy = asObject(po.approvedBy);
   const lastEditedBy = asObject(po.lastEditedBy);
@@ -130,9 +131,15 @@ export default function PoListCard({
             <div className="text-xs text-slate-500 mt-0.5">
               Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(str(po.tanggal))}
               {poCreatorLabel(po) !== 'Tidak tercatat' && ` · oleh ${poCreatorLabel(po)}`}
-              {!!vendorSoLabel && (
+              {!!vendorSoSegments.length && (
                 <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0">
-                  SO vendor: {vendorSoLabel}
+                  SO vendor:{' '}
+                  {vendorSoSegments.map((seg, i) => (
+                    <span key={seg.vendorTenantId || i}>
+                      {i > 0 && ' · '}
+                      <span className={seg.cancelled ? 'line-through text-slate-400' : ''}>{seg.label}</span>
+                    </span>
+                  ))}
                 </span>
               )}
               {!vendorSoLabel && poStatus === 'APPROVED' && !!po.vendorSyncError && !isOptimistic && (
@@ -322,10 +329,15 @@ export default function PoListCard({
               })}
             </div>
           )}
-          {!!vendorSoLabel && (
+          {!!vendorSoSegments.length && (
             <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">
               <span className="font-medium text-slate-700">SO vendor:</span>{' '}
-              {vendorSoLabel}
+              {vendorSoSegments.map((seg, i) => (
+                <span key={seg.vendorTenantId || i}>
+                  {i > 0 && ' · '}
+                  <span className={seg.cancelled ? 'line-through text-slate-400' : ''}>{seg.label}</span>
+                </span>
+              ))}
             </p>
           )}
           {!vendorSoLabel && ['SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED'].includes(poStatus) && !isOptimistic && (

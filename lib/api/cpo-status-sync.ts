@@ -73,6 +73,25 @@ function rollupReceiveStatus(items: CpoLine[]) {
   return 'SHIPPED';
 }
 
+/**
+ * Cocokkan submission vendor mana yang dimaksud sebuah event webhook.
+ * `noSO` TIDAK cukup sendirian sebagai kunci — tiap vendor tenant menomori SO
+ * mereka independen (mis. semua bisa sama-sama punya "SO2608000001"), jadi
+ * fallback by-noSO wajib disertai vendorTenantId supaya tidak salah tempel
+ * ke submission vendor lain yang kebetulan punya nomor SO sama.
+ */
+function matchesVendorSubmission(
+  sub: JsonObject,
+  meta: { soId?: string; noSO?: string; vendorTenantId?: string },
+): boolean {
+  if (meta.soId && sub.vendorSoId === meta.soId) return true;
+  if (meta.noSO && sub.vendorNoSO === meta.noSO) {
+    if (!meta.vendorTenantId) return true;
+    return sub.vendorTenantId === meta.vendorTenantId;
+  }
+  return false;
+}
+
 /** Gabungan rollup ship+receive — status kemajuan aktual PO berdasar data item, lepas dari event pemicu. */
 function rollupCpoProgressStatus(items: CpoLine[]): string {
   const shipStatus = rollupShipStatus(items);
@@ -208,12 +227,14 @@ export async function syncCpoFromVendorEvent(
     if (soSynced.cancelledSoLines) patch.cancelledSoLines = soSynced.cancelledSoLines;
     const subs = Array.isArray(po.vendorSubmissions) ? [...po.vendorSubmissions] as JsonObject[] : [];
     if (subs.length && soSynced.vendorSoSnapshot) {
-      const soId = String(payload.salesOrderId || '');
-      const noSO = String(payload.noSO || '');
-      patch.vendorSubmissions = subs.map((sub) => {
-        const match = (soId && sub.vendorSoId === soId) || (noSO && sub.vendorNoSO === noSO);
-        return match ? { ...sub, vendorSo: payload } : sub;
-      });
+      const matchMeta = {
+        soId: String(payload.salesOrderId || ''),
+        noSO: String(payload.noSO || ''),
+        vendorTenantId: payload.vendorTenantId ? String(payload.vendorTenantId) : undefined,
+      };
+      patch.vendorSubmissions = subs.map((sub) => (
+        matchesVendorSubmission(sub, matchMeta) ? { ...sub, vendorSo: payload } : sub
+      ));
     }
   } else if (event === 'sales_order.cancelled') {
     const meta = {
@@ -242,12 +263,16 @@ export async function syncCpoFromVendorEvent(
     }
     const subs = Array.isArray(po.vendorSubmissions) ? [...po.vendorSubmissions] as JsonObject[] : [];
     if (subs.length) {
-      const soId = meta.salesOrderId;
-      const noSO = meta.noSO;
-      patch.vendorSubmissions = subs.map((sub) => {
-        const match = (soId && sub.vendorSoId === soId) || (noSO && sub.vendorNoSO === noSO);
-        return match ? { ...sub, status: 'CANCELLED', cancelReason: payload.reason || payload.cancelReason, vendorSo: payload } : sub;
-      });
+      const matchMeta = {
+        soId: meta.salesOrderId,
+        noSO: meta.noSO,
+        vendorTenantId: payload.vendorTenantId ? String(payload.vendorTenantId) : undefined,
+      };
+      patch.vendorSubmissions = subs.map((sub) => (
+        matchesVendorSubmission(sub, matchMeta)
+          ? { ...sub, status: 'CANCELLED', cancelReason: payload.reason || payload.cancelReason, vendorSo: payload }
+          : sub
+      ));
     }
   } else if (event === 'invoice.posted') {
     // PO multi-vendor: jangan paksa INVOICED kalau masih ada item vendor lain

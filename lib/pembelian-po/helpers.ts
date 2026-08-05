@@ -90,3 +90,37 @@ export function formatPoVendorSoDisplay(
   }
   return no;
 }
+
+export type PoVendorSoSegment = {
+  vendorTenantId: string;
+  label: string;
+  cancelled: boolean;
+};
+
+/** Sama seperti formatPoVendorSoDisplay tapi per-segmen — supaya UI bisa mencoret SO vendor yang statusnya CANCELLED. */
+export function getPoVendorSoSegments(
+  po: JsonObject | null | undefined,
+  vendorNameById: Record<string, string> = {},
+): PoVendorSoSegment[] {
+  if (!po) return [];
+  const subs = asArray(po.vendorSubmissions) as JsonObject[];
+  if (subs.length) {
+    return subs.map((s) => {
+      const vendorTenantId = str(s.vendorTenantId);
+      const name = vendorLabel(vendorTenantId, vendorNameById);
+      const no = str(s.vendorNoSO);
+      return {
+        vendorTenantId,
+        label: no ? `${name}: ${no}` : name,
+        cancelled: str(s.status) === 'CANCELLED',
+      };
+    });
+  }
+  const no = str(po.vendorNoSO);
+  if (!no) return [];
+  const vid = str(po.vendorTenantId);
+  if (vid && vid !== 'multi') {
+    return [{ vendorTenantId: vid, label: `${vendorLabel(vid, vendorNameById)}: ${no}`, cancelled: false }];
+  }
+  return [{ vendorTenantId: vid, label: no, cancelled: false }];
+}
