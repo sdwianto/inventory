@@ -70,6 +70,31 @@ function rollupReceiveStatus(items: CpoLine[]) {
   return 'SHIPPED';
 }
 
+/** Gabungan rollup ship+receive — status kemajuan aktual PO berdasar data item, lepas dari event pemicu. */
+function rollupCpoProgressStatus(items: CpoLine[]): string {
+  const shipStatus = rollupShipStatus(items);
+  if (shipStatus !== 'SHIPPED') return shipStatus;
+  return rollupReceiveStatus(items);
+}
+
+const CPO_STATUS_RANK: Record<string, number> = {
+  SUBMITTED: 0,
+  CONFIRMED: 1,
+  PARTIAL_SHIPPED: 2,
+  SHIPPED: 3,
+  PARTIAL_RECEIVED: 4,
+  RECEIVED: 5,
+  INVOICED: 6,
+};
+
+/** Jangan biarkan event yang telat/duplikat menurunkan status yang sudah lebih maju. */
+function pickForwardCpoStatus(current: string, proposed: string): string {
+  const c = CPO_STATUS_RANK[current];
+  const p = CPO_STATUS_RANK[proposed];
+  if (c == null || p == null) return proposed;
+  return p >= c ? proposed : current;
+}
+
 function hasAppliedId(list: unknown, id: string): boolean {
   if (!id || !Array.isArray(list)) return false;
   return list.some((x) => String(x) === id);
@@ -166,7 +191,9 @@ export async function syncCpoFromVendorEvent(
       if (soSynced.status === 'PARTIAL_CANCELLED' || soSynced.status === 'CANCELLED') {
         patch.status = soSynced.status;
       } else {
-        patch.status = 'CONFIRMED';
+        // Event confirmed bisa datang telat/duplikat setelah shipped/received
+        // sudah tercatat — jangan mundurkan progres yang sudah tercapai.
+        patch.status = pickForwardCpoStatus(String(po.status || ''), rollupCpoProgressStatus(soSynced.items));
       }
     } else if (soSynced.status) {
       patch.status = soSynced.status;
@@ -224,8 +251,9 @@ export async function syncCpoFromVendorEvent(
     // yang aktif (belum shipped/received) atau baru dibatalkan — ikuti rollup
     // ship/receive sebenarnya, baru INVOICED kalau semua item aktif sudah RECEIVED.
     const items = (Array.isArray(po.items) ? po.items : []) as CpoLine[];
-    const receiveStatus = rollupReceiveStatus(items);
-    patch.status = receiveStatus === 'RECEIVED' ? 'INVOICED' : receiveStatus;
+    const progressStatus = rollupCpoProgressStatus(items);
+    const proposedStatus = progressStatus === 'RECEIVED' ? 'INVOICED' : progressStatus;
+    patch.status = pickForwardCpoStatus(String(po.status || ''), proposedStatus);
     patch.invoicedAt = payload.postedAt ? new Date(String(payload.postedAt)) : now;
     patch.vendorNoInvoice = payload.noInvoice || po.vendorNoInvoice;
     patch.vendorInvoiceId = payload.invoiceId || po.vendorInvoiceId;
