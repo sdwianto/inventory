@@ -9,6 +9,7 @@ type CpoLine = JsonObject & {
   qty?: number | string;
   qtyShipped?: number;
   qtyReceived?: number;
+  qtyRejected?: number;
 };
 
 type CpoDoc = JsonObject & {
@@ -40,7 +41,9 @@ function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
 
 function lineQtyTarget(line: CpoLine): number {
   if (line.cancelled) return 0;
-  return parseFloat(String(line.qty)) || 0;
+  const qty = parseFloat(String(line.qty)) || 0;
+  const rejected = parseFloat(String(line.qtyRejected)) || 0;
+  return Math.max(0, qty - rejected);
 }
 
 function rollupShipStatus(items: CpoLine[]) {
@@ -285,7 +288,12 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
     const items = (po.items || []).map((line) => {
       const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
       const add = parseFloat(String(recv?.qtyReceived)) || 0;
-      return { ...line, qtyReceived: (Number(line.qtyReceived) || 0) + add };
+      const addRejected = parseFloat(String((recv as JsonObject | undefined)?.qtyRejected)) || 0;
+      return {
+        ...line,
+        qtyReceived: (Number(line.qtyReceived) || 0) + add,
+        qtyRejected: (Number(line.qtyRejected) || 0) + addRejected,
+      };
     });
 
     const receiveStatus = rollupReceiveStatus(items);

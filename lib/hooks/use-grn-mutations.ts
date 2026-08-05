@@ -49,7 +49,16 @@ export function useGrnMutations(
 
   const postGrn = useCallback(async (
     grnId: string,
-    items: Array<{ lineId?: unknown; lineIndex: number; qty: number; lokasiKode: string }>,
+    items: Array<{
+      lineId?: unknown;
+      lineIndex: number;
+      qty: number;
+      lokasiKode: string;
+      uomId?: string;
+      satuan?: string;
+      qtyRejected?: number;
+      rejectReason?: string;
+    }>,
     photos?: string[],
   ) => {
     const previous = qc.getQueryData<GrnPages>(listKey);

@@ -134,6 +134,8 @@ export default function PenerimaanPage() {
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [qtyMap, setQtyMap] = useState<JsonObject>({});
   const [gudangMap, setGudangMap] = useState<JsonObject>({});
+  const [rejectQtyMap, setRejectQtyMap] = useState<JsonObject>({});
+  const [rejectReasonMap, setRejectReasonMap] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<string[]>([]);
   const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
   const [doView, setDoView] = useState<JsonObject | null>(null);
@@ -286,6 +288,8 @@ export default function PenerimaanPage() {
       setQtyMap(initQty);
       setGudangMap(initGudang);
       setUomMap(initUom);
+      setRejectQtyMap({});
+      setRejectReasonMap({});
       setPhotos([]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -294,11 +298,25 @@ export default function PenerimaanPage() {
 
   const postGrn = async () => {
     if (!detail) return;
+
+    for (const [idx, it] of detailItems.entries()) {
+      const key = itemRowKey(it, idx);
+      const rejectQty = num(rejectQtyMap[key]);
+      const reason = str(rejectReasonMap[key]).trim();
+      if (rejectQty > 0 && !reason) {
+        const nama = str(it.localNama) || str(it.vendorNama) || str(it.nama) || 'item';
+        toast.error(`Isi alasan tolak untuk ${nama}`);
+        return;
+      }
+    }
+
     const grnId = str(detail.id);
     setPosting(grnId);
     const items = detailItems.map((it, idx) => {
       const key = itemRowKey(it, idx);
       const uom = uomMap[key];
+      const rejectQty = num(rejectQtyMap[key]);
+      const reason = str(rejectReasonMap[key]).trim();
       return {
         lineId: it.lineId,
         lineIndex: idx,
@@ -306,8 +324,9 @@ export default function PenerimaanPage() {
         lokasiKode: str(gudangMap[key], 'GKERING'),
         uomId: uom?.uomId || str(it.uomId) || undefined,
         satuan: uom?.satuan || str(it.satuan) || undefined,
+        ...(rejectQty > 0 ? { qtyRejected: rejectQty, rejectReason: reason } : {}),
       };
-    }).filter((it) => it.qty > 0);
+    }).filter((it) => it.qty > 0 || (it.qtyRejected ?? 0) > 0);
 
     try {
       const data = await postGrnMutation(grnId, items, photos);
@@ -487,10 +506,11 @@ export default function PenerimaanPage() {
               const rowKey = itemRowKey(it, idx);
               const localStokId = str(it.localStokId);
               const uomRow = uomMap[rowKey];
+              const rejectQty = num(rejectQtyMap[rowKey]);
               return (
+              <div key={rowKey} className="border rounded p-2 space-y-2">
               <div
-                key={rowKey}
-                className="grid grid-cols-[minmax(0,1fr)_9rem_7rem_5.5rem] gap-3 items-end text-sm border rounded p-2"
+                className="grid grid-cols-[minmax(0,1fr)_9rem_7rem_5.5rem] gap-3 items-end text-sm"
               >
                 <div className="min-w-0">
                   <div className="font-medium truncate">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</div>
@@ -549,6 +569,32 @@ export default function PenerimaanPage() {
                     onChange={(e) => setQtyMap({ ...qtyMap, [rowKey]: e.target.value })}
                   />
                 </div>
+              </div>
+              <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 items-end text-sm">
+                <div className="min-w-0 flex flex-col gap-1">
+                  <Label className="text-xs block text-red-600">Qty ditolak</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={num(it.qtyOrdered)}
+                    step="any"
+                    className="h-9"
+                    value={str(rejectQtyMap[rowKey], '0')}
+                    onChange={(e) => setRejectQtyMap({ ...rejectQtyMap, [rowKey]: e.target.value })}
+                  />
+                </div>
+                {rejectQty > 0 && (
+                  <div className="min-w-0 flex flex-col gap-1">
+                    <Label className="text-xs block text-red-600">Alasan tolak</Label>
+                    <Input
+                      className="h-9"
+                      placeholder="mis. rusak, tidak sesuai pesanan"
+                      value={rejectReasonMap[rowKey] || ''}
+                      onChange={(e) => setRejectReasonMap({ ...rejectReasonMap, [rowKey]: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
               </div>
               );
             })}
@@ -669,6 +715,22 @@ export default function PenerimaanPage() {
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={src} alt="Foto terima barang" className="w-full h-full object-cover" />
                   </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(asArray(doView?.items) as JsonObject[]).some((it) => num(it.qtyRejected) > 0) && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] uppercase tracking-wide text-red-500">Item ditolak</p>
+              <div className="space-y-1">
+                {(asArray(doView?.items) as JsonObject[]).filter((it) => num(it.qtyRejected) > 0).map((it, idx) => (
+                  <div key={itemRowKey(it, idx)} className="text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                    <span className="font-medium">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</span>
+                    {' · '}
+                    <span className="text-red-700">{formatNumber(num(it.qtyRejected))} {str(it.satuan) || 'unit'} ditolak</span>
+                    {str(it.rejectReason) ? <span className="text-slate-600"> — {str(it.rejectReason)}</span> : null}
+                  </div>
                 ))}
               </div>
             </div>

@@ -217,6 +217,8 @@ export async function notifyGrnPostedToSales(
       uomId: it.uomId,
       qtyBase: it.qtyReceivedBase ?? it.qtyBase,
       satuan: it.satuan,
+      qtyRejected: it.qtyRejected || 0,
+      rejectReason: it.rejectReason || null,
     })),
   };
 

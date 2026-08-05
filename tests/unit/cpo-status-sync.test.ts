@@ -78,6 +78,45 @@ describe('syncCpoOnGrnPosted', () => {
     expect(items[0]?.qtyReceived).toBe(2);
   });
 
+  it('reaches RECEIVED when remaining qty is explicitly rejected (not just short-shipped)', async () => {
+    const po = {
+      id: 'po1',
+      tenantId: 'sppg',
+      noPO: 'CPO-1',
+      status: 'SHIPPED',
+      items: [{ localStokId: 'p1', kode: 'A', qty: 10, qtyReceived: 0 }],
+    };
+    const { db, updates } = mockDb(po);
+    await syncCpoOnGrnPosted(db as never, {
+      id: 'grn-reject-1',
+      tenantId: 'sppg',
+      noPO: 'CPO-1',
+      items: [{ localStokId: 'p1', localKode: 'A', qtyReceived: 7, qtyRejected: 3 }],
+    });
+    expect(updates[0]?.status).toBe('RECEIVED');
+    const items = updates[0]?.items as Array<{ qtyReceived: number; qtyRejected: number }>;
+    expect(items[0]?.qtyReceived).toBe(7);
+    expect(items[0]?.qtyRejected).toBe(3);
+  });
+
+  it('stays PARTIAL_RECEIVED when rejected qty does not cover the remaining shortfall', async () => {
+    const po = {
+      id: 'po1',
+      tenantId: 'sppg',
+      noPO: 'CPO-1',
+      status: 'SHIPPED',
+      items: [{ localStokId: 'p1', kode: 'A', qty: 10, qtyReceived: 0 }],
+    };
+    const { db, updates } = mockDb(po);
+    await syncCpoOnGrnPosted(db as never, {
+      id: 'grn-reject-2',
+      tenantId: 'sppg',
+      noPO: 'CPO-1',
+      items: [{ localStokId: 'p1', localKode: 'A', qtyReceived: 5, qtyRejected: 1 }],
+    });
+    expect(updates[0]?.status).toBe('PARTIAL_RECEIVED');
+  });
+
   it('preserves INVOICED status when updating receive qty', async () => {
     const po = {
       id: 'po1',

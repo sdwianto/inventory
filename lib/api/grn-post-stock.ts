@@ -41,7 +41,13 @@ export async function applyGrnStockPosting(
   const now = new Date();
   await ensureStokLokasiIndexes(db);
 
-  const lineInputs: { it: JsonObject; qty: number; qtyBase: number; resolved: import('@/lib/uom/resolve-line-qty').ResolvedLineQty; lineIndex: number }[] = [];
+  const lineInputs: {
+    it: JsonObject; qty: number; qtyBase: number;
+    resolved: import('@/lib/uom/resolve-line-qty').ResolvedLineQty; lineIndex: number;
+    qtyRejected: number; rejectReason?: string;
+  }[] = [];
+  /** Baris yang ditolak penuh (qty diterima 0) — dicatat tanpa diproses stok/lot/kartu. */
+  const rejectedOnlyLines: { it: JsonObject; qtyRejected: number; rejectReason?: string }[] = [];
   const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
   for (const [lineIndex, it] of ((grn.items || []) as JsonObject[]).entries()) {
     if (!it.localStokId) {
@@ -52,17 +58,22 @@ export async function applyGrnStockPosting(
       || (b.lineIndex == null && b.lineId === it.lineId)
     ));
     const qty = parseFloat(String(bodyLine?.qty ?? it.qtyOrdered ?? it.qtyReceived ?? 0)) || 0;
-    if (qty <= 0) continue;
+    const qtyRejected = parseFloat(String(bodyLine?.qtyRejected ?? 0)) || 0;
+    const rejectReason = bodyLine?.rejectReason ? String(bodyLine.rejectReason) : undefined;
+    if (qty <= 0) {
+      if (qtyRejected > 0) rejectedOnlyLines.push({ it, qtyRejected, rejectReason });
+      continue;
+    }
     const resolved = await resolveLineQtyBase(db, tid, String(it.localStokId), {
       qty,
       uomId: String(bodyLine?.uomId || it.uomId || ''),
       satuan: String(bodyLine?.satuan || it.satuan || ''),
     }, uomsCache);
     if ('error' in resolved) return { error: resolved.error };
-    lineInputs.push({ it, qty: resolved.qty, qtyBase: resolved.qtyBase, resolved, lineIndex });
+    lineInputs.push({ it, qty: resolved.qty, qtyBase: resolved.qtyBase, resolved, lineIndex, qtyRejected, rejectReason });
   }
 
-  if (!lineInputs.length) return { error: 'Tidak ada qty diterima' };
+  if (!lineInputs.length && !rejectedOnlyLines.length) return { error: 'Tidak ada qty diterima' };
 
   const stokIds = [...new Set(lineInputs.map((l) => l.it.localStokId))];
   const products = await db.collection('products')
@@ -103,7 +114,7 @@ export async function applyGrnStockPosting(
   /** W2-17: accumulate qtyBase per (stokId, warehouse, bin) when default bin resolved. */
   const binDeltas = new Map<string, number>();
 
-  for (const { it, qty, qtyBase, resolved, lineIndex } of lineInputs) {
+  for (const { it, qty, qtyBase, resolved, lineIndex, qtyRejected, rejectReason } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
     if (!prod) return { error: `Produk lokal tidak ditemukan: ${it.vendorKode}` };
 
@@ -219,6 +230,8 @@ export async function applyGrnStockPosting(
       lotNo,
       lotId: lot.id,
       expiryDate,
+      qtyRejected,
+      ...(rejectReason ? { rejectReason } : {}),
     });
   }
 
@@ -360,6 +373,16 @@ export async function applyGrnStockPosting(
     if (existingLots === 0) {
       await db.collection(INGREDIENT_LOTS_COLLECTION).insertMany(lotDocs, txOpts(session));
     }
+  }
+
+  for (const { it, qtyRejected, rejectReason } of rejectedOnlyLines) {
+    itemsFull.push({
+      ...it,
+      qtyReceived: 0,
+      qtyReceivedBase: 0,
+      qtyRejected,
+      ...(rejectReason ? { rejectReason } : {}),
+    });
   }
 
   const receivedTotal = itemsFull.reduce((s, it) => {
