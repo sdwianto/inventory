@@ -49,6 +49,35 @@ describe('cpo-line-cancel-sync', () => {
     expect(rows.find((r) => r.kode === 'B711755')?.cancelled).toBeFalsy();
   });
 
+  it('syncs qty/satuan/uom from matched SO item (estimate unit differs from confirmed SO unit)', () => {
+    const rows = diffPoItemsAgainstActiveSo(
+      [{ lineId: 'l1', kode: 'B463855', nama: 'Semangka', qty: 204, satuan: 'KG' }],
+      [{ kode: 'B463855', qty: 2700, satuan: 'ONS', uomId: 'uom-ons', factorToBase: 1 }],
+      { noSO: 'SO2608000005' },
+    );
+    const row = rows.find((r) => r.kode === 'B463855');
+    expect(row?.qty).toBe(2700);
+    expect(row?.satuan).toBe('ONS');
+    expect(row?.uomId).toBe('uom-ons');
+    expect(row?.factorToBase).toBe(1);
+  });
+
+  it('does not touch qtyShipped/qtyReceived/harga when syncing qty/uom from matched SO', () => {
+    const rows = diffPoItemsAgainstActiveSo(
+      [{
+        lineId: 'l1', kode: 'B463855', nama: 'Semangka', qty: 204, satuan: 'KG',
+        harga: 1500, qtyShipped: 2700, qtyReceived: 2700,
+      }],
+      [{ kode: 'B463855', qty: 2700, satuan: 'ONS', uomId: 'uom-ons' }],
+      { noSO: 'SO2608000005' },
+    );
+    const row = rows.find((r) => r.kode === 'B463855');
+    expect(row?.qty).toBe(2700);
+    expect(row?.harga).toBe(1500);
+    expect(row?.qtyShipped).toBe(2700);
+    expect(row?.qtyReceived).toBe(2700);
+  });
+
   it('restores auto-cancelled line when it reappears on SO', () => {
     const rows = diffPoItemsAgainstActiveSo(
       [{

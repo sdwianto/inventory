@@ -129,6 +129,22 @@ function clearAutoCancel(line: CpoLine): CpoLine {
   return rest;
 }
 
+/**
+ * Adopsi qty/satuan/uom dari item SO yang cocok — SO yang sudah dikonfirmasi vendor
+ * adalah sumber kebenaran final, bisa beda dari estimasi awal saat PO dibuat
+ * (mis. dari Acuan Pengadaan). Harga & counter progres (shipped/received) sengaja
+ * tidak disentuh di sini.
+ */
+function syncLineFromMatchedSo(line: CpoLine, matched: JsonObject): CpoLine {
+  const next: CpoLine = { ...line };
+  if (matched.qty != null) next.qty = parseQty(matched.qty);
+  if (matched.satuan != null) next.satuan = matched.satuan;
+  if ('uomId' in matched) next.uomId = matched.uomId as CpoLine['uomId'];
+  if (matched.factorToBase != null) next.factorToBase = matched.factorToBase;
+  if (matched.nama) next.nama = String(matched.nama);
+  return next;
+}
+
 /** Bandingkan baris PO dengan item aktif di SO — yang hilang ditandai dibatalkan; yang ketemu lagi dipulihkan. */
 export function diffPoItemsAgainstActiveSo(
   poItems: CpoLine[],
@@ -156,9 +172,10 @@ export function diffPoItemsAgainstActiveSo(
       usedIndices,
     );
     if (matched) {
-      // Item masih di SO — pulihkan jika sebelumnya tercoret karena mismatch sync
-      if (line.cancelled) return clearAutoCancel(line);
-      return line;
+      // Item masih di SO — pulihkan jika sebelumnya tercoret karena mismatch sync,
+      // lalu adopsi qty/satuan/uom dari SO yang dikonfirmasi (sumber kebenaran final).
+      const base = line.cancelled ? clearAutoCancel(line) : line;
+      return syncLineFromMatchedSo(base, matched as JsonObject);
     }
     if (line.cancelled) return line;
     return markLineCancelled(line, {
