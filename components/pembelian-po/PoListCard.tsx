@@ -20,6 +20,7 @@ import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cance
 import PrintPortal from '@/components/PrintPortal';
 import CustomerPoDocument from '@/components/CustomerPoDocument';
 import { printDocument } from '@/lib/doc-print';
+import { toast } from 'sonner';
 
 const PO_PRINT_ID = 'customer-po-a4-print';
 
@@ -102,6 +103,11 @@ export default function PoListCard({
   const handlePrint = async () => {
     setPrinting(true);
     try {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 150)));
+      if (!document.getElementById(PO_PRINT_ID)) {
+        toast.error('Dokumen cetak belum siap — coba lagi');
+        return;
+      }
       await printDocument(PO_PRINT_ID);
     } finally {
       setPrinting(false);
