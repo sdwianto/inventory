@@ -3,6 +3,7 @@ import type { Db } from 'mongodb';
 
 import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems } from '@/lib/api/cpo-line-cancel-sync';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
+import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
 
 type CpoLine = JsonObject & {
@@ -320,6 +321,29 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
         qtyRejected: (Number(line.qtyRejected) || 0) + addRejected,
       };
     });
+
+    const unmatchedGrnItems = grnItems.filter((_, i) => !usedGrn.has(i));
+    if (unmatchedGrnItems.length) {
+      // Baris GRN yang tidak ketemu pasangannya di PO tidak akan menambah
+      // qtyReceived mana pun — kalau ini sebetulnya milik salah satu baris
+      // PO, po.status bisa nyangkut PARTIAL_RECEIVED walau barang sudah
+      // diterima lengkap. Log supaya kejadian ini kelihatan, bukan senyap.
+      logger.warn('cpo_grn_line_unmatched', {
+        poId: po.id,
+        noPO: po.noPO,
+        grnId,
+        tenantId: grn.tenantId,
+        unmatchedCount: unmatchedGrnItems.length,
+        unmatched: unmatchedGrnItems.map((g) => ({
+          lineId: g.lineId,
+          localKode: g.localKode,
+          vendorKode: g.vendorKode,
+          uomId: g.uomId,
+          satuan: g.satuan,
+          qtyReceived: g.qtyReceived,
+        })),
+      });
+    }
 
     const receiveStatus = rollupReceiveStatus(items);
     const keepInvoiced = String(po.status || '') === 'INVOICED';

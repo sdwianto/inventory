@@ -8,7 +8,16 @@ export type LocalPoLineLike = {
   kode?: string;
   uomId?: string;
   vendorUomId?: string;
+  satuan?: string;
 };
+
+function normalizeKode(kode?: string | null): string {
+  return String(kode || '').trim().toUpperCase();
+}
+
+function normalizeSatuan(satuan?: string | null): string {
+  return String(satuan || '').trim().toUpperCase();
+}
 
 export type VendorWebhookLineLike = {
   lineId?: string;
@@ -24,6 +33,7 @@ export type GrnLineLike = {
   localKode?: string;
   vendorKode?: string;
   uomId?: string;
+  satuan?: string;
   qtyReceived?: number | string;
 };
 
@@ -120,12 +130,30 @@ export function findMatchingGrnLine<T extends GrnLineLike>(
     }
   }
 
-  const kode = String(poLine.vendorKode || poLine.kode || '');
+  // Fallback toleran: kode + satuan dinormalisasi (trim + uppercase). uomId
+  // PO dan GRN bisa berasal dari sumber/webhook berbeda dan tidak selalu
+  // sama persis walau produk & satuannya sama secara teks — tanpa fallback
+  // ini, baris yang sebenarnya sudah diterima bisa nyangkut qtyReceived=0
+  // dan bikin status PO salah PARTIAL_RECEIVED (lihat P0 hutang-approval).
+  const kode = normalizeKode(poLine.vendorKode || poLine.kode);
+  const satuan = normalizeSatuan(poLine.satuan);
+  if (kode && satuan) {
+    const matches = grnItems
+      .map((g, i) => ({ g, i }))
+      .filter(({ g, i }) => !used.has(i)
+        && normalizeKode(g.vendorKode || g.localKode) === kode
+        && normalizeSatuan(g.satuan) === satuan);
+    if (matches.length === 1) {
+      used.add(matches[0].i);
+      return matches[0].g;
+    }
+  }
+
   if (kode) {
     const matches = grnItems
       .map((g, i) => ({ g, i }))
       .filter(({ g, i }) => !used.has(i) && (
-        String(g.vendorKode || '') === kode || String(g.localKode || '') === kode
+        normalizeKode(g.vendorKode) === kode || normalizeKode(g.localKode) === kode
       ));
     if (matches.length === 1) {
       used.add(matches[0].i);

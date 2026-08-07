@@ -47,4 +47,37 @@ describe('findMatchingGrnLine', () => {
     );
     expect(match?.qtyReceived).toBe(5);
   });
+
+  it('falls back to kode+satuan (normalized) when lineId/uomId differ between PO and GRN', () => {
+    // PO line dari webhook sales_order dan GRN line dari webhook delivery bisa punya
+    // uomId berbeda representasi walau satuannya sama secara teks — kasus nyata yang
+    // bikin po.status nyangkut PARTIAL_RECEIVED walau barang sudah diterima lengkap.
+    const items = [
+      { lineId: 'grn-l1', localStokId: 'other-id', localKode: 'B925034', uomId: 'grn-uom-x', satuan: 'kg', qtyReceived: 4 },
+    ];
+    const match = findMatchingGrnLine(
+      { lineId: 'po-l1', localStokId: 'lp-id', kode: 'B925034', uomId: 'po-uom-y', satuan: 'KG' },
+      items,
+    );
+    expect(match?.qtyReceived).toBe(4);
+  });
+
+  it('falls back to kode-only match case-insensitively when unique', () => {
+    const items = [
+      { lineId: 'grn-l1', vendorKode: 'b426390', qtyReceived: 20 },
+    ];
+    const match = findMatchingGrnLine(
+      { lineId: 'po-l1', kode: 'B426390' },
+      items,
+    );
+    expect(match?.qtyReceived).toBe(20);
+  });
+
+  it('returns undefined when no tier matches', () => {
+    const match = findMatchingGrnLine(
+      { lineId: 'po-l9', localStokId: 'nope', kode: 'ZZZ' },
+      grnItems,
+    );
+    expect(match).toBeUndefined();
+  });
 });
