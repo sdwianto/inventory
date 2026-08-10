@@ -44,6 +44,13 @@ export async function consumeBatchesFefo(
     noRelease?: string;
     distributionId?: string;
     noDokumen?: string;
+    /**
+     * ADR-004 P0G — hanya jalur keluar (distribusi / release) yang menolak batch HOLD.
+     * Cycle count, rekonsiliasi, dan posting waste hasil produksi tetap harus bisa
+     * menyentuh batch tertahan; menahannya di sana justru merusak akurasi stok.
+     * Default mati agar penambahan pemanggil baru tidak diam-diam mengubah perilaku.
+     */
+    enforceFoodSafetyHold?: boolean;
   },
   session?: ClientSession | null,
 ): Promise<FefoConsumeLineResult> {
@@ -67,6 +74,10 @@ export async function consumeBatchesFefo(
   };
   if (input.productionResultId) {
     filter.productionResultId = input.productionResultId;
+  }
+  if (input.enforceFoodSafetyHold) {
+    // $ne juga cocok untuk baris lama yang belum punya field ini.
+    filter.foodSafetyStatus = { $ne: 'HOLD' };
   }
 
   const rows = await db

@@ -193,6 +193,12 @@ const INDEX_SPECS: IndexSpec[] = [
     index: { tenantId: 1, finishedGoodProductId: 1, warehouseKode: 1, status: 1, expiryDate: 1 },
     name: 'idx_batch_fefo_product_wh',
   },
+  // ADR-004: daftar batch tertahan per tenant (Food Safety lens)
+  {
+    collection: 'production_batches',
+    index: { tenantId: 1, foodSafetyStatus: 1, updatedAt: -1 },
+    name: 'idx_batch_food_safety_status',
+  },
   { collection: 'fefo_batch_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_fefo_recon_tenant_created' },
   // W2-5 ingredient lots
   { collection: 'ingredient_lots', index: { tenantId: 1, id: 1 }, name: 'idx_ilot_tenant_id' },

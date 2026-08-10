@@ -77,9 +77,10 @@ export function assertStatusTransition(
   return null;
 }
 
-export function appendDocHistory(
-  history: DocHistoryEntry[] | null | undefined,
-  entry: DocHistoryEntry,
-): DocHistoryEntry[] {
+/** Generic so callers with a richer entry (mis. FoodSafetyHistoryEntry) keep their type. */
+export function appendDocHistory<T extends DocHistoryEntry>(
+  history: T[] | null | undefined,
+  entry: T,
+): T[] {
   return [...(history || []), entry];
 }

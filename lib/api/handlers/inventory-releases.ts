@@ -25,6 +25,7 @@ import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
+import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 
@@ -266,6 +267,8 @@ export async function handleInventoryReleases({
       if ('error' in resolved) return err(resolved.error, 400);
       releaseLines.push({ ...it, qtyBase: resolved.qtyBase, qty: resolved.qty, uomId: resolved.uomId, satuan: resolved.satuan });
     }
+    // ADR-004 — resolve sekali per dokumen, bukan per baris FEFO.
+    const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, tenantId);
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const claim = await txDb.collection('inventory_releases').updateOne(
@@ -317,6 +320,7 @@ export async function handleInventoryReleases({
               asOf: now,
               releaseId: doc.id,
               noRelease: doc.noRelease,
+              enforceFoodSafetyHold,
             },
             session,
           );

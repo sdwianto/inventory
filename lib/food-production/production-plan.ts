@@ -9,10 +9,10 @@ export type ProductionPlanStatus = FpDocStatus;
 
 /** Penerima porsi MBG / SPPG. */
 export const KATEGORI_PORSI_OPTIONS = [
-  { value: 'PORSI_BESAR', label: 'Porsi besar', hint: 'SD 4–6 + SMP + SMA + Pendidik + Tendik + Bumil + Busui' },
-  { value: 'PORSI_KECIL', label: 'Porsi kecil', hint: 'Balita + TK/PAUD + SD kelas 1–3' },
-  { value: 'POSYANDU_BUMIL_BUSUI', label: 'Posyandu Bumil Busui', hint: 'Totebag' },
-  { value: 'POSYANDU_BALITA', label: 'Posyandu Balita', hint: 'Totebag' },
+  { value: 'PORSI_BESAR', label: 'Porsi Besar Sekolah', hint: 'SD 4–6 + SMP + SMA + Tendik' },
+  { value: 'PORSI_KECIL', label: 'Porsi Kecil Sekolah', hint: 'KB + PAUD + TK + SD 1–3' },
+  { value: 'POSYANDU_BUMIL_BUSUI', label: 'Porsi Besar Posyandu', hint: 'Bumil + Busui' },
+  { value: 'POSYANDU_BALITA', label: 'Porsi Kecil Posyandu', hint: 'Balita 1–5' },
 ] as const;
 
 export type KategoriPorsi = (typeof KATEGORI_PORSI_OPTIONS)[number]['value'];

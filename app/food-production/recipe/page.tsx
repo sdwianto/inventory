@@ -721,7 +721,7 @@ export default function FoodProductionRecipePage() {
               <div>
                 <Label>Bahan</Label>
                 <p className="text-[11px] text-muted-foreground">
-                  Porsi besar &amp; Bumil Busui = 100%; kecil &amp; balita = % dari qty besar.
+                  Porsi Besar Sekolah &amp; Posyandu = 100%; Kecil Sekolah &amp; Posyandu = % dari qty besar.
                 </p>
               </div>
               <Button

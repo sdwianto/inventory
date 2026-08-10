@@ -66,6 +66,8 @@
         "diag:bg-jobs": "node scripts/diagnose-bg-jobs-stale.mjs",
         "migrate:bootstrap": "node --experimental-strip-types scripts/run-bootstrap.ts",
         "migrate:email-normalized": "node scripts/backfill-email-normalized.mjs",
+        "migrate:food-safety-status:dry-run": "node scripts/backfill-food-safety-status.mjs",
+        "migrate:food-safety-status": "node scripts/backfill-food-safety-status.mjs --apply",
         "worker:bg-jobs": "node scripts/run-bg-worker.mjs",
         "execution:worker": "node scripts/ensure-node-version.mjs && node scripts/run-execution-worker.mjs",
         "execution:doctor": "node scripts/ensure-node-version.mjs && npx tsx scripts/execution-doctor.ts",

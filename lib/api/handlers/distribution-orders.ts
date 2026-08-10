@@ -63,6 +63,7 @@ import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import {
   consumeBatchesFefo,
   restoreBatchesFromAllocations,
@@ -1068,6 +1069,8 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         });
         if (needs.length) {
           const docNo = String(assignedNo || existing.noDokumen || id);
+          // ADR-004 — resolve sekali per dokumen, bukan per baris FEFO.
+          const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, existing.tenantId);
           try {
             await runInTransactionOrFallback(async ({ db: txDb, session }) => {
               if (!session) {
@@ -1126,6 +1129,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                     productionResultId: hsl!.id,
                     distributionId: id,
                     noDokumen: docNo,
+                    enforceFoodSafetyHold,
                   },
                   session,
                 );

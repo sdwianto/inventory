@@ -6,9 +6,8 @@
   "derivation": {
     "PORSI_KECIL": {
       "groups": [
-        "Siswa TK/PAUD/TK LB (Pagi 20-25%)",
-        "Siswa SD/MI Kelas 1-3 (Pagi 20-25%)",
-        "Anak Balita usia 13-59 bulan (Pagi 20-25%)"
+        "KB / PAUD / TK (Pagi 20-25%)",
+        "Siswa SD/MI Kelas 1-3 (Pagi 20-25%)"
       ],
       "energiKcal": { "method": "operational", "value": 340, "intersection": "330-338", "note": "Irisan 330-338; acuan operasional 340" },
       "proteinG": { "method": "avg_midpoint", "value": 6.4, "ranges": [[5, 6.3], [8, 10], [4, 5]] },
@@ -20,12 +19,9 @@
         "Siswa SD/MI Kelas 4-6 (Siang 30-35%)",
         "Siswa SMP/MTS (Siang 30-35%)",
         "Siswa SMA/SMK/MA (Siang 30-35%)",
-        "Pendidik (Siang 30-35%)",
-        "Tenaga Kependidikan (Siang 30-35%)",
-        "Ibu Hamil (Siang 30-35%)",
-        "Ibu Menyusui (Siang 30-35%)"
+        "Tenaga Kependidikan (Siang 30-35%)"
       ],
-      "energiKcal": { "method": "avg_midpoint", "value": 762, "note": "Irisan rentang tidak ada; rata-rata midpoint 7 kelompok" },
+      "energiKcal": { "method": "avg_midpoint", "value": 762, "note": "Nilai operasional; kelompok: SD 4–6 + SMP + SMA + Tendik" },
       "proteinG": { "method": "avg_midpoint", "value": 22.8 },
       "lemakG": { "method": "avg_midpoint", "value": 23.2 },
       "karbohidratG": { "method": "avg_midpoint", "value": 114.7 }
@@ -34,7 +30,7 @@
   "profiles": [
     {
       "key": "PORSI_KECIL",
-      "label": "Porsi Kecil MBG (Balita + TK + SD 1–3)",
+      "label": "Porsi Kecil Sekolah MBG (KB + PAUD + TK + SD 1–3)",
       "energiKcal": 340,
       "proteinG": 6.4,
       "lemakG": 11.2,
@@ -45,7 +41,7 @@
     },
     {
       "key": "PORSI_BESAR",
-      "label": "Porsi Besar MBG (SD 4–6 + SMP + SMA + Pendidik + Tendik + Bumil + Busui)",
+      "label": "Porsi Besar Sekolah MBG (SD 4–6 + SMP + SMA + Tendik)",
       "energiKcal": 762,
       "proteinG": 22.8,
       "lemakG": 23.2,

@@ -63,10 +63,10 @@ export interface ServicePointDoc {
 
 /** Label singkat kategori untuk catatan lapangan (PK / PB). */
 export const KATEGORI_PORSI_SHORT: Partial<Record<KategoriPorsi, string>> = {
-  PORSI_KECIL: 'PK',
-  PORSI_BESAR: 'PB',
-  POSYANDU_BUMIL_BUSUI: 'Bumil',
-  POSYANDU_BALITA: 'Balita',
+  PORSI_KECIL: 'PKS',
+  PORSI_BESAR: 'PBS',
+  POSYANDU_BUMIL_BUSUI: 'PBP',
+  POSYANDU_BALITA: 'PKP',
 };
 
 export const SERVICE_POINT_JENIS_LABELS: Record<ServicePointJenis, string> = {

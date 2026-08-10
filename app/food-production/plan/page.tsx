@@ -2669,8 +2669,8 @@ function FoodProductionPlanPageContent() {
                   onChange={(e) => setPlanAkgProfile(e.target.value)}
                   title="Target AKG Tabel 2 MBG (penyebut %); isi porsi dihitung dari TKPI × qty besar/kecil"
                 >
-                  <option value="PORSI_KECIL">Target Porsi Kecil (340 kkal)</option>
-                  <option value="PORSI_BESAR">Target Porsi Besar (762 kkal)</option>
+                  <option value="PORSI_KECIL">Target Porsi Kecil Sekolah (340 kkal)</option>
+                  <option value="PORSI_BESAR">Target Porsi Besar Sekolah (762 kkal)</option>
                 </select>
               </div>
               <p className="text-sm text-slate-900">
@@ -2692,7 +2692,7 @@ function FoodProductionPlanPageContent() {
                 )}
               </p>
               <p className="text-[10px] text-slate-600">
-                Qty bahan: porsi besar = 100%; porsi kecil/balita = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
+                Qty bahan: Porsi Besar Sekolah/Posyandu = 100%; Kecil Sekolah/Posyandu = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
               </p>
               {!!draftAkg?.warnings?.length && (
                 <p className="text-[11px] text-amber-800">{draftAkg.warnings.join(' · ')}</p>
