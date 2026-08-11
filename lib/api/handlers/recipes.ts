@@ -25,6 +25,13 @@ import {
   type RecipeImportProduct,
 } from '@/lib/food-production/recipe-import';
 import { isFinishedGoodRole, isIngredientRole, normalizeItemRole } from '@/lib/food-production/item-role';
+import {
+  convertRecipeLineQtys,
+  defaultKitchenSatuan,
+  kitchenSatuanOptionsForBase,
+  normalizeRecipeSatuan,
+  type RecipeConversionProduct,
+} from '@/lib/food-production/recipe-uom';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 import { nextSequentialCode } from '@/lib/api/document-sequence';
 import { storeBase64Image, deleteMediaFile } from '@/lib/api/media-storage';
@@ -137,7 +144,18 @@ async function enrichLines(
   const ids = [...new Set(lines.map((l) => l.productId))];
   const products = await db.collection('products')
     .find({ ...tenantFilter, id: { $in: ids } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1, syncSource: 1 })
+    .project({
+      id: 1,
+      kode: 1,
+      nama: 1,
+      satuan: 1,
+      itemRole: 1,
+      aktif: 1,
+      syncSource: 1,
+      recipeBaseGrams: 1,
+      recipeBaseMl: 1,
+      nutrition: 1,
+    })
     .toArray();
   const byId = new Map(products.map((p) => [String(p.id), p]));
   const out: RecipeLine[] = [];
@@ -147,20 +165,63 @@ async function enrichLines(
     if (p.aktif === false) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
     }
-    // Bahan = baris di collection `products` tenant ini (termasuk sync sales.app).
-    // Satu sumber dengan Master Produk & Kartu Stok — tidak membedakan syncSource.
     if (!isIngredientRole(p.itemRole)) {
       const role = normalizeItemRole(p.itemRole);
       return {
         error: `Produk "${String(p.nama || p.kode || line.productId)}" tidak boleh jadi bahan (role: ${role})`,
       };
     }
+
+    const productConv: RecipeConversionProduct = {
+      satuan: p.satuan != null ? String(p.satuan) : undefined,
+      recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
+      recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+      nutrition: p.nutrition && typeof p.nutrition === 'object'
+        ? (p.nutrition as { gramsPerUnit?: number })
+        : undefined,
+    };
+    const baseSatuan = normalizeRecipeSatuan(productConv.satuan);
+    const allowed = kitchenSatuanOptionsForBase(baseSatuan, {
+      recipeBaseGrams: productConv.recipeBaseGrams,
+      recipeBaseMl: productConv.recipeBaseMl,
+      gramsPerUnit: productConv.nutrition?.gramsPerUnit,
+    });
+    let kitchen = normalizeRecipeSatuan(line.satuan);
+    if (!kitchen) {
+      kitchen = defaultKitchenSatuan(baseSatuan, {
+        recipeBaseGrams: productConv.recipeBaseGrams,
+        recipeBaseMl: productConv.recipeBaseMl,
+        gramsPerUnit: productConv.nutrition?.gramsPerUnit,
+      });
+    }
+    if (kitchen && allowed.length && !allowed.includes(kitchen)) {
+      return {
+        error: `Bahan "${String(p.nama || p.kode || line.productId)}": satuan dapur ${kitchen} tidak kompatibel dengan basis ${baseSatuan || '—'} (pilih: ${allowed.join(', ')})`,
+      };
+    }
+    if (!kitchen && baseSatuan) kitchen = baseSatuan;
+
+    const converted = convertRecipeLineQtys({
+      qtyBesar: Number(line.qtyBesar) || 0,
+      qtyKecil: Number(line.qtyKecil) || 0,
+      kitchenSatuan: kitchen,
+      product: productConv,
+    });
+    if ('error' in converted) {
+      return {
+        error: `Bahan "${String(p.nama || p.kode || line.productId)}": ${converted.error}`,
+      };
+    }
+
     out.push({
       ...line,
       productKode: line.productKode || (p.kode != null ? String(p.kode) : undefined),
       productNama: line.productNama || (p.nama != null ? String(p.nama) : undefined),
-      // Satuan selalu dari master produk — tidak menerima override manual dari client.
-      satuan: p.satuan != null ? String(p.satuan) : undefined,
+      satuan: converted.satuan || kitchen || undefined,
+      qtyBaseBesar: converted.qtyBaseBesar,
+      qtyBaseKecil: converted.qtyBaseKecil,
+      factorToBase: converted.factorToBase,
+      baseSatuan: converted.baseSatuan,
     });
   }
   return out;

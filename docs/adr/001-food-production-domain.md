@@ -572,3 +572,13 @@ Yang diubah posisi (bukan dihapus): **Nutrition, Cost, QC, Forecast, AI** → Ph
 - [REGISTER.md](./REGISTER.md)
 - Sales execution platform (job bus)
 - Canvas: workspace `canvases/adr-001-food-production-blueprint.canvas.tsx`
+
+---
+
+## Catatan operasional: satuan dapur resep → basis pengadaan
+
+- Input resep boleh **GR / ML / …** (satuan dapur); stok & pengadaan tetap **`products.satuan`**.
+- Saat simpan resep, server mengisi `qtyBaseBesar` / `qtyBaseKecil` / `factorToBase` / `baseSatuan`.
+- MRP / issue / PR / cost / gizi memakai **qty basis** (`recipeBaseQtyForFamily`), bukan qty dapur mentah.
+- Bahan basis **SAK / BTL / IKAT**: isi `products.recipeBaseGrams` (atau `recipeBaseMl` / `nutrition.gramsPerUnit`) agar GR/ML bisa dikonversi — tidak menebak.
+- Backfill resep lama: `npm run migrate:recipe-qty-base:dry-run` lalu `--apply`.

@@ -17,6 +17,10 @@ export interface QcTemplateItem {
   key: string;
   label: string;
   required?: boolean;
+  /** ADR-004 P0C — default mati; hanya FP_MANAGE yang boleh mengaktifkan lewat template. */
+  critical?: boolean;
+  /** ADR-004 P0C — holdOnFail ⇒ critical. Penahanan batch aktual di P0F. */
+  holdOnFail?: boolean;
 }
 
 export interface QcTemplateDoc {
@@ -126,10 +130,16 @@ export function normalizeQcTemplateItems(raw: unknown): QcTemplateItem[] | { err
     if (!label) return { error: `Item ${i + 1}: label wajib` };
     if (seen.has(key)) return { error: `Item duplikat: ${key}` };
     seen.add(key);
+    let critical = row.critical === true;
+    let holdOnFail = row.holdOnFail === true;
+    // Default mati untuk QC (bukan CCP). holdOnFail ⇒ critical.
+    if (holdOnFail && !critical) critical = true;
     out.push({
       key,
       label,
       required: row.required !== false,
+      critical,
+      holdOnFail,
     });
   }
   return out;

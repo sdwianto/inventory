@@ -2,10 +2,10 @@
 
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
-  recipeQtyForFamily,
   splitPorsiByKategoriFamily,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
+import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import {
   ceilProcurementQty,
   computeRecipeLineContributions,
@@ -181,13 +181,13 @@ export function recipeIngredientNeeds(input: {
   return (input.recipe.lines || [])
     .map((rLine) => {
       const qtyBesarPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
-        recipeQtyForFamily(rLine, 'BESAR'),
+        recipeBaseQtyForFamily(rLine, 'BESAR'),
         porsiBesarNeeded,
         yieldQty,
         wastePct,
       ), bufferPct));
       const qtyKecilPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
-        recipeQtyForFamily(rLine, 'KECIL'),
+        recipeBaseQtyForFamily(rLine, 'KECIL'),
         porsiKecilNeeded,
         yieldQty,
         wastePct,
@@ -199,7 +199,7 @@ export function recipeIngredientNeeds(input: {
         productId: rLine.productId,
         productKode: rLine.productKode,
         productNama: rLine.productNama,
-        satuan: rLine.satuan,
+        satuan: rLine.baseSatuan || rLine.satuan,
         qty,
         qtyBesarPart,
         qtyKecilPart,

@@ -137,6 +137,69 @@ describe('food-production sprint 4 — MRP', () => {
     expect(result.summary.lineCount).toBe(2);
   });
 
+  it('MRP uses qtyBase* when kitchen satuan is GR (product base KG)', () => {
+    const recipe: RecipeDoc = {
+      id: 'r1',
+      tenantId: 't1',
+      kode: 'RSP-1',
+      nama: 'Nasi',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'beras',
+        qty: 300,
+        qtyBesar: 300,
+        pctKecil: 70,
+        qtyKecil: 210,
+        satuan: 'GR',
+        qtyBaseBesar: 0.3,
+        qtyBaseKecil: 0.21,
+        factorToBase: 0.001,
+        baseSatuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const menu: MenuDoc = {
+      id: 'm1',
+      tenantId: 't1',
+      kode: 'MNU-1',
+      nama: 'Menu',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      items: [{ recipeId: 'r1', recipePerMenuPorsi: 1 }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-07-16',
+        kitchenId: 'k1',
+        kitchenNama: 'Utama',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        lines: [{ menuId: 'm1', targetPorsi: 100 }],
+      },
+      menusById: new Map([['m1', menu]]),
+      recipesById: new Map([['r1', recipe]]),
+      onHandByProduct: new Map([['beras', 0]]),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const beras = result.lines.find((l) => l.productId === 'beras');
+    // 100/100 * 0.3 KG = 0.3 → ceil = 1 KG (bukan 300)
+    expect(beras?.qtyGross).toBe(1);
+    expect(beras?.satuan).toBe('KG');
+  });
+
   it('rejects plan without warehouse or menu', () => {
     const badWh = explodeMaterialRequirements({
       plan: {

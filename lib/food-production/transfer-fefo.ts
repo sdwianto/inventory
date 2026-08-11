@@ -7,7 +7,9 @@ import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   PRODUCTION_BATCHES_COLLECTION,
+  effectiveFoodSafetyStatus,
   effectiveQtyRemaining,
+  foodSafetyStatusMatch,
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import { allocateFefo, type FefoAllocation } from '@/lib/food-production/fefo-allocate';
@@ -151,6 +153,9 @@ export async function relocateBatchesFefo(
     );
     batch.qtyRemaining = afterSource;
 
+    // ADR-004: relokasi tidak boleh mengubah disposisi. Hanya gabungkan ke batch
+    // tujuan yang disposisinya sama, agar qty tertahan tidak melebur jadi bersih.
+    const srcFoodSafety = effectiveFoodSafetyStatus(batch);
     const destExisting = (await db.collection(PRODUCTION_BATCHES_COLLECTION).findOne(
       {
         tenantId: tid,
@@ -158,6 +163,7 @@ export async function relocateBatchesFefo(
         finishedGoodProductId: input.stokId,
         warehouseKode: toWh,
         status: { $in: ['ACTIVE', 'EXPIRED'] },
+        foodSafetyStatus: foodSafetyStatusMatch(srcFoodSafety),
       },
       txOpts(session),
     )) as unknown as ProductionBatchDoc | null;
@@ -198,6 +204,10 @@ export async function relocateBatchesFefo(
         qtyRemaining: take,
         satuan: batch.satuan,
         status: batch.status === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE',
+        foodSafetyStatus: srcFoodSafety,
+        ...(batch.foodSafetyHistory?.length
+          ? { foodSafetyHistory: batch.foodSafetyHistory }
+          : {}),
         relocatedFromBatchId: batch.id,
         lastRelocatedBy,
         createdAt: now,

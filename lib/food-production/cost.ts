@@ -84,7 +84,12 @@ export function analyzeRecipeStandardCost(input: {
   for (const line of recipe.lines || []) {
     const product = productsById.get(line.productId);
     const unit = unitCostOf(product);
-    const qty = roundQty(Number(line.qty) * wasteFactor);
+    // Cost per basis produk: prefer qtyBaseBesar (legacy tanpa qtyBase = qty dapur = basis).
+    const qtyBase = line.qtyBaseBesar != null && Number.isFinite(Number(line.qtyBaseBesar))
+      ? Number(line.qtyBaseBesar)
+      : Number(line.qtyBesar ?? line.qty) || 0;
+    const qty = roundQty(qtyBase * wasteFactor);
+    const satuanLabel = line.baseSatuan || line.satuan || product?.satuan;
     if (unit == null) {
       missing += 1;
       lines.push({
@@ -92,7 +97,7 @@ export function analyzeRecipeStandardCost(input: {
         productKode: line.productKode || product?.productKode,
         productNama: line.productNama || product?.productNama,
         qty,
-        satuan: line.satuan || product?.satuan,
+        satuan: satuanLabel,
         unitCost: 0,
         amount: 0,
         missingPrice: true,
@@ -106,7 +111,7 @@ export function analyzeRecipeStandardCost(input: {
       productKode: line.productKode || product?.productKode,
       productNama: line.productNama || product?.productNama,
       qty,
-      satuan: line.satuan || product?.satuan,
+      satuan: satuanLabel,
       unitCost: money(unit),
       amount,
     });

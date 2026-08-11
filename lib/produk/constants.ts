@@ -13,6 +13,10 @@ export const EMPTY_PRODUCT: JsonObject = {
   minStok: 0,
   aktif: true,
   tenantId: '',
+  /** 1 satuan basis = N gram — konversi resep dapur GR→SAK/BTL/dll. */
+  recipeBaseGrams: '',
+  /** 1 satuan basis = N ml — konversi resep dapur ML→kemasan. */
+  recipeBaseMl: '',
 };
 
 export const PRODUCT_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'] as const;

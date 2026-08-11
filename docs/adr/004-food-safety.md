@@ -150,6 +150,19 @@ holdOnFail = true  ⇒  critical = true
 
 Ditegakkan di normalizer, bukan konvensi.
 
+**Semantik peralihan P0B → dicabut di P0C.** P0B sempat memakai `required` sebagai penentu disposition sementara. Sejak P0C, basis final berlaku:
+
+```
+P0B  required   + FAIL → disposition FAIL      (sementara — DICABUT)
+P0C  critical   + FAIL → disposition FAIL      (final)
+     holdOnFail + FAIL → kandidat HOLD
+P0D  holdOnFail + FAIL + batchId → foodSafetyStatus HOLD
+```
+
+`required` kembali bermakna tunggal: wajib dijawab PASS/FAIL. Template lama tanpa field `critical`/`holdOnFail` dibaca lewat `effectiveHaccpItemFlags()` (CCP+required → keduanya true) agar tidak ada jendela regresi.
+
+**Konsekuensi P0B pada gate COMPLETED.** CCP gagal tidak lagi memblokir transisi ke COMPLETED. Gate lama membuat dokumen gagal menggantung sehingga kegagalan tidak pernah tercatat resmi — persis kebalikan dari yang dibutuhkan audit. Yang tetap memblokir hanyalah kelengkapan pengisian: item wajib belum diisi, masih NA, atau evidence foto belum ada. Karena `status = COMPLETED` tidak lagi menyiratkan "semua CCP lolos", setiap pembaca `haccp_results` wajib memakai `disposition`, bukan `status`, untuk menyimpulkan hasil pemeriksaan.
+
 ### 5. CCP invariant — holdOnFail bersifat derived, bukan configurable
 
 Untuk item berkategori CCP:
@@ -240,6 +253,12 @@ Riwayat disimpan embedded di `production_batches.foodSafetyHistory[]` menggunaka
 `foodSafetyStatus = HOLD` harus ditolak oleh seluruh jalur pengeluaran: FEFO allocate, FEFO consume, dan dist FEFO ship. Pesan shortfall wajib menyebut alasan penahanan agar operator tidak mengira stok hilang.
 
 Untuk P0, hanya `PENDING`, `HOLD`, dan `RELEASED` yang berkonsekuensi; gate memblokir `HOLD` saja. `PASS` bersifat informatif sampai Fase HACCP Study ada, karena sebelum `HaccpPlan` sistem belum tahu gate apa saja yang seharusnya berlaku bagi suatu batch. Sistem tidak mengklaim jaminan yang belum dimilikinya.
+
+**Menyaring kandidat FEFO saja tidak cukup.** Pada `distribution_orders` dan `inventory_releases`, mutasi stok diposting sebelum FEFO consume berjalan, sehingga filter `foodSafetyStatus != HOLD` hanya membuat batch tertahan dilewati — barang tetap terkirim dengan shortfall diam bila tidak ada batch pengganti. Karena itu P0G wajib menambahkan pra-validasi yang **menggagalkan dokumen sebelum transaksi dimulai**, bukan sekadar mengandalkan filter kandidat.
+
+P0G juga mencakup kanal baca publik: `/fp-public/batches` saat ini menampilkan seluruh batch `ACTIVE` tanpa menyaring disposisi, sehingga batch tertahan akan tampil sebagai normal di kanal yang dilihat pihak luar.
+
+**Relokasi antar-gudang bukan pengeluaran, tetapi tetap dapat mencuci disposisi.** `relocateBatchesFefo` memindahkan batch tanpa memblokirnya (mutasi stok sudah terjadi lebih dulu; menolak relokasi justru membuat lokasi batch melenceng dari buku stok). Invariannya: klon di gudang tujuan **wajib mewarisi** `foodSafetyStatus` dan `foodSafetyHistory`, dan penggabungan ke batch tujuan hanya sah bila disposisinya sama. Pemblokiran transfer itu sendiri adalah gate tingkat dokumen di P0G.
 
 ### 10. Traceability — read model, bukan ledger
 

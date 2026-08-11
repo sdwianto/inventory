@@ -34,16 +34,27 @@ export interface RecipeLine {
   productId: string;
   productKode?: string;
   productNama?: string;
-  /** Alias qtyBesar — kompatibilitas data lama / nutrition / cost. */
+  /** Alias qtyBesar — kompatibilitas data lama / nutrition / cost (qty dapur). */
   qty: number;
-  /** Qty bahan untuk porsi besar & bumil busui (100%). */
+  /** Qty bahan dapur untuk porsi besar & bumil busui (100%). */
   qtyBesar: number;
   /** Persen qty kecil terhadap qty besar (1–100). */
   pctKecil: number;
-  /** Derived: qtyBesar × pctKecil / 100 — porsi kecil & balita. */
+  /** Derived: qtyBesar × pctKecil / 100 — porsi kecil & balita (qty dapur). */
   qtyKecil: number;
+  /** Satuan dapur (boleh GR/ML; tidak harus = products.satuan). */
   satuan?: string;
   uomId?: string;
+  /**
+   * Qty dalam satuan basis produk (stok / pengadaan).
+   * Diisi enrichLines lewat modul recipe-uom.
+   */
+  qtyBaseBesar?: number;
+  qtyBaseKecil?: number;
+  /** Snapshot: qtyBase = qtyDapur × factorToBase. */
+  factorToBase?: number;
+  /** Snapshot label products.satuan saat simpan. */
+  baseSatuan?: string;
   notes?: string;
 }
 
@@ -224,6 +235,11 @@ export function consolidateRecipeLines(lines: RecipeLine[]): RecipeLine[] {
     existing.qty = sumBesar;
     existing.pctKecil = clampPctKecil(pct);
     existing.qtyKecil = computeQtyKecil(sumBesar, existing.pctKecil);
+    // qtyBase* harus dihitung ulang lewat enrichLines (faktor bisa beda antar baris).
+    delete existing.qtyBaseBesar;
+    delete existing.qtyBaseKecil;
+    delete existing.factorToBase;
+    delete existing.baseSatuan;
     if (!existing.satuan && normalized.satuan) existing.satuan = normalized.satuan;
     if (!existing.uomId && normalized.uomId) existing.uomId = normalized.uomId;
     if (!existing.productKode && normalized.productKode) existing.productKode = normalized.productKode;
@@ -246,6 +262,7 @@ export function normalizeRecipeLines(
   }
   const lines: RecipeLine[] = [];
   const fgId = options?.finishedGoodProductId?.trim() || '';
+  const satuanByProduct = new Map<string, string>();
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
     const productId = String(row?.productId || '').trim();
@@ -254,6 +271,16 @@ export function normalizeRecipeLines(
     if ('error' in qtys) return { error: `Baris ${i + 1}: ${qtys.error}` };
     if (fgId && productId === fgId) {
       return { error: `Baris ${i + 1}: barang jadi tidak boleh jadi bahan di resep yang sama` };
+    }
+    const satuan = row.satuan != null ? String(row.satuan).trim().toUpperCase() : '';
+    if (satuan) {
+      const prev = satuanByProduct.get(productId);
+      if (prev && prev !== satuan) {
+        return {
+          error: `Baris ${i + 1}: produk yang sama tidak boleh memakai satuan dapur berbeda (${prev} vs ${satuan})`,
+        };
+      }
+      satuanByProduct.set(productId, satuan);
     }
     lines.push({
       productId,

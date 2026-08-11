@@ -5,8 +5,8 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
+import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import {
-  recipeQtyForFamily,
   splitPorsiByKategoriFamily,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
@@ -25,12 +25,14 @@ export type RecipeLineContribution = {
   productId: string;
   productKode?: string;
   productNama?: string;
+  /** Label satuan basis produk (stok / pengadaan), bukan satuan dapur. */
   satuan?: string;
   qty: number;
 };
 
 /**
  * Skala satu resep (besar+kecil, override/exclude/buffer) → kontribusi qty per bahan.
+ * Qty dari `qtyBase*` (satuan basis produk); legacy tanpa qtyBase dianggap sudah basis.
  * Pure, unit-tested. Diekstrak (closeout technical debt) dari duplikasi identik antara
  * `explodeMaterialRequirements` (single-plan, strict) dan `buildRencanaKebutuhanLines`
  * (multi-plan, permissive, lib/food-production/rencana-kebutuhan.ts) — kedua fungsi tetap
@@ -55,13 +57,13 @@ export function computeRecipeLineContributions(input: {
   const out: RecipeLineContribution[] = [];
   for (const rLine of input.recipe.lines || []) {
     const addBesar = scaleRecipeIngredientQty(
-      recipeQtyForFamily(rLine, 'BESAR'),
+      recipeBaseQtyForFamily(rLine, 'BESAR'),
       porsiBesarNeeded,
       yieldQty,
       wastePct,
     );
     const addKecil = scaleRecipeIngredientQty(
-      recipeQtyForFamily(rLine, 'KECIL'),
+      recipeBaseQtyForFamily(rLine, 'KECIL'),
       porsiKecilNeeded,
       yieldQty,
       wastePct,
@@ -78,7 +80,7 @@ export function computeRecipeLineContributions(input: {
       productId: rLine.productId,
       productKode: rLine.productKode,
       productNama: rLine.productNama,
-      satuan: rLine.satuan,
+      satuan: rLine.baseSatuan || rLine.satuan,
       qty: add,
     });
   }
@@ -200,7 +202,8 @@ export function ceilProcurementQty(n: number): number {
 
 /**
  * Gross ingredient need from one recipe scaled to recipe portions needed.
- * qty = line.qty * (recipePorsiNeeded / yieldQty) * (1 + waste%/100)
+ * qty = qtyBase * (recipePorsiNeeded / yieldQty) * (1 + waste%/100)
+ * (qtyBase dari recipeBaseQtyForFamily — satuan basis produk)
  */
 export function scaleRecipeIngredientQty(
   lineQty: number,

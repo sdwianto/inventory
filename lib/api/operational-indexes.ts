@@ -295,6 +295,8 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'haccp_results', index: { tenantId: 1, id: 1 }, name: 'idx_haccp_res_tenant_id' },
   { collection: 'haccp_results', index: { tenantId: 1, noDokumen: 1 }, name: 'uniq_haccp_res_tenant_no', unique: true },
   { collection: 'haccp_results', index: { tenantId: 1, productionBatchId: 1, createdAt: -1 }, name: 'idx_haccp_res_tenant_batch' },
+  // ADR-004 P0B: filter disposition per batch (Food Safety lens)
+  { collection: 'haccp_results', index: { tenantId: 1, productionBatchId: 1, disposition: 1 }, name: 'idx_haccp_res_batch_disposition' },
   { collection: 'haccp_results', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_status_tanggal' },
   { collection: 'haccp_results', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_kitchen_tanggal' },
   { collection: 'supplier_price_book', index: { tenantId: 1, id: 1 }, name: 'idx_spb_tenant_id' },

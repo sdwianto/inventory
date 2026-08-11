@@ -18,7 +18,9 @@ import {
   HACCP_STATUS_LABELS,
   HACCP_CATEGORY_LABELS,
   HACCP_UI_STATUS_NEXT,
+  effectiveHaccpDisposition,
   isHaccpEditable,
+  type HaccpDisposition,
   type HaccpResultStatus,
   type HaccpItemResult,
 } from '@/lib/food-production/haccp';
@@ -51,7 +53,13 @@ interface HaccpRow {
   batchNo?: string;
   tanggal: string;
   status: HaccpResultStatus;
-  summary?: { passCount: number; failCount: number; photoCount: number };
+  disposition?: HaccpDisposition;
+  summary?: {
+    passCount: number;
+    failCount: number;
+    requiredFailCount: number;
+    photoCount: number;
+  };
   items: Array<{ key: string; label: string; result: HaccpItemResult; note?: string }>;
   evidenceUrls?: string[];
 }
@@ -281,7 +289,12 @@ export default function HaccpPage() {
                   </div>
                 </td>
                 <td className="p-3 font-mono text-xs">{row.batchNo || row.productionBatchId}</td>
-                <td className="p-3">{HACCP_STATUS_LABELS[row.status] || row.status}</td>
+                <td className="p-3">
+                  <div>{HACCP_STATUS_LABELS[row.status] || row.status}</div>
+                  {effectiveHaccpDisposition(row) === 'FAIL' && (
+                    <div className="text-[11px] font-medium text-destructive">CCP gagal</div>
+                  )}
+                </td>
                 <td className="p-3 text-right">{row.summary?.photoCount ?? 0}</td>
                 <td className="p-3 text-right">
                   <Button variant="ghost" size="sm" onClick={() => void openDetail(row)}>

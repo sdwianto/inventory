@@ -53,6 +53,7 @@ import {
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import {
+  DEFAULT_FOOD_SAFETY_STATUS,
   PRODUCTION_BATCHES_COLLECTION,
   buildBatchNo,
   defaultExpiryDate,
@@ -694,6 +695,8 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
               qtyRemaining: gross,
               satuan: line.satuan,
               status: 'ACTIVE',
+              // ADR-004: batch baru selalu belum diperiksa sampai gate food safety berjalan.
+              foodSafetyStatus: DEFAULT_FOOD_SAFETY_STATUS,
               createdAt: now,
               updatedAt: now,
             });

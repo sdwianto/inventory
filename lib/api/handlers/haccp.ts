@@ -18,8 +18,12 @@ import {
   normalizeHaccpCategory,
   normalizeHaccpResultItems,
   summarizeHaccpItems,
+  computeHaccpDisposition,
+  hasHaccpHoldCandidate,
+  haccpDispositionMongoFilter,
   assertHaccpCanComplete,
   isHaccpEditable,
+  type HaccpDisposition,
   type HaccpTemplateDoc,
   type HaccpResultDoc,
   type HaccpResultStatus,
@@ -131,7 +135,8 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     if (!kode || !nama) return err('kode dan nama wajib', 400);
     const category = normalizeHaccpCategory(haccpBody.category);
     if (typeof category !== 'string') return err(category.error, 400);
-    const items = normalizeHaccpTemplateItems(haccpBody.items);
+    // ADR-004 P0C: flag critical/holdOnFail hanya lewat jalur MANAGE (role di atas).
+    const items = normalizeHaccpTemplateItems(haccpBody.items, category);
     if ('error' in items) return err(items.error, 400);
 
     const tenantId = tenantIdForWrite(scopeAuth, haccpBody);
@@ -177,6 +182,14 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     if (status) {
       if (!KNOWN_STATUSES.has(status)) return err('Filter status tidak valid', 400);
       filter.status = status;
+    }
+    const disposition = String(url.searchParams.get('disposition') || '').trim().toUpperCase();
+    if (disposition) {
+      if (disposition !== 'PENDING' && disposition !== 'PASS' && disposition !== 'FAIL') {
+        return err('Filter disposition tidak valid', 400);
+      }
+      // Jangan pakai equality mentah — dokumen lama tanpa field harus ikut terbaca.
+      Object.assign(filter, haccpDispositionMongoFilter(disposition as HaccpDisposition));
     }
     const batchId = String(url.searchParams.get('productionBatchId') || '').trim();
     if (batchId) filter.productionBatchId = batchId;
@@ -272,6 +285,7 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       evidenceMediaFiles: evidence.files,
       linkedQcResultId,
       status: 'DRAFT',
+      disposition: computeHaccpDisposition(items, template.items, template.category),
       history,
       summary: summarizeHaccpItems(items, template.items, evidence.urls),
       catatan: String(haccpBody.catatan || '').trim() || undefined,
@@ -365,6 +379,7 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
           items,
           evidenceUrls,
           evidenceMediaFiles,
+          disposition: computeHaccpDisposition(items, template.items, template.category),
           summary: summarizeHaccpItems(items, template.items, evidenceUrls),
           catatan: haccpBody.catatan != null
             ? String(haccpBody.catatan).trim() || null
@@ -406,6 +421,9 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     const transitionErr = assertStatusTransition(existing.status, toStatus, HACCP_STATUS_TRANSITIONS);
     if (transitionErr) return err(transitionErr, 400);
 
+    // ADR-004: disposition dihitung ulang saat COMPLETED mengikuti template berlaku.
+    let disposition = existing.disposition;
+    let holdCandidate = false;
     if (toStatus === 'COMPLETED') {
       const template = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id: existing.templateId }),
@@ -417,6 +435,13 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
         existing.evidenceUrls || [],
       );
       if (gate) return err(gate, 400);
+      disposition = computeHaccpDisposition(existing.items, template.items, template.category);
+      // P0C: holdOnFail+FAIL = kandidat HOLD. Penahanan batch aktual di P0D.
+      holdCandidate = hasHaccpHoldCandidate(
+        existing.items,
+        template.items,
+        template.category,
+      );
     }
 
     const actor = auditActor(auth);
@@ -430,7 +455,15 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     });
     await db.collection(HACCP_RESULTS_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
-      { $set: { status: toStatus, history, updatedAt: now } },
+      {
+        $set: {
+          status: toStatus,
+          history,
+          updatedAt: now,
+          // Pembatalan tidak menghapus hasil ukur; catatan tetap jujur apa adanya.
+          ...(disposition ? { disposition } : {}),
+        },
+      },
     );
     const saved = await db.collection(HACCP_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
@@ -440,12 +473,19 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       : toStatus === 'CANCELLED'
         ? 'HACCP_RESULT_CANCEL'
         : 'HACCP_RESULT_STATUS';
+
+    let auditSummary = `HACCP ${existing.noDokumen} → ${toStatus}`;
+    if (toStatus === 'COMPLETED' && disposition) {
+      auditSummary += ` · disposition ${disposition}`;
+      if (holdCandidate) auditSummary += ' · holdCandidate';
+    }
+
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action,
       entityType: 'haccp_result',
       entityId: path[1],
-      summary: `HACCP ${existing.noDokumen} → ${toStatus}`,
+      summary: auditSummary,
       ...actor,
     });
     return ok(clean(saved as Record<string, unknown>));

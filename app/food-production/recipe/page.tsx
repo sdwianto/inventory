@@ -20,6 +20,12 @@ import {
   computeQtyKecil,
   clampPctKecil,
 } from '@/lib/food-production/recipe';
+import {
+  defaultKitchenSatuan,
+  kitchenSatuanOptionsForBase,
+  toBaseRecipeQty,
+  type RecipeConversionProduct,
+} from '@/lib/food-production/recipe-uom';
 import { formatNumber } from '@/lib/format';
 
 interface ProductOpt {
@@ -27,6 +33,9 @@ interface ProductOpt {
   kode: string;
   nama: string;
   satuan?: string;
+  recipeBaseGrams?: number;
+  recipeBaseMl?: number;
+  gramsPerUnit?: number;
   itemRole?: string;
   aktif?: boolean;
 }
@@ -56,10 +65,59 @@ interface RecipeRow {
     pctKecil?: number;
     qtyKecil?: number;
     satuan?: string;
+    qtyBaseBesar?: number;
+    qtyBaseKecil?: number;
+    factorToBase?: number;
+    baseSatuan?: string;
     notes?: string;
     productNama?: string;
   }>;
   aktif: boolean;
+}
+
+function productConvFromOpt(p: ProductOpt | undefined): RecipeConversionProduct {
+  if (!p) return {};
+  return {
+    satuan: p.satuan,
+    recipeBaseGrams: p.recipeBaseGrams,
+    recipeBaseMl: p.recipeBaseMl,
+    nutrition: p.gramsPerUnit != null ? { gramsPerUnit: p.gramsPerUnit } : undefined,
+  };
+}
+
+function kitchenOptsForProduct(p: ProductOpt | undefined): string[] {
+  if (!p?.satuan) return [];
+  return kitchenSatuanOptionsForBase(p.satuan, {
+    recipeBaseGrams: p.recipeBaseGrams,
+    recipeBaseMl: p.recipeBaseMl,
+    gramsPerUnit: p.gramsPerUnit,
+  });
+}
+
+function defaultSatuanForProduct(p: ProductOpt | undefined): string {
+  if (!p?.satuan) return '';
+  return defaultKitchenSatuan(p.satuan, {
+    recipeBaseGrams: p.recipeBaseGrams,
+    recipeBaseMl: p.recipeBaseMl,
+    gramsPerUnit: p.gramsPerUnit,
+  });
+}
+
+/** Live preview: kitchen qty → product base. */
+function basePreview(
+  qtyKitchen: number,
+  kitchenSatuan: string,
+  product: ProductOpt | undefined,
+): { text: string; ok: boolean } {
+  if (!product?.satuan || !kitchenSatuan || !(qtyKitchen > 0)) {
+    return { text: '', ok: true };
+  }
+  const r = toBaseRecipeQty(qtyKitchen, kitchenSatuan, productConvFromOpt(product));
+  if ('error' in r) return { text: r.error, ok: false };
+  return {
+    text: `= ${formatNumber(r.qtyBase)} ${r.baseSatuan}`,
+    ok: true,
+  };
 }
 
 const emptyLine = (): RecipeLineForm => ({
@@ -135,7 +193,7 @@ export default function FoodProductionRecipePage() {
     kode: '',
     nama: '',
     effectiveDate: today(),
-    yieldQty: '100',
+    yieldQty: '500',
     wastePct: '',
     catatan: '',
     aktif: true,
@@ -183,14 +241,22 @@ export default function FoodProductionRecipePage() {
       const list = Array.isArray(pData)
         ? pData
         : (Array.isArray(pData?.items) ? pData.items : (Array.isArray(pData?.data) ? pData.data : []));
-      setProducts(list.map((p: ProductOpt) => ({
-        id: String(p.id),
-        kode: String(p.kode || ''),
-        nama: String(p.nama || ''),
-        satuan: p.satuan ? String(p.satuan) : '',
-        itemRole: p.itemRole ? String(p.itemRole) : undefined,
-        aktif: p.aktif !== false,
-      })));
+      setProducts(list.map((p: Record<string, unknown>) => {
+        const nutrition = p.nutrition && typeof p.nutrition === 'object'
+          ? (p.nutrition as { gramsPerUnit?: number })
+          : undefined;
+        return {
+          id: String(p.id),
+          kode: String(p.kode || ''),
+          nama: String(p.nama || ''),
+          satuan: p.satuan ? String(p.satuan) : '',
+          recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
+          recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+          gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
+          itemRole: p.itemRole ? String(p.itemRole) : undefined,
+          aktif: p.aktif !== false,
+        };
+      }));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat resep');
     } finally {
@@ -255,7 +321,7 @@ export default function FoodProductionRecipePage() {
       kode: nextKode,
       nama: '',
       effectiveDate: today(),
-      yieldQty: '100',
+      yieldQty: '500',
       wastePct: '',
       catatan: '',
       aktif: true,
@@ -329,6 +395,19 @@ export default function FoodProductionRecipePage() {
           `Resep "${exactNamaMatch.nama}" sudah ada (${exactNamaMatch.kode}). Ubah nama, atau batalkan jika sama.`,
         );
       }
+      const readyLines = consolidateFormLines(lines).filter((l) => l.productId);
+      for (const l of readyLines) {
+        const product = products.find((p) => p.id === l.productId);
+        const preview = basePreview(Number(l.qtyBesar) || 0, l.satuan, product);
+        if (!preview.ok) {
+          throw new Error(
+            `Bahan "${product?.nama || l.productId}": ${preview.text || 'konversi satuan gagal'}`,
+          );
+        }
+        if (!l.satuan) {
+          throw new Error(`Bahan "${product?.nama || l.productId}": satuan dapur wajib dipilih`);
+        }
+      }
       const payload = {
         nama,
         effectiveDate: form.effectiveDate,
@@ -337,16 +416,14 @@ export default function FoodProductionRecipePage() {
         catatan: form.catatan.trim() || undefined,
         aktif: form.aktif,
         gambarBase64: gambarPhotos[0] || null,
-        lines: consolidateFormLines(lines)
-          .filter((l) => l.productId)
-          .map((l) => ({
-            productId: l.productId,
-            qtyBesar: Number(l.qtyBesar),
-            qty: Number(l.qtyBesar),
-            pctKecil: clampPctKecil(l.pctKecil),
-            satuan: l.satuan || undefined,
-            notes: l.notes.trim() || undefined,
-          })),
+        lines: readyLines.map((l) => ({
+          productId: l.productId,
+          qtyBesar: Number(l.qtyBesar),
+          qty: Number(l.qtyBesar),
+          pctKecil: clampPctKecil(l.pctKecil),
+          satuan: l.satuan || undefined,
+          notes: l.notes.trim() || undefined,
+        })),
       };
       const url = editing ? `/api/recipes/${editing.id}` : '/api/recipes';
       const method = editing ? 'PUT' : 'POST';
@@ -735,12 +812,12 @@ export default function FoodProductionRecipePage() {
               </Button>
             </div>
             <div className="rounded-md border overflow-hidden">
-              <div className="hidden sm:grid sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_4.5rem_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
+              <div className="hidden sm:grid sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_minmax(7rem,1fr)_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
                 <div>Produk</div>
                 <div>Qty besar</div>
                 <div>% kecil</div>
                 <div>Qty kecil</div>
-                <div>Satuan</div>
+                <div>Satuan dapur</div>
                 <div />
               </div>
               <div className="divide-y">
@@ -749,10 +826,17 @@ export default function FoodProductionRecipePage() {
                     Number(line.qtyBesar) || 0,
                     clampPctKecil(line.pctKecil),
                   );
+                  const product = products.find((p) => p.id === line.productId);
+                  const satuanOpts = kitchenOptsForProduct(product);
+                  const preview = basePreview(
+                    Number(line.qtyBesar) || 0,
+                    line.satuan,
+                    product,
+                  );
                   return (
                   <div
                     key={idx}
-                    className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_4.5rem_2.5rem] items-center px-2 py-1.5"
+                    className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_minmax(7rem,1fr)_2.5rem] items-start px-2 py-1.5"
                   >
                     <div className="min-w-0">
                       <span className="sm:hidden text-[11px] text-muted-foreground">Produk</span>
@@ -776,7 +860,20 @@ export default function FoodProductionRecipePage() {
                         }}
                         onProductPick={(p) => {
                           const productId = str(p.id);
-                          const satuan = str(p.satuan);
+                          const picked: ProductOpt = {
+                            id: productId,
+                            kode: str(p.kode),
+                            nama: str(p.nama),
+                            satuan: str(p.satuan),
+                            recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
+                            recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+                            gramsPerUnit:
+                              p.nutrition && typeof p.nutrition === 'object'
+                                && (p.nutrition as { gramsPerUnit?: number }).gramsPerUnit != null
+                                ? Number((p.nutrition as { gramsPerUnit?: number }).gramsPerUnit)
+                                : undefined,
+                          };
+                          const kitchenSatuan = defaultSatuanForProduct(picked) || str(p.satuan);
                           setLines((prev) => {
                             const existingIdx = prev.findIndex(
                               (l, i) => i !== idx && l.productId === productId,
@@ -789,7 +886,7 @@ export default function FoodProductionRecipePage() {
                                   return {
                                     ...l,
                                     qtyBesar: String((Number(l.qtyBesar) || 0) + addQty),
-                                    satuan: satuan || l.satuan,
+                                    satuan: l.satuan || kitchenSatuan,
                                   };
                                 })
                                 .filter((_, i) => i !== idx);
@@ -799,10 +896,14 @@ export default function FoodProductionRecipePage() {
                             return consolidateFormLines(
                               prev.map((l, i) => (
                                 i === idx
-                                  ? { ...l, productId, satuan: satuan || l.satuan }
+                                  ? { ...l, productId, satuan: kitchenSatuan }
                                   : l
                               )),
                             );
+                          });
+                          setProducts((prev) => {
+                            if (prev.some((x) => x.id === productId)) return prev;
+                            return [...prev, picked];
                           });
                         }}
                       />
@@ -846,19 +947,41 @@ export default function FoodProductionRecipePage() {
                         title="Otomatis dari qty besar × %"
                       />
                     </div>
-                    <div>
-                      <span className="sm:hidden text-[11px] text-muted-foreground">Satuan</span>
-                      <Input
-                        type="text"
-                        readOnly
-                        tabIndex={-1}
-                        className="bg-muted/40 text-muted-foreground"
+                    <div className="min-w-0">
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Satuan dapur</span>
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-50"
                         value={line.satuan}
-                        aria-label={`Satuan baris ${idx + 1} (dari master produk)`}
-                        title="Otomatis dari master produk — tidak bisa diubah manual"
-                      />
+                        disabled={!line.productId || satuanOpts.length === 0}
+                        aria-label={`Satuan dapur baris ${idx + 1}`}
+                        onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                          i === idx ? { ...l, satuan: e.target.value } : l
+                        )))}
+                      >
+                        {!line.satuan && <option value="">Pilih…</option>}
+                        {satuanOpts.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                        {line.satuan && !satuanOpts.includes(line.satuan) && (
+                          <option value={line.satuan}>{line.satuan}</option>
+                        )}
+                      </select>
+                      {preview.text ? (
+                        <p
+                          className={`mt-0.5 text-[10px] tabular-nums leading-tight ${
+                            preview.ok ? 'text-muted-foreground' : 'text-destructive'
+                          }`}
+                          title="Konversi ke satuan basis produk (stok / pengadaan)"
+                        >
+                          {preview.text}
+                        </p>
+                      ) : product?.satuan ? (
+                        <p className="mt-0.5 text-[10px] text-muted-foreground leading-tight">
+                          basis {product.satuan}
+                        </p>
+                      ) : null}
                     </div>
-                    <div className="flex justify-end">
+                    <div className="flex justify-end pt-1">
                       <Button
                         type="button"
                         variant="ghost"

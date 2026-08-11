@@ -6,6 +6,7 @@ import {
   normalizeHaccpResultItems,
   summarizeHaccpItems,
   assertHaccpCanComplete,
+  computeHaccpDisposition,
   DEFAULT_HACCP_TEMPLATES,
 } from '@/lib/food-production/haccp';
 import { batchTrailToCsv, sortTrailEvents, type BatchTrailEvent } from '@/lib/food-production/batch-audit-trail';
@@ -38,12 +39,21 @@ describe('food-production phase 5 sprint 21', () => {
     if ('error' in (items as object)) return;
     expect(assertHaccpCanComplete(items, tpl, [])).toMatch(/evidence foto/);
     expect(assertHaccpCanComplete(items, tpl, ['/api/media/t/x.jpg'])).toBeNull();
+    // ADR-004 P0B: CCP gagal tidak lagi menyandera COMPLETED — hasilnya masuk
+    // ke disposition, bukan ke penolakan transisi status.
     const failed = normalizeHaccpResultItems(
       [{ key: 'core_temp', result: 'FAIL' }, { key: 'hold_time', result: 'PASS' }],
       tpl,
     );
     if ('error' in (failed as object)) return;
-    expect(assertHaccpCanComplete(failed, tpl, ['/api/media/t/x.jpg'])).toMatch(/gagal/);
+    expect(assertHaccpCanComplete(failed, tpl, ['/api/media/t/x.jpg'])).toBeNull();
+    expect(computeHaccpDisposition(failed, tpl)).toBe('FAIL');
+    const notFilled = normalizeHaccpResultItems(
+      [{ key: 'core_temp', result: 'PASS' }, { key: 'hold_time', result: 'NA' }],
+      tpl,
+    );
+    if ('error' in (notFilled as object)) return;
+    expect(assertHaccpCanComplete(notFilled, tpl, ['/api/media/t/x.jpg'])).toMatch(/PASS\/FAIL/);
   });
 
   it('summarizes items and photo count', () => {

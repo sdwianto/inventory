@@ -64,6 +64,18 @@ export function normalizeFoodSafetyStatus(raw: unknown): FoodSafetyStatus | { er
   return { error: 'foodSafetyStatus wajib PENDING | PASS | HOLD | RELEASED' };
 }
 
+/**
+ * Filter Mongo untuk mencocokkan disposisi yang sama, dengan baris lama
+ * (field belum ada) dihitung sebagai PENDING — `null` pada $in juga cocok
+ * untuk field yang tidak ada. Dipakai agar qty batch tertahan tidak pernah
+ * melebur ke batch berdisposisi lain saat relokasi antar-gudang.
+ */
+export function foodSafetyStatusMatch(
+  status: FoodSafetyStatus,
+): FoodSafetyStatus | { $in: Array<FoodSafetyStatus | null> } {
+  return status === DEFAULT_FOOD_SAFETY_STATUS ? { $in: [status, null] } : status;
+}
+
 /** Hanya HOLD yang memblokir pengeluaran (ADR-004 §9). */
 export function isFoodSafetyBlocked(
   b: Pick<ProductionBatchDoc, 'foodSafetyStatus'> | null | undefined,

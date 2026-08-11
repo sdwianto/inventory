@@ -283,6 +283,13 @@ export default function ProdukPage() {
         };
         if (!editing) payload.stok = num(form.stok);
       }
+      // Faktor resep dapur — lokal & vendor (bukan field locked sales.app).
+      payload.recipeBaseGrams = form.recipeBaseGrams === '' || form.recipeBaseGrams == null
+        ? null
+        : num(form.recipeBaseGrams);
+      payload.recipeBaseMl = form.recipeBaseMl === '' || form.recipeBaseMl == null
+        ? null
+        : num(form.recipeBaseMl);
       if (!isMaster) delete payload.tenantId;
       if (editing) delete payload.stok;
       await productMutation.mutateAsync({
@@ -774,7 +781,8 @@ export default function ProdukPage() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           {editing && isVendorSynced(editing) && (
             <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-              Kode, nama, grup, dan satuan dikelola di sales.app. Di inventory hanya gudang, stok minimum, dan harga beli yang bisa diubah.
+              Kode, nama, grup, dan satuan dikelola di sales.app. Di inventory: gudang, stok minimum, harga beli,
+              serta faktor resep dapur (recipeBaseGrams / recipeBaseMl) yang bisa diubah.
             </p>
           )}
           <DialogHeader>
@@ -886,6 +894,42 @@ export default function ProdukPage() {
               hargaBeli={num(form.hargaBeli)}
               readOnly={Boolean(editing && isVendorSynced(editing))}
             />
+
+            <FormSectionTitle>Faktor Resep Dapur</FormSectionTitle>
+            <div>
+              <Label>Gram per satuan basis (recipeBaseGrams)</Label>
+              <Input
+                type="number"
+                min={0}
+                step="any"
+                value={form.recipeBaseGrams === '' || form.recipeBaseGrams == null ? '' : num(form.recipeBaseGrams)}
+                onChange={(e) => setForm({
+                  ...form,
+                  recipeBaseGrams: e.target.value === '' ? '' : parseFloat(e.target.value),
+                })}
+                placeholder="contoh: 25000 untuk 1 SAK = 25 kg"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Wajib bila basis SAK/BTL/IKAT dan resep memakai GR. 1 {str(form.satuan) || 'basis'} = N gram.
+              </p>
+            </div>
+            <div>
+              <Label>Ml per satuan basis (recipeBaseMl)</Label>
+              <Input
+                type="number"
+                min={0}
+                step="any"
+                value={form.recipeBaseMl === '' || form.recipeBaseMl == null ? '' : num(form.recipeBaseMl)}
+                onChange={(e) => setForm({
+                  ...form,
+                  recipeBaseMl: e.target.value === '' ? '' : parseFloat(e.target.value),
+                })}
+                placeholder="contoh: 1000 untuk 1 BTL = 1 L"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Untuk konversi ML dari resep ke basis kemasan. Tidak mengubah satuan stok/pengadaan.
+              </p>
+            </div>
 
             <FormSectionTitle>Gudang Penyimpanan</FormSectionTitle>
             <div className="col-span-2">

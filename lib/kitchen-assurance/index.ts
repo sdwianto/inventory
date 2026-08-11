@@ -14,7 +14,12 @@ import type { AuthContext } from '@/types/auth';
 import { withTenantFilter } from '@/lib/api/tenant-master';
 import { TEMPERATURE_LOGS_COLLECTION, type TemperatureLogDoc } from '@/lib/food-production/temperature-log';
 import { QC_RESULTS_COLLECTION, type QcResultDoc } from '@/lib/food-production/qc';
-import { HACCP_RESULTS_COLLECTION, type HaccpResultDoc } from '@/lib/food-production/haccp';
+import {
+  HACCP_RESULTS_COLLECTION,
+  HACCP_DISPOSITION_LABELS,
+  effectiveHaccpDisposition,
+  type HaccpResultDoc,
+} from '@/lib/food-production/haccp';
 import type { BatchTrailEvent } from '@/lib/food-production/batch-audit-trail';
 
 export type BatchAssuranceTrailParams = {
@@ -96,13 +101,16 @@ export async function getBatchAssuranceTrail(
   for (const h of haccpList) {
     entityIds.push(h.id);
     const firstPhoto = (h.evidenceUrls || [])[0];
+    // ADR-004 P0B: sejak dokumen gagal boleh berstatus COMPLETED, status saja
+    // menyesatkan bagi auditor — hasil pemeriksaan harus ikut tercetak.
+    const disposition = effectiveHaccpDisposition(h);
     events.push({
       at: h.createdAt instanceof Date ? h.createdAt.toISOString() : String(h.tanggal),
       eventType: 'HACCP',
       entityType: 'haccp_result',
       entityId: h.id,
       refNo: h.noDokumen,
-      summary: `HACCP ${h.noDokumen} (${h.templateKode || h.category}) · foto ${h.summary?.photoCount || 0}`,
+      summary: `HACCP ${h.noDokumen} (${h.templateKode || h.category}) · hasil ${HACCP_DISPOSITION_LABELS[disposition]} · foto ${h.summary?.photoCount || 0}`,
       statusOrAlert: h.status,
       evidenceUrl: firstPhoto,
       userName: h.createdByName,

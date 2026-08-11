@@ -81,6 +81,13 @@ interface ProductBody extends Record<string, unknown> {
   stokAlasan?: string;
   ids?: unknown[];
   itemRole?: string;
+  /**
+   * Faktor resep dapur → basis kemasan: 1 products.satuan = N gram.
+   * Dipakai Food Production (GR→SAK/BTL), bukan pengadaan integer UOM.
+   */
+  recipeBaseGrams?: number | string | null;
+  /** 1 products.satuan = N ml (konversi resep ML→BTL/dll). */
+  recipeBaseMl?: number | string | null;
 }
 
 interface ProductDoc extends Record<string, unknown> {
@@ -93,6 +100,17 @@ interface ProductDoc extends Record<string, unknown> {
   gudangKode?: string;
   stok?: number;
   itemRole?: ItemRole;
+  recipeBaseGrams?: number;
+  recipeBaseMl?: number;
+}
+
+/** Optional positive factor for recipe kitchen UOM; null clears; undefined skips. */
+function parseRecipeBaseFactor(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 async function enrichProductList(
@@ -279,6 +297,10 @@ export async function handleProducts({
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+    const recipeGrams = parseRecipeBaseFactor(productBody.recipeBaseGrams);
+    const recipeMl = parseRecipeBaseFactor(productBody.recipeBaseMl);
+    if (recipeGrams != null) doc.recipeBaseGrams = recipeGrams;
+    if (recipeMl != null) doc.recipeBaseMl = recipeMl;
     const initialStok = doc.stok || 0;
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
@@ -467,6 +489,12 @@ export async function handleProducts({
       ['stok', 'minStok'].forEach((k) => {
         if (update[k] !== undefined) update[k] = parseFloat(String(update[k] || 0));
       });
+      if (productBody.recipeBaseGrams !== undefined) {
+        update.recipeBaseGrams = parseRecipeBaseFactor(productBody.recipeBaseGrams) ?? null;
+      }
+      if (productBody.recipeBaseMl !== undefined) {
+        update.recipeBaseMl = parseRecipeBaseFactor(productBody.recipeBaseMl) ?? null;
+      }
 
       const tid = existing.tenantId || 'default';
       const grup = String(update.grup ?? existing.grup ?? 'Umum').trim();

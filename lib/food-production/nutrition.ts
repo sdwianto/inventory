@@ -12,6 +12,7 @@ import {
   type RecipeLine,
   type RecipePorsiFamily,
 } from '@/lib/food-production/recipe';
+import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import type { MenuDoc } from '@/lib/food-production/menu';
 import type { ProductionPlanLine } from '@/lib/food-production/production-plan';
 import type { ProductionResultLine } from '@/lib/food-production/production-result';
@@ -491,15 +492,18 @@ export function analyzeRecipeNutrition(input: {
     const product = productsById.get(line.productId);
     const productNama = line.productNama || product?.productNama;
     const productKode = line.productKode || product?.productKode;
-    const satuan = line.satuan || product?.satuan;
-    const qty = recipeQtyForFamily(line, porsiFamily);
+    // gramsPerUnit / tebakan TKPI relatif ke satuan basis produk; qty gizi = qtyBase.
+    const baseSatuan = line.baseSatuan || product?.satuan;
+    const kitchenSatuan = line.satuan || baseSatuan;
+    const qtyKitchen = recipeQtyForFamily(line, porsiFamily);
+    const qtyBase = recipeBaseQtyForFamily(line, porsiFamily);
     const resolved = resolveProductNutrition(product || {
       productId: line.productId,
       productNama,
       productKode,
-      satuan,
-    }, { productNama, productKode, satuan });
-    const contrib = contributionFromProduct(qty, resolved.nutrition);
+      satuan: baseSatuan,
+    }, { productNama, productKode, satuan: baseSatuan });
+    const contrib = contributionFromProduct(qtyBase, resolved.nutrition);
     if (resolved.warning) warnings.push(`${productNama || productKode || line.productId}: ${resolved.warning}`);
     if (!contrib) {
       missingProductIds.push(line.productId);
@@ -507,8 +511,8 @@ export function analyzeRecipeNutrition(input: {
         productId: line.productId,
         productKode,
         productNama,
-        qty,
-        satuan,
+        qty: qtyKitchen,
+        satuan: kitchenSatuan,
         contribution: { ...EMPTY_NUTRITION },
         missing: true,
       });
@@ -519,8 +523,8 @@ export function analyzeRecipeNutrition(input: {
       productId: line.productId,
       productKode,
       productNama,
-      qty,
-      satuan,
+      qty: qtyKitchen,
+      satuan: kitchenSatuan,
       contribution: contrib,
       source: resolved.source,
       tkpiCode: resolved.tkpiCode,

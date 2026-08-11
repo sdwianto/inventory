@@ -10,7 +10,10 @@ import {
   type TemperatureLogDoc,
 } from '@/lib/food-production/temperature-log';
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
-import { HACCP_RESULTS_COLLECTION } from '@/lib/food-production/haccp';
+import {
+  HACCP_RESULTS_COLLECTION,
+  haccpDispositionMongoFilter,
+} from '@/lib/food-production/haccp';
 import { MAINTENANCE_SCHEDULES_COLLECTION } from '@/lib/maintenance/constants';
 import {
   PRODUCTION_BATCHES_COLLECTION,
@@ -426,10 +429,12 @@ export async function collectAttentions(
     }
   }
 
-  // ── Food: HACCP FAIL ──
+  // ── Food: HACCP FAIL (disposition, bukan failCount mentah) ──
+  // ADR-004 P0B: item non-wajib yang FAIL tidak menentukan disposition; attention
+  // harus selaras supaya termometer-belum-kalibrasi tidak jadi CRITICAL palsu.
   const haccpFilter: Record<string, unknown> = {
     tenantId,
-    'summary.failCount': { $gt: 0 },
+    ...haccpDispositionMongoFilter('FAIL'),
   };
   if (kitchenId) haccpFilter.kitchenId = kitchenId;
   const haccpRows = await db
@@ -440,14 +445,14 @@ export async function collectAttentions(
     .toArray();
   for (const row of haccpRows) {
     const r = row as Record<string, unknown>;
-    const summary = (r.summary || {}) as { failCount?: number };
-    const fails = Number(summary.failCount || 0);
+    const summary = (r.summary || {}) as { requiredFailCount?: number; failCount?: number };
+    const fails = Number(summary.requiredFailCount || summary.failCount || 0);
     out.push({
       key: `haccp:${String(r.id)}`,
       pillar: 'FOOD',
       level: 'CRITICAL',
       label: `HACCP · ${String(r.noDokumen || r.id)}`,
-      detail: `${fails} temuan FAIL`,
+      detail: fails > 0 ? `${fails} CCP wajib FAIL` : 'Disposition FAIL',
       href: '/food-production/haccp',
       source: 'FOOD_PRODUCTION',
       kitchenId: r.kitchenId ? String(r.kitchenId) : undefined,

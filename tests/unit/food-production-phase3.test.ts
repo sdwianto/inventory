@@ -207,6 +207,71 @@ describe('food-production phase 3', () => {
     expect(besar.akgDaily.energiKcal).toBe(762);
   });
 
+  it('nutrition 300 GR (qtyBase 0.3) equals 0.3 KG — tidak 1000× overcount', () => {
+    const productsById = new Map([['beras', {
+      productId: 'beras',
+      productNama: 'Beras',
+      satuan: 'KG',
+      nutrition: {
+        basis: 'PER_100G' as const,
+        gramsPerUnit: 1000,
+        energiKcal: 350,
+        proteinG: 7,
+        lemakG: 1,
+        karbohidratG: 78,
+      },
+    }]]);
+    const viaKg = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r1',
+        kode: 'RSP-1',
+        nama: 'Nasi',
+        yieldQty: 100,
+        lines: [{
+          productId: 'beras',
+          qty: 0.3,
+          qtyBesar: 0.3,
+          pctKecil: 70,
+          qtyKecil: 0.21,
+          satuan: 'KG',
+          qtyBaseBesar: 0.3,
+          qtyBaseKecil: 0.21,
+          factorToBase: 1,
+          baseSatuan: 'KG',
+        }],
+      },
+      productsById,
+      akgProfile: 'PORSI_KECIL',
+    });
+    const viaGr = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r1',
+        kode: 'RSP-1',
+        nama: 'Nasi',
+        yieldQty: 100,
+        lines: [{
+          productId: 'beras',
+          qty: 300,
+          qtyBesar: 300,
+          pctKecil: 70,
+          qtyKecil: 210,
+          satuan: 'GR',
+          qtyBaseBesar: 0.3,
+          qtyBaseKecil: 0.21,
+          factorToBase: 0.001,
+          baseSatuan: 'KG',
+        }],
+      },
+      productsById,
+      akgProfile: 'PORSI_KECIL',
+    });
+    expect(viaGr.batch.energiKcal).toBe(viaKg.batch.energiKcal);
+    // 0.3 KG × 1000g × 350/100 = 1050
+    expect(viaGr.batch.energiKcal).toBe(1050);
+    expect(viaGr.lines[0]?.satuan).toBe('GR');
+    expect(viaGr.lines[0]?.qty).toBe(300);
+  });
+
   it('blends plan line besar+kecil and suggests AKG profile', () => {
     expect(suggestAkgProfileForCategories([['PORSI_BESAR']])).toBe('PORSI_BESAR');
     expect(suggestAkgProfileForCategories([['PORSI_KECIL']])).toBe('PORSI_KECIL');
