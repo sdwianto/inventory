@@ -64,6 +64,16 @@ function toastFoodSafetyHold(hold: FoodSafetyHoldResult | undefined) {
   }
 }
 
+function toastFoodSafetyFinding(finding: {
+  raised?: boolean;
+  skipped?: string;
+  kaIssue?: { noDokumen?: string; created?: boolean };
+} | undefined) {
+  if (!finding?.raised) return;
+  const ka = finding.kaIssue?.noDokumen ? ` · Issue ${finding.kaIssue.noDokumen}` : '';
+  toast.warning(`Temuan FAIL diangkat ke Kitchen Assurance${ka}`);
+}
+
 interface Template {
   id: string;
   kode: string;
@@ -287,6 +297,7 @@ export default function QcPage() {
       const saved = data as QcRow;
       toast.success(`Checklist ${saved.noDokumen} tersimpan`);
       toastFoodSafetyHold(data?.foodSafetyHold as FoodSafetyHoldResult | undefined);
+      toastFoodSafetyFinding(data?.foodSafetyFinding);
       setFormOpen(false);
       await load();
     } catch (e) {

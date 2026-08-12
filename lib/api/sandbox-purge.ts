@@ -54,6 +54,8 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'distribution_orders',
   'temperature_logs',
   'haccp_results',
+  'haccp_plans',
+  'haccp_verifications',
   'qc_results',
   'kitchen_transfers',
   'production_batches',
@@ -69,6 +71,8 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'supplier_price_book',
   'qc_templates',
   'haccp_templates',
+  'food_safety_programs',
+  'food_safety_requirements',
   // Kitchen Assurance — transaksi + definisi simulasi
   'ka_follow_ups',
   'ka_safety_cases',

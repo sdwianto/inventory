@@ -17,7 +17,7 @@ import {
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, LineChart, LayoutGrid, ClipboardList,
   PackageOpen, KeyRound, MapPinned, Car,
-  ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn,
+  ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn, ShieldCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
@@ -114,6 +114,10 @@ const NAV: NavEntry[] = [
       { href: '/kitchen-assurance/monitoring', label: 'Monitoring', icon: ListChecks },
       { href: '/kitchen-assurance/cases', label: 'Cases', icon: FolderOpen },
       { href: '/kitchen-assurance/follow-up', label: 'Follow Up', icon: SquareCheck },
+      { href: '/food-production/prerequisite', label: 'Prerequisite', icon: ShieldCheck },
+      { href: '/food-production/haccp-plan', label: 'HACCP Study', icon: ClipboardList },
+      { href: '/food-production/haccp-verification', label: 'HACCP Verify', icon: SquareCheck },
+      { href: '/food-production/audit-readiness', label: 'Audit Readiness', icon: ClipboardList },
       { href: '/kitchen-assurance/reports', label: 'Reports', icon: FileChartColumn },
       { href: '/kitchen-assurance/analytics', label: 'Analytics', icon: LineChart },
     ],
@@ -186,6 +190,11 @@ const KA_OPS_ROUTES = [
   '/kitchen-assurance/follow-up',
   '/kitchen-assurance/reports',
   '/kitchen-assurance/analytics',
+  '/food-production/prerequisite',
+  '/food-production/haccp-plan',
+  '/food-production/haccp-verification',
+  '/food-production/audit-readiness',
+  '/food-production/qc',
 ] as const;
 
 /** Logistics — domain baru, Armada instance pertama (Sprint 2 Step 2). Management-only, sama seperti sebelum dipindah (bukan GUDANG). */

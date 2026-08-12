@@ -9,7 +9,7 @@ import { FP_DEFAULT_TRANSITIONS } from '@/lib/food-production/document';
 export const QC_TEMPLATES_COLLECTION = 'qc_templates';
 export const QC_RESULTS_COLLECTION = 'qc_results';
 
-export type QcCategory = 'PRODUKSI' | 'KEBERSIHAN' | 'DISTRIBUSI';
+export type QcCategory = 'PRODUKSI' | 'KEBERSIHAN' | 'DISTRIBUSI' | 'PREREQUISITE';
 /** OK = aman, FAIL = ada temuan, NA = tidak dicek. */
 export type QcItemResult = 'PASS' | 'FAIL' | 'NA';
 
@@ -29,6 +29,9 @@ export interface QcTemplateDoc {
   kode: string;
   nama: string;
   category: QcCategory;
+  /** ADR-004 Fase 2 — tautan ke FoodSafetyRequirement (prerequisite). */
+  requirementId?: string;
+  programId?: string;
   items: QcTemplateItem[];
   aktif: boolean;
   createdAt: Date;
@@ -67,6 +70,11 @@ export interface QcResultDoc {
    * (sumber otoritatif: ka_safety_cases.proposedHoldBatchIds).
    */
   proposedHoldBatchIds?: string[];
+  /** ADR-004 Fase 2 — program / requirement / periode checklist. */
+  programId?: string;
+  requirementId?: string;
+  /** Mis. 2026-08-12 | 2026-W33 | 2026-08 */
+  checklistPeriod?: string;
   kitchenId?: string;
   kitchenNama?: string;
   tanggal: string;
@@ -123,6 +131,7 @@ export const QC_CATEGORY_LABELS: Record<QcCategory, string> = {
   PRODUKSI: 'Produksi',
   KEBERSIHAN: 'Kebersihan',
   DISTRIBUSI: 'Distribusi',
+  PREREQUISITE: 'Prerequisite',
 };
 
 /** Editable until cancelled. */
@@ -158,8 +167,10 @@ export function normalizeQcTemplateItems(raw: unknown): QcTemplateItem[] | { err
 
 export function normalizeQcCategory(raw: unknown): QcCategory | { error: string } {
   const v = String(raw || '').toUpperCase();
-  if (v === 'PRODUKSI' || v === 'KEBERSIHAN' || v === 'DISTRIBUSI') return v;
-  return { error: 'category wajib PRODUKSI | KEBERSIHAN | DISTRIBUSI' };
+  if (v === 'PRODUKSI' || v === 'KEBERSIHAN' || v === 'DISTRIBUSI' || v === 'PREREQUISITE') {
+    return v;
+  }
+  return { error: 'category wajib PRODUKSI | KEBERSIHAN | DISTRIBUSI | PREREQUISITE' };
 }
 
 export function normalizeQcResultItems(
@@ -302,6 +313,17 @@ export const DEFAULT_QC_TEMPLATES: Array<{
       { key: 'suhu_simpan', label: 'Suhu simpan/angkut aman', required: true },
       { key: 'waktu_kirim', label: 'Waktu kirim sesuai jadwal', required: true },
       { key: 'dokumentasi', label: 'Dokumentasi serah terima', required: false },
+    ],
+  },
+  {
+    kode: 'QC-PRP',
+    nama: 'Checklist Prerequisite Umum',
+    category: 'PREREQUISITE',
+    items: [
+      { key: 'area_siap', label: 'Area & fasilitas siap produksi', required: true },
+      { key: 'hygiene_ok', label: 'Hygiene personel terpenuhi', required: true },
+      { key: 'alat_siap', label: 'Peralatan bersih & siap pakai', required: true },
+      { key: 'catatan', label: 'Catatan temuan lain', required: false },
     ],
   },
 ];

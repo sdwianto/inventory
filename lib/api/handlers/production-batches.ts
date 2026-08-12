@@ -16,6 +16,9 @@ import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import { getBatchAssuranceTrail } from '@/lib/kitchen-assurance';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
+import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
+import { DISTRIBUTION_ORDERS_COLLECTION } from '@/lib/food-production/distribution';
+import { INGREDIENT_LOTS_COLLECTION } from '@/lib/food-production/ingredient-lot';
 import {
   batchTrailToCsv,
   sortTrailEvents,
@@ -174,6 +177,100 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
       productionPlanId: batch.productionPlanId,
     });
     events.push(...assurance.events);
+
+    // ADR-004 Fase 6 — LOT (candidate from material issue allocations) + DIST.
+    if (batch.productionPlanId) {
+      const issues = await db.collection(MATERIAL_ISSUES_COLLECTION).find(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: batch.productionPlanId,
+          status: { $nin: ['CANCELLED'] },
+        }),
+      ).project({
+        id: 1,
+        noDokumen: 1,
+        stockPostedAt: 1,
+        createdAt: 1,
+        fefoConsume: 1,
+      }).limit(50).toArray();
+
+      const lotIds = new Set<string>();
+      for (const iss of issues) {
+        for (const fc of (iss.fefoConsume || []) as Array<{ allocations?: unknown[] }>) {
+          for (const a of fc.allocations || []) {
+            const id = String((a as { batchId?: string }).batchId || '').trim();
+            if (id) lotIds.add(id);
+          }
+        }
+        const at = iss.stockPostedAt instanceof Date
+          ? iss.stockPostedAt.toISOString()
+          : iss.createdAt instanceof Date
+            ? iss.createdAt.toISOString()
+            : '';
+        events.push({
+          at,
+          eventType: 'LOT',
+          entityType: 'material_issue',
+          entityId: String(iss.id),
+          refNo: String(iss.noDokumen || ''),
+          summary: `Issue bahan ${iss.noDokumen} (candidate lot inference)`,
+          statusOrAlert: 'CANDIDATE',
+        });
+      }
+
+      if (lotIds.size) {
+        const lots = await db.collection(INGREDIENT_LOTS_COLLECTION).find(
+          withTenantFilter(scopeAuth, { id: { $in: [...lotIds] } }),
+        ).project({ id: 1, lotNo: 1, supplierId: 1, noGRN: 1, productNama: 1, receivedAt: 1 }).limit(100).toArray();
+        for (const lot of lots) {
+          events.push({
+            at: String(lot.receivedAt || ''),
+            eventType: 'LOT',
+            entityType: 'ingredient_lot',
+            entityId: String(lot.id),
+            refNo: String(lot.lotNo || ''),
+            summary: `Lot ${lot.lotNo || lot.id} · ${lot.productNama || ''}${
+              lot.supplierId ? ` · supplier ${lot.supplierId}` : ''
+            }${lot.noGRN ? ` · ${lot.noGRN}` : ''}`.trim(),
+            statusOrAlert: 'CANDIDATE',
+          });
+        }
+      }
+
+      const dists = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).find(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: batch.productionPlanId,
+          status: { $nin: ['CANCELLED'] },
+        }),
+      ).project({
+        id: 1,
+        noDokumen: 1,
+        status: 1,
+        stockPostedAt: 1,
+        createdAt: 1,
+        fefoConsume: 1,
+      }).limit(50).toArray();
+
+      for (const d of dists) {
+        const usedBatch = ((d.fefoConsume || []) as Array<{ allocations?: unknown[] }>)
+          .some((fc) => (fc.allocations || []).some(
+            (a) => String((a as { batchId?: string }).batchId || '') === batch.id,
+          ));
+        const at = d.stockPostedAt instanceof Date
+          ? d.stockPostedAt.toISOString()
+          : d.createdAt instanceof Date
+            ? d.createdAt.toISOString()
+            : '';
+        events.push({
+          at,
+          eventType: 'DIST',
+          entityType: 'distribution_order',
+          entityId: String(d.id),
+          refNo: String(d.noDokumen || ''),
+          summary: `Distribusi ${d.noDokumen}${usedBatch ? ' · alokasi batch ini' : ' · plan (candidate)'}`,
+          statusOrAlert: String(d.status || ''),
+        });
+      }
+    }
 
     const entityIds = [
       batch.id,

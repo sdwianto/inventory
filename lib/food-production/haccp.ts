@@ -5,6 +5,7 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import { FP_DEFAULT_TRANSITIONS } from '@/lib/food-production/document';
+import { applyMeasuredValueAutoEval } from '@/lib/food-production/haccp-critical-limit-eval';
 
 export const HACCP_TEMPLATES_COLLECTION = 'haccp_templates';
 export const HACCP_RESULTS_COLLECTION = 'haccp_results';
@@ -42,7 +43,22 @@ export interface HaccpTemplateItem {
   label: string;
   required?: boolean;
   needsPhoto?: boolean;
+  /** Legacy teks bebas — tetap dibaca; Fase 3 prefer criticalLimit. */
   criticalLimitNote?: string;
+  /**
+   * ADR-004 Fase 3 — critical limit terstruktur (hasil migrasi / input baru).
+   */
+  criticalLimit?: {
+    key: string;
+    parameter: string;
+    label: string;
+    operator: string;
+    value?: number;
+    valueMax?: number;
+    unit?: string;
+    durationMinutes?: number;
+    note?: string;
+  };
   /**
    * ADR-004 P0C — kegagalan keamanan pangan (menentukan disposition FAIL).
    * Terpisah dari `required` (kelengkapan isi).
@@ -102,6 +118,15 @@ export interface HaccpResultItem {
   result: HaccpItemResult;
   note?: string;
   evidenceUrls?: string[];
+  /** ADR-004 Fase 4 — nilai terukur; dievaluasi vs critical limit template bila ada. */
+  measuredValue?: number;
+  /** Wajib bila measuredValue diisi. */
+  operatorId?: string;
+  /** Opsional — master kalibrasi belum matang. */
+  instrumentId?: string;
+  /** true jika result dihitung otomatis dari limit. */
+  autoEvaluated?: boolean;
+  evaluatedLimitKey?: string;
 }
 
 export interface HaccpResultDoc {
@@ -236,12 +261,37 @@ export function normalizeHaccpTemplateItems(
       critical = true;
     }
 
+    const clRaw = row.criticalLimit;
+    let criticalLimit: HaccpTemplateItem['criticalLimit'];
+    if (clRaw && typeof clRaw === 'object' && !Array.isArray(clRaw)) {
+      const cl = clRaw as Record<string, unknown>;
+      const clKey = String(cl.key || key).trim();
+      const parameter = String(cl.parameter || '').trim();
+      const clLabel = String(cl.label || label).trim();
+      const operator = String(cl.operator || '').trim();
+      if (clKey && parameter && clLabel && operator) {
+        criticalLimit = {
+          key: clKey,
+          parameter,
+          label: clLabel,
+          operator,
+          value: typeof cl.value === 'number' ? cl.value : undefined,
+          valueMax: typeof cl.valueMax === 'number' ? cl.valueMax : undefined,
+          unit: String(cl.unit || '').trim() || undefined,
+          durationMinutes:
+            typeof cl.durationMinutes === 'number' ? cl.durationMinutes : undefined,
+          note: String(cl.note || '').trim() || undefined,
+        };
+      }
+    }
+
     out.push({
       key,
       label,
       required,
       needsPhoto: row.needsPhoto === true,
       criticalLimitNote: String(row.criticalLimitNote || '').trim() || undefined,
+      criticalLimit,
       critical,
       holdOnFail,
     });
@@ -259,19 +309,31 @@ export function normalizeHaccpResultItems(
   );
   const out: HaccpResultItem[] = [];
   for (const t of templateItems) {
-    const row = byKey.get(t.key);
-    const resultRaw = String(row?.result || 'NA').toUpperCase();
-    const result: HaccpItemResult =
-      resultRaw === 'PASS' || resultRaw === 'FAIL' || resultRaw === 'NA' ? resultRaw : 'NA';
+    const row = byKey.get(t.key) || {};
     const evidenceUrls = Array.isArray(row?.evidenceUrls)
       ? (row.evidenceUrls as unknown[]).map((u) => String(u || '').trim()).filter(Boolean)
       : undefined;
+
+    // ADR-004 Fase 4 — measuredValue vs critical limit (auto PASS/FAIL).
+    const evaluated = applyMeasuredValueAutoEval(t, {
+      measuredValue: row.measuredValue,
+      operatorId: row.operatorId,
+      instrumentId: row.instrumentId,
+      result: row.result,
+    });
+    if ('error' in evaluated) return { error: evaluated.error };
+
     out.push({
       key: t.key,
       label: t.label,
-      result,
+      result: evaluated.result,
       note: row?.note != null ? String(row.note).trim() || undefined : undefined,
       evidenceUrls: evidenceUrls?.length ? evidenceUrls : undefined,
+      measuredValue: evaluated.measuredValue,
+      operatorId: evaluated.operatorId,
+      instrumentId: evaluated.instrumentId,
+      autoEvaluated: evaluated.autoEvaluated || undefined,
+      evaluatedLimitKey: evaluated.evaluatedLimitKey,
     });
   }
   return out;
@@ -481,6 +543,15 @@ export const DEFAULT_HACCP_TEMPLATES: Array<{
         required: true,
         needsPhoto: true,
         criticalLimitNote: '≥ 74°C',
+        criticalLimit: {
+          key: 'cl_core_temp',
+          parameter: 'core_temp',
+          label: 'Suhu inti',
+          operator: 'GTE',
+          value: 74,
+          unit: 'C',
+          note: '≥ 74°C',
+        },
         critical: true,
         holdOnFail: true,
       },
@@ -488,6 +559,7 @@ export const DEFAULT_HACCP_TEMPLATES: Array<{
         key: 'hold_time',
         label: 'Waktu tahan panas sesuai SOP',
         required: true,
+        criticalLimitNote: 'sesuai SOP dapur',
         critical: true,
         holdOnFail: true,
       },
@@ -512,6 +584,15 @@ export const DEFAULT_HACCP_TEMPLATES: Array<{
         required: true,
         needsPhoto: true,
         criticalLimitNote: '≤ 2 jam',
+        criticalLimit: {
+          key: 'cl_cool_2h',
+          parameter: 'cool_hours',
+          label: 'Jam ke 21°C',
+          operator: 'LTE',
+          value: 2,
+          unit: 'jam',
+          note: '≤ 2 jam',
+        },
         critical: true,
         holdOnFail: true,
       },
@@ -520,6 +601,15 @@ export const DEFAULT_HACCP_TEMPLATES: Array<{
         label: 'Pendinginan 21→5°C dalam 4 jam',
         required: true,
         criticalLimitNote: '≤ 4 jam',
+        criticalLimit: {
+          key: 'cl_cool_4h',
+          parameter: 'cool_hours',
+          label: 'Jam ke 5°C',
+          operator: 'LTE',
+          value: 4,
+          unit: 'jam',
+          note: '≤ 4 jam',
+        },
         critical: true,
         holdOnFail: true,
       },
@@ -544,6 +634,15 @@ export const DEFAULT_HACCP_TEMPLATES: Array<{
         required: true,
         needsPhoto: true,
         criticalLimitNote: '≥ 60°C',
+        criticalLimit: {
+          key: 'cl_hold_temp',
+          parameter: 'hold_temp',
+          label: 'Suhu holding',
+          operator: 'GTE',
+          value: 60,
+          unit: 'C',
+          note: '≥ 60°C',
+        },
         critical: true,
         holdOnFail: true,
       },

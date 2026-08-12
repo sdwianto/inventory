@@ -47,6 +47,11 @@ const KA_OPS_ROUTES = [
   '/kitchen-assurance/follow-up',
   '/kitchen-assurance/reports',
   '/kitchen-assurance/analytics',
+  '/food-production/prerequisite',
+  '/food-production/haccp-plan',
+  '/food-production/haccp-verification',
+  '/food-production/audit-readiness',
+  '/food-production/qc',
 ] as const;
 
 const FP_MGMT_ROUTES = [

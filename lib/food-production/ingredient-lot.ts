@@ -26,6 +26,8 @@ export interface IngredientLotDoc {
   qty: number;
   qtyRemaining: number;
   satuan?: string;
+  /** ADR-004 Fase 6 — denormalisasi dari GRN (vendorTenantId / supplierId). Nama dari master. */
+  supplierId?: string;
   status: IngredientLotStatus;
   lineIndex?: number;
   lastConsumedBy?: {

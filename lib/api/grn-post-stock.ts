@@ -205,6 +205,12 @@ export async function applyGrnStockPosting(
       productNama: String(prod.nama || it.nama || ''),
       warehouseKode: lokasiKode,
       ...(binKode ? { binKode } : {}),
+      // ADR-004 Fase 6 — supplier identity dari GRN (bukan nama otoritatif).
+      supplierId: String(
+        (grn as { supplierId?: unknown }).supplierId
+        || grn.vendorTenantId
+        || '',
+      ).trim() || undefined,
       receivedAt: receivedDay,
       expiryDate,
       qty: qtyBase,

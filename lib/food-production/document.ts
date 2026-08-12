@@ -13,6 +13,8 @@ export const FP_DOC_TYPES = {
   KITCHEN_TRANSFER: 'FP_XFER',
   DISTRIBUTION_ORDER: 'FP_DIST',
   HACCP_RESULT: 'FP_HACCP',
+  HACCP_PLAN: 'FP_HPLAN',
+  HACCP_VERIFICATION: 'FP_HVER',
 } as const;
 
 export type FpDocType = (typeof FP_DOC_TYPES)[keyof typeof FP_DOC_TYPES];
@@ -27,6 +29,8 @@ export const FP_DOC_PREFIX: Record<FpDocType, string> = {
   FP_XFER: 'XFR',
   FP_DIST: 'DST',
   FP_HACCP: 'HCP',
+  FP_HPLAN: 'HPL',
+  FP_HVER: 'HVR',
 };
 
 /** Generic lifecycle used by Plan / Issue / Result until a richer engine exists. */

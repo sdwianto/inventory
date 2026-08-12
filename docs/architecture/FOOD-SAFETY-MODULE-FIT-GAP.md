@@ -315,28 +315,34 @@ Menjawab satu pertanyaan: bisakah makanan yang diketahui gagal food-safety contr
 
 - `FoodSafetyProgram` + `FoodSafetyRequirement` (master ringan, `source: BGN | INTERNAL`, seed 11 program dari scope §5).
 - Extend engine checklist QC: kategori prerequisite, `requirementId`, periode, auto-finding saat FAIL.
+- **Status implementasi (2026-08-12):** DONE di codebase — API `/food-safety-programs` (+ compliance), QC `PREREQUISITE`, blast-radius proposed-hold, UI Prerequisite.
 - **Estimasi: 6–9 dev-day.**
 
 ### Fase 3 — HACCP study
 
 - `HaccpPlan` dengan `recipeIds[]`, `menuIds[]`, dan `processSteps[]`, `hazards[]`, `ccps[]`, `criticalLimits[]`, `monitoringPlans[]` sebagai struktur embedded.
 - Critical limit terstruktur menggantikan `criticalLimitNote` string bebas, dengan skrip migrasi bermode dry-run.
+- **Status implementasi (2026-08-12):** DONE di codebase — model + API `/haccp-plans` (+ seed-example + status gate), indexes (termasuk unique partial satu ACTIVE/tenant), migrasi dry-run `migrate-haccp-critical-limits.mjs`, UI HACCP Study (list/create/edit/status/seed), sandbox purge, tests Fase 3. Konten operasional tetap bergantung validasi ahli (contoh berlabel `isExample`).
 - **Estimasi: 10–15 dev-day.** Turun dari perkiraan awal karena `HaccpProduct`, `HaccpPlanVersion`, dan collection process step dicoret. Tetap bagian terbesar, dan paling bergantung pada input ahli keamanan pangan.
 
 ### Fase 4 — HACCP runtime
 
 - `measuredValue` dan `operatorId` (dengan `instrumentId` opsional) dievaluasi otomatis terhadap critical limit, menggantikan operator yang mengetik PASS sendiri.
+- Limit `TEXT` / catatan SOP tetap manual PASS/FAIL; kalibrasi instrumen tidak divalidasi di MVP (`instrumentId` hanya referensi).
+- **Status implementasi (2026-08-12):** DONE 100% — eval engine + normalize create/update, seed template dengan `criticalLimit` terstruktur pada CCP numerik, UI nilai terukur + instrumen opsional (manual disabled hanya untuk limit numerik), tests operator/GT-LT-EQ/TEXT/HOLD.
 - **Estimasi: 4–6 dev-day.**
 
 ### Fase 5 — Verifikasi sistem HACCP
 
 - Record verifikasi ringan (`verificationType`, `verifiedBy`, `method`, `result`, evidence), terpisah dari verifikasi corrective action milik KA. Bukan engine.
+- **Status implementasi (2026-08-12):** DONE di codebase — model `haccp_verifications`, API `/haccp-verifications`, gate PASS+evidence, UI HACCP Verify, indexes, sandbox purge, tests Fase 5. Tipe: PLAN | RECORD_COMPLETENESS | CCP_MONITORING.
 - **Estimasi: 2–4 dev-day.**
 
 ### Fase 6 — Audit readiness
 
 - BGN requirement mapping, agregasi evidence, status `NOT_READY | PARTIAL | READY`.
 - Traceability read-model backward dan forward berlabel candidate-lot inference, denormalisasi `supplierId` ke `ingredient_lots`, perluasan `BatchTrailEventType` dengan `LOT` dan `DIST`.
+- **Status implementasi (2026-08-12):** DONE 100% — `/food-safety-readiness` + `/food-safety-traceability`, UI Audit Readiness + panel di KA dashboard, GRN stamp + migrasi dry-run `supplierId`, trail LOT/DIST, indexes (termasuk lot/batch alloc), proportional `weightShare` via recipe↔FG (qty tetap superset), tests Fase 6. Attribution selalu dilabeli candidate-lot inference (bukan observasi fisik).
 - **Estimasi: 8–12 dev-day.**
 
 **Total MVP: sekitar 37–56 dev-day** di luar review dan UAT. Angka ini belum boleh dijadikan komitmen: Fase 3 bergantung pada ketersediaan konten HACCP yang disahkan, bukan pada kecepatan coding.

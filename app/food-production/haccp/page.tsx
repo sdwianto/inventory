@@ -25,6 +25,7 @@ import {
   type HaccpResultStatus,
   type HaccpItemResult,
 } from '@/lib/food-production/haccp';
+import { isNumericAutoEvalLimit } from '@/lib/food-production/haccp-critical-limit-eval';
 
 type FoodSafetyHoldResult = {
   held?: boolean;
@@ -58,7 +59,14 @@ interface Template {
   kode: string;
   nama: string;
   category: keyof typeof HACCP_CATEGORY_LABELS;
-  items: Array<{ key: string; label: string; required?: boolean; needsPhoto?: boolean }>;
+  items: Array<{
+    key: string;
+    label: string;
+    required?: boolean;
+    needsPhoto?: boolean;
+    criticalLimitNote?: string;
+    criticalLimit?: { operator?: string; value?: number; valueMax?: number; unit?: string; label?: string };
+  }>;
 }
 
 interface BatchOpt {
@@ -68,9 +76,21 @@ interface BatchOpt {
   kitchenNama?: string;
 }
 
+interface HaccpItemEdit {
+  key: string;
+  label: string;
+  result: HaccpItemResult;
+  note?: string;
+  measuredValue?: number;
+  operatorId?: string;
+  instrumentId?: string;
+  autoEvaluated?: boolean;
+}
+
 interface HaccpRow {
   id: string;
   noDokumen: string;
+  templateId?: string;
   templateKode?: string;
   templateNama?: string;
   category: keyof typeof HACCP_CATEGORY_LABELS;
@@ -85,7 +105,7 @@ interface HaccpRow {
     requiredFailCount: number;
     photoCount: number;
   };
-  items: Array<{ key: string; label: string; result: HaccpItemResult; note?: string }>;
+  items: HaccpItemEdit[];
   evidenceUrls?: string[];
 }
 
@@ -106,9 +126,26 @@ export default function HaccpPage() {
   const [batchId, setBatchId] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [detail, setDetail] = useState<HaccpRow | null>(null);
-  const [editItems, setEditItems] = useState<HaccpRow['items']>([]);
+  const [editItems, setEditItems] = useState<HaccpItemEdit[]>([]);
   const [detailPhotos, setDetailPhotos] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const detailTemplate = useMemo(
+    () => templates.find((t) => t.id === detail?.templateId),
+    [templates, detail?.templateId],
+  );
+
+  const operatorId = useMemo(
+    () => String((getUser() as { id?: string } | null)?.id || '').trim(),
+    [],
+  );
+
+  const itemsForSave = () => editItems.map((item) => ({
+    ...item,
+    operatorId: item.measuredValue != null
+      ? (item.operatorId || operatorId)
+      : item.operatorId,
+  }));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,7 +235,7 @@ export default function HaccpPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
         body: JSON.stringify({
-          items: editItems,
+          items: itemsForSave(),
           evidenceUrls: detailPhotos,
         }),
       });
@@ -229,7 +266,7 @@ export default function HaccpPage() {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
           body: JSON.stringify({
-            items: editItems,
+            items: itemsForSave(),
             evidenceUrls: detailPhotos,
           }),
         });
@@ -406,25 +443,89 @@ export default function HaccpPage() {
                   CCP gagal — batch terkait ditahan (HOLD) saat checklist disimpan, meski dokumen masih DRAFT.
                 </p>
               )}
-              {editItems.map((item, idx) => (
-                <div key={item.key} className="space-y-1 border-b pb-2">
-                  <Label>{item.label}</Label>
-                  <select
-                    className="w-full h-9 border rounded-md px-2 text-sm"
-                    value={item.result}
-                    disabled={!canLog || !isHaccpEditable(detail.status)}
-                    onChange={(e) => {
-                      const next = [...editItems];
-                      next[idx] = { ...item, result: e.target.value as HaccpItemResult };
-                      setEditItems(next);
-                    }}
-                  >
-                    <option value="PASS">PASS</option>
-                    <option value="FAIL">FAIL</option>
-                    <option value="NA">N/A</option>
-                  </select>
-                </div>
-              ))}
+              {editItems.map((item, idx) => {
+                const tplItem = detailTemplate?.items?.find((t) => t.key === item.key);
+                const limitHint = tplItem?.criticalLimit
+                  ? `${tplItem.criticalLimit.operator || ''} ${tplItem.criticalLimit.value ?? ''}${
+                    tplItem.criticalLimit.valueMax != null ? `–${tplItem.criticalLimit.valueMax}` : ''
+                  }${tplItem.criticalLimit.unit ? ` ${tplItem.criticalLimit.unit}` : ''}`.trim()
+                  : tplItem?.criticalLimitNote || '';
+                const numericAuto = tplItem
+                  ? isNumericAutoEvalLimit(tplItem)
+                  : Boolean(item.autoEvaluated);
+                const hasLimit = Boolean(tplItem?.criticalLimit || tplItem?.criticalLimitNote);
+                return (
+                  <div key={item.key} className="space-y-1 border-b pb-2">
+                    <Label>{item.label}</Label>
+                    {hasLimit && (
+                      <p className="text-xs text-muted-foreground">
+                        Limit: {limitHint || 'terstruktur'}
+                        {numericAuto
+                          ? ' · isi nilai terukur → PASS/FAIL otomatis'
+                          : ' · limit teks — PASS/FAIL tetap manual'}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="Nilai terukur"
+                        className="h-9 w-28 border rounded-md px-2 text-sm"
+                        value={item.measuredValue ?? ''}
+                        disabled={!canLog || !isHaccpEditable(detail.status)}
+                        onChange={(e) => {
+                          const next = [...editItems];
+                          const raw = e.target.value;
+                          next[idx] = {
+                            ...item,
+                            measuredValue: raw === '' ? undefined : Number(raw),
+                          };
+                          setEditItems(next);
+                        }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Instrumen (opsional)"
+                        className="h-9 w-36 border rounded-md px-2 text-sm"
+                        value={item.instrumentId || ''}
+                        disabled={!canLog || !isHaccpEditable(detail.status)}
+                        onChange={(e) => {
+                          const next = [...editItems];
+                          next[idx] = {
+                            ...item,
+                            instrumentId: e.target.value.trim() || undefined,
+                          };
+                          setEditItems(next);
+                        }}
+                      />
+                      <select
+                        className="flex-1 min-w-[7rem] h-9 border rounded-md px-2 text-sm"
+                        value={item.result}
+                        disabled={
+                          !canLog
+                          || !isHaccpEditable(detail.status)
+                          || (numericAuto && item.measuredValue != null)
+                        }
+                        onChange={(e) => {
+                          const next = [...editItems];
+                          next[idx] = { ...item, result: e.target.value as HaccpItemResult };
+                          setEditItems(next);
+                        }}
+                      >
+                        <option value="PASS">PASS</option>
+                        <option value="FAIL">FAIL</option>
+                        <option value="NA">N/A</option>
+                      </select>
+                    </div>
+                    {item.autoEvaluated && (
+                      <p className="text-xs text-muted-foreground">
+                        Dievaluasi otomatis dari critical limit
+                        {item.measuredValue != null ? ` (${item.measuredValue})` : ''}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
               <PhotoUploadField
                 label="Evidence"
                 photos={detailPhotos}

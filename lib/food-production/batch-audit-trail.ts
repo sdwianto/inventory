@@ -18,6 +18,8 @@ export type BatchTrailEventType =
   | 'QC'
   | 'HACCP'
   | 'FOOD_SAFETY'
+  | 'LOT'
+  | 'DIST'
   | 'AUDIT';
 
 export interface BatchTrailEvent {

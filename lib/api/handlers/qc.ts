@@ -34,6 +34,14 @@ import {
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import { applyQcFoodSafetyOnSave } from '@/lib/food-production/qc-batch-hold';
+import { applyQcFindingOnSave } from '@/lib/food-production/qc-auto-finding';
+import {
+  FOOD_SAFETY_PROGRAMS_COLLECTION,
+  FOOD_SAFETY_REQUIREMENTS_COLLECTION,
+  resolveChecklistPeriod,
+  type FoodSafetyProgramDoc,
+  type FoodSafetyRequirementDoc,
+} from '@/lib/food-production/food-safety-program';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -44,7 +52,9 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles';
+import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import type { HandlerContext } from '@/types/api/handler';
+import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
 
@@ -52,21 +62,42 @@ async function ensureDefaultTemplates(
   db: HandlerContext['db'],
   tenantId: string,
 ) {
-  const count = await db.collection(QC_TEMPLATES_COLLECTION).countDocuments({ tenantId });
-  if (count > 0) return;
   const now = new Date();
-  const docs: QcTemplateDoc[] = DEFAULT_QC_TEMPLATES.map((t) => ({
-    id: uuidv4(),
-    tenantId,
-    kode: t.kode,
-    nama: t.nama,
-    category: t.category,
-    items: t.items,
-    aktif: true,
-    createdAt: now,
-    updatedAt: now,
-  }));
-  await db.collection(QC_TEMPLATES_COLLECTION).insertMany(docs);
+  const count = await db.collection(QC_TEMPLATES_COLLECTION).countDocuments({ tenantId });
+  if (count === 0) {
+    const docs: QcTemplateDoc[] = DEFAULT_QC_TEMPLATES.map((t) => ({
+      id: uuidv4(),
+      tenantId,
+      kode: t.kode,
+      nama: t.nama,
+      category: t.category,
+      items: t.items,
+      aktif: true,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await db.collection(QC_TEMPLATES_COLLECTION).insertMany(docs);
+    return;
+  }
+  // ADR-004 Fase 2 — tenant lama: pastikan QC-PRP ada tanpa menimpa template custom.
+  for (const t of DEFAULT_QC_TEMPLATES.filter((x) => x.category === 'PREREQUISITE')) {
+    const exists = await db.collection(QC_TEMPLATES_COLLECTION).findOne({
+      tenantId,
+      kode: t.kode,
+    });
+    if (exists) continue;
+    await db.collection(QC_TEMPLATES_COLLECTION).insertOne({
+      id: uuidv4(),
+      tenantId,
+      kode: t.kode,
+      nama: t.nama,
+      category: t.category,
+      items: t.items,
+      aktif: true,
+      createdAt: now,
+      updatedAt: now,
+    } satisfies QcTemplateDoc);
+  }
 }
 
 /** Persist data-URL photos on each item; keep existing /api/media URLs. */
@@ -139,6 +170,21 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     if ('error' in items) return err(items.error, 400);
 
     const tenantId = tenantIdForWrite(scopeAuth, qcBody);
+    let requirementId = String(qcBody.requirementId || '').trim() || undefined;
+    let programId = String(qcBody.programId || '').trim() || undefined;
+    if (requirementId) {
+      const req = await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: requirementId }),
+      ) as FoodSafetyRequirementDoc | null;
+      if (!req) return err('Requirement tidak ditemukan', 404);
+      programId = req.programId;
+    } else if (programId) {
+      const prog = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: programId }),
+      );
+      if (!prog) return err('Program tidak ditemukan', 404);
+    }
+
     const now = new Date();
     const doc: QcTemplateDoc = {
       id: uuidv4(),
@@ -146,6 +192,8 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       kode,
       nama,
       category,
+      requirementId,
+      programId,
       items,
       aktif: qcBody.aktif !== false,
       createdAt: now,
@@ -172,6 +220,82 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       ...auditActor(auth),
     });
     return ok(clean(doc as unknown as Record<string, unknown>));
+  }
+
+  // ADR-004 Fase 2 — tautkan requirementId/programId ke template existing.
+  if (path[0] === 'qc-templates' && path[1] && !path[2] && method === 'PUT') {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: qcBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const existing = await db.collection(QC_TEMPLATES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as QcTemplateDoc | null;
+    if (!existing) return err('Template QC tidak ditemukan', 404);
+
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (qcBody.nama != null) {
+      const nama = String(qcBody.nama || '').trim();
+      if (!nama) return err('nama wajib', 400);
+      patch.nama = nama;
+    }
+    if (qcBody.category != null) {
+      const category = normalizeQcCategory(qcBody.category);
+      if (typeof category !== 'string') return err(category.error, 400);
+      patch.category = category;
+    }
+    if (qcBody.items != null) {
+      const items = normalizeQcTemplateItems(qcBody.items);
+      if ('error' in items) return err(items.error, 400);
+      patch.items = items;
+    }
+    if (qcBody.aktif != null) patch.aktif = qcBody.aktif !== false;
+
+    if (qcBody.requirementId !== undefined || qcBody.programId !== undefined) {
+      let requirementId = qcBody.requirementId != null
+        ? String(qcBody.requirementId || '').trim() || null
+        : existing.requirementId || null;
+      let programId = qcBody.programId != null
+        ? String(qcBody.programId || '').trim() || null
+        : existing.programId || null;
+      if (requirementId) {
+        const req = await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: requirementId }),
+        ) as FoodSafetyRequirementDoc | null;
+        if (!req) return err('Requirement tidak ditemukan', 404);
+        programId = req.programId;
+      } else if (programId) {
+        const prog = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: programId }),
+        );
+        if (!prog) return err('Program tidak ditemukan', 404);
+      }
+      patch.requirementId = requirementId;
+      patch.programId = programId;
+    }
+
+    await db.collection(QC_TEMPLATES_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+      { $set: patch },
+    );
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'QC_TEMPLATE_UPDATE',
+      entityType: 'qc_template',
+      entityId: path[1],
+      summary: `QC template ${existing.kode} diperbarui`,
+      metadata: {
+        programId: patch.programId ?? existing.programId,
+        requirementId: patch.requirementId ?? existing.requirementId,
+      },
+      ...auditActor(auth),
+    });
+    const updated = await db.collection(QC_TEMPLATES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    );
+    return ok(clean(updated as Record<string, unknown>));
   }
 
   // ── Results ──
@@ -256,6 +380,19 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       }
     }
 
+    // Fase 2 — prerequisite tanpa plan/batch: pakai kitchen dari body / acting scope.
+    if (!kitchenId) {
+      const fromBody = String(qcBody.kitchenId || '').trim();
+      const fromScope = resolveKitchenIdFilter(url, request);
+      kitchenId = fromBody || fromScope || undefined;
+      if (kitchenId) {
+        const k = await db.collection(KITCHENS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: kitchenId }),
+        );
+        kitchenNama = k?.nama ? String(k.nama) : undefined;
+      }
+    }
+
     let items = normalizeQcResultItems(qcBody.items ?? [], template.items);
     if ('error' in items) return err(items.error, 400);
     const persisted = await persistItemEvidence(tenantId, items);
@@ -281,6 +418,22 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       note: saveNow ? 'Checklist finding dicatat' : `Template ${template.kode}`,
     });
 
+    const programId = template.programId
+      || String(qcBody.programId || '').trim()
+      || undefined;
+    const requirementId = template.requirementId
+      || String(qcBody.requirementId || '').trim()
+      || undefined;
+    let checklistPeriod = String(qcBody.checklistPeriod || '').trim() || undefined;
+    if (!checklistPeriod && programId) {
+      const prog = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION).findOne(
+        { tenantId, id: programId },
+      ) as FoodSafetyProgramDoc | null;
+      if (prog) checklistPeriod = resolveChecklistPeriod(tanggal, prog.frequency);
+    } else if (!checklistPeriod && template.category === 'PREREQUISITE') {
+      checklistPeriod = resolveChecklistPeriod(tanggal, 'DAILY');
+    }
+
     const doc: QcResultDoc = {
       id: uuidv4(),
       tenantId,
@@ -293,6 +446,9 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       productionPlanNo,
       productionBatchId,
       batchNo,
+      programId,
+      requirementId,
+      checklistPeriod,
       kitchenId,
       kitchenNama,
       tanggal,
@@ -329,6 +485,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       qcNoDokumen: doc.noDokumen,
       items,
       templateItems: template.items,
+      category: template.category,
       productionPlanId,
       kitchenId,
       kitchenNama,
@@ -343,9 +500,46 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       doc.proposedHoldBatchIds = foodSafetyHold.proposedHoldBatchIds;
     }
 
+    // ADR-004 Fase 2: FAIL tanpa holdOnFail → auto Safety Case (saat dicatat).
+    let foodSafetyFinding: Awaited<ReturnType<typeof applyQcFindingOnSave>> | undefined;
+    if (saveNow) {
+      foodSafetyFinding = await applyQcFindingOnSave(db, {
+        tenantId,
+        qcResultId: doc.id,
+        qcNoDokumen: doc.noDokumen,
+        category: template.category,
+        items,
+        templateItems: template.items,
+        productionBatchId,
+        productionPlanId,
+        kitchenId,
+        kitchenNama,
+        tanggal,
+        programId,
+        requirementId,
+        actor,
+      });
+      if (
+        foodSafetyFinding.proposedHoldBatchIds?.length
+        && !doc.proposedHoldBatchIds?.length
+      ) {
+        await db.collection(QC_RESULTS_COLLECTION).updateOne(
+          { id: doc.id, tenantId },
+          {
+            $set: {
+              proposedHoldBatchIds: foodSafetyFinding.proposedHoldBatchIds,
+              updatedAt: new Date(),
+            },
+          },
+        );
+        doc.proposedHoldBatchIds = foodSafetyFinding.proposedHoldBatchIds;
+      }
+    }
+
     return ok(clean({
       ...(doc as unknown as Record<string, unknown>),
       foodSafetyHold,
+      ...(foodSafetyFinding ? { foodSafetyFinding } : {}),
     }));
   }
 
@@ -447,6 +641,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       qcNoDokumen: existing.noDokumen,
       items,
       templateItems: template.items,
+      category: existing.category || template.category,
       productionPlanId: existing.productionPlanId,
       kitchenId: existing.kitchenId,
       kitchenNama: existing.kitchenNama,
@@ -460,6 +655,37 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       );
     }
 
+    const foodSafetyFinding = await applyQcFindingOnSave(db, {
+      tenantId: existing.tenantId,
+      qcResultId: existing.id,
+      qcNoDokumen: existing.noDokumen,
+      category: existing.category || template.category,
+      items,
+      templateItems: template.items,
+      productionBatchId,
+      productionPlanId: existing.productionPlanId,
+      kitchenId: existing.kitchenId,
+      kitchenNama: existing.kitchenNama,
+      tanggal: existing.tanggal,
+      programId: existing.programId,
+      requirementId: existing.requirementId,
+      actor,
+    });
+    if (
+      foodSafetyFinding.proposedHoldBatchIds?.length
+      && !(foodSafetyHold.proposedHoldBatchIds?.length)
+    ) {
+      await db.collection(QC_RESULTS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id: path[1] }),
+        {
+          $set: {
+            proposedHoldBatchIds: foodSafetyFinding.proposedHoldBatchIds,
+            updatedAt: new Date(),
+          },
+        },
+      );
+    }
+
     const saved = await db.collection(QC_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
@@ -469,12 +695,14 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       entityType: 'qc_result',
       entityId: path[1],
       summary: `QC ${existing.noDokumen} dicatat oleh ${actor.userName}`
-        + (foodSafetyHold.held ? ' · batch HOLD' : foodSafetyHold.proposed ? ' · proposed HOLD' : ''),
+        + (foodSafetyHold.held ? ' · batch HOLD' : foodSafetyHold.proposed ? ' · proposed HOLD' : '')
+        + (foodSafetyFinding.raised ? ' · finding' : ''),
       ...auditActor(auth),
     });
     return ok(clean({
       ...(saved as Record<string, unknown>),
       foodSafetyHold,
+      foodSafetyFinding,
     }));
   }
 

@@ -12,6 +12,10 @@ import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { KaDashboardSnapshot } from '@/lib/kitchen-assurance/dashboard';
 import { trafficEmoji, trafficLabel } from '@/lib/kitchen-assurance/dashboard';
 import type { KaKitchenStatusPillar } from '@/lib/kitchen-assurance/attention';
+import {
+  AUDIT_READINESS_STATUS_LABELS,
+  type AuditReadinessSnapshot,
+} from '@/lib/food-production/food-safety-audit-readiness';
 
 function trafficClass(t: string): string {
   if (t === 'GREEN') return 'text-emerald-700';
@@ -19,8 +23,15 @@ function trafficClass(t: string): string {
   return 'text-red-700';
 }
 
+function readinessClass(s: string): string {
+  if (s === 'READY') return 'text-emerald-700';
+  if (s === 'PARTIAL') return 'text-amber-700';
+  return 'text-red-700';
+}
+
 export default function KitchenAssuranceDashboardPage() {
   const [snap, setSnap] = useState<KaDashboardSnapshot | null>(null);
+  const [readiness, setReadiness] = useState<AuditReadinessSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -28,12 +39,19 @@ export default function KitchenAssuranceDashboardPage() {
     try {
       const kitchenId = getActingKitchenId();
       const q = kitchenId ? `?kitchenId=${encodeURIComponent(kitchenId)}` : '';
-      const res = await fetch(`/api/ka-dashboard${q}`, {
-        headers: actingTenantHeaders(),
-      });
+      const hdr = actingTenantHeaders();
+      const [res, rRes] = await Promise.all([
+        fetch(`/api/ka-dashboard${q}`, { headers: hdr }),
+        fetch(`/api/food-safety-readiness${q}`, { headers: hdr }),
+      ]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal memuat dashboard');
       setSnap(data);
+      if (rRes.ok) {
+        setReadiness(await rRes.json());
+      } else {
+        setReadiness(null);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat');
     } finally {
@@ -75,6 +93,39 @@ export default function KitchenAssuranceDashboardPage() {
 
       <OperationalScopeBar />
       <KitchenScopeBar />
+
+      {readiness && (
+        <div className='rounded-lg border bg-white p-4'>
+          <div className='flex flex-wrap items-start justify-between gap-2'>
+            <div>
+              <h2 className='text-sm font-semibold'>Audit Readiness</h2>
+              <p className={`mt-1 text-lg font-semibold ${readinessClass(readiness.status)}`}>
+                {AUDIT_READINESS_STATUS_LABELS[readiness.status]}
+              </p>
+              <p className='mt-1 text-xs text-muted-foreground'>
+                BGN {readiness.bgnRequirements.filter((r) => r.hasEvidence).length}/
+                {readiness.bgnRequirements.length} · lookback {readiness.lookbackDays} hari
+              </p>
+            </div>
+            <Link
+              href='/food-production/audit-readiness'
+              className='text-xs text-blue-700 hover:underline'
+            >
+              Detail readiness & traceability
+            </Link>
+          </div>
+          <div className='mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5'>
+            {readiness.pillars.map((p) => (
+              <div key={p.key} className='rounded-md border px-2 py-2'>
+                <div className={`text-xs font-medium ${readinessClass(p.status)}`}>
+                  {AUDIT_READINESS_STATUS_LABELS[p.status]}
+                </div>
+                <div className='mt-0.5 text-xs text-muted-foreground'>{p.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className='rounded-lg border bg-white p-4'>
         <h2 className='text-sm font-semibold'>Kitchen Status</h2>

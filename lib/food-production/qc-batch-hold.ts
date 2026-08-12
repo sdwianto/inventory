@@ -34,6 +34,8 @@ export type ApplyQcHoldInput = {
   qcNoDokumen?: string;
   items: QcResultItem[];
   templateItems: QcTemplateItem[];
+  /** ADR-004 Fase 2 — PREREQUISITE tidak pernah auto-HOLD. */
+  category?: string;
   productionPlanId?: string;
   kitchenId?: string;
   kitchenNama?: string;
@@ -54,6 +56,7 @@ export type ApplyQcHoldResult = {
 
 /**
  * Usulan batch inferensial: plan yang sama, atau dapur + tanggal produksi.
+ * Fallback: batch ACTIVE di dapur yang sama (inferensi longgar).
  * Tidak pernah menahan otomatis.
  */
 export async function resolveProposedHoldBatchIds(
@@ -74,13 +77,30 @@ export async function resolveProposedHoldBatchIds(
   } else if (input.kitchenId?.trim() && input.tanggal?.trim()) {
     filter.kitchenId = input.kitchenId.trim();
     filter.producedAt = input.tanggal.trim();
+  } else if (input.kitchenId?.trim()) {
+    filter.kitchenId = input.kitchenId.trim();
   } else {
     return [];
   }
-  const rows = await db.collection(PRODUCTION_BATCHES_COLLECTION)
+  let rows = await db.collection(PRODUCTION_BATCHES_COLLECTION)
     .find(filter, { projection: { id: 1 } })
     .limit(30)
     .toArray();
+  // Tanggal ketat kosong → longgar: semua ACTIVE di dapur yang sama.
+  if (
+    !rows.length
+    && input.kitchenId?.trim()
+    && input.tanggal?.trim()
+    && !input.productionPlanId?.trim()
+  ) {
+    rows = await db.collection(PRODUCTION_BATCHES_COLLECTION)
+      .find(
+        { tenantId: input.tenantId, status: 'ACTIVE', kitchenId: input.kitchenId.trim() },
+        { projection: { id: 1 } },
+      )
+      .limit(30)
+      .toArray();
+  }
   return rows.map((r) => String(r.id || '').trim()).filter(Boolean);
 }
 
@@ -300,6 +320,7 @@ async function applyQcProposedHold(
 
 /**
  * Titik masuk P0F saat QC disimpan.
+ * ADR-004 Fase 2: category PREREQUISITE → selalu proposed hold (tidak auto-HOLD).
  * Idempoten per qcResultId via sourceKey KA.
  */
 export async function applyQcFoodSafetyOnSave(
@@ -310,7 +331,21 @@ export async function applyQcFoodSafetyOnSave(
     return { held: false, skipped: 'no_candidate' };
   }
   const labels = listQcHoldFailLabels(input.items, input.templateItems);
+  const isPrerequisite = String(input.category || '').toUpperCase() === 'PREREQUISITE';
   const batchId = String(input.productionBatchId || '').trim();
+
+  // Blast radius: prerequisite terikat lingkungan — usulan, bukan HOLD deterministik.
+  if (isPrerequisite) {
+    const proposed = await applyQcProposedHold(db, input, labels);
+    if (batchId && !(proposed.proposedHoldBatchIds || []).includes(batchId)) {
+      return {
+        ...proposed,
+        proposedHoldBatchIds: [batchId, ...(proposed.proposedHoldBatchIds || [])],
+      };
+    }
+    return proposed;
+  }
+
   if (batchId) {
     return applyQcHoldToBatch(db, { ...input, productionBatchId: batchId }, labels);
   }
