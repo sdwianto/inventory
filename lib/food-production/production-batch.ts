@@ -111,6 +111,15 @@ export function applyFoodSafetyTransition(
   const to = input.to;
   const reason = String(input.reason || '').trim();
   if (!reason) return { error: 'Alasan wajib diisi untuk perubahan status food safety' };
+  // ADR-004 P0H / Recovery gate — RELEASE hanya via corrective action VERIFIED (KA_FOLLOW_UP).
+  if (to === 'RELEASED') {
+    if (input.sourceType !== 'KA_FOLLOW_UP') {
+      return { error: 'Pelepasan food safety (RELEASED) hanya melalui follow-up KA yang diverifikasi' };
+    }
+    if (!String(input.sourceId || '').trim()) {
+      return { error: 'sourceId wajib untuk pelepasan food safety (RELEASED)' };
+    }
+  }
 
   if (from !== to) {
     const allowed = FOOD_SAFETY_TRANSITIONS[from] || [];

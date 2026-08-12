@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import {
   PRODUCTION_BATCHES_COLLECTION,
   daysUntilExpiry,
+  effectiveFoodSafetyStatus,
   effectiveQtyRemaining,
   isExpired,
   type ProductionBatchDoc,
@@ -61,6 +62,7 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
       return {
         ...b,
         qtyRemaining: effectiveQtyRemaining(b),
+        foodSafetyStatus: effectiveFoodSafetyStatus(b),
         expired,
         daysUntilExpiry: daysLeft,
         status: expired && b.status === 'ACTIVE' ? 'EXPIRED' : b.status,
@@ -107,6 +109,23 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
       summary: `Batch ${batch.batchNo} · ${batch.finishedGoodNama || 'FG'} · qty ${batch.qty}`,
       statusOrAlert: batch.status,
     });
+
+    // ADR-004 P0D/P0E — HOLD/RELEASE harus terlihat di export trail (Auditability).
+    for (const h of batch.foodSafetyHistory || []) {
+      const at = h.at instanceof Date ? h.at.toISOString() : String(h.at || '');
+      const from = h.fromStatus != null ? String(h.fromStatus) : '—';
+      const to = String(h.toStatus || '');
+      events.push({
+        at,
+        eventType: 'FOOD_SAFETY',
+        entityType: 'production_batch',
+        entityId: batch.id,
+        refNo: h.sourceType || undefined,
+        summary: h.note || `Food safety ${from} → ${to}`,
+        statusOrAlert: to,
+        userName: h.userName ? String(h.userName) : undefined,
+      });
+    }
 
     if (batch.productionPlanId) {
       const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
@@ -188,6 +207,7 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
         id: batch.id,
         batchNo: batch.batchNo,
         status: batch.status,
+        foodSafetyStatus: effectiveFoodSafetyStatus(batch),
         kitchenNama: batch.kitchenNama,
         productionPlanId: batch.productionPlanId,
         productionPlanNo: batch.productionPlanNo,

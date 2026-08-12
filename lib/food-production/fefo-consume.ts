@@ -5,6 +5,7 @@
 import type { ClientSession, Db } from 'mongodb';
 import {
   PRODUCTION_BATCHES_COLLECTION,
+  effectiveFoodSafetyStatus,
   effectiveQtyRemaining,
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
@@ -94,11 +95,13 @@ export async function consumeBatchesFefo(
     expiryDate: b.expiryDate,
     qtyRemaining: effectiveQtyRemaining(b),
     status: b.status,
+    foodSafetyStatus: effectiveFoodSafetyStatus(b),
   }));
 
   const plan = allocateFefo(needQty, candidates, {
     asOf: now,
     allowExpired: input.allowExpired,
+    rejectFoodSafetyHold: input.enforceFoodSafetyHold === true,
   });
 
   for (const a of plan.allocations) {

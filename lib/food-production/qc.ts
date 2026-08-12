@@ -56,6 +56,17 @@ export interface QcResultDoc {
   category: QcCategory;
   productionPlanId?: string;
   productionPlanNo?: string;
+  /**
+   * ADR-004 P0F — opsional. Bila diisi + holdOnFail+FAIL → auto HOLD.
+   * Dokumen lama tanpa field tetap valid (jalur proposed hold).
+   */
+  productionBatchId?: string;
+  batchNo?: string;
+  /**
+   * Mirror usulan batch saat hold tanpa tautan deterministik
+   * (sumber otoritatif: ka_safety_cases.proposedHoldBatchIds).
+   */
+  proposedHoldBatchIds?: string[];
   kitchenId?: string;
   kitchenNama?: string;
   tanggal: string;
@@ -215,6 +226,43 @@ export function assertQcCanComplete(
   );
   if (!hasSignal) return 'Isi minimal satu finding / status item sebelum simpan';
   return null;
+}
+
+/**
+ * ADR-004 P0F — item holdOnFail yang FAIL (holdOnFail ⇒ critical).
+ * Critical tanpa holdOnFail tidak menahan produk.
+ */
+export function listQcHoldFailLabels(
+  items: QcResultItem[],
+  templateItems: QcTemplateItem[],
+): string[] {
+  const byKey = new Map(templateItems.map((t) => [t.key, t]));
+  const labels: string[] = [];
+  for (const item of items) {
+    if (item.result !== 'FAIL') continue;
+    const tpl = byKey.get(item.key);
+    if (!tpl?.holdOnFail) continue;
+    labels.push(item.label || tpl.label || item.key);
+  }
+  return labels;
+}
+
+export function hasQcHoldCandidate(
+  items: QcResultItem[],
+  templateItems: QcTemplateItem[],
+): boolean {
+  return listQcHoldFailLabels(items, templateItems).length > 0;
+}
+
+export function buildQcHoldReason(
+  labels: string[],
+  opts?: { noDokumen?: string; batchNo?: string },
+): string {
+  const failed = labels.length ? labels.join(', ') : 'QC holdOnFail gagal';
+  const parts = [`QC holdOnFail gagal: ${failed}`];
+  if (opts?.noDokumen) parts.push(`dok ${opts.noDokumen}`);
+  if (opts?.batchNo) parts.push(`batch ${opts.batchNo}`);
+  return parts.join(' · ');
 }
 
 export const DEFAULT_QC_TEMPLATES: Array<{

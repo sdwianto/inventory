@@ -29,6 +29,7 @@ export default function TenantSetupPage() {
       multiUomEnabled: true,
       offlineQueueEnabled: true,
       reportSnapshotsEnabled: true,
+      foodSafetyHoldEnabled: true,
     },
   });
   const [saving, setSaving] = useState(false);
@@ -52,6 +53,7 @@ export default function TenantSetupPage() {
           multiUomEnabled: true,
           offlineQueueEnabled: true,
           reportSnapshotsEnabled: true,
+          foodSafetyHoldEnabled: true,
           ...(settingsData.features as Record<string, boolean> | undefined),
         },
         periodLockedUntil: settingsData.periodLockedUntil
@@ -249,7 +251,7 @@ export default function TenantSetupPage() {
       {isMaster && (
         <Card>
           <CardHeader><CardTitle className="text-base">Feature Flags (MASTER — P3)</CardTitle></CardHeader>
-          <CardContent className="grid sm:grid-cols-3 gap-3 text-sm">
+          <CardContent className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
             <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
               <input
                 type="checkbox"
@@ -282,6 +284,17 @@ export default function TenantSetupPage() {
                 })}
               />
               Report snapshots (CQRS)
+            </label>
+            <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.features?.foodSafetyHoldEnabled !== false}
+                onChange={(e) => setForm({
+                  ...form,
+                  features: { ...form.features, foodSafetyHoldEnabled: e.target.checked },
+                })}
+              />
+              Food safety HOLD (blokir keluar)
             </label>
           </CardContent>
         </Card>

@@ -201,6 +201,11 @@ export default function KaFollowUpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal update');
       toast.success(`Status → ${KA_FOLLOW_UP_STATUS_LABELS[status]}`);
+      if (status === 'VERIFIED' && data?.foodSafetyRelease?.released) {
+        toast.success('Batch food safety dilepas (RELEASED)');
+      } else if (status === 'VERIFIED' && data?.foodSafetyRelease?.error) {
+        toast.warning(`Verifikasi OK, pelepasan batch gagal: ${data.foodSafetyRelease.error}`);
+      }
       setEvidenceFor(null);
       setEvidencePhotos([]);
       setEvidenceNote('');

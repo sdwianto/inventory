@@ -35,6 +35,10 @@ function txOpts(session?: ClientSession | null) {
  * Full remaining → update warehouseKode on same batch id.
  * Partial → decrement source + merge/clone at dest.
  * Shortfall / no batches: soft (stock already moved; Detect owns drift).
+ *
+ * ADR-004 P0G: bila `enforceFoodSafetyHold`, kandidat HOLD dilewati — transfer
+ * dokumen sudah di-gate terpisah; di sini mencegah FEFO memilih HOLD lebih dulu
+ * dari batch aman yang lebih lambat kadaluarsa.
  */
 export async function relocateBatchesFefo(
   db: Db,
@@ -49,6 +53,8 @@ export async function relocateBatchesFefo(
     noTransaksi?: string;
     transferId?: string;
     xferId?: string;
+    /** ADR-004 P0G — lewati batch HOLD saat alokasi relokasi. */
+    enforceFoodSafetyHold?: boolean;
   },
   session?: ClientSession | null,
 ): Promise<FefoRelocateLineResult> {
@@ -74,17 +80,19 @@ export async function relocateBatchesFefo(
   const now = input.asOf ?? new Date();
   const tid = String(input.tenantId || 'default').trim() || 'default';
 
+  const filter: Record<string, unknown> = {
+    tenantId: tid,
+    finishedGoodProductId: input.stokId,
+    warehouseKode: fromWh,
+    status: { $in: ['ACTIVE', 'EXPIRED'] },
+  };
+  if (input.enforceFoodSafetyHold) {
+    filter.foodSafetyStatus = { $ne: 'HOLD' };
+  }
+
   const rows = (await db
     .collection(PRODUCTION_BATCHES_COLLECTION)
-    .find(
-      {
-        tenantId: tid,
-        finishedGoodProductId: input.stokId,
-        warehouseKode: fromWh,
-        status: { $in: ['ACTIVE', 'EXPIRED'] },
-      },
-      txOpts(session),
-    )
+    .find(filter, txOpts(session))
     .sort({ expiryDate: 1 })
     .toArray()) as unknown as ProductionBatchDoc[];
 
@@ -96,11 +104,13 @@ export async function relocateBatchesFefo(
     expiryDate: b.expiryDate,
     qtyRemaining: effectiveQtyRemaining(b),
     status: b.status,
+    foodSafetyStatus: effectiveFoodSafetyStatus(b),
   }));
 
   const plan = allocateFefo(needQty, candidates, {
     asOf: now,
     allowExpired: input.allowExpired !== false,
+    rejectFoodSafetyHold: input.enforceFoodSafetyHold === true,
   });
 
   const lastRelocatedBy = {

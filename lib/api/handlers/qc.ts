@@ -30,6 +30,11 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import {
+  PRODUCTION_BATCHES_COLLECTION,
+  type ProductionBatchDoc,
+} from '@/lib/food-production/production-batch';
+import { applyQcFoodSafetyOnSave } from '@/lib/food-production/qc-batch-hold';
+import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
@@ -153,6 +158,17 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       entityType: 'qc_template',
       entityId: doc.id,
       summary: `QC template ${doc.kode}`,
+      // ADR-004 P0C/P0F — audit konfigurasi critical/holdOnFail.
+      metadata: {
+        category,
+        criticalCount: items.filter((i) => i.critical).length,
+        holdOnFailCount: items.filter((i) => i.holdOnFail).length,
+        flags: items.map((i) => ({
+          key: i.key,
+          critical: !!i.critical,
+          holdOnFail: !!i.holdOnFail,
+        })),
+      },
       ...auditActor(auth),
     });
     return ok(clean(doc as unknown as Record<string, unknown>));
@@ -173,6 +189,8 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     const tanggal = url.searchParams.get('tanggal');
     if (tanggal) filter.tanggal = tanggal;
     if (productionPlanId) filter.productionPlanId = productionPlanId;
+    const productionBatchId = url.searchParams.get('productionBatchId');
+    if (productionBatchId) filter.productionBatchId = productionBatchId;
     const list = await db.collection(QC_RESULTS_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
       .sort({ createdAt: -1 })
@@ -217,6 +235,27 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       tanggal = plan.tanggal;
     }
 
+    // ADR-004 P0F — productionBatchId opsional (legacy / proposed hold tanpa batch).
+    let productionBatchId: string | undefined;
+    let batchNo: string | undefined;
+    const batchIdRaw = String(qcBody.productionBatchId || '').trim();
+    if (batchIdRaw) {
+      const batch = await db.collection(PRODUCTION_BATCHES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: batchIdRaw }),
+      ) as ProductionBatchDoc | null;
+      if (!batch) return err('Batch tidak ditemukan', 404);
+      productionBatchId = batch.id;
+      batchNo = batch.batchNo;
+      if (!kitchenId) {
+        kitchenId = batch.kitchenId;
+        kitchenNama = batch.kitchenNama;
+      }
+      if (!productionPlanId && batch.productionPlanId) {
+        productionPlanId = batch.productionPlanId;
+        productionPlanNo = batch.productionPlanNo;
+      }
+    }
+
     let items = normalizeQcResultItems(qcBody.items ?? [], template.items);
     if ('error' in items) return err(items.error, 400);
     const persisted = await persistItemEvidence(tenantId, items);
@@ -252,6 +291,8 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       category: template.category,
       productionPlanId,
       productionPlanNo,
+      productionBatchId,
+      batchNo,
       kitchenId,
       kitchenNama,
       tanggal,
@@ -279,7 +320,33 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       summary: `QC ${doc.noDokumen} (${template.kode})`,
       ...auditActor(auth),
     });
-    return ok(clean(doc as unknown as Record<string, unknown>));
+
+    // ADR-004 P0F: HOLD / proposed hold saat kegagalan disimpan.
+    const foodSafetyHold = await applyQcFoodSafetyOnSave(db, {
+      tenantId,
+      productionBatchId,
+      qcResultId: doc.id,
+      qcNoDokumen: doc.noDokumen,
+      items,
+      templateItems: template.items,
+      productionPlanId,
+      kitchenId,
+      kitchenNama,
+      tanggal,
+      actor,
+    });
+    if (foodSafetyHold.proposed && foodSafetyHold.proposedHoldBatchIds?.length) {
+      await db.collection(QC_RESULTS_COLLECTION).updateOne(
+        { id: doc.id, tenantId },
+        { $set: { proposedHoldBatchIds: foodSafetyHold.proposedHoldBatchIds, updatedAt: new Date() } },
+      );
+      doc.proposedHoldBatchIds = foodSafetyHold.proposedHoldBatchIds;
+    }
+
+    return ok(clean({
+      ...(doc as unknown as Record<string, unknown>),
+      foodSafetyHold,
+    }));
   }
 
   if (path[0] === 'qc-results' && path[1] && !path[2] && method === 'GET') {
@@ -323,6 +390,24 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     const gate = assertQcCanComplete(items, template.items);
     if (gate) return err(gate, 400);
 
+    // P0F — boleh mengaitkan batch belakangan pada dokumen lama.
+    let productionBatchId = existing.productionBatchId;
+    let batchNo = existing.batchNo;
+    if (qcBody.productionBatchId != null) {
+      const batchIdRaw = String(qcBody.productionBatchId || '').trim();
+      if (!batchIdRaw) {
+        productionBatchId = undefined;
+        batchNo = undefined;
+      } else {
+        const batch = await db.collection(PRODUCTION_BATCHES_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: batchIdRaw }),
+        ) as ProductionBatchDoc | null;
+        if (!batch) return err('Batch tidak ditemukan', 404);
+        productionBatchId = batch.id;
+        batchNo = batch.batchNo;
+      }
+    }
+
     const actor = auditActor(auth);
     const now = new Date();
     const history = appendDocHistory(existing.history, {
@@ -343,6 +428,8 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
           catatan: qcBody.catatan != null
             ? String(qcBody.catatan).trim() || undefined
             : existing.catatan,
+          productionBatchId: productionBatchId || null,
+          batchNo: batchNo || null,
           status: 'COMPLETED',
           history,
           recordedAt: now,
@@ -352,6 +439,27 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
         },
       },
     );
+
+    const foodSafetyHold = await applyQcFoodSafetyOnSave(db, {
+      tenantId: existing.tenantId,
+      productionBatchId,
+      qcResultId: existing.id,
+      qcNoDokumen: existing.noDokumen,
+      items,
+      templateItems: template.items,
+      productionPlanId: existing.productionPlanId,
+      kitchenId: existing.kitchenId,
+      kitchenNama: existing.kitchenNama,
+      tanggal: existing.tanggal,
+      actor,
+    });
+    if (foodSafetyHold.proposed && foodSafetyHold.proposedHoldBatchIds?.length) {
+      await db.collection(QC_RESULTS_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, { id: path[1] }),
+        { $set: { proposedHoldBatchIds: foodSafetyHold.proposedHoldBatchIds, updatedAt: new Date() } },
+      );
+    }
+
     const saved = await db.collection(QC_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
@@ -360,10 +468,14 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       action: 'QC_RESULT_RECORD',
       entityType: 'qc_result',
       entityId: path[1],
-      summary: `QC ${existing.noDokumen} dicatat oleh ${actor.userName}`,
+      summary: `QC ${existing.noDokumen} dicatat oleh ${actor.userName}`
+        + (foodSafetyHold.held ? ' · batch HOLD' : foodSafetyHold.proposed ? ' · proposed HOLD' : ''),
       ...auditActor(auth),
     });
-    return ok(clean(saved as Record<string, unknown>));
+    return ok(clean({
+      ...(saved as Record<string, unknown>),
+      foodSafetyHold,
+    }));
   }
 
   if (path[0] === 'qc-results' && path[1] && path[2] === 'status' && method === 'POST') {

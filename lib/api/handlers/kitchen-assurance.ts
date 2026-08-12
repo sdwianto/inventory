@@ -58,6 +58,13 @@ import {
   buildKitchenStatus,
 } from '@/lib/kitchen-assurance/attention';
 import { ensureOpenKaIssue, resolveKitchenNama } from '@/lib/kitchen-assurance/auto-issue';
+import { releaseBatchFromVerifiedFollowUp } from '@/lib/food-production/food-safety-release';
+import {
+  PRODUCTION_BATCHES_COLLECTION,
+  applyFoodSafetyTransition,
+  effectiveFoodSafetyStatus,
+  type ProductionBatchDoc,
+} from '@/lib/food-production/production-batch';
 import { buildKaReports, resolveReportRange } from '@/lib/kitchen-assurance/reports';
 import { buildKaAnalytics } from '@/lib/kitchen-assurance/analytics';
 import { toPillar } from '@/lib/kitchen-assurance/categories';
@@ -1027,22 +1034,99 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
       patch.verifiedBy = actor.userId;
       patch.verifiedByName = actor.userName;
     }
+
+    // ADR-004 P0H — preflight RELEASE sebelum commit VERIFIED (Recovery gate).
+    let safetyCase: KaSafetyCaseDoc | null = null;
+    const releaseReason = historyNote || `Follow-up diverifikasi · ${existing.noDokumen}`;
+    if (toStatus === 'VERIFIED') {
+      const caseId = String(existing.safetyCaseId || '').trim();
+      if (caseId) {
+        safetyCase = await db.collection(KA_SAFETY_CASES_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: caseId }),
+        ) as KaSafetyCaseDoc | null;
+      }
+      const batchId = String(safetyCase?.batchId || '').trim();
+      if (batchId) {
+        const batch = await db.collection(PRODUCTION_BATCHES_COLLECTION).findOne(
+          { tenantId: existing.tenantId, id: batchId },
+        ) as ProductionBatchDoc | null;
+        if (batch && effectiveFoodSafetyStatus(batch) === 'HOLD') {
+          const dry = applyFoodSafetyTransition(batch, {
+            to: 'RELEASED',
+            sourceType: 'KA_FOLLOW_UP',
+            sourceId: existing.id,
+            reason: releaseReason,
+            at: now,
+            userId: actor.userId,
+            userName: actor.userName,
+          });
+          if ('error' in dry) return err(dry.error, 400);
+        }
+      }
+    }
+
     await db.collection(KA_FOLLOW_UPS_COLLECTION).updateOne(
       withTenantFilter(scopeAuth, { id }),
       { $set: patch },
     );
+
+    let foodSafetyRelease: Awaited<ReturnType<typeof releaseBatchFromVerifiedFollowUp>> | undefined;
+    if (toStatus === 'VERIFIED') {
+      foodSafetyRelease = await releaseBatchFromVerifiedFollowUp(db, {
+        tenantId: existing.tenantId,
+        followUp: {
+          id: existing.id,
+          noDokumen: existing.noDokumen,
+          status: 'VERIFIED',
+          safetyCaseId: existing.safetyCaseId,
+        },
+        safetyCase,
+        reason: releaseReason,
+        actor,
+      });
+      if (foodSafetyRelease.error) {
+        console.warn(
+          '[p0h-release] follow-up verified but batch release failed:',
+          foodSafetyRelease.error,
+        );
+      }
+      if (foodSafetyRelease.released && safetyCase) {
+        await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+          withTenantFilter(scopeAuth, { id: safetyCase.id }),
+          {
+            $set: {
+              inventoryHoldRef: foodSafetyRelease.batchId,
+              'resolution.type': 'HOLD_BATCH',
+              'resolution.summary': `Batch dilepas setelah FU ${existing.noDokumen} VERIFIED`,
+              'resolution.followUpId': existing.id,
+              'resolution.followUpNo': existing.noDokumen,
+              'resolution.inventoryHoldRef': foodSafetyRelease.batchId,
+              'resolution.resolvedAt': now,
+              'resolution.resolvedBy': actor.userId,
+              'resolution.resolvedByName': actor.userName,
+              updatedAt: now,
+            },
+          },
+        );
+      }
+    }
+
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action: 'KA_FOLLOW_UP_STATUS',
       entityType: 'ka_follow_up',
       entityId: id,
-      summary: `Follow-up ${existing.noDokumen} → ${toStatus}`,
+      summary: `Follow-up ${existing.noDokumen} → ${toStatus}`
+        + (foodSafetyRelease?.released ? ' · batch RELEASED' : ''),
       ...actor,
     });
     const updated = await db.collection(KA_FOLLOW_UPS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(clean(updated as Record<string, unknown>));
+    return ok(clean({
+      ...(updated as Record<string, unknown>),
+      ...(foodSafetyRelease ? { foodSafetyRelease } : {}),
+    }));
   }
 
   // ── Dashboard (Kitchen Status — ADR-002 P1) ──

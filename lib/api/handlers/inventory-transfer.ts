@@ -23,6 +23,8 @@ import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
+import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
+import { assertFefoExitNotBlockedByHold } from '@/lib/food-production/food-safety-exit-gate';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
 import type { HandlerContext } from '@/types/api/handler';
@@ -105,6 +107,23 @@ export async function handleTransfer({
       keterangan: invBody.keterangan || '', items: transferLines, userName: invBody.userName || '', createdAt: now,
     });
 
+    // ADR-004 P0G — gate dokumen transfer sebelum mutasi stok (relocate mewarisi HOLD).
+    const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, tenantId);
+    const holdGate = await assertFefoExitNotBlockedByHold(db, {
+      tenantId,
+      enforce: enforceFoodSafetyHold,
+      asOf: now,
+      allowExpired: true,
+      context: 'transfer',
+      lines: transferLines.map((it) => ({
+        stokId: itemStokId(it),
+        stokNama: String((it as { nama?: string }).nama || ''),
+        warehouseKode: String(invBody.lokasiAsal),
+        needQty: it.qtyBase,
+      })),
+    });
+    if (!holdGate.ok) return err(holdGate.error, 400);
+
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const fefoRelocate: Array<Record<string, unknown>> = [];
@@ -147,6 +166,7 @@ export async function handleTransfer({
               allowExpired: true,
               noTransaksi: noTransfer,
               transferId: String(doc.id),
+              enforceFoodSafetyHold,
             },
             session,
           );

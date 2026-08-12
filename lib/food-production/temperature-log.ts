@@ -145,6 +145,46 @@ export function isOpenTempAlert(status: TempAlertStatus): boolean {
   return status === 'WARN' || status === 'OUT_OF_RANGE' || status === 'CRITICAL';
 }
 
+/**
+ * ADR-004 P0E — auto HOLD hanya untuk COOKING/HOLDING + OUT_OF_RANGE/CRITICAL
+ * dengan productionBatchId. RECEIVING terkait GRN/lot, bukan batch.
+ * WARN tidak menahan produk.
+ */
+export function shouldHoldBatchFromTemp(input: {
+  stage: TempStage | string;
+  alertStatus: TempAlertStatus | string;
+  productionBatchId?: string | null;
+}): boolean {
+  const stage = String(input.stage || '').toUpperCase();
+  const alert = String(input.alertStatus || '').toUpperCase();
+  const batchId = String(input.productionBatchId || '').trim();
+  if (!batchId) return false;
+  if (stage !== 'COOKING' && stage !== 'HOLDING') return false;
+  return alert === 'OUT_OF_RANGE' || alert === 'CRITICAL';
+}
+
+export function buildTempHoldReason(input: {
+  stage: TempStage | string;
+  alertStatus: TempAlertStatus | string;
+  suhuC: number;
+  minC?: number;
+  maxC?: number;
+  batchNo?: string;
+}): string {
+  const stageLabel = TEMP_STAGE_LABELS[String(input.stage).toUpperCase() as TempStage]
+    || String(input.stage);
+  const band = [
+    input.minC != null ? String(input.minC) : '?',
+    input.maxC != null ? String(input.maxC) : '?',
+  ].join('–');
+  const parts = [
+    `Suhu ${stageLabel} ${input.suhuC}°C (${input.alertStatus})`,
+    `ambang ${band}°C`,
+  ];
+  if (input.batchNo) parts.push(`batch ${input.batchNo}`);
+  return parts.join(' · ');
+}
+
 export function normalizeThresholdNumbers(raw: {
   minC?: unknown;
   maxC?: unknown;

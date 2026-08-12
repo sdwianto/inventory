@@ -17,6 +17,7 @@ import { ShieldCheck, Plus, RefreshCw, Eye } from 'lucide-react';
 import {
   HACCP_STATUS_LABELS,
   HACCP_CATEGORY_LABELS,
+  HACCP_DISPOSITION_LABELS,
   HACCP_UI_STATUS_NEXT,
   effectiveHaccpDisposition,
   isHaccpEditable,
@@ -24,6 +25,30 @@ import {
   type HaccpResultStatus,
   type HaccpItemResult,
 } from '@/lib/food-production/haccp';
+
+type FoodSafetyHoldResult = {
+  held?: boolean;
+  skipped?: string;
+  foodSafetyStatus?: string;
+  error?: string;
+  kaIssue?: { noDokumen?: string; created?: boolean };
+};
+
+function toastFoodSafetyHold(hold: FoodSafetyHoldResult | undefined) {
+  if (!hold) return;
+  if (hold.error) {
+    toast.warning(`Checklist tersimpan, tetapi penahanan batch gagal: ${hold.error}`);
+    return;
+  }
+  if (hold.held) {
+    const ka = hold.kaIssue?.noDokumen ? ` · Issue ${hold.kaIssue.noDokumen}` : '';
+    toast.warning(`Batch ditahan (food safety)${ka}`);
+    return;
+  }
+  if (hold.skipped === 'already_hold') {
+    toast.message('Batch sudah berstatus HOLD (food safety)');
+  }
+}
 
 const OPS_WRITE = new Set(['GUDANG', 'ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 const MANAGE = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
@@ -134,6 +159,8 @@ export default function HaccpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat');
       toast.success(`HACCP ${data.noDokumen} dibuat`);
+      // P0D: create boleh membawa FAIL (API) → HOLD di DRAFT; UI default NA.
+      toastFoodSafetyHold(data?.foodSafetyHold as FoodSafetyHoldResult | undefined);
       setOpenCreate(false);
       setTemplateId('');
       setBatchId('');
@@ -178,6 +205,7 @@ export default function HaccpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
       toast.success('Checklist disimpan');
+      toastFoodSafetyHold(data?.foodSafetyHold as FoodSafetyHoldResult | undefined);
       setDetail(data as HaccpRow);
       setEditItems((data as HaccpRow).items || editItems);
       setDetailPhotos((data as HaccpRow).evidenceUrls || detailPhotos);
@@ -207,6 +235,7 @@ export default function HaccpPage() {
         });
         const saveData = await saveRes.json();
         if (!saveRes.ok) throw new Error(saveData?.error || 'Gagal simpan checklist');
+        toastFoodSafetyHold(saveData?.foodSafetyHold as FoodSafetyHoldResult | undefined);
         setDetail(saveData as HaccpRow);
         setEditItems((saveData as HaccpRow).items || editItems);
         setDetailPhotos((saveData as HaccpRow).evidenceUrls || detailPhotos);
@@ -219,6 +248,7 @@ export default function HaccpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal status');
       toast.success(`Status → ${HACCP_STATUS_LABELS[next]}`);
+      toastFoodSafetyHold(data?.foodSafetyHold as FoodSafetyHoldResult | undefined);
       if (next === 'COMPLETED' || next === 'CANCELLED') {
         setDetail(null);
       } else {
@@ -367,7 +397,15 @@ export default function HaccpPage() {
             <div className="space-y-3 py-2">
               <p className="text-sm text-muted-foreground">
                 {detail.templateNama} · batch {detail.batchNo} · {HACCP_STATUS_LABELS[detail.status]}
+                {' · '}
+                hasil {HACCP_DISPOSITION_LABELS[effectiveHaccpDisposition(detail)]
+                  || effectiveHaccpDisposition(detail)}
               </p>
+              {effectiveHaccpDisposition(detail) === 'FAIL' && (
+                <p className="text-xs text-destructive font-medium">
+                  CCP gagal — batch terkait ditahan (HOLD) saat checklist disimpan, meski dokumen masih DRAFT.
+                </p>
+              )}
               {editItems.map((item, idx) => (
                 <div key={item.key} className="space-y-1 border-b pb-2">
                   <Label>{item.label}</Label>

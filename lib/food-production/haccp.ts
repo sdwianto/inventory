@@ -49,7 +49,7 @@ export interface HaccpTemplateItem {
    */
   critical?: boolean;
   /**
-   * ADR-004 P0C — kegagalan menahan batch (kandidat HOLD; penahanan aktual di P0D).
+   * ADR-004 P0C — kegagalan menahan batch (→ HOLD di P0D saat disimpan).
    * Invariant: holdOnFail ⇒ critical.
    */
   holdOnFail?: boolean;
@@ -333,20 +333,44 @@ export function computeHaccpDisposition(
 }
 
 /**
- * ADR-004 P0C — kandidat HOLD dari holdOnFail+FAIL.
- * Penahanan aktual ke production_batches dilakukan di P0D.
+ * ADR-004 P0C/P0D — item holdOnFail yang FAIL (pemicu HOLD pada batch).
  */
+export function listHaccpHoldFailLabels(
+  items: HaccpResultItem[],
+  templateItems: HaccpTemplateItem[],
+  category?: HaccpCategory | string | null,
+): string[] {
+  const byKey = new Map(templateItems.map((t) => [t.key, t]));
+  const labels: string[] = [];
+  for (const item of items) {
+    if (item.result !== 'FAIL') continue;
+    const tpl = byKey.get(item.key);
+    if (!tpl) continue;
+    if (!effectiveHaccpItemFlags(tpl, category).holdOnFail) continue;
+    labels.push(item.label || tpl.label || item.key);
+  }
+  return labels;
+}
+
+/** True bila ada holdOnFail+FAIL — penahanan batch dijalankan di P0D. */
 export function hasHaccpHoldCandidate(
   items: HaccpResultItem[],
   templateItems: HaccpTemplateItem[],
   category?: HaccpCategory | string | null,
 ): boolean {
-  const holdKeys = new Set(
-    templateItems
-      .filter((t) => effectiveHaccpItemFlags(t, category).holdOnFail)
-      .map((t) => t.key),
-  );
-  return items.some((i) => i.result === 'FAIL' && holdKeys.has(i.key));
+  return listHaccpHoldFailLabels(items, templateItems, category).length > 0;
+}
+
+/** Alasan audit untuk foodSafetyHistory saat HOLD dari HACCP. */
+export function buildHaccpHoldReason(
+  labels: string[],
+  opts?: { noDokumen?: string; batchNo?: string },
+): string {
+  const failed = labels.length ? labels.join(', ') : 'CCP holdOnFail gagal';
+  const parts = [`HACCP holdOnFail gagal: ${failed}`];
+  if (opts?.noDokumen) parts.push(`dok ${opts.noDokumen}`);
+  if (opts?.batchNo) parts.push(`batch ${opts.batchNo}`);
+  return parts.join(' · ');
 }
 
 /** Dokumen lama tanpa field: FAIL kalau ada CCP wajib gagal, selain itu ikut status. */

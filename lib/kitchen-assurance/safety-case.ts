@@ -78,6 +78,11 @@ export interface KaSafetyCaseDoc {
   kitchenNama?: string;
   batchId?: string;
   planId?: string;
+  /**
+   * ADR-004 P0F — usulan batch untuk HOLD inferensial (QC tanpa productionBatchId).
+   * Bukan auto-HOLD; supervisor mengonfirmasi sebelum disposisi berubah.
+   */
+  proposedHoldBatchIds?: string[];
   assetId?: string;
   maintenanceRequestId?: string;
   productId?: string;

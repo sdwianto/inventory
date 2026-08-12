@@ -17,6 +17,7 @@ export type BatchTrailEventType =
   | 'TEMP_LOG'
   | 'QC'
   | 'HACCP'
+  | 'FOOD_SAFETY'
   | 'AUDIT';
 
 export interface BatchTrailEvent {
@@ -36,6 +37,8 @@ export interface BatchAuditTrail {
     id: string;
     batchNo?: string;
     status?: string;
+    /** ADR-004 — disposisi food safety (HOLD memblokir FEFO). */
+    foodSafetyStatus?: string;
     kitchenNama?: string;
     productionPlanId?: string;
     productionPlanNo?: string;

@@ -66,6 +66,7 @@ const emptyForm = {
   stage: 'HOLDING' as TempStage,
   suhuC: '',
   kitchenId: '',
+  productionBatchId: '',
   catatan: '',
 };
 
@@ -88,6 +89,7 @@ export default function ColdChainPage() {
   const [alerts, setAlerts] = useState<AlertSummary | null>(null);
   const [thresholds, setThresholds] = useState<ThresholdRow[]>([]);
   const [kitchens, setKitchens] = useState<KitchenOpt[]>([]);
+  const [batches, setBatches] = useState<Array<{ id: string; batchNo: string; finishedGoodNama?: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [openThr, setOpenThr] = useState(false);
@@ -110,7 +112,7 @@ export default function ColdChainPage() {
       if (filterStage) qs.set('stage', filterStage);
       if (filterAlert) qs.set('alertStatus', filterAlert);
       const q = qs.toString();
-      const [lRes, aRes, tRes, kRes] = await Promise.all([
+      const [lRes, aRes, tRes, kRes, bRes] = await Promise.all([
         fetch(`/api/temperature-logs${q ? `?${q}` : ''}`, {
           headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
         }),
@@ -119,17 +121,22 @@ export default function ColdChainPage() {
         }),
         fetch('/api/temperature-thresholds', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/kitchens?aktif=1', { headers: { ...actingTenantHeaders() } }),
+        fetch('/api/production-batches', {
+          headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+        }),
       ]);
       const lData = await lRes.json();
       const aData = await aRes.json();
       const tData = await tRes.json();
       const kData = await kRes.json();
+      const bData = await bRes.json();
       if (!lRes.ok) throw new Error(lData?.error || 'Gagal memuat log');
       if (!aRes.ok) throw new Error(aData?.error || 'Gagal memuat alert');
       setRows(Array.isArray(lData) ? lData : []);
       setAlerts(aData && typeof aData === 'object' ? aData as AlertSummary : null);
       setThresholds(Array.isArray(tData) ? tData : []);
       setKitchens(Array.isArray(kData) ? kData : []);
+      setBatches(Array.isArray(bData) ? bData : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
     } finally {
@@ -170,6 +177,7 @@ export default function ColdChainPage() {
           stage: form.stage,
           suhuC: Number(form.suhuC),
           kitchenId: form.kitchenId || undefined,
+          productionBatchId: form.productionBatchId || undefined,
           catatan: form.catatan || undefined,
         }),
       });
@@ -180,6 +188,20 @@ export default function ColdChainPage() {
         toast.success(`Log tersimpan — ${TEMP_ALERT_LABELS[status as TempAlertStatus] || status}`);
       } else {
         toast.error(`Alert: ${TEMP_ALERT_LABELS[status as TempAlertStatus] || status} (${data.suhuC}°C)`);
+      }
+      if (data?.foodSafetyHold?.held) {
+        const ka = data.foodSafetyHold?.kaIssue?.noDokumen
+          ? ` · Issue ${data.foodSafetyHold.kaIssue.noDokumen}`
+          : '';
+        toast.warning(`Batch ditahan (food safety)${ka}`);
+      } else if (data?.foodSafetyHold?.error) {
+        toast.warning(`Log tersimpan, penahanan batch gagal: ${data.foodSafetyHold.error}`);
+      } else if (data?.foodSafetyHold?.skipped === 'already_hold') {
+        toast.message('Batch sudah berstatus HOLD (food safety)');
+      } else if (data?.foodSafetyHold?.skipped === 'no_batch') {
+        toast.warning(
+          'Alert suhu tanpa batch — produk tidak ditahan. Pilih batch produksi agar HOLD otomatis.',
+        );
       }
       setOpen(false);
       await load();
@@ -440,6 +462,26 @@ export default function ColdChainPage() {
                 {kitchens.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
               </select>
             </div>
+            {(form.stage === 'COOKING' || form.stage === 'HOLDING') && (
+              <div className="space-y-1">
+                <Label>Batch produksi</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm"
+                  value={form.productionBatchId}
+                  onChange={(e) => setForm((f) => ({ ...f, productionBatchId: e.target.value }))}
+                >
+                  <option value="">— opsional; wajib agar suhu gagal menahan batch</option>
+                  {batches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.batchNo}{b.finishedGoodNama ? ` · ${b.finishedGoodNama}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  ADR-004: COOKING/HOLDING di luar ambang + batch → HOLD otomatis.
+                </p>
+              </div>
+            )}
             <div className="space-y-1">
               <Label>Catatan</Label>
               <Input

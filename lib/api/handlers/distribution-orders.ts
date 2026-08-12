@@ -68,6 +68,7 @@ import {
   consumeBatchesFefo,
   restoreBatchesFromAllocations,
 } from '@/lib/food-production/fefo-consume';
+import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import {
   computeDistFgReturnNeeds,
   computeDistFgShipNeeds,
@@ -1071,6 +1072,21 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           const docNo = String(assignedNo || existing.noDokumen || id);
           // ADR-004 — resolve sekali per dokumen, bukan per baris FEFO.
           const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, existing.tenantId);
+          // P0G: gagalkan dokumen sebelum mutasi stok bila shortfall karena HOLD.
+          const holdGate = await assertFefoExitNotBlockedByHold(db, {
+            tenantId: existing.tenantId,
+            enforce: enforceFoodSafetyHold,
+            asOf: now,
+            context: 'distribusi',
+            lines: needs.map((n) => ({
+              stokId: n.stokId,
+              stokNama: n.nama || n.kode,
+              warehouseKode: hsl!.warehouseKode,
+              needQty: n.needQty,
+              productionResultId: hsl!.id,
+            })),
+          });
+          if (!holdGate.ok) return err(holdGate.error, 400);
           try {
             await runInTransactionOrFallback(async ({ db: txDb, session }) => {
               if (!session) {
@@ -1133,6 +1149,30 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                   },
                   session,
                 );
+                if (enforceFoodSafetyHold) {
+                  const post = await assertConsumeShortfallNotDueToHold(
+                    txDb,
+                    {
+                      tenantId: existing.tenantId,
+                      enforce: true,
+                      shortfall: fefo.shortfall,
+                      skippedNoBatches: fefo.skippedNoBatches,
+                      asOf: now,
+                      context: 'distribusi',
+                      line: {
+                        stokId: need.stokId,
+                        stokNama: need.nama || need.kode,
+                        warehouseKode: hsl!.warehouseKode,
+                        needQty: need.needQty,
+                        productionResultId: hsl!.id,
+                      },
+                    },
+                    session,
+                  );
+                  if (!post.ok) {
+                    throw Object.assign(new Error(post.error), { httpStatus: 400 });
+                  }
+                }
                 fefoLines.push({
                   stokId: need.stokId,
                   needQty: fefo.needQty,

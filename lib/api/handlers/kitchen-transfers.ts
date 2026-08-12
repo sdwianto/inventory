@@ -14,6 +14,8 @@ import { postStockMutation } from '@/lib/api/stock-mutation';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
 import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
+import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
+import { assertFefoExitNotBlockedByHold } from '@/lib/food-production/food-safety-exit-gate';
 import {
   KITCHEN_TRANSFERS_COLLECTION,
   XFER_STATUS_TRANSITIONS,
@@ -264,6 +266,26 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
       );
       if (locked) return locked;
 
+      const enforceFoodSafetyHold = existing.allocationOnly
+        ? false
+        : await isFoodSafetyHoldEnforced(db, existing.tenantId);
+      if (!existing.allocationOnly) {
+        const holdGate = await assertFefoExitNotBlockedByHold(db, {
+          tenantId: existing.tenantId,
+          enforce: enforceFoodSafetyHold,
+          asOf: now,
+          allowExpired: true,
+          context: 'transfer',
+          lines: (existing.lines || []).map((line) => ({
+            stokId: line.productId,
+            stokNama: line.productNama || line.productKode,
+            warehouseKode: existing.fromWarehouseKode,
+            needQty: Number(line.qty) || 0,
+          })),
+        });
+        if (!holdGate.ok) return err(holdGate.error, 400);
+      }
+
       try {
         await runInTransactionOrFallback(async ({ db: txDb, session }) => {
           if (!existing.allocationOnly && !session) {
@@ -306,6 +328,7 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
                   allowExpired: true,
                   noTransaksi: fresh.noDokumen,
                   xferId: fresh.id,
+                  enforceFoodSafetyHold,
                 },
                 session,
               );

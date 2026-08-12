@@ -29,6 +29,7 @@ import {
   type HaccpResultStatus,
 } from '@/lib/food-production/haccp';
 import { PRODUCTION_BATCHES_COLLECTION, type ProductionBatchDoc } from '@/lib/food-production/production-batch';
+import { applyHaccpHoldToBatch } from '@/lib/food-production/haccp-batch-hold';
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles';
@@ -166,6 +167,17 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       entityType: 'haccp_template',
       entityId: doc.id,
       summary: `HACCP template ${doc.kode}`,
+      // ADR-004 P0C — audit perubahan konfigurasi critical/holdOnFail.
+      metadata: {
+        category,
+        criticalCount: items.filter((i) => i.critical).length,
+        holdOnFailCount: items.filter((i) => i.holdOnFail).length,
+        flags: items.map((i) => ({
+          key: i.key,
+          critical: !!i.critical,
+          holdOnFail: !!i.holdOnFail,
+        })),
+      },
       ...auditActor(auth),
     });
     return ok(clean(doc as unknown as Record<string, unknown>), 201);
@@ -310,7 +322,23 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       summary: `HACCP ${doc.noDokumen} · batch ${doc.batchNo || doc.productionBatchId}`,
       ...actor,
     });
-    return ok(clean(doc as unknown as Record<string, unknown>), 201);
+
+    // ADR-004 P0D: HOLD saat kegagalan disimpan (termasuk DRAFT).
+    const hold = await applyHaccpHoldToBatch(db, {
+      tenantId,
+      productionBatchId: batch.id,
+      haccpResultId: doc.id,
+      haccpNoDokumen: doc.noDokumen,
+      items,
+      templateItems: template.items,
+      category: template.category,
+      actor,
+    });
+
+    return ok(clean({
+      ...(doc as unknown as Record<string, unknown>),
+      foodSafetyHold: hold,
+    }), 201);
   }
 
   if (path[0] === 'haccp-results' && path[1] && !path[2] && method === 'GET') {
@@ -391,15 +419,32 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     const saved = await db.collection(HACCP_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
+    const actor = auditActor(auth);
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action: 'HACCP_RESULT_UPDATE',
       entityType: 'haccp_result',
       entityId: path[1],
       summary: `HACCP ${existing.noDokumen} diperbarui`,
-      ...auditActor(auth),
+      ...actor,
     });
-    return ok(clean(saved as Record<string, unknown>));
+
+    // ADR-004 P0D: HOLD pada setiap save yang memuat holdOnFail+FAIL.
+    const hold = await applyHaccpHoldToBatch(db, {
+      tenantId: existing.tenantId,
+      productionBatchId: existing.productionBatchId,
+      haccpResultId: existing.id,
+      haccpNoDokumen: existing.noDokumen,
+      items,
+      templateItems: template.items,
+      category: template.category,
+      actor,
+    });
+
+    return ok(clean({
+      ...(saved as Record<string, unknown>),
+      foodSafetyHold: hold,
+    }));
   }
 
   if (path[0] === 'haccp-results' && path[1] && path[2] === 'status' && method === 'POST') {
@@ -424,23 +469,27 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     // ADR-004: disposition dihitung ulang saat COMPLETED mengikuti template berlaku.
     let disposition = existing.disposition;
     let holdCandidate = false;
+    let completedTemplate: HaccpTemplateDoc | null = null;
     if (toStatus === 'COMPLETED') {
-      const template = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
+      completedTemplate = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id: existing.templateId }),
       ) as HaccpTemplateDoc | null;
-      if (!template) return err('Template hilang', 400);
+      if (!completedTemplate) return err('Template hilang', 400);
       const gate = assertHaccpCanComplete(
         existing.items,
-        template.items,
+        completedTemplate.items,
         existing.evidenceUrls || [],
       );
       if (gate) return err(gate, 400);
-      disposition = computeHaccpDisposition(existing.items, template.items, template.category);
-      // P0C: holdOnFail+FAIL = kandidat HOLD. Penahanan batch aktual di P0D.
+      disposition = computeHaccpDisposition(
+        existing.items,
+        completedTemplate.items,
+        completedTemplate.category,
+      );
       holdCandidate = hasHaccpHoldCandidate(
         existing.items,
-        template.items,
-        template.category,
+        completedTemplate.items,
+        completedTemplate.category,
       );
     }
 
@@ -474,10 +523,26 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
         ? 'HACCP_RESULT_CANCEL'
         : 'HACCP_RESULT_STATUS';
 
+    // P0D: COMPLETED dengan holdCandidate juga menahan (jaga-jaga bila DRAFT tanpa save ulang).
+    let hold: Awaited<ReturnType<typeof applyHaccpHoldToBatch>> | undefined;
+    if (toStatus === 'COMPLETED' && holdCandidate && completedTemplate) {
+      hold = await applyHaccpHoldToBatch(db, {
+        tenantId: existing.tenantId,
+        productionBatchId: existing.productionBatchId,
+        haccpResultId: existing.id,
+        haccpNoDokumen: existing.noDokumen,
+        items: existing.items,
+        templateItems: completedTemplate.items,
+        category: completedTemplate.category,
+        actor,
+      });
+    }
+
     let auditSummary = `HACCP ${existing.noDokumen} → ${toStatus}`;
     if (toStatus === 'COMPLETED' && disposition) {
       auditSummary += ` · disposition ${disposition}`;
-      if (holdCandidate) auditSummary += ' · holdCandidate';
+      if (hold?.held) auditSummary += ' · batch HOLD';
+      else if (holdCandidate) auditSummary += ' · holdCandidate';
     }
 
     await writeAuditLog(db, {
@@ -488,7 +553,10 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       summary: auditSummary,
       ...actor,
     });
-    return ok(clean(saved as Record<string, unknown>));
+    return ok(clean({
+      ...(saved as Record<string, unknown>),
+      ...(hold ? { foodSafetyHold: hold } : {}),
+    }));
   }
 
   return null;

@@ -29,6 +29,11 @@ export interface EnsureOpenIssueInput {
   kitchenId?: string;
   kitchenNama?: string;
   sourceHref?: string;
+  /** ADR-004 — tautan deterministik ke batch yang ditahan. */
+  batchId?: string;
+  planId?: string;
+  /** ADR-004 P0F — usulan batch (inferensial); tidak auto-HOLD. */
+  proposedHoldBatchIds?: string[];
   actor?: { userId?: string; userName?: string };
 }
 
@@ -97,7 +102,14 @@ export async function ensureOpenKaIssue(
     sourceHref: input.sourceHref?.trim() || undefined,
     kitchenId: input.kitchenId?.trim() || undefined,
     kitchenNama,
-    resolution: { type: 'NONE' },
+    batchId: input.batchId?.trim() || undefined,
+    planId: input.planId?.trim() || undefined,
+    proposedHoldBatchIds: input.proposedHoldBatchIds != null
+      ? [...new Set(input.proposedHoldBatchIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : undefined,
+    resolution: input.proposedHoldBatchIds != null
+      ? { type: 'HOLD_BATCH' }
+      : { type: 'NONE' },
     photos: [],
     loggedAt: now,
     history: appendKaHistory([], {

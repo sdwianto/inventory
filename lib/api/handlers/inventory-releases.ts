@@ -26,6 +26,7 @@ import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
+import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 
@@ -269,6 +270,19 @@ export async function handleInventoryReleases({
     }
     // ADR-004 — resolve sekali per dokumen, bukan per baris FEFO.
     const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, tenantId);
+    const holdGate = await assertFefoExitNotBlockedByHold(db, {
+      tenantId,
+      enforce: enforceFoodSafetyHold,
+      asOf: now,
+      context: 'release',
+      lines: releaseLines.map((it) => ({
+        stokId: String(it.stokId),
+        stokNama: it.nama,
+        warehouseKode: lokasiKode,
+        needQty: it.qtyBase,
+      })),
+    });
+    if (!holdGate.ok) return err(holdGate.error, 400);
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const claim = await txDb.collection('inventory_releases').updateOne(
@@ -324,6 +338,27 @@ export async function handleInventoryReleases({
             },
             session,
           );
+          if (enforceFoodSafetyHold) {
+            const post = await assertConsumeShortfallNotDueToHold(
+              txDb,
+              {
+                tenantId,
+                enforce: true,
+                shortfall: fefo.shortfall,
+                skippedNoBatches: fefo.skippedNoBatches,
+                asOf: now,
+                context: 'release',
+                line: {
+                  stokId: String(it.stokId),
+                  stokNama: it.nama,
+                  warehouseKode: lokasiKode,
+                  needQty: it.qtyBase,
+                },
+              },
+              session,
+            );
+            if (!post.ok) throw new Error(post.error);
+          }
           fefoLines.push({
             stokId: it.stokId,
             allocated: fefo.allocated,

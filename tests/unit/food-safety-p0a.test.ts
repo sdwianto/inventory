@@ -68,11 +68,24 @@ describe('ADR-004 P0A — transisi disposisi', () => {
       ['PENDING', 'PASS'],
       ['PENDING', 'HOLD'],
       ['PASS', 'HOLD'],
-      ['HOLD', 'RELEASED'],
     ] as Array<[FoodSafetyStatus | undefined, FoodSafetyStatus]>) {
       const res = transition({ foodSafetyStatus: from }, to);
       expect('error' in res ? res.error : res.foodSafetyStatus).toBe(to);
     }
+    // RELEASED hanya via KA_FOLLOW_UP + sourceId (P0H Recovery gate).
+    const released = applyFoodSafetyTransition(
+      { foodSafetyStatus: 'HOLD' },
+      {
+        to: 'RELEASED',
+        sourceType: 'KA_FOLLOW_UP',
+        sourceId: 'fu-1',
+        reason: 'alasan uji',
+        at: new Date('2026-08-10T00:00:00.000Z'),
+        userId: 'u1',
+        userName: 'QA',
+      },
+    );
+    expect('error' in released ? released.error : released.foodSafetyStatus).toBe('RELEASED');
   });
 
   it('mengizinkan RELEASED → HOLD agar temuan susulan bisa menahan ulang', () => {

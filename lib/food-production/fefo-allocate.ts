@@ -9,6 +9,8 @@ export type FefoBatchCandidate = {
   expiryDate: string;
   qtyRemaining: number;
   status?: string;
+  /** ADR-004 P0G — dihormati bila rejectFoodSafetyHold. */
+  foodSafetyStatus?: string;
 };
 
 export type FefoAllocation = {
@@ -42,7 +44,12 @@ export function sortFefo(batches: FefoBatchCandidate[]): FefoBatchCandidate[] {
 export function allocateFefo(
   needQty: number,
   batches: FefoBatchCandidate[],
-  opts?: { asOf?: Date; allowExpired?: boolean },
+  opts?: {
+    asOf?: Date;
+    allowExpired?: boolean;
+    /** ADR-004 P0G — lewati kandidat foodSafetyStatus HOLD. */
+    rejectFoodSafetyHold?: boolean;
+  },
 ): FefoAllocateResult {
   const need = Number(needQty);
   if (!(need > 0)) {
@@ -51,6 +58,7 @@ export function allocateFefo(
 
   const asOfIso = (opts?.asOf ?? new Date()).toISOString().slice(0, 10);
   const allowExpired = opts?.allowExpired === true;
+  const rejectHold = opts?.rejectFoodSafetyHold === true;
   const ordered = sortFefo(batches);
 
   const allocations: FefoAllocation[] = [];
@@ -58,6 +66,7 @@ export function allocateFefo(
 
   for (const b of ordered) {
     if (left <= 0) break;
+    if (rejectHold && String(b.foodSafetyStatus || '').toUpperCase() === 'HOLD') continue;
     const rem = remainingOf(b);
     if (rem <= 0) continue;
     const exp = String(b.expiryDate || '').slice(0, 10);

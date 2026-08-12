@@ -5,13 +5,14 @@
 
 import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
-import { withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
+import { withTenantFilter, resolveOperationalScope, tenantIdForWrite } from '@/lib/api/tenant-master';
 import { requireApiScope } from '@/lib/api/require-scope';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
 import { PRODUCTION_BATCHES_COLLECTION } from '@/lib/food-production/production-batch';
+import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 
 const FP_READ = 'food-production:read';
@@ -101,6 +102,12 @@ export async function handleFpPublic(ctx: HandlerContext): Promise<NextResponse 
       expiryDate: { $gte: todayIso },
     };
     if (kitchenId) filter.kitchenId = kitchenId;
+    // ADR-004 P0G — jangan tampilkan batch HOLD sebagai stok tersedia di kanal publik.
+    const tenantId = tenantIdForWrite(scopeAuth, {});
+    const enforceHold = await isFoodSafetyHoldEnforced(db, tenantId);
+    if (enforceHold) {
+      filter.foodSafetyStatus = { $ne: 'HOLD' };
+    }
     const list = await db.collection(PRODUCTION_BATCHES_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
       .sort({ expiryDate: 1 })

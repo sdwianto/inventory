@@ -149,3 +149,32 @@ describe('ADR-004 P0C — legacy tanpa field flag', () => {
     expect(hasHaccpHoldCandidate(row, tpl, 'CCP_COOK')).toBe(true);
   });
 });
+
+describe('ADR-004 P0C — audit konfigurasi flag (kontrak metadata)', () => {
+  it('ringkasan critical/holdOnFail dari item template siap diaudit', () => {
+    const items = normalizeHaccpTemplateItems(
+      [
+        { key: 'a', label: 'A' },
+        { key: 'b', label: 'B', required: false, critical: true, holdOnFail: false },
+      ],
+      'CCP_COOK',
+    );
+    expect('error' in items).toBe(false);
+    if ('error' in items) return;
+    const metadata = {
+      criticalCount: items.filter((i) => i.critical).length,
+      holdOnFailCount: items.filter((i) => i.holdOnFail).length,
+      flags: items.map((i) => ({
+        key: i.key,
+        critical: !!i.critical,
+        holdOnFail: !!i.holdOnFail,
+      })),
+    };
+    expect(metadata.criticalCount).toBe(2);
+    expect(metadata.holdOnFailCount).toBe(1);
+    expect(metadata.flags).toEqual([
+      { key: 'a', critical: true, holdOnFail: true },
+      { key: 'b', critical: true, holdOnFail: false },
+    ]);
+  });
+});

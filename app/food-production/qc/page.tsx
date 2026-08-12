@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
+import KitchenScopeBar from '@/components/KitchenScopeBar';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
+import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { useConfirm } from '@/components/ConfirmProvider';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
@@ -25,6 +27,42 @@ import {
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 const OPS_WRITE = new Set(['GUDANG', 'ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
+
+type FoodSafetyHoldResult = {
+  held?: boolean;
+  proposed?: boolean;
+  skipped?: string;
+  foodSafetyStatus?: string;
+  error?: string;
+  proposedHoldBatchIds?: string[];
+  kaIssue?: { noDokumen?: string; created?: boolean };
+};
+
+function toastFoodSafetyHold(hold: FoodSafetyHoldResult | undefined) {
+  if (!hold) return;
+  if (hold.error) {
+    toast.warning(`Checklist tersimpan, tetapi penahanan batch gagal: ${hold.error}`);
+    return;
+  }
+  if (hold.held) {
+    const ka = hold.kaIssue?.noDokumen ? ` · Issue ${hold.kaIssue.noDokumen}` : '';
+    toast.warning(`Batch ditahan (food safety)${ka}`);
+    return;
+  }
+  if (hold.proposed) {
+    const n = hold.proposedHoldBatchIds?.length || 0;
+    const ka = hold.kaIssue?.noDokumen ? ` · Issue ${hold.kaIssue.noDokumen}` : '';
+    toast.warning(
+      n > 0
+        ? `QC tanpa batch — usulan HOLD ${n} batch (butuh konfirmasi supervisor)${ka}`
+        : `QC tanpa batch — Issue diangkat; batch tidak ditahan otomatis${ka}`,
+    );
+    return;
+  }
+  if (hold.skipped === 'already_hold') {
+    toast.message('Batch sudah berstatus HOLD (food safety)');
+  }
+}
 
 interface Template {
   id: string;
@@ -50,6 +88,9 @@ interface QcRow {
   templateNama?: string;
   category: keyof typeof QC_CATEGORY_LABELS;
   productionPlanNo?: string;
+  productionBatchId?: string;
+  batchNo?: string;
+  proposedHoldBatchIds?: string[];
   tanggal: string;
   status: QcResultStatus;
   summary?: { passCount: number; failCount: number; naCount: number; photoCount?: number };
@@ -65,6 +106,13 @@ interface PlanOpt {
   noDokumen: string;
   tanggal: string;
   status: string;
+}
+
+interface BatchOpt {
+  id: string;
+  batchNo: string;
+  finishedGoodNama?: string;
+  foodSafetyStatus?: string;
 }
 
 function formatRecordedAt(raw?: string): string {
@@ -99,6 +147,7 @@ export default function QcPage() {
   const [rows, setRows] = useState<QcRow[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [plans, setPlans] = useState<PlanOpt[]>([]);
+  const [batches, setBatches] = useState<BatchOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -106,6 +155,7 @@ export default function QcPage() {
   const [status, setStatus] = useState<QcResultStatus>('DRAFT');
   const [templateId, setTemplateId] = useState('');
   const [planId, setPlanId] = useState('');
+  const [batchId, setBatchId] = useState('');
   const [editItems, setEditItems] = useState<QcItemEdit[]>([]);
   const [catatan, setCatatan] = useState('');
   const [recordedAt, setRecordedAt] = useState<string | undefined>();
@@ -116,18 +166,22 @@ export default function QcPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [qRes, tRes, pRes] = await Promise.all([
-        fetch('/api/qc-results', { headers: { ...actingTenantHeaders() } }),
+      const hdr = { ...actingTenantHeaders(), ...actingKitchenHeaders() };
+      const [qRes, tRes, pRes, bRes] = await Promise.all([
+        fetch('/api/qc-results', { headers: hdr }),
         fetch('/api/qc-templates?aktif=1', { headers: { ...actingTenantHeaders() } }),
-        fetch('/api/production-plans', { headers: { ...actingTenantHeaders() } }),
+        fetch('/api/production-plans', { headers: hdr }),
+        fetch('/api/production-batches', { headers: hdr }),
       ]);
       const qData = await qRes.json();
       const tData = await tRes.json();
       const pData = await pRes.json();
+      const bData = await bRes.json();
       if (!qRes.ok) throw new Error(qData?.error || 'Gagal memuat QC');
       setRows(Array.isArray(qData) ? qData : []);
       setTemplates(Array.isArray(tData) ? tData : []);
       setPlans(Array.isArray(pData) ? pData : []);
+      setBatches(Array.isArray(bData) ? bData : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat');
     } finally {
@@ -136,6 +190,11 @@ export default function QcPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const onKitchen = () => { void load(); };
+    window.addEventListener('fp-kitchen-changed', onKitchen);
+    return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
+  }, [load]);
 
   function openNew() {
     setEditingId(null);
@@ -143,6 +202,7 @@ export default function QcPage() {
     setStatus('DRAFT');
     setTemplateId('');
     setPlanId('');
+    setBatchId('');
     setEditItems([]);
     setCatatan('');
     setRecordedAt(undefined);
@@ -176,6 +236,7 @@ export default function QcPage() {
     setStatus(doc.status);
     setTemplateId(doc.templateId || '');
     setPlanId('');
+    setBatchId(doc.productionBatchId || '');
     setEditItems((doc.items || []).map((it) => ({
       ...it,
       note: it.note || '',
@@ -186,7 +247,8 @@ export default function QcPage() {
     setRecordedByName(doc.recordedByName || doc.createdByName);
     setMetaLine(
       `${doc.templateNama || doc.templateKode || 'QC'} · ${QC_CATEGORY_LABELS[doc.category]}`
-      + (doc.productionPlanNo ? ` · ${doc.productionPlanNo}` : ''),
+      + (doc.productionPlanNo ? ` · ${doc.productionPlanNo}` : '')
+      + (doc.batchNo ? ` · batch ${doc.batchNo}` : ''),
     );
     setFormOpen(true);
   }
@@ -205,13 +267,18 @@ export default function QcPage() {
         save: true,
         record: true,
         ...(planId ? { productionPlanId: planId } : {}),
+        productionBatchId: batchId || '',
         ...(!editingId ? { templateId } : {}),
       };
       const res = await fetch(
         editingId ? `/api/qc-results/${editingId}` : '/api/qc-results',
         {
           method: editingId ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+          headers: {
+            'Content-Type': 'application/json',
+            ...actingTenantHeaders(),
+            ...actingKitchenHeaders(),
+          },
           body: JSON.stringify(payload),
         },
       );
@@ -219,6 +286,7 @@ export default function QcPage() {
       if (!res.ok) throw new Error(data?.error || 'Gagal simpan');
       const saved = data as QcRow;
       toast.success(`Checklist ${saved.noDokumen} tersimpan`);
+      toastFoodSafetyHold(data?.foodSafetyHold as FoodSafetyHoldResult | undefined);
       setFormOpen(false);
       await load();
     } catch (e) {
@@ -256,6 +324,7 @@ export default function QcPage() {
   return (
     <div className="space-y-4 p-4 md:p-6">
       <OperationalScopeBar />
+      <KitchenScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
@@ -263,7 +332,7 @@ export default function QcPage() {
             Quality Control
           </h1>
           <p className="text-sm text-muted-foreground">
-            Catat finding lapangan (bukan approval PASS-all) — foto & remark per item
+            Catat finding lapangan — batch opsional (ADR-004: holdOnFail+FAIL + batch → HOLD)
           </p>
         </div>
         <div className="flex gap-2">
@@ -284,7 +353,7 @@ export default function QcPage() {
             <tr>
               <th className="text-left p-3">No QCR</th>
               <th className="text-left p-3">Template</th>
-              <th className="text-left p-3">Rencana</th>
+              <th className="text-left p-3">Batch</th>
               <th className="text-left p-3">Temuan</th>
               <th className="text-left p-3">Dicatat</th>
               <th className="text-left p-3">Status</th>
@@ -305,7 +374,12 @@ export default function QcPage() {
                   <div>{row.templateNama || row.templateKode}</div>
                   <div className="text-[11px] text-muted-foreground">{QC_CATEGORY_LABELS[row.category]}</div>
                 </td>
-                <td className="p-3 font-mono text-xs">{row.productionPlanNo || '—'}</td>
+                <td className="p-3 font-mono text-xs">
+                  {row.batchNo || row.productionBatchId || '—'}
+                  {(row.proposedHoldBatchIds?.length || 0) > 0 && !row.productionBatchId && (
+                    <div className="text-[11px] text-amber-700">usulan hold</div>
+                  )}
+                </td>
                 <td className="p-3 text-xs">
                   {row.summary?.failCount ?? 0} temuan · {row.summary?.photoCount ?? 0} foto
                 </td>
@@ -344,40 +418,63 @@ export default function QcPage() {
               <p className="text-muted-foreground">{metaLine}</p>
             )}
 
-            {!selectedTemplateLocked && (
-              <div className="space-y-2 rounded-md border p-3 bg-muted/20">
-                <div className="space-y-1">
-                  <Label>Template</Label>
-                  <select
-                    className="w-full h-10 border rounded-md px-2 text-sm bg-background"
-                    value={templateId}
-                    onChange={(e) => applyTemplate(e.target.value)}
-                    disabled={!editable}
-                  >
-                    <option value="">— Pilih —</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.kode} · {t.nama} ({QC_CATEGORY_LABELS[t.category]})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Rencana (opsional)</Label>
-                  <select
-                    className="w-full h-10 border rounded-md px-2 text-sm bg-background"
-                    value={planId}
-                    onChange={(e) => setPlanId(e.target.value)}
-                    disabled={!editable}
-                  >
-                    <option value="">— Tanpa rencana —</option>
-                    {plans.map((p) => (
-                      <option key={p.id} value={p.id}>{p.noDokumen} · {p.tanggal}</option>
-                    ))}
-                  </select>
-                </div>
+            <div className="space-y-2 rounded-md border p-3 bg-muted/20">
+              {!selectedTemplateLocked && (
+                <>
+                  <div className="space-y-1">
+                    <Label>Template</Label>
+                    <select
+                      className="w-full h-10 border rounded-md px-2 text-sm bg-background"
+                      value={templateId}
+                      onChange={(e) => applyTemplate(e.target.value)}
+                      disabled={!editable}
+                    >
+                      <option value="">— Pilih —</option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.kode} · {t.nama} ({QC_CATEGORY_LABELS[t.category]})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Rencana (opsional)</Label>
+                    <select
+                      className="w-full h-10 border rounded-md px-2 text-sm bg-background"
+                      value={planId}
+                      onChange={(e) => setPlanId(e.target.value)}
+                      disabled={!editable}
+                    >
+                      <option value="">— Tanpa rencana —</option>
+                      {plans.map((p) => (
+                        <option key={p.id} value={p.id}>{p.noDokumen} · {p.tanggal}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+              <div className="space-y-1">
+                <Label>Batch produksi (opsional)</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm bg-background"
+                  value={batchId}
+                  onChange={(e) => setBatchId(e.target.value)}
+                  disabled={!editable}
+                >
+                  <option value="">— Tanpa batch → usulan HOLD saja —</option>
+                  {batches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.batchNo}
+                      {b.finishedGoodNama ? ` · ${b.finishedGoodNama}` : ''}
+                      {b.foodSafetyStatus === 'HOLD' ? ' · HOLD' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  holdOnFail+FAIL + batch → HOLD otomatis. Tanpa batch → Safety Case + usulan batch.
+                </p>
               </div>
-            )}
+            </div>
 
             {editItems.map((item, idx) => (
               <div key={item.key} className="border rounded-md p-3 space-y-2">
