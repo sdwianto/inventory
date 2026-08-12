@@ -332,6 +332,75 @@ describe('enrichPoItemsForVendor', () => {
     }
   });
 
+  it('ignores stale line vendorUomId when catalog already has real mappings', async () => {
+    mockedFindUoms.mockResolvedValue(new Map([
+      ['local-kg', {
+        id: 'local-kg',
+        tenantId: 'sppg',
+        productId: 'lp1',
+        satuan: 'KG',
+        factorToBase: 10,
+        vendorUomId: 'sales-kg-current',
+        isBase: false,
+        hargaEcer: 0,
+        hargaGrosir: 0,
+        hargaSpesial: 0,
+        barcode: '',
+        sortOrder: 1,
+        aktif: true,
+      }],
+    ]));
+    mockedListUoms.mockResolvedValue(new Map([
+      ['lp1', [
+        {
+          id: 'local-ons',
+          tenantId: 'sppg',
+          productId: 'lp1',
+          satuan: 'ONS',
+          factorToBase: 1,
+          vendorUomId: 'sales-ons-current',
+          isBase: true,
+          hargaEcer: 0,
+          hargaGrosir: 0,
+          hargaSpesial: 0,
+          barcode: '',
+          sortOrder: 0,
+          aktif: true,
+        },
+        {
+          id: 'local-kg',
+          tenantId: 'sppg',
+          productId: 'lp1',
+          satuan: 'KG',
+          factorToBase: 10,
+          vendorUomId: 'sales-kg-current',
+          isBase: false,
+          hargaEcer: 0,
+          hargaGrosir: 0,
+          hargaSpesial: 0,
+          barcode: '',
+          sortOrder: 1,
+          aktif: true,
+        },
+      ]],
+    ]));
+
+    const result = await enrichPoItemsForVendor(productDb() as never, 'sppg', [{
+      localStokId: 'lp1',
+      uomId: 'local-kg',
+      vendorUomId: 'sales-uom-deleted-long-ago',
+      qty: 2,
+      satuan: 'KG',
+      nama: 'Daging Sapi',
+    }]);
+
+    expect('items' in result).toBe(true);
+    if ('items' in result) {
+      expect(result.items?.[0]?.uomId).toBe('sales-kg-current');
+      expect(result.items?.[0]?.satuan).toBe('KG');
+    }
+  });
+
   it('rejects inactive synced product', async () => {
     const inactiveDb = {
       collection: (name: string) => ({

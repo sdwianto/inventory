@@ -779,8 +779,9 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (!['APPROVED', 'SUBMITTED'].includes(String(po.status))) {
-      return err('Hanya PO berstatus APPROVED/SUBMITTED yang bisa dikirim ulang ke vendor', 400);
+    // PARTIAL_CANCELLED: boleh retry vendor yang masih FAILED (vendor lain bisa sudah SYNCED).
+    if (!['APPROVED', 'SUBMITTED', 'PARTIAL_CANCELLED'].includes(String(po.status))) {
+      return err('Hanya PO berstatus APPROVED/SUBMITTED/PARTIAL_CANCELLED yang bisa dikirim ulang ke vendor', 400);
     }
 
     const synced = await syncApprovedPoToVendor(db, po as Record<string, unknown>);
@@ -801,8 +802,8 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (!['APPROVED', 'SUBMITTED'].includes(String(po.status))) {
-      return err('Retry vendor hanya untuk PO APPROVED/SUBMITTED', 400);
+    if (!['APPROVED', 'SUBMITTED', 'PARTIAL_CANCELLED'].includes(String(po.status))) {
+      return err('Retry vendor hanya untuk PO APPROVED/SUBMITTED/PARTIAL_CANCELLED', 400);
     }
 
     const vendorTenantId = String(path[3] || '').trim();

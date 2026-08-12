@@ -125,6 +125,25 @@ function isRealVendorUomId(id?: string | null, localUomId?: string): boolean {
   return !v.startsWith('legacy:');
 }
 
+/** vendorUomId di baris PO hanya dipakai jika masih dikenal di katalog lokal (hindari ID usang). */
+function isKnownLineVendorUomId(
+  id: string | undefined | null,
+  productUoms: ProductUom[],
+  prod: ProductDoc,
+  localUomId?: string,
+): boolean {
+  if (!isRealVendorUomId(id, localUomId)) return false;
+  const v = String(id).trim();
+  if (productUoms.some((u) => isRealVendorUomId(u.vendorUomId, u.id) && String(u.vendorUomId).trim() === v)) {
+    return true;
+  }
+  if (isRealVendorUomId(prod.vendorBaseUomId) && String(prod.vendorBaseUomId).trim() === v) {
+    return true;
+  }
+  // Belum ada mapping nyata di katalog — izinkan ID baris (bootstrap / isi manual).
+  return !productUoms.some((u) => isRealVendorUomId(u.vendorUomId, u.id));
+}
+
 /** Cari vendorUomId untuk push PO — toleran data lama / uomId stale setelah sync. */
 export function resolveVendorUomId(
   prod: ProductDoc,
@@ -133,8 +152,8 @@ export function resolveVendorUomId(
   satuanHint?: string,
   lineVendorUomId?: string,
 ): string | undefined {
-  // 1) ID eksplisit di baris PO (hasil map saat buat/edit) — utamakan non-legacy
-  if (isRealVendorUomId(lineVendorUomId, localUom?.id)) {
+  // 1) ID eksplisit di baris PO — hanya jika masih dikenal di katalog (bukan UUID usang)
+  if (isKnownLineVendorUomId(lineVendorUomId, productUoms, prod, localUom?.id)) {
     return String(lineVendorUomId).trim();
   }
 

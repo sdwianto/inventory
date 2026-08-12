@@ -26,12 +26,23 @@ cd ~/inventory/inventory-app   # atau path VPS Anda
 cp .env.docker.example .env.docker
 # Edit secrets: SESSION_SECRET, WORKER_SECRET, MASTER_BOOTSTRAP_PASSWORD, INTEGRATION_SETUP_TOKEN
 
+# Sebelum rebuild: prune cache/image tidak terpakai (hemat disk/RAM)
+docker builder prune -af
+docker image prune -af
+
 docker compose --env-file .env.docker build inventory-app
 docker compose --env-file .env.docker up -d
 
 # Smoke
 curl -sS http://127.0.0.1:3001/api/health | head
 # Buat resep + gambar → tidak boleh EACCES
+```
+
+Untuk stack Sales+Inventory enterprise, pakai script di sales:
+
+```bash
+cd ~/workspace/projects/sales
+./scripts/vps-redeploy.sh          # prune → pull → build inventory(+worker)
 ```
 
 ## Catatan
