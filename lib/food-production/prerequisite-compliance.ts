@@ -35,7 +35,7 @@ export async function listPrerequisiteCompliance(
   const programs = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION)
     .find({ tenantId: input.tenantId, aktif: true })
     .sort({ sortOrder: 1, kode: 1 })
-    .toArray() as FoodSafetyProgramDoc[];
+    .toArray() as unknown as FoodSafetyProgramDoc[];
 
   const out: PrerequisiteComplianceRow[] = [];
   for (const prog of programs) {

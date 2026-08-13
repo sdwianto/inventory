@@ -147,7 +147,7 @@ export async function handleHaccpVerifications(ctx: HandlerContext): Promise<Nex
       kitchenId,
       note: String(b.note || '').trim() || undefined,
       evidenceUrls: evidenceUrls.length ? evidenceUrls : undefined,
-      verifiedBy: actor.userId,
+      verifiedBy: actor.userId || 'system',
       verifiedByName: actor.userName,
       verifiedAt: now,
       history: appendHaccpVerificationHistory([], {
@@ -230,7 +230,7 @@ export async function handleHaccpVerifications(ctx: HandlerContext): Promise<Nex
       status: toStatus,
       updatedAt: now,
       verifiedAt: now,
-      verifiedBy: actor.userId,
+      verifiedBy: actor.userId || 'system',
       verifiedByName: actor.userName,
       history: appendHaccpVerificationHistory(existing.history, {
         at: now,
