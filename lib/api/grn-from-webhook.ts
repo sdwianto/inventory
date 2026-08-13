@@ -96,12 +96,16 @@ export function grnUpdateFieldsFromPayload(
   correlationId?: string | null,
 ): Record<string, unknown> {
   const cid = String(correlationId || payload.correlationId || existing.correlationId || '').trim();
+  const shippedAt = payload.shippedAt ? new Date(String(payload.shippedAt)) : undefined;
   return {
     noDO: payload.noDO || existing.noDO,
     noSO: payload.noSO || existing.noSO,
     noPO: payload.noPO || existing.noPO,
     vendorTenantId: vendorTenantId || existing.vendorTenantId,
     vendorDeliverySnapshot: payload,
+    ...(shippedAt && !Number.isNaN(shippedAt.getTime())
+      ? { tanggal: shippedAt, shippedAt, tanggalAktualKirim: shippedAt }
+      : {}),
     ...(cid ? { correlationId: cid } : {}),
     updatedAt: new Date(),
   };
@@ -181,6 +185,21 @@ export async function buildGrnInsertDoc(
   const vendorTenantName = await resolveVendorTenantName(db, tid, vendorTenantId ?? null);
   const cid = String(correlationId || payload.correlationId || '').trim();
 
+  const shippedAt = payload.shippedAt ? new Date(String(payload.shippedAt)) : now;
+  let tanggalPermintaanKirim: Date | null = null;
+  const noPO = payload.noPO ? String(payload.noPO) : null;
+  if (noPO) {
+    const po = await db.collection('customer_purchase_orders').findOne(
+      { tenantId: tid, noPO },
+      { projection: { tanggalKedatangan: 1, tanggal: 1 } },
+    );
+    const raw = po?.tanggalKedatangan || po?.tanggal;
+    if (raw) {
+      const d = new Date(String(raw));
+      if (!Number.isNaN(d.getTime())) tanggalPermintaanKirim = d;
+    }
+  }
+
   return {
     id: uuidv4(),
     tenantId: tid,
@@ -192,13 +211,16 @@ export async function buildGrnInsertDoc(
     vendorDeliveryId: payload.deliveryId,
     noDO: payload.noDO,
     noSO: payload.noSO,
-    noPO: payload.noPO || null,
+    noPO,
     vendorDeliverySnapshot: payload,
     vendorName: vendorTenantName || vendorTenantId || null,
     supplierName: vendorTenantName || null,
     lokasi: payload.lokasi,
     items: uniqueItems,
-    tanggal: payload.shippedAt ? new Date(String(payload.shippedAt)) : now,
+    tanggal: shippedAt,
+    shippedAt,
+    tanggalAktualKirim: shippedAt,
+    tanggalPermintaanKirim,
     createdAt: now,
     invoiceSyncStatus: 'NONE',
     ...(cid ? { correlationId: cid } : {}),

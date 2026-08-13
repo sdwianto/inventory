@@ -8,8 +8,13 @@ import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 type GrnRow = Record<string, unknown> & {
   vendorTenantId?: string;
   noDO?: string;
+  noPO?: string;
   noInvoice?: string | null;
   tenantId?: string;
+  tanggal?: unknown;
+  shippedAt?: unknown;
+  tanggalPermintaanKirim?: unknown;
+  tanggalAktualKirim?: unknown;
 };
 
 export async function resolveVendorTenantName(
@@ -32,6 +37,31 @@ export async function resolveVendorTenantName(
   if (link?.vendorName) return String(link.vendorName);
 
   return vid;
+}
+
+/** Ambil tanggal permintaan kirim (PO.tanggalKedatangan) per noPO. */
+export async function loadPoRequestedShipDatesByNoPo(
+  db: Db,
+  tenantId: string,
+  noPOs: string[],
+): Promise<Record<string, Date>> {
+  const unique = [...new Set(noPOs.map((n) => String(n || '').trim()).filter(Boolean))];
+  if (!unique.length) return {};
+  const rows = await db.collection('customer_purchase_orders').find({
+    tenantId,
+    noPO: { $in: unique },
+  }).project({ noPO: 1, tanggalKedatangan: 1, tanggal: 1 }).toArray();
+
+  const out: Record<string, Date> = {};
+  for (const row of rows) {
+    const noPO = String(row.noPO || '').trim();
+    if (!noPO) continue;
+    const raw = row.tanggalKedatangan || row.tanggal;
+    if (!raw) continue;
+    const d = new Date(String(raw));
+    if (!Number.isNaN(d.getTime())) out[noPO] = d;
+  }
+  return out;
 }
 
 export async function enrichGrnList(
@@ -63,6 +93,11 @@ export async function enrichGrnList(
     ]),
   ) as Record<string, string | undefined>;
 
+  const missingPoDateNos = grns
+    .filter((g) => !g.tanggalPermintaanKirim && g.noPO)
+    .map((g) => String(g.noPO));
+  const poDates = await loadPoRequestedShipDatesByNoPo(db, tid, missingPoDateNos);
+
   return grns.map((grn) => {
     const vid = grn.vendorTenantId;
     let vendorTenantName = vid ? nameMap[vid] : undefined;
@@ -71,12 +106,20 @@ export async function enrichGrnList(
     const doVendorKey = `${String(grn.noDO || '')}:${String(vid || '')}`;
     const noInvoice = grn.noInvoice || invoiceByDoVendor[doVendorKey] || null;
 
+    const noPO = String(grn.noPO || '').trim();
+    const tanggalPermintaanKirim = grn.tanggalPermintaanKirim
+      || (noPO ? poDates[noPO] : undefined)
+      || null;
+    const tanggalAktualKirim = grn.tanggalAktualKirim || grn.shippedAt || grn.tanggal || null;
+
     return {
       ...grn,
       vendorTenantName,
       supplierName: vendorTenantName,
       vendorName: vendorTenantName,
       noInvoice,
+      tanggalPermintaanKirim,
+      tanggalAktualKirim,
     };
   });
 }

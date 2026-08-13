@@ -5,13 +5,14 @@ import { str, num, asObject, asArray } from '@/types/json';
 import { useEffect, useMemo, useState } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import VendorInvoiceDetail from '@/components/VendorInvoiceDetail';
+import HutangVendorPrintPanel from '@/components/HutangVendorPrintPanel';
 import VirtualTableBody from '@/components/VirtualTableBody';
 import { TableSkeleton } from '@/components/TableSkeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Banknote, CircleCheck, Eye, RefreshCw } from 'lucide-react';
+import { Banknote, CircleCheck, Eye, Printer, RefreshCw } from 'lucide-react';
 import { formatIDR, formatDate } from '@/lib/format';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { debounce } from '@/lib/debounce';
@@ -23,7 +24,7 @@ import { useHutangMutations } from '@/lib/hooks/use-hutang-mutations';
 import { useBgJob, jobProgressMessage, BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
-import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
+import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { fetchJson } from '@/lib/fetch-json';
 
@@ -86,6 +87,7 @@ export default function HutangVendorPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [overrideMatch, setOverrideMatch] = useState(false);
+  const [printOpen, setPrintOpen] = useState(false);
 
   const syncMutation = useApiMutation([queryKeys.hutang.all, queryKeys.pages.hutang()]);
 
@@ -264,6 +266,7 @@ export default function HutangVendorPage() {
   };
 
   const allList = Array.isArray(list) ? list : [];
+  const activeTabLabel = TABS.find((t) => t.key === tab)?.label || 'Semua';
 
   return (
     <>
@@ -275,10 +278,21 @@ export default function HutangVendorPage() {
               Review invoice dari sales.app · Menunggu review: {pendingCount}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={`w-4 h-4 mr-1 ${syncing ? 'animate-spin' : ''}`} />
-            {syncProgress || 'Sync invoice'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPrintOpen(true)}
+              disabled={!allList.length}
+            >
+              <Printer className="w-4 h-4 mr-1" />
+              Cetak
+            </Button>
+            <Button variant="outline" size="sm" onClick={syncNow} disabled={syncing}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${syncing ? 'animate-spin' : ''}`} />
+              {syncProgress || 'Sync invoice'}
+            </Button>
+          </div>
         </div>
         <OperationalScopeBar />
 
@@ -305,23 +319,24 @@ export default function HutangVendorPage() {
         )}
 
         <div className="bg-white border rounded-lg overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1040px]">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
                 <th className="px-3 py-2 text-left">Invoice</th>
                 <th className="px-3 py-2 text-left">Vendor</th>
                 <th className="px-3 py-2 text-left">No. PO</th>
                 <th className="px-3 py-2 text-left">No. DO</th>
-                <th className="px-3 py-2 text-left">Tanggal</th>
+                <th className="px-3 py-2 text-left whitespace-nowrap">Minta kirim</th>
+                <th className="px-3 py-2 text-left whitespace-nowrap">Aktual kirim</th>
                 <th className="px-3 py-2 text-right">Total</th>
                 <th className="px-3 py-2 text-center">Status</th>
                 <th className="px-3 py-2 text-center">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {isLoading && <TableSkeleton rows={8} cols={8} />}
+              {isLoading && <TableSkeleton rows={8} cols={9} />}
               {!isLoading && !allList.length && (
-                <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada tagihan</td></tr>
+                <tr><td colSpan={9} className="text-center py-10 text-slate-400">Belum ada tagihan</td></tr>
               )}
               {!isLoading && allList.length > 0 && (
                 <VirtualTableBody
@@ -337,7 +352,14 @@ export default function HutangVendorPage() {
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{str(h.noPO) || '—'}</td>
                         <td className="px-3 py-2 font-mono text-xs">{str(h.noDO) || '—'}</td>
-                        <td className="px-3 py-2 text-xs">{formatDate(str(h.tanggal))}</td>
+                        <td className="px-3 py-2 text-xs whitespace-nowrap" title="Tanggal permintaan kirim dari PO">
+                          {str(h.tanggalPermintaanKirim) ? formatDate(str(h.tanggalPermintaanKirim)) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-xs whitespace-nowrap" title="Tanggal aktual kirim / invoice">
+                          {str(h.tanggalAktualKirim || h.tanggal)
+                            ? formatDate(str(h.tanggalAktualKirim || h.tanggal))
+                            : '—'}
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums font-medium">{formatIDR(num(h.total))}</td>
                         <td className="px-3 py-2 text-center">
                           <span className={`px-2 py-0.5 rounded text-xs ${APPROVAL_BADGE[a as keyof typeof APPROVAL_BADGE] || 'bg-slate-100'}`}>
@@ -424,6 +446,13 @@ export default function HutangVendorPage() {
           </Button>
         </DialogContent>
       </Dialog>
+
+      <HutangVendorPrintPanel
+        open={printOpen}
+        onOpenChange={setPrintOpen}
+        rows={allList}
+        tabLabel={activeTabLabel}
+      />
     </>
   );
 }

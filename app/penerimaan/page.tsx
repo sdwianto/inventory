@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { formatDateTime, formatIDR, formatNumber } from '@/lib/format';
+import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
 import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
@@ -27,7 +27,9 @@ import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { fetchJson } from '@/lib/fetch-json';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
-import { patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
+import { fetchProductUomsForIds } from '@/lib/hooks/use-product-uoms';
+import { convertQtyBetweenUoms, patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
+import { resolveGrnReceiveLineUom } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 
@@ -272,17 +274,31 @@ export default function PenerimaanPage() {
       });
       setDetail(data);
       const detailItems = asArray(data.items) as JsonObject[];
+      const stokIds = detailItems.map((it) => str(it.localStokId)).filter(Boolean);
+      const uomsByStok = stokIds.length
+        ? await fetchProductUomsForIds(stokIds)
+        : new Map<string, ProductUom[]>();
       const initQty: JsonObject = {};
       const initGudang: JsonObject = {};
       const initUom: Record<string, { uomId?: string; satuan?: string; factorToBase?: number }> = {};
       for (const [idx, it] of detailItems.entries()) {
         const key = itemRowKey(it, idx);
-        initQty[key] = it.qtyOrdered ?? 0;
         const embedded = it.product as JsonObject | undefined;
         initGudang[key] = str(it.gudangKode || embedded?.gudangKode, 'GKERING');
-        initUom[key] = {
+        const localStokId = str(it.localStokId);
+        const resolved = resolveGrnReceiveLineUom({
+          uoms: localStokId ? (uomsByStok.get(localStokId) || []) : [],
           uomId: str(it.uomId) || undefined,
           satuan: str(it.satuan) || undefined,
+          qtyOrdered: it.qtyOrdered,
+          qtyBase: it.qtyBase,
+          factorToBase: it.factorToBase,
+        });
+        initQty[key] = resolved.qty;
+        initUom[key] = {
+          uomId: resolved.uom?.id || str(it.uomId) || undefined,
+          satuan: resolved.uom?.satuan || str(it.satuan) || undefined,
+          factorToBase: resolved.factorToBase,
         };
       }
       setQtyMap(initQty);
@@ -375,7 +391,14 @@ export default function PenerimaanPage() {
         {supplierLabel(r)}
       </td>
       <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{invoiceSyncLabel(r)}</td>
-      <td className="px-3 py-2 text-xs whitespace-nowrap">{formatDateTime(str(r.tanggal))}</td>
+      <td className="px-3 py-2 text-xs whitespace-nowrap" title="Tanggal permintaan kirim dari PO">
+        {str(r.tanggalPermintaanKirim) ? formatDate(str(r.tanggalPermintaanKirim)) : '—'}
+      </td>
+      <td className="px-3 py-2 text-xs whitespace-nowrap" title="Tanggal aktual kirim (DO)">
+        {str(r.tanggalAktualKirim || r.shippedAt || r.tanggal)
+          ? formatDateTime(str(r.tanggalAktualKirim || r.shippedAt || r.tanggal))
+          : '—'}
+      </td>
       <td className="px-3 py-2 text-xs max-w-[160px] truncate" title={str(r.lokasi) || undefined}>
         {str(r.lokasi) || (rStatus === 'POSTED' ? '—' : '')}
       </td>
@@ -453,23 +476,24 @@ export default function PenerimaanPage() {
           </div>
         )}
         <div className="bg-white border rounded-lg overflow-x-auto max-w-full">
-          <table className="w-full min-w-[960px] text-sm">
+          <table className="w-full min-w-[1100px] text-sm">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
                 <th className="px-3 py-2 text-left whitespace-nowrap">No. GRN</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">No. DO</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">Supplier</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">No. Invoice</th>
-                <th className="px-3 py-2 text-left whitespace-nowrap">Tanggal</th>
+                <th className="px-3 py-2 text-left whitespace-nowrap">Minta kirim (PO)</th>
+                <th className="px-3 py-2 text-left whitespace-nowrap">Aktual kirim</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">Gudang</th>
                 <th className="px-3 py-2 text-center whitespace-nowrap">Status</th>
                 <th className="px-3 py-2 text-center whitespace-nowrap">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {isLoading && <TableSkeleton rows={8} cols={8} />}
+              {isLoading && <TableSkeleton rows={8} cols={9} />}
               {!isLoading && !list.length && (
-                <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>
+                <tr><td colSpan={9} className="text-center py-10 text-slate-400">Belum ada GRN</td></tr>
               )}
               {!isLoading && list.length > 0 && (
                 <VirtualTableBody
@@ -507,6 +531,15 @@ export default function PenerimaanPage() {
               const localStokId = str(it.localStokId);
               const uomRow = uomMap[rowKey];
               const rejectQty = num(rejectQtyMap[rowKey]);
+              const factor = Number(uomRow?.factorToBase) > 0 ? Number(uomRow.factorToBase) : 1;
+              const qtyOrderedBase = (() => {
+                if (it.qtyBase != null && it.qtyBase !== '' && Number.isFinite(num(it.qtyBase))) {
+                  return num(it.qtyBase);
+                }
+                const orderedFactor = Number(it.factorToBase) > 0 ? Number(it.factorToBase) : factor;
+                return num(it.qtyOrdered) * orderedFactor;
+              })();
+              const maxQtyInCurrentUom = Math.round((qtyOrderedBase / factor) * 1000) / 1000;
               return (
               <div key={rowKey} className="border rounded p-2 space-y-2">
               <div
@@ -536,8 +569,9 @@ export default function PenerimaanPage() {
                       uomId={uomRow?.uomId || str(it.uomId)}
                       onChange={(uom: ProductUom) => {
                         const prev = uomMap[rowKey];
+                        const oldFactor = prev?.factorToBase;
                         const patched = patchQtyLineOnUomChange(
-                          { qty: qtyMap[rowKey], factorToBase: prev?.factorToBase },
+                          { qty: qtyMap[rowKey], factorToBase: oldFactor },
                           uom,
                         );
                         setUomMap({
@@ -549,6 +583,16 @@ export default function PenerimaanPage() {
                           },
                         });
                         setQtyMap({ ...qtyMap, [rowKey]: patched.qty });
+                        if (rejectQtyMap[rowKey] != null && str(rejectQtyMap[rowKey]) !== '') {
+                          setRejectQtyMap({
+                            ...rejectQtyMap,
+                            [rowKey]: String(convertQtyBetweenUoms(
+                              rejectQtyMap[rowKey],
+                              oldFactor,
+                              uom,
+                            )),
+                          });
+                        }
                       }}
                     />
                   ) : (
@@ -562,7 +606,7 @@ export default function PenerimaanPage() {
                   <Input
                     type="number"
                     min={0}
-                    max={num(it.qtyOrdered)}
+                    max={maxQtyInCurrentUom || undefined}
                     step="any"
                     className="h-9"
                     value={str(qtyMap[rowKey])}
@@ -576,7 +620,7 @@ export default function PenerimaanPage() {
                   <Input
                     type="number"
                     min={0}
-                    max={num(it.qtyOrdered)}
+                    max={maxQtyInCurrentUom || undefined}
                     step="any"
                     className="h-9"
                     value={str(rejectQtyMap[rowKey], '0')}
@@ -652,8 +696,20 @@ export default function PenerimaanPage() {
               )}
             </div>
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-slate-400">Tanggal kirim</p>
-              <p className="font-medium">{doView?.tanggal ? formatDateTime(str(doView.tanggal)) : '—'}</p>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Minta kirim (PO)</p>
+              <p className="font-medium">
+                {str(doView?.tanggalPermintaanKirim)
+                  ? formatDate(str(doView?.tanggalPermintaanKirim))
+                  : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">Aktual kirim</p>
+              <p className="font-medium">
+                {str(doView?.tanggalAktualKirim || doView?.shippedAt || doView?.tanggal)
+                  ? formatDateTime(str(doView?.tanggalAktualKirim || doView?.shippedAt || doView?.tanggal))
+                  : '—'}
+              </p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-wide text-slate-400">Status</p>

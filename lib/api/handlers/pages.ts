@@ -13,16 +13,31 @@ import {
   encodeStringCursor,
 } from '@/lib/api/cursor-page';
 import { payableHutangFilter, approvalStatusFilter, stripHutangListSnapshot } from '@/lib/api/hutang-filters';
+import { loadPoRequestedShipDatesByNoPo } from '@/lib/api/grn-enrich';
 import { buildProductSearchFilter, mergeProductSearchWithVendorName, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import type { HandlerContext } from '@/types/api/handler';
 
-function mapHutangRow(h: Record<string, unknown>, today: Date) {
+function mapHutangRow(
+  h: Record<string, unknown>,
+  today: Date,
+  poDates: Record<string, Date> = {},
+) {
   const jatuh = h.jatuhTempo ? new Date(String(h.jatuhTempo)) : null;
   const overdue = jatuh && jatuh < today && h.status !== 'LUNAS';
-  return { ...stripHutangListSnapshot(h), overdue };
+  const noPO = String(h.noPO || '').trim();
+  const tanggalPermintaanKirim = h.tanggalPermintaanKirim
+    || (noPO ? poDates[noPO] : undefined)
+    || null;
+  const tanggalAktualKirim = h.tanggalAktualKirim || h.shippedAt || h.tanggal || null;
+  return {
+    ...stripHutangListSnapshot(h),
+    overdue,
+    tanggalPermintaanKirim,
+    tanggalAktualKirim,
+  };
 }
 
 export async function handlePages({
@@ -75,7 +90,7 @@ export async function handlePages({
   }
 
   if (route === '/pages/hutang') {
-    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     const status = url.searchParams.get('status') || '';
     const approvalStatus = url.searchParams.get('approvalStatus') || '';
@@ -99,7 +114,11 @@ export async function handlePages({
       .toArray();
     const today = new Date();
     const { items, hasMore } = sliceCursorPage(list, limit);
-    const mapped = items.map((h) => mapHutangRow(h as Record<string, unknown>, today));
+    const noPOs = items.map((h) => String((h as Record<string, unknown>).noPO || '')).filter(Boolean);
+    const poDates = tenantId
+      ? await loadPoRequestedShipDatesByNoPo(db, tenantId, noPOs)
+      : {};
+    const mapped = items.map((h) => mapHutangRow(h as Record<string, unknown>, today, poDates));
     const last = items[items.length - 1] as Record<string, unknown> | undefined;
     return ok({
       items: mapped,
