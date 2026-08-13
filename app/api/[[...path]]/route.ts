@@ -7,7 +7,6 @@ import { logger } from '@/lib/api/logger';
 import { captureException } from '@/lib/api/sentry';
 import { runWithRequestTrace } from '@/lib/execution/tracing/trace-context';
 import { getExecutionMetricsSnapshot } from '@/lib/execution/metrics/prometheus';
-import { refreshObservabilityGauges } from '@/lib/execution/metrics/observability-collector';
 import { refreshGrnInvoiceSyncGauges } from '@/lib/api/grn-invoice-sync-metrics';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
@@ -76,7 +75,8 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       try {
         metricsDb = await connectToMongo();
         if (metricsDb) {
-          await refreshObservabilityGauges(metricsDb);
+          // Jangan panggil refreshObservabilityGauges di sini — snapshot di bawah
+          // sudah refresh (hindari double Redis client / scrape leak).
           await refreshGrnInvoiceSyncGauges(metricsDb);
         }
       } catch {
