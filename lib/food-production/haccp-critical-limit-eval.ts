@@ -12,11 +12,29 @@ export type CriticalLimitLike = Pick<
   'operator' | 'value' | 'valueMax' | 'unit' | 'note' | 'parameter' | 'label' | 'key'
 >;
 
+/** Input longgar — UI/API sering kirim criticalLimit parsial tanpa key/parameter. */
+export type TemplateLimitSource = {
+  key: string;
+  label: string;
+  criticalLimitNote?: string | null;
+  criticalLimit?: {
+    key?: string;
+    parameter?: string;
+    label?: string;
+    operator?: string;
+    value?: number;
+    valueMax?: number;
+    unit?: string;
+    durationMinutes?: number;
+    note?: string;
+  } | null;
+};
+
 /**
  * Resolve limit dari template item: structured dulu, lalu parse note legacy.
  */
 export function resolveTemplateCriticalLimit(
-  item: Pick<HaccpTemplateItem, 'key' | 'label' | 'criticalLimit' | 'criticalLimitNote'>,
+  item: TemplateLimitSource,
 ): CriticalLimitLike | null {
   const cl = item.criticalLimit;
   if (cl && cl.operator) {
@@ -29,7 +47,7 @@ export function resolveTemplateCriticalLimit(
       value: cl.value,
       valueMax: cl.valueMax,
       unit: cl.unit,
-      note: cl.note || item.criticalLimitNote,
+      note: cl.note || item.criticalLimitNote || undefined,
     };
   }
   const note = String(item.criticalLimitNote || '').trim();
@@ -42,9 +60,7 @@ export function resolveTemplateCriticalLimit(
 }
 
 /** True bila limit numerik bisa auto-eval (bukan TEXT). */
-export function isNumericAutoEvalLimit(
-  item: Pick<HaccpTemplateItem, 'key' | 'label' | 'criticalLimit' | 'criticalLimitNote'>,
-): boolean {
+export function isNumericAutoEvalLimit(item: TemplateLimitSource): boolean {
   const limit = resolveTemplateCriticalLimit(item);
   if (!limit) return false;
   return String(limit.operator || '').toUpperCase() !== 'TEXT';
