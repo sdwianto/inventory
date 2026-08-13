@@ -98,6 +98,18 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
   // kalau 3-way match per-baris invoice ini sudah MATCHED.
   const poGate = poReceived || hutang.matchStatus === 'MATCHED';
 
+  const tanggalPermintaanKirim = hutang.tanggalPermintaanKirim
+    || po?.tanggalKedatangan
+    || grns.find((g) => g.tanggalPermintaanKirim)?.tanggalPermintaanKirim
+    || null;
+  const grnAktual = grns.find((g) => g.tanggalAktualKirim || g.shippedAt || g.tanggal);
+  const tanggalAktualKirim = hutang.tanggalAktualKirim
+    || hutang.shippedAt
+    || grnAktual?.tanggalAktualKirim
+    || grnAktual?.shippedAt
+    || grnAktual?.tanggal
+    || null;
+
   return {
     po: po ? {
       id: po.id,
@@ -105,6 +117,7 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
       status: po.status,
       estimasiTotal: po.estimasiTotal,
       vendorSoSnapshot: po.vendorSoSnapshot,
+      tanggalKedatangan: po.tanggalKedatangan || null,
       poReceived,
     } : null,
     grns: grns.map((g) => ({
@@ -113,7 +126,11 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
       status: g.status,
       receivedTotal: g.receivedTotal,
       postedAt: g.postedAt,
+      tanggalPermintaanKirim: g.tanggalPermintaanKirim || null,
+      tanggalAktualKirim: g.tanggalAktualKirim || g.shippedAt || g.tanggal || null,
     })),
+    tanggalPermintaanKirim,
+    tanggalAktualKirim,
     canApprove: (hutang.approvalStatus || hutang.status) === 'PENDING_REVIEW'
       && (poGate || (!po && hasPostedGrn)),
   };

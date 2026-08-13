@@ -71,6 +71,11 @@ export default function VendorInvoiceThermal({
       {str(detail.noPO) ? <div className="receipt-line receipt-wrap">PO   : {str(detail.noPO)}</div> : null}
       {str(detail.noSO) ? <div className="receipt-line">SO   : {str(detail.noSO)}</div> : null}
       {str(detail.noDO) ? <div className="receipt-line">DO   : {str(detail.noDO)}</div> : null}
+      {str(detail.tanggalPermintaanKirim || asObject(detail.po).tanggalKedatangan) ? (
+        <div className="receipt-line">
+          Minta: {formatDate(str(detail.tanggalPermintaanKirim || asObject(detail.po).tanggalKedatangan))}
+        </div>
+      ) : null}
       {str(detail.paymentTerms) ? <div className="receipt-line">Bayar: {str(detail.paymentTerms)}</div> : null}
       {str(detail.jatuhTempo) ? <div className="receipt-line">Jth  : {formatDate(str(detail.jatuhTempo))}</div> : null}
       <div className="line" />

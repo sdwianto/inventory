@@ -123,17 +123,17 @@ function ItemTable({
     <table className="w-full text-[11px] border-collapse table-fixed leading-snug">
       <colgroup>
         <col style={{ width: '22px' }} />
-        <col style={{ width: '58px' }} />
+        <col style={{ width: '56px' }} />
         <col />
         <col style={{ width: '28px' }} />
         <col style={{ width: '32px' }} />
-        <col style={{ width: '52px' }} />
-        <col style={{ width: '52px' }} />
-        {showVendorColumn && <col style={{ width: '72px' }} />}
-        <col style={{ width: '86px' }} />
-        <col style={{ width: '78px' }} />
-        <col style={{ width: '78px' }} />
-        <col style={{ width: '78px' }} />
+        <col style={{ width: '48px' }} />
+        <col style={{ width: '48px' }} />
+        {showVendorColumn && <col style={{ width: '128px' }} />}
+        <col style={{ width: '82px' }} />
+        <col style={{ width: '72px' }} />
+        <col style={{ width: '72px' }} />
+        <col style={{ width: '72px' }} />
       </colgroup>
       <thead>
         <tr className="bg-orange-500 text-white">
@@ -177,7 +177,7 @@ function ItemTable({
             </td>
             {showVendorColumn && (
               <td
-                className="border border-slate-200 px-0.5 py-1 text-[10px] font-medium text-orange-800 truncate"
+                className="border border-slate-200 px-1 py-1 text-[10px] font-medium text-orange-800 break-words leading-snug"
                 title={row.vendor}
               >
                 {row.vendor}

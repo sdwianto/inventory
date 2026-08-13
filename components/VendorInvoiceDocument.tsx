@@ -158,6 +158,22 @@ export default function VendorInvoiceDocument({
           <div><span className="text-slate-500 block">No. SO</span><span className="font-mono">{str(detail.noSO, '—')}</span></div>
           <div><span className="text-slate-500 block">No. DO</span><span className="font-mono">{str(detail.noDO, '—')}</span></div>
           <div><span className="text-slate-500 block">Syarat bayar</span><span>{str(detail.paymentTerms, '—')}</span></div>
+          <div>
+            <span className="text-slate-500 block" title="Tanggal permintaan kedatangan barang dari PO">Minta kedatangan</span>
+            <span className="font-medium">
+              {str(detail.tanggalPermintaanKirim || asObject(detail.po).tanggalKedatangan)
+                ? formatDate(str(detail.tanggalPermintaanKirim || asObject(detail.po).tanggalKedatangan))
+                : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block" title="Tanggal aktual kirim / penerimaan">Aktual kirim</span>
+            <span className="font-medium">
+              {str(detail.tanggalAktualKirim || detail.shippedAt || detail.tanggal)
+                ? formatDate(str(detail.tanggalAktualKirim || detail.shippedAt || detail.tanggal))
+                : '—'}
+            </span>
+          </div>
           <div><span className="text-slate-500 block">Status PO</span><span>{str(po.status, '—')}</span></div>
           <div><span className="text-slate-500 block">Match GRN</span><span>{str(detail.matchStatus, '—')}</span></div>
         </div>
