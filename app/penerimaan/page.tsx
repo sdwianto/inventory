@@ -29,7 +29,7 @@ import LineUomSelect from '@/components/uom/LineUomSelect';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { fetchProductUomsForIds } from '@/lib/hooks/use-product-uoms';
 import { convertQtyBetweenUoms, patchQtyLineOnUomChange } from '@/lib/uom/line-patch';
-import { resolveGrnReceiveLineUom } from '@/lib/uom/line-ui';
+import { reconcileLineQtyBase, resolveGrnReceiveLineUom } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 
@@ -140,6 +140,8 @@ export default function PenerimaanPage() {
   const [rejectReasonMap, setRejectReasonMap] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<string[]>([]);
   const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
+  /** qtyBase kirim (sudah direkonsiliasi) — untuk max qty saat satuan diganti. */
+  const [orderedBaseMap, setOrderedBaseMap] = useState<Record<string, number>>({});
   const [doView, setDoView] = useState<JsonObject | null>(null);
   const [loadingDo, setLoadingDo] = useState('');
   const [replayingInvoice, setReplayingInvoice] = useState('');
@@ -281,6 +283,7 @@ export default function PenerimaanPage() {
       const initQty: JsonObject = {};
       const initGudang: JsonObject = {};
       const initUom: Record<string, { uomId?: string; satuan?: string; factorToBase?: number }> = {};
+      const initOrderedBase: Record<string, number> = {};
       for (const [idx, it] of detailItems.entries()) {
         const key = itemRowKey(it, idx);
         const embedded = it.product as JsonObject | undefined;
@@ -295,6 +298,7 @@ export default function PenerimaanPage() {
           factorToBase: it.factorToBase,
         });
         initQty[key] = resolved.qty;
+        initOrderedBase[key] = resolved.qtyBase;
         initUom[key] = {
           uomId: resolved.uom?.id || str(it.uomId) || undefined,
           satuan: resolved.uom?.satuan || str(it.satuan) || undefined,
@@ -304,6 +308,7 @@ export default function PenerimaanPage() {
       setQtyMap(initQty);
       setGudangMap(initGudang);
       setUomMap(initUom);
+      setOrderedBaseMap(initOrderedBase);
       setRejectQtyMap({});
       setRejectReasonMap({});
       setPhotos([]);
@@ -532,14 +537,22 @@ export default function PenerimaanPage() {
               const uomRow = uomMap[rowKey];
               const rejectQty = num(rejectQtyMap[rowKey]);
               const factor = Number(uomRow?.factorToBase) > 0 ? Number(uomRow.factorToBase) : 1;
-              const qtyOrderedBase = (() => {
-                if (it.qtyBase != null && it.qtyBase !== '' && Number.isFinite(num(it.qtyBase))) {
-                  return num(it.qtyBase);
+              const kirimSat = str(it.satuan).toUpperCase();
+              const curSat = str(uomRow?.satuan || it.satuan).toUpperCase();
+              /** Jangan percaya it.factorToBase/qtyBase mentah — pakai base hasil openPost atau qty kirim. */
+              const maxQtyInCurrentUom = (() => {
+                if (kirimSat && curSat === kirimSat) {
+                  return Math.round(num(it.qtyOrdered) * 1000) / 1000;
                 }
-                const orderedFactor = Number(it.factorToBase) > 0 ? Number(it.factorToBase) : factor;
-                return num(it.qtyOrdered) * orderedFactor;
+                const base = Number.isFinite(orderedBaseMap[rowKey])
+                  ? orderedBaseMap[rowKey]
+                  : reconcileLineQtyBase({
+                    qtyOrdered: num(it.qtyOrdered),
+                    orderedFactor: Number(it.factorToBase) > 0 ? Number(it.factorToBase) : factor,
+                    qtyBaseHint: it.qtyBase,
+                  });
+                return Math.round((base / factor) * 1000) / 1000;
               })();
-              const maxQtyInCurrentUom = Math.round((qtyOrderedBase / factor) * 1000) / 1000;
               return (
               <div key={rowKey} className="border rounded p-2 space-y-2">
               <div

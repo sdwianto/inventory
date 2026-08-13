@@ -5,6 +5,7 @@ import { resolveVendorTenantName } from '@/lib/api/grn-enrich';
 import { ensureUniqueLineIds } from '@/lib/api/grn-line-ids';
 import { loadProductMaps, resolveFromMaps } from '@/lib/api/grn-resolve-products';
 import { listProductUoms } from '@/lib/api/product-uom';
+import { reconcileLineQtyBase } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import type { JsonObject } from '@/types/json';
 
@@ -41,9 +42,11 @@ export async function resolveLocalUomForGrnLine(
         uomId: local.id,
         satuan: local.satuan,
         factorToBase: local.factorToBase,
-        qtyBase: qtyBaseFromWebhook != null && !Number.isNaN(qtyBaseFromWebhook)
-          ? qtyBaseFromWebhook
-          : qty * local.factorToBase,
+        qtyBase: reconcileLineQtyBase({
+          qtyOrdered: qty,
+          orderedFactor: local.factorToBase,
+          qtyBaseHint: qtyBaseFromWebhook,
+        }),
       };
     }
   }
@@ -56,9 +59,11 @@ export async function resolveLocalUomForGrnLine(
         uomId: bySat.id,
         satuan: bySat.satuan,
         factorToBase: bySat.factorToBase,
-        qtyBase: qtyBaseFromWebhook != null && !Number.isNaN(qtyBaseFromWebhook)
-          ? qtyBaseFromWebhook
-          : qty * bySat.factorToBase,
+        qtyBase: reconcileLineQtyBase({
+          qtyOrdered: qty,
+          orderedFactor: bySat.factorToBase,
+          qtyBaseHint: qtyBaseFromWebhook,
+        }),
       };
     }
   }

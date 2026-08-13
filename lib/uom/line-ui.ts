@@ -34,8 +34,28 @@ export function findUomByIdOrSatuan(
 }
 
 /**
- * Inisialisasi baris Terima Barang: qty tampilan = qtyBase ÷ faktor satuan aktif.
- * qtyOrdered selalu diinterpretasikan dalam satuan baris (uomId/satuan GRN), bukan default produk.
+ * qtyBase harus = qtyOrdered × faktor satuan kirim.
+ * Webhook/sales sering kirim qtyBase = qtyOrdered (salah) → Terima Barang jadi 2,7 KG dari 27 KG.
+ */
+export function reconcileLineQtyBase(opts: {
+  qtyOrdered: number;
+  orderedFactor: number;
+  qtyBaseHint?: unknown;
+}): number {
+  const qtyOrdered = Number.isFinite(opts.qtyOrdered) ? opts.qtyOrdered : 0;
+  const factor = opts.orderedFactor > 0 ? opts.orderedFactor : 1;
+  const derived = qtyOrdered * factor;
+  const raw = parseFloat(String(opts.qtyBaseHint ?? ''));
+  if (!Number.isFinite(raw) || raw < 0) return derived;
+  const tol = Math.max(0.001, Math.abs(derived) * 0.001);
+  if (Math.abs(raw - derived) <= tol) return raw;
+  return derived;
+}
+
+/**
+ * Inisialisasi baris Terima Barang.
+ * Prioritas tampilan: satuan label "kirim" (DO) → uomId → default produk.
+ * qtyOrdered selalu dalam satuan kirim; qtyBase yang inkonsisten diabaikan.
  */
 export function resolveGrnReceiveLineUom(input: {
   uoms: ProductUom[];
@@ -58,21 +78,24 @@ export function resolveGrnReceiveLineUom(input: {
   const bySat = sat ? uoms.find((u) => u.satuan === sat) : undefined;
   /** Satuan yang menjelaskan qtyOrdered / label "kirim". */
   const orderedUom = bySat || byId || null;
-  const displayUom = byId || bySat || pickDefaultUom(uoms);
+  /** Prefer satuan kirim agar dropdown = label DO (bukan ONS default dari uomId salah). */
+  const displayUom = bySat || byId || pickDefaultUom(uoms);
 
   const qtyOrdered = parseFloat(String(input.qtyOrdered ?? 0)) || 0;
-  const rawBase = parseFloat(String(input.qtyBase ?? ''));
-  let qtyBase = Number.isFinite(rawBase) && rawBase >= 0 ? rawBase : NaN;
-  if (!Number.isFinite(qtyBase)) {
-    if (orderedUom) {
-      qtyBase = qtyOrdered * uomFactorOf(orderedUom);
-    } else {
-      const f = lineUomFactor(input.factorToBase as number | undefined);
-      qtyBase = qtyOrdered * f;
-    }
-  }
+  const orderedFactor = orderedUom
+    ? uomFactorOf(orderedUom)
+    : lineUomFactor(input.factorToBase as number | undefined);
+  const qtyBase = reconcileLineQtyBase({
+    qtyOrdered,
+    orderedFactor,
+    qtyBaseHint: input.qtyBase,
+  });
 
   const factorToBase = displayUom ? uomFactorOf(displayUom) : 1;
+  /** Hindari drift float: jika satuan tampilan = satuan kirim, qty = qtyOrdered. */
+  if (displayUom && orderedUom && displayUom.id === orderedUom.id) {
+    return { uom: displayUom, qty: qtyOrdered, qtyBase, factorToBase };
+  }
   const qty = qtyInUom(qtyBase, displayUom);
   return { uom: displayUom, qty, qtyBase, factorToBase };
 }
