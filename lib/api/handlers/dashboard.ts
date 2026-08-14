@@ -8,7 +8,18 @@ import { warehouseLabel, WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import { fetchMaintenanceDashboardStats } from '@/lib/api/maintenance-dashboard-stats';
 import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
 import type { HandlerContext } from '@/types/api/handler';
+import type { AuthContext } from '@/types/auth';
 import { getDashboardSnapshot, setDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import {
+  approvedVendorInvoiceMatch,
+  buildSpendingMonths,
+  foldInventoryByWarehouse,
+  grnSummaryFromAgg,
+  resolveDashboardUnitCost,
+  type GrnStatusAggRow,
+  type InventoryStockRow,
+  type MonthAggRow,
+} from '@/lib/api/dashboard-metrics';
 
 const PO_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Draft',
@@ -42,72 +53,10 @@ const PO_COLORS: Record<string, string> = {
   REJECTED: '#ef4444',
 };
 
-const APPROVED_SPENDING = new Set(['APPROVED', 'PAID_EXTERNAL', 'OUTSTANDING', 'PARTIAL', 'LUNAS']);
-
-interface MonthAggRow {
-  _id: string;
-  total?: number;
-  count?: number;
-}
-
-interface SpendingMonth {
-  month: string;
-  label: string;
-  total: number;
-  count: number;
-}
-
-interface GrnStatusAggRow {
-  _id?: string;
-  count?: number;
-}
-
-interface InventoryAggRow {
-  _id: string;
-  qty?: number;
-  nilai?: number;
-  skuCount?: number;
-}
-
-function grnSummaryFromAgg(rows: GrnStatusAggRow[]) {
-  const map = Object.fromEntries(rows.map((r) => [r._id || 'UNKNOWN', r.count || 0]));
-  const total = rows.reduce((s, r) => s + (r.count || 0), 0);
-  return {
-    grn: total,
-    draft: map.DRAFT || 0,
-    unknownProduct: (map.UNKNOWN_PRODUCT || 0) + (map.NEEDS_MAPPING || 0),
-  };
-}
-
-function monthLabel(ym: string): string {
-  const [y, m] = String(ym).split('-');
-  const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
-  return d.toLocaleDateString('id-ID', { month: 'short', year: '2-digit' });
-}
-
-function buildSpendingMonths(now: Date, aggRows: MonthAggRow[]): SpendingMonth[] {
-  const map = Object.fromEntries(aggRows.map((r) => [r._id, r]));
-  const months: SpendingMonth[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const row = map[key];
-    months.push({
-      month: key,
-      label: monthLabel(key),
-      total: row?.total || 0,
-      count: row?.count || 0,
-    });
-  }
-  return months;
-}
-
-async function aggregateInventoryByWarehouse(
-  db: Db,
-  tenantStok: Record<string, unknown>,
-): Promise<InventoryAggRow[]> {
-  const rows = await db.collection('stok_lokasi').aggregate([
-    { $match: tenantStok },
+async function aggregateInventoryByWarehouse(db: Db, scopeAuth: AuthContext) {
+  const stockScope = withTenantFilter(scopeAuth, { lokasiKode: { $in: [...WAREHOUSE_CODES] } });
+  const grouped = await db.collection('stok_lokasi').aggregate([
+    { $match: stockScope },
     {
       $group: {
         _id: { lokasi: '$lokasiKode', stokId: '$stokId' },
@@ -116,37 +65,25 @@ async function aggregateInventoryByWarehouse(
     },
   ]).toArray();
 
-  const stokIds = [...new Set(rows.map((r) => String(r._id?.stokId || '')).filter(Boolean))];
+  const rows: InventoryStockRow[] = grouped.map((r) => ({
+    lokasiKode: String(r._id?.lokasi || 'GKERING'),
+    stokId: String(r._id?.stokId || ''),
+    qty: Number(r.qty) || 0,
+  }));
+
+  const stokIds = [...new Set(rows.map((r) => r.stokId).filter(Boolean))];
   const priceMap = new Map<string, number>();
   if (stokIds.length) {
-    const { lokasiKode: _drop, ...tenantOnly } = tenantStok as { lokasiKode?: unknown };
     const products = await db.collection('products')
-      .find({ ...tenantOnly, id: { $in: stokIds } })
-      .project({ id: 1, hargaBeli: 1 })
+      .find(withTenantFilter(scopeAuth, { id: { $in: stokIds } }))
+      .project({ id: 1, hargaBeli: 1, vendorHargaBeli: 1 })
       .toArray();
     for (const p of products) {
-      priceMap.set(String(p.id), parseInt(String(p.hargaBeli || 0), 10) || 0);
+      priceMap.set(String(p.id), resolveDashboardUnitCost(p));
     }
   }
 
-  const invMap: Record<string, { qty: number; nilai: number; skuCount: number }> = {};
-  for (const row of rows) {
-    const kode = String(row._id?.lokasi || 'GKERING');
-    const qty = parseFloat(String(row.qty || 0)) || 0;
-    const harga = priceMap.get(String(row._id?.stokId || '')) || 0;
-    const cur = invMap[kode] || { qty: 0, nilai: 0, skuCount: 0 };
-    cur.qty += qty;
-    cur.nilai += qty * harga;
-    cur.skuCount += 1;
-    invMap[kode] = cur;
-  }
-
-  return WAREHOUSE_CODES.map((kode) => ({
-    _id: kode,
-    qty: invMap[kode]?.qty || 0,
-    nilai: invMap[kode]?.nilai || 0,
-    skuCount: invMap[kode]?.skuCount || 0,
-  }));
+  return foldInventoryByWarehouse(rows, priceMap);
 }
 
 export async function handleDashboard({
@@ -176,10 +113,9 @@ export async function handleDashboard({
   const tenantPo = withTenantFilter(scopeAuth, {});
   const tenantGrn = withTenantFilter(scopeAuth, {});
   const tenantProducts = withTenantFilter(scopeAuth, { aktif: true });
-  const tenantStok = withTenantFilter(scopeAuth, { lokasiKode: { $in: WAREHOUSE_CODES } });
-  const tenantHutang = withTenantFilter(scopeAuth, {
+  const tenantApprovedHutang = withTenantFilter(scopeAuth, {
     referenceType: 'VENDOR_INVOICE',
-    approvalStatus: { $nin: ['PENDING_REVIEW', 'REJECTED'] },
+    ...approvedVendorInvoiceMatch(),
   });
 
   const [
@@ -206,22 +142,14 @@ export async function handleDashboard({
       withTenantFilter(scopeAuth, hutangPendingReviewFilter()),
     ),
     db.collection('hutang').aggregate([
-      {
-        $match: {
-          ...withTenantFilter(scopeAuth, { referenceType: 'VENDOR_INVOICE' }),
-          $or: [
-            { approvalStatus: { $in: [...APPROVED_SPENDING] } },
-            { status: { $in: [...APPROVED_SPENDING] }, approvalStatus: { $exists: false } },
-          ],
-        },
-      },
+      { $match: tenantApprovedHutang },
       { $addFields: { expenseDate: { $ifNull: ['$approvedAt', '$tanggal'] } } },
       { $match: { expenseDate: { $gte: monthStart } } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$total', 0] } } } },
     ]).toArray(),
-    aggregateInventoryByWarehouse(db, tenantStok),
+    aggregateInventoryByWarehouse(db, scopeAuth),
     db.collection('hutang').aggregate([
-      { $match: tenantHutang },
+      { $match: tenantApprovedHutang },
       {
         $addFields: {
           expenseDate: { $ifNull: ['$approvedAt', '$tanggal'] },
@@ -275,7 +203,7 @@ export async function handleDashboard({
       ...grnSummary,
       produk: productCount,
       pendingReview,
-      approvedMonth: approvedMonthRow?.total || 0,
+      approvedMonth: Math.round(approvedMonthRow?.total || 0),
     },
     poByStatus,
     inventoryByWarehouse,

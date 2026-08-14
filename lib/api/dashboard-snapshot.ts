@@ -3,6 +3,7 @@
 import type { Db } from 'mongodb';
 import { createHash } from 'crypto';
 import type { AuthContext } from '@/types/auth';
+import { DASHBOARD_SNAPSHOT_VERSION } from '@/lib/api/dashboard-metrics';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 
 const COLLECTION = 'dashboard_snapshots';
@@ -44,6 +45,7 @@ export async function getDashboardSnapshot(
   const row = await db.collection(COLLECTION).findOne({
     tenantId,
     scopeHash: hash,
+    version: DASHBOARD_SNAPSHOT_VERSION,
     expiresAt: { $gt: new Date() },
   });
   return (row?.payload as Record<string, unknown> | undefined) || null;
@@ -64,6 +66,7 @@ export async function setDashboardSnapshot(
       $set: {
         tenantId,
         scopeHash: hash,
+        version: DASHBOARD_SNAPSHOT_VERSION,
         payload,
         updatedAt: now,
         expiresAt: new Date(now.getTime() + TTL_MS),
