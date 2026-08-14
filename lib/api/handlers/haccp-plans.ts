@@ -287,7 +287,7 @@ export async function handleHaccpPlans(ctx: HandlerContext): Promise<NextRespons
     if (b.markValidated === true) {
       const byName = String(b.validatedByName || '').trim() || actor.userName || '';
       if (!byName) return err('Nama validator wajib saat menandai rencana tervalidasi', 400);
-      if (!String(b.validationNote ?? existing.validationNote || '').trim()
+      if (!String(b.validationNote ?? existing.validationNote ?? '').trim()
         && !idList(b.validationEvidenceUrls ?? existing.validationEvidenceUrls).length) {
         return err('Catatan atau foto validasi wajib', 400);
       }
