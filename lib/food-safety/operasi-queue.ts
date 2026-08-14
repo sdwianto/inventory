@@ -2,7 +2,6 @@
  * Gelombang C — antrian "Wajib hari ini" dari rencana HACCP ACTIVE.
  */
 
-import type { HaccpCcp, HaccpMonitoringPlan } from '@/lib/food-production/haccp-plan';
 import { normalizeHaccpTemplateKodeHint } from '@/lib/food-production/haccp-plan';
 
 export type OperasiQueueItem = {
@@ -15,8 +14,15 @@ export type OperasiQueueItem = {
 
 export function buildOperasiCcpQueue(plan: {
   id: string;
-  monitoringPlans?: HaccpMonitoringPlan[];
-  ccps?: HaccpCcp[];
+  monitoringPlans?: Array<{
+    key: string;
+    ccpKey: string;
+    method?: string;
+    frequency?: string;
+    responsibleRole?: string;
+    templateKodeHint?: string;
+  }>;
+  ccps?: Array<{ key: string; nama: string }>;
 }): OperasiQueueItem[] {
   const ccpByKey = new Map((plan.ccps || []).map((c) => [c.key, c]));
   const items: OperasiQueueItem[] = [];
