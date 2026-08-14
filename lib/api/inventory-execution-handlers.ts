@@ -240,5 +240,6 @@ export async function executeSandboxResetJob(
     tenantId: payload.tenantId ? String(payload.tenantId) : undefined,
     includeSales: payload.includeSales !== false,
     preserveJobId: jobId,
+    profile: payload.profile as string | undefined,
   });
 }

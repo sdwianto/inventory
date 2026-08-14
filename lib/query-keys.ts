@@ -102,7 +102,7 @@ export const queryKeys = {
   sandbox: {
     all: ['sandbox'] as const,
     status: ['sandbox', 'status'] as const,
-    preview: (params: { tenantId?: string; includeSales?: boolean } = {}) =>
+    preview: (params: { tenantId?: string; includeSales?: boolean; profile?: string } = {}) =>
       ['sandbox', 'preview', params] as const,
   },
   maintenance: {

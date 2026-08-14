@@ -19,8 +19,10 @@ import {
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import { ensureOpenKaIssue } from '@/lib/kitchen-assurance/auto-issue';
+import { ensureOpenFollowUpForCase } from '@/lib/kitchen-assurance/auto-follow-up';
 import { KA_SAFETY_CASES_COLLECTION } from '@/lib/kitchen-assurance/safety-case';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { buildHaccpHoldRepairHrefs } from '@/lib/food-safety/hold-repair-href';
 
 export type HaccpBatchHoldActor = {
   userId?: string;
@@ -44,7 +46,18 @@ export type ApplyHaccpHoldResult = {
   held: boolean;
   skipped?: string;
   foodSafetyStatus?: string;
-  kaIssue?: { noDokumen?: string; created?: boolean; skipped?: string };
+  kaIssue?: {
+    id?: string;
+    noDokumen?: string;
+    created?: boolean;
+    skipped?: string;
+    /** Deep-link Gelombang C — Temuan dengan konteks case + batch. */
+    temuanHref?: string;
+    /** Langsung ke unggah bukti follow-up (≤2 klik). */
+    followUpHref?: string;
+    followUpId?: string;
+    followUpNo?: string;
+  };
   error?: string;
 };
 
@@ -129,6 +142,7 @@ export async function applyHaccpHoldToBatch(
   if (input.openSafetyCase !== false) {
     try {
       const sourceKey = `haccp-hold:${input.haccpResultId}`;
+      const temuanHrefBase = `/kitchen-assurance/temuan?batch=${encodeURIComponent(batchId)}`;
       const ensured = await ensureOpenKaIssue(db, {
         tenantId: input.tenantId,
         sourceKey,
@@ -144,7 +158,7 @@ export async function applyHaccpHoldToBatch(
         kitchenNama: batch.kitchenNama,
         batchId,
         planId: batch.productionPlanId,
-        sourceHref: `/food-production/haccp?batch=${encodeURIComponent(batchId)}`,
+        sourceHref: temuanHrefBase,
         actor,
       });
       // Backfill batchId pada case lama yang dibuat sebelum field diisi.
@@ -160,10 +174,49 @@ export async function applyHaccpHoldToBatch(
           },
         );
       }
+      let followUpId: string | undefined;
+      let followUpNo: string | undefined;
+      try {
+        const fu = await ensureOpenFollowUpForCase(db, {
+          tenantId: input.tenantId,
+          safetyCase: ensured.case,
+          title: `Perbaikan HACCP · ${batch.batchNo || batchId}`,
+          description: buildHaccpHoldReason(labels, {
+            noDokumen: input.haccpNoDokumen,
+            batchNo: batch.batchNo,
+          }),
+          priority: 'CRITICAL',
+          actor,
+        });
+        followUpId = fu.followUp.id;
+        followUpNo = fu.followUp.noDokumen;
+      } catch (fuErr) {
+        console.warn(
+          '[haccp-hold] ensureOpenFollowUpForCase failed:',
+          fuErr instanceof Error ? fuErr.message : fuErr,
+        );
+      }
+      const hrefs = buildHaccpHoldRepairHrefs({
+        caseId: ensured.case.id,
+        batchId,
+        followUpId,
+      });
+      // Perbarui sourceHref dengan caseId setelah case tersedia.
+      if (ensured.case.sourceHref !== hrefs.temuanHref) {
+        await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+          { id: ensured.case.id, tenantId: input.tenantId },
+          { $set: { sourceHref: hrefs.temuanHref, updatedAt: now } },
+        );
+      }
       kaIssue = {
+        id: ensured.case.id,
         noDokumen: ensured.case.noDokumen,
         created: ensured.created,
         skipped: ensured.skipped,
+        temuanHref: hrefs.temuanHref,
+        followUpHref: hrefs.followUpHref,
+        followUpId,
+        followUpNo,
       };
       if (ensured.created) {
         await writeAuditLog(db, {

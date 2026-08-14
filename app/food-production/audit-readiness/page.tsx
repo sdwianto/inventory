@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { ClipboardCheck, RefreshCw, Search } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   AUDIT_READINESS_STATUS_LABELS,
   type AuditReadinessSnapshot,
@@ -72,12 +73,18 @@ export default function FoodSafetyAuditPage() {
       <OperationalScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/audit', label: 'Siap audit' },
+              { label: 'Panel kesiapan' },
+            ]}
+          />
+          <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight">
             <ClipboardCheck className="h-5 w-5" />
-            Audit Readiness
+            Panel kesiapan audit
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Agregasi evidence BGN/PRP + HACCP + traceability candidate-lot (bukan sertifikasi).
+            Agregasi bukti prasyarat + HACCP + telusur lot (bukan sertifikasi resmi).
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -99,15 +106,29 @@ export default function FoodSafetyAuditPage() {
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {snap.pillars.map((p) => (
-              <div key={p.key} className="rounded-lg border p-3">
-                <div className={`text-sm font-semibold ${statusClass(p.status)}`}>
-                  {AUDIT_READINESS_STATUS_LABELS[p.status]}
+            {snap.pillars.map((p) => {
+              const inner = (
+                <>
+                  <div className={`text-sm font-semibold ${statusClass(p.status)}`}>
+                    {AUDIT_READINESS_STATUS_LABELS[p.status]}
+                  </div>
+                  <div className="font-medium text-sm mt-1">{p.label}</div>
+                  <p className="text-xs text-muted-foreground mt-1">{p.detail}</p>
+                </>
+              );
+              if (p.href && p.status !== 'READY') {
+                return (
+                  <Link key={p.key} href={p.href} className="rounded-lg border p-3 hover:border-slate-400">
+                    {inner}
+                  </Link>
+                );
+              }
+              return (
+                <div key={p.key} className="rounded-lg border p-3">
+                  {inner}
                 </div>
-                <div className="font-medium text-sm mt-1">{p.label}</div>
-                <p className="text-xs text-muted-foreground mt-1">{p.detail}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="overflow-hidden rounded-lg border">
@@ -120,7 +141,7 @@ export default function FoodSafetyAuditPage() {
                 <tr>
                   <th className="p-2">Kode</th>
                   <th className="p-2">Requirement</th>
-                  <th className="p-2">sourceRef</th>
+                  <th className="p-2">Dasar</th>
                   <th className="p-2">Evidence</th>
                 </tr>
               </thead>
@@ -128,10 +149,22 @@ export default function FoodSafetyAuditPage() {
                 {snap.bgnRequirements.map((r) => (
                   <tr key={r.requirementId} className="border-t">
                     <td className="p-2 font-mono text-xs">{r.kode}</td>
-                    <td className="p-2">{r.nama}</td>
-                    <td className="p-2 text-xs text-muted-foreground">{r.sourceRef || '—'}</td>
+                    <td className="p-2">
+                      {r.href ? (
+                        <Link href={r.href} className="text-blue-700 hover:underline">
+                          {r.nama}
+                        </Link>
+                      ) : (
+                        r.nama
+                      )}
+                    </td>
+                    <td className="p-2 text-xs text-muted-foreground">{r.bgnCode || r.sourceRef || '—'}</td>
                     <td className={`p-2 text-xs ${r.hasEvidence ? 'text-emerald-700' : 'text-red-700'}`}>
-                      {r.hasEvidence ? 'Ada' : 'Belum'}
+                      {r.hasEvidence ? 'Ada' : (
+                        r.href ? (
+                          <Link href={r.href} className="text-red-700 underline">Belum — buka Setup</Link>
+                        ) : 'Belum'
+                      )}
                     </td>
                   </tr>
                 ))}

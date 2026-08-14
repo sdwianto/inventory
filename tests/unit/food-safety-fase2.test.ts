@@ -74,22 +74,32 @@ describe('ADR-004 Fase 2 — program seed & periode', () => {
   });
 
   it('ensureFoodSafetyProgramsSeeded idempoten', async () => {
-    const store = { programs: [] as unknown[], requirements: [] as unknown[] };
+    const store = { programs: [] as Array<Record<string, unknown>>, requirements: [] as Array<Record<string, unknown>> };
+    const chain = (rows: unknown[]) => ({
+      project: () => ({ toArray: async () => rows }),
+      toArray: async () => rows,
+    });
     const db = {
       collection: (name: string) => ({
         countDocuments: async () => (
           name === 'food_safety_programs' ? store.programs.length : store.requirements.length
         ),
-        insertMany: async (docs: unknown[]) => {
+        insertMany: async (docs: Array<Record<string, unknown>>) => {
           if (name === 'food_safety_programs') store.programs.push(...docs);
           else store.requirements.push(...docs);
         },
+        find: () => chain(
+          name === 'food_safety_programs' ? store.programs : store.requirements,
+        ),
+        updateOne: async () => ({ modifiedCount: 1 }),
       }),
     };
     const first = await ensureFoodSafetyProgramsSeeded(db as never, 't1');
     expect(first.seeded).toBe(true);
     expect(first.programs).toBe(11);
     expect(first.requirements).toBeGreaterThan(11);
+    expect(store.requirements.some((r) => r.kode === 'STOR-03')).toBe(true);
+    expect(store.requirements.some((r) => r.requirementGroup === 'PRE-04')).toBe(true);
 
     const second = await ensureFoodSafetyProgramsSeeded(db as never, 't1');
     expect(second.seeded).toBe(false);

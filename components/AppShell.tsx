@@ -15,9 +15,9 @@ import {
   Database, Truck, ShoppingBag, FileText, Banknote, BookOpen,
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
-  Eraser, Activity, Shield, ChefHat, Apple, LineChart, LayoutGrid, ClipboardList,
+  Eraser, Activity, Shield, ChefHat, Apple, LayoutGrid, ClipboardList,
   PackageOpen, KeyRound, MapPinned, Car,
-  ShieldAlert, ListChecks, FolderOpen, SquareCheck, FileChartColumn, ShieldCheck,
+  ShieldAlert, SquareCheck, ShieldCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
@@ -108,18 +108,13 @@ const NAV: NavEntry[] = [
     ],
   },
   {
-    type: 'group', key: 'kitchenAssurance', label: 'Kitchen Assurance', icon: ShieldAlert,
+    type: 'group', key: 'kitchenAssurance', label: 'Keamanan Pangan', icon: ShieldAlert,
     items: [
-      { href: '/kitchen-assurance', label: 'Dashboard', icon: LayoutDashboard },
-      { href: '/kitchen-assurance/monitoring', label: 'Monitoring', icon: ListChecks },
-      { href: '/kitchen-assurance/cases', label: 'Cases', icon: FolderOpen },
-      { href: '/kitchen-assurance/follow-up', label: 'Follow Up', icon: SquareCheck },
-      { href: '/food-production/prerequisite', label: 'Prerequisite', icon: ShieldCheck },
-      { href: '/food-production/haccp-plan', label: 'HACCP Study', icon: ClipboardList },
-      { href: '/food-production/haccp-verification', label: 'HACCP Verify', icon: SquareCheck },
-      { href: '/food-production/audit-readiness', label: 'Audit Readiness', icon: ClipboardList },
-      { href: '/kitchen-assurance/reports', label: 'Reports', icon: FileChartColumn },
-      { href: '/kitchen-assurance/analytics', label: 'Analytics', icon: LineChart },
+      { href: '/kitchen-assurance', label: 'Beranda', icon: LayoutDashboard },
+      { href: '/kitchen-assurance/setup', label: 'Setup kesiapan', icon: ShieldCheck },
+      { href: '/kitchen-assurance/operasi', label: 'Operasi harian', icon: ClipboardList },
+      { href: '/kitchen-assurance/temuan', label: 'Temuan & perbaikan', icon: Wrench },
+      { href: '/kitchen-assurance/audit', label: 'Siap audit', icon: SquareCheck },
     ],
   },
   {
@@ -182,9 +177,13 @@ const FP_OPS_ROUTES = [
   '/food-production/batch',
 ] as const;
 
-/** Kitchen Assurance — ops band (ADR-002). */
+/** Keamanan Pangan (KA + FS hub) — ops band (ADR-002 / ADR-004 UI hub). */
 const KA_OPS_ROUTES = [
   '/kitchen-assurance',
+  '/kitchen-assurance/setup',
+  '/kitchen-assurance/operasi',
+  '/kitchen-assurance/temuan',
+  '/kitchen-assurance/audit',
   '/kitchen-assurance/monitoring',
   '/kitchen-assurance/cases',
   '/kitchen-assurance/follow-up',
@@ -195,6 +194,8 @@ const KA_OPS_ROUTES = [
   '/food-production/haccp-verification',
   '/food-production/audit-readiness',
   '/food-production/qc',
+  '/food-production/haccp',
+  '/food-production/cold-chain',
 ] as const;
 
 /** Logistics — domain baru, Armada instance pertama (Sprint 2 Step 2). Management-only, sama seperti sebelum dipindah (bukan GUDANG). */

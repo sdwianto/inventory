@@ -311,6 +311,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'haccp_results', index: { tenantId: 1, productionBatchId: 1, disposition: 1 }, name: 'idx_haccp_res_batch_disposition' },
   { collection: 'haccp_results', index: { tenantId: 1, status: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_status_tanggal' },
   { collection: 'haccp_results', index: { tenantId: 1, kitchenId: 1, tanggal: -1 }, name: 'idx_haccp_res_tenant_kitchen_tanggal' },
+  { collection: 'haccp_results', index: { tenantId: 1, haccpPlanId: 1, createdAt: -1 }, name: 'idx_haccp_res_tenant_plan' },
   { collection: 'haccp_plans', index: { tenantId: 1, id: 1 }, name: 'idx_haccp_plan_tenant_id' },
   { collection: 'haccp_plans', index: { tenantId: 1, kode: 1 }, name: 'uniq_haccp_plan_tenant_kode', unique: true },
   { collection: 'haccp_plans', index: { tenantId: 1, status: 1, updatedAt: -1 }, name: 'idx_haccp_plan_status' },
@@ -342,6 +343,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'food_safety_programs', index: { tenantId: 1, id: 1 }, name: 'idx_fs_prog_tenant_id' },
   { collection: 'food_safety_programs', index: { tenantId: 1, kode: 1 }, name: 'uniq_fs_prog_tenant_kode', unique: true },
   { collection: 'food_safety_requirements', index: { tenantId: 1, id: 1 }, name: 'idx_fs_req_tenant_id' },
+  { collection: 'food_safety_requirements', index: { tenantId: 1, requirementGroup: 1, sortOrder: 1 }, name: 'idx_fs_req_tenant_group' },
   {
     collection: 'food_safety_requirements',
     index: { tenantId: 1, programId: 1, kode: 1 },

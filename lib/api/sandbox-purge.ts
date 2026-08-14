@@ -5,9 +5,22 @@ import {
   previewSalesSandboxRemote,
   salesRemotePurgeConfigured,
 } from '@/lib/api/sandbox-purge-sales-remote';
+import { DEFAULT_FOOD_SAFETY_STATUS } from '@/lib/food-production/production-batch';
+import { ensureFoodSafetyProgramsSeeded } from '@/lib/food-production/food-safety-program-seed';
+
+/** Profil reset sandbox — `full` = perilaku lama; `kitchen-assurance` = uji KA saja. */
+export type SandboxPurgeProfile = 'full' | 'kitchen-assurance';
+
+export const SANDBOX_PURGE_PROFILES: SandboxPurgeProfile[] = ['full', 'kitchen-assurance'];
+
+export function normalizeSandboxPurgeProfile(raw: unknown): SandboxPurgeProfile {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'kitchen-assurance' || v === 'ka') return 'kitchen-assurance';
+  return 'full';
+}
 
 /**
- * Koleksi yang dihapus saat reset sandbox.
+ * Koleksi yang dihapus saat reset sandbox penuh.
  * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
  * Kitchen Assurance: observation / case / follow-up + policy & monitoring definitions.
  * Setup dapur (kitchens, service_points, armadas, temperature_thresholds) tetap.
@@ -79,6 +92,26 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'ka_observations',
   'ka_policies',
   'ka_monitoring_definitions',
+  'ka_follow_up_orphan_reconcile_reports',
+  'ka_open_case_missing_fu_reconcile_reports',
+] as const;
+
+/**
+ * Profil Kitchen Assurance: transaksi KA + jejak Food Safety uji.
+ * Tidak menyentuh stok, Sales, PO/GRN, resep, program PRP, HACCP Study.
+ */
+export const SANDBOX_KA_COLLECTIONS = [
+  'ka_follow_ups',
+  'ka_safety_cases',
+  'ka_observations',
+  'ka_policies',
+  'ka_monitoring_definitions',
+  'ka_follow_up_orphan_reconcile_reports',
+  'ka_open_case_missing_fu_reconcile_reports',
+  'temperature_logs',
+  'qc_results',
+  'haccp_results',
+  'haccp_verifications',
 ] as const;
 
 export const SANDBOX_KEEP_HINT = [
@@ -111,6 +144,64 @@ export const SANDBOX_KEEP_HINT = [
   'integration_links',
 ] as const;
 
+/** Hint retain untuk profil KA (uji tanpa sentuh pengadaan/stok). */
+export const SANDBOX_KA_KEEP_HINT = [
+  'products',
+  'product_uom',
+  'stok_lokasi',
+  'goods_receipts',
+  'customer_purchase_orders',
+  'hutang',
+  'kitchens',
+  'service_points',
+  'armadas',
+  'temperature_thresholds',
+  'food_safety_programs',
+  'food_safety_requirements',
+  'qc_templates',
+  'haccp_templates',
+  'haccp_plans',
+  'recipes',
+  'menus',
+  'production_batches',
+  'users',
+  'tenants',
+  'tenant_settings',
+] as const;
+
+export function collectionsForSandboxProfile(
+  profile: SandboxPurgeProfile,
+): readonly string[] {
+  return profile === 'kitchen-assurance'
+    ? SANDBOX_KA_COLLECTIONS
+    : SANDBOX_TRANSACTION_COLLECTIONS;
+}
+
+export function keepHintForSandboxProfile(
+  profile: SandboxPurgeProfile,
+): readonly string[] {
+  return profile === 'kitchen-assurance' ? SANDBOX_KA_KEEP_HINT : SANDBOX_KEEP_HINT;
+}
+
+/**
+ * Kunci dedupe job SANDBOX_RESET — wajib bedakan profil agar KA tidak
+ * me-reuse job reset penuh (atau sebaliknya) di antrian PENDING/RUNNING.
+ */
+export function sandboxResetDedupeKey(opts: {
+  profile?: SandboxPurgeProfile | string;
+  tenantId?: string | null;
+  includeSales?: boolean;
+}): string {
+  const profile = normalizeSandboxPurgeProfile(opts.profile);
+  const scope = String(opts.tenantId || '').trim() || 'all';
+  const sales = profile === 'kitchen-assurance'
+    ? 0
+    : opts.includeSales === false
+      ? 0
+      : 1;
+  return `sandbox-reset:${profile}:${scope}:sales=${sales}`;
+}
+
 type CollectionCount =
   | { skipped: true; before: 0; deleted: 0 }
   | { dryRun: true; before: number }
@@ -119,7 +210,8 @@ type CollectionCount =
 export type SandboxDbResult = {
   label: string;
   dbName: string;
-  counts: Record<string, CollectionCount | StockResetInfo | AssetResetInfo>;
+  counts: Record<string, CollectionCount | StockResetInfo | AssetResetInfo | BatchFoodSafetyResetInfo>;
+  profile?: SandboxPurgeProfile;
   /** remote = via sales.app; mongo = langsung ke SALES_DB_NAME; remote+mongo = keduanya */
   purgeMode?: 'remote' | 'mongo' | 'remote+mongo';
   warning?: string;
@@ -132,6 +224,10 @@ type StockResetInfo =
 type AssetResetInfo =
   | { dryRun: true; in_repair: number | null; note: string }
   | { in_repair: number };
+
+type BatchFoodSafetyResetInfo =
+  | { dryRun: true; batches: number | null; note: string }
+  | { batches: number; note: string };
 
 function tenantQuery(tenantId?: string): Record<string, string> {
   const tid = String(tenantId || '').trim();
@@ -197,15 +293,18 @@ export async function purgeSandboxDatabase(
   dbName: string,
   tenantId: string | undefined,
   confirm: boolean,
-  options?: { preserveBgJobIds?: string[] },
+  options?: { preserveBgJobIds?: string[]; profile?: SandboxPurgeProfile },
 ): Promise<SandboxDbResult> {
+  const profile = normalizeSandboxPurgeProfile(options?.profile);
+  const collections = collectionsForSandboxProfile(profile);
   const counts: SandboxDbResult['counts'] = {};
   const filter = tenantQuery(tenantId);
   const preserveBgJobIds = (options?.preserveBgJobIds || []).map((id) => String(id).trim()).filter(Boolean);
   const existingNames = new Set(
     (await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name),
   );
-  const fastDrop = confirm && isFullTenantPurge(filter);
+  // KA profile never drop-collection (always deleteMany) — avoid nuking unrelated data if mis-scoped.
+  const fastDrop = confirm && profile === 'full' && isFullTenantPurge(filter);
 
   const collectionFilter = (name: string): Record<string, unknown> => {
     if (name === 'bg_jobs' && preserveBgJobIds.length) {
@@ -215,7 +314,7 @@ export async function purgeSandboxDatabase(
   };
 
   const collectionResults = await Promise.all(
-    SANDBOX_TRANSACTION_COLLECTIONS.map(async (name) => {
+    collections.map(async (name) => {
       if (!confirm) {
         if (!existingNames.has(name)) {
           return [name, { skipped: true, before: 0, deleted: 0 } as CollectionCount] as const;
@@ -232,6 +331,14 @@ export async function purgeSandboxDatabase(
   );
   for (const [name, info] of collectionResults) {
     counts[name] = info;
+  }
+
+  if (profile === 'kitchen-assurance') {
+    await applyKaBatchFoodSafetyReset(db, filter, existingNames, confirm, counts);
+    if (confirm) {
+      await seedFoodSafetyProgramsAfterKaPurge(db, tenantId);
+    }
+    return { label, dbName, counts, profile };
   }
 
   if (confirm) {
@@ -274,7 +381,72 @@ export async function purgeSandboxDatabase(
     };
   }
 
-  return { label, dbName, counts };
+  return { label, dbName, counts, profile };
+}
+
+async function applyKaBatchFoodSafetyReset(
+  db: Db,
+  filter: Record<string, unknown>,
+  existingNames: Set<string>,
+  confirm: boolean,
+  counts: SandboxDbResult['counts'],
+): Promise<void> {
+  if (!existingNames.has('production_batches')) {
+    counts._batch_food_safety_reset = confirm
+      ? { batches: 0, note: 'collection missing' }
+      : { dryRun: true, batches: 0, note: 'foodSafetyStatus → PENDING; history cleared' };
+    return;
+  }
+  // Preview & execute memakai filter tenant yang sama (semua batch di scope),
+  // agar angka dry-run tidak under-count vs updateMany.
+  if (!confirm) {
+    const batches = await db.collection('production_batches').countDocuments(filter);
+    counts._batch_food_safety_reset = {
+      dryRun: true,
+      batches,
+      note: 'foodSafetyStatus → PENDING; foodSafetyHistory → []',
+    };
+    return;
+  }
+  const now = new Date();
+  const r = await db.collection('production_batches').updateMany(filter, {
+    $set: {
+      foodSafetyStatus: DEFAULT_FOOD_SAFETY_STATUS,
+      foodSafetyHistory: [],
+      updatedAt: now,
+    },
+    $unset: {
+      foodSafetyHoldAt: '',
+      foodSafetyHoldReason: '',
+      foodSafetyHoldSourceId: '',
+      foodSafetyHoldSourceType: '',
+    },
+  });
+  counts._batch_food_safety_reset = {
+    batches: r.modifiedCount,
+    note: 'foodSafetyStatus → PENDING; history cleared',
+  };
+}
+
+async function seedFoodSafetyProgramsAfterKaPurge(
+  db: Db,
+  tenantId: string | undefined,
+): Promise<void> {
+  const tids: string[] = [];
+  if (tenantId) {
+    tids.push(tenantId);
+  } else {
+    const fromSettings = await db.collection('tenant_settings').distinct('tenantId');
+    const fromKitchens = await db.collection('kitchens').distinct('tenantId');
+    for (const t of [...fromSettings, ...fromKitchens]) {
+      const id = String(t || '').trim();
+      if (id && !tids.includes(id)) tids.push(id);
+    }
+    if (!tids.length) tids.push('default');
+  }
+  for (const tid of tids) {
+    await ensureFoodSafetyProgramsSeeded(db, tid);
+  }
 }
 
 async function purgeSalesLocal(
@@ -361,19 +533,27 @@ async function executeSalesPurge(
 export async function previewSandboxPurge(
   inventoryDb: Db,
   client: MongoClient,
-  options: { tenantId?: string; includeSales?: boolean } = {},
+  options: {
+    tenantId?: string;
+    includeSales?: boolean;
+    profile?: SandboxPurgeProfile;
+  } = {},
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
-  const { tenantId, includeSales = true } = options;
+  const profile = normalizeSandboxPurgeProfile(options.profile);
+  const includeSales = profile === 'kitchen-assurance'
+    ? false
+    : options.includeSales !== false;
 
   const [inventory, sales] = await Promise.all([
     purgeSandboxDatabase(
       inventoryDb,
       'inventory',
       inventoryDb.databaseName,
-      tenantId,
+      options.tenantId,
       false,
+      { profile },
     ),
-    includeSales ? previewSalesPurge(client, tenantId) : Promise.resolve(null),
+    includeSales ? previewSalesPurge(client, options.tenantId) : Promise.resolve(null),
   ]);
 
   return { inventory, sales };
@@ -382,10 +562,21 @@ export async function previewSandboxPurge(
 export async function executeSandboxPurge(
   inventoryDb: Db,
   client: MongoClient,
-  options: { tenantId?: string; includeSales?: boolean; preserveBgJobIds?: string[] } = {},
+  options: {
+    tenantId?: string;
+    includeSales?: boolean;
+    preserveBgJobIds?: string[];
+    profile?: SandboxPurgeProfile;
+  } = {},
 ): Promise<{ inventory: SandboxDbResult; sales: SandboxDbResult | null }> {
-  const { tenantId, includeSales = true, preserveBgJobIds } = options;
-  const purgeOpts = preserveBgJobIds?.length ? { preserveBgJobIds } : undefined;
+  const profile = normalizeSandboxPurgeProfile(options.profile);
+  const includeSales = profile === 'kitchen-assurance'
+    ? false
+    : options.includeSales !== false;
+  const purgeOpts = {
+    ...(options.preserveBgJobIds?.length ? { preserveBgJobIds: options.preserveBgJobIds } : {}),
+    profile,
+  };
 
   // Sequential: inventory dulu, sales belakangan — error sales tidak menyembunyikan hasil inventory,
   // dan sales selalu memakai jalur mongo lokal (lihat executeSalesPurge).
@@ -393,7 +584,7 @@ export async function executeSandboxPurge(
     inventoryDb,
     'inventory',
     inventoryDb.databaseName,
-    tenantId,
+    options.tenantId,
     true,
     purgeOpts,
   );
@@ -401,7 +592,7 @@ export async function executeSandboxPurge(
   let sales: SandboxDbResult | null = null;
   if (includeSales) {
     try {
-      sales = await executeSalesPurge(client, tenantId);
+      sales = await executeSalesPurge(client, options.tenantId);
     } catch (e) {
       throw new Error(
         `Inventory sudah di-reset, tetapi purge sales gagal: ${
@@ -421,7 +612,12 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
   let documents = 0;
   let collections = 0;
   for (const [name, info] of Object.entries(result.counts)) {
-    if (name === '_stock_reset' || name === '_asset_reset' || name === '_sales_purge_meta') continue;
+    if (
+      name === '_stock_reset'
+      || name === '_asset_reset'
+      || name === '_batch_food_safety_reset'
+      || name === '_sales_purge_meta'
+    ) continue;
     if ('skipped' in info && info.skipped) continue;
     if ('dryRun' in info && 'before' in info) {
       documents += info.before;
@@ -438,18 +634,28 @@ export function summarizeSandboxCounts(result: SandboxDbResult): {
 
 export async function runSandboxResetJob(
   inventoryDb: Db,
-  options: { tenantId?: string; includeSales?: boolean; preserveJobId?: string } = {},
+  options: {
+    tenantId?: string;
+    includeSales?: boolean;
+    preserveJobId?: string;
+    profile?: SandboxPurgeProfile | string;
+  } = {},
 ) {
   const { updateJobProgress } = await import('@/lib/api/bg-jobs');
   const { getMongoClient } = await import('@/lib/api/db');
   const client = await getMongoClient();
   const preserveBgJobIds = options.preserveJobId ? [options.preserveJobId] : undefined;
-  const includeSales = options.includeSales !== false;
+  const profile = normalizeSandboxPurgeProfile(options.profile);
+  const includeSales = profile === 'kitchen-assurance'
+    ? false
+    : options.includeSales !== false;
 
   await updateJobProgress(inventoryDb, options.preserveJobId, {
-    message: includeSales
-      ? 'Menghapus transaksi inventory + sales…'
-      : 'Menghapus transaksi inventory…',
+    message: profile === 'kitchen-assurance'
+      ? 'Reset Kitchen Assurance (cases, QC/HACCP results, temp logs)…'
+      : includeSales
+        ? 'Menghapus transaksi inventory + sales…'
+        : 'Menghapus transaksi inventory…',
     phase: 'purge',
   });
 
@@ -457,6 +663,7 @@ export async function runSandboxResetJob(
     tenantId: options.tenantId,
     includeSales,
     preserveBgJobIds,
+    profile,
   });
 
   await updateJobProgress(inventoryDb, options.preserveJobId, {
@@ -467,7 +674,8 @@ export async function runSandboxResetJob(
   return {
     tenantId: options.tenantId || null,
     scope: options.tenantId ? 'tenant' : 'all',
-    includeSales: options.includeSales !== false,
+    profile,
+    includeSales,
     salesPurgeMode: salesRemotePurgeConfigured() ? 'remote' : 'mongo',
     inventory: {
       ...result.inventory,

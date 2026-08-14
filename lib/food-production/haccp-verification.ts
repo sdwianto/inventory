@@ -11,7 +11,8 @@ export const HACCP_VERIFICATIONS_COLLECTION = 'haccp_verifications';
 export type HaccpVerificationType =
   | 'PLAN'
   | 'RECORD_COMPLETENESS'
-  | 'CCP_MONITORING';
+  | 'CCP_MONITORING'
+  | 'VALIDATION';
 
 export type HaccpVerificationResult = 'PASS' | 'FAIL' | 'PARTIAL';
 
@@ -51,6 +52,7 @@ export const HACCP_VERIFICATION_TYPE_LABELS: Record<HaccpVerificationType, strin
   PLAN: 'Verifikasi plan HACCP',
   RECORD_COMPLETENESS: 'Kelengkapan record monitoring',
   CCP_MONITORING: 'Verifikasi monitoring CCP',
+  VALIDATION: 'Validasi rencana HACCP',
 };
 
 export const HACCP_VERIFICATION_RESULT_LABELS: Record<HaccpVerificationResult, string> = {
@@ -72,8 +74,8 @@ export function normalizeHaccpVerificationType(
   raw: unknown,
 ): HaccpVerificationType | { error: string } {
   const v = String(raw || '').toUpperCase();
-  if (v === 'PLAN' || v === 'RECORD_COMPLETENESS' || v === 'CCP_MONITORING') return v;
-  return { error: 'verificationType wajib PLAN|RECORD_COMPLETENESS|CCP_MONITORING' };
+  if (v === 'PLAN' || v === 'RECORD_COMPLETENESS' || v === 'CCP_MONITORING' || v === 'VALIDATION') return v;
+  return { error: 'verificationType wajib PLAN|RECORD_COMPLETENESS|CCP_MONITORING|VALIDATION' };
 }
 
 export function normalizeHaccpVerificationResult(
@@ -94,7 +96,7 @@ export function normalizeHaccpVerificationStatus(
 
 /**
  * Gate konten sebelum COMPLETED.
- * - PLAN → haccpPlanId wajib
+ * - PLAN / VALIDATION → haccpPlanId wajib
  * - RECORD_* / CCP_MONITORING → haccpResultId wajib
  * - method wajib
  * - PASS → minimal satu evidence (jejak audit)
@@ -109,9 +111,9 @@ export function assertHaccpVerificationReady(doc: Pick<
   | 'evidenceUrls'
 >): string | null {
   if (!String(doc.method || '').trim()) return 'method wajib';
-  if (doc.verificationType === 'PLAN') {
+  if (doc.verificationType === 'PLAN' || doc.verificationType === 'VALIDATION') {
     if (!String(doc.haccpPlanId || '').trim()) {
-      return 'haccpPlanId wajib untuk verificationType PLAN';
+      return `haccpPlanId wajib untuk verificationType ${doc.verificationType}`;
     }
   } else if (!String(doc.haccpResultId || '').trim()) {
     return 'haccpResultId wajib untuk verifikasi record/CCP';

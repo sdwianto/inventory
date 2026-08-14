@@ -483,9 +483,11 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
     const status = url.searchParams.get('status');
     const category = url.searchParams.get('category');
     const kitchenId = url.searchParams.get('kitchenId');
+    const batchId = String(url.searchParams.get('batchId') || '').trim();
     if (status) filter.status = status;
     if (category) filter.category = String(category).toUpperCase();
     if (kitchenId) filter.kitchenId = kitchenId;
+    if (batchId) filter.batchId = batchId;
     const list = await db.collection(KA_SAFETY_CASES_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
       .sort({ createdAt: -1 })

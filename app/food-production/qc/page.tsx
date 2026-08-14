@@ -166,6 +166,8 @@ export default function QcPage() {
   const [templateId, setTemplateId] = useState('');
   const [planId, setPlanId] = useState('');
   const [batchId, setBatchId] = useState('');
+  const [programId, setProgramId] = useState('');
+  const [requirementId, setRequirementId] = useState('');
   const [editItems, setEditItems] = useState<QcItemEdit[]>([]);
   const [catatan, setCatatan] = useState('');
   const [recordedAt, setRecordedAt] = useState<string | undefined>();
@@ -206,6 +208,31 @@ export default function QcPage() {
     return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
   }, [load]);
 
+  // Gelombang D — Setup PRP: ?create=1&category=PREREQUISITE&programId=&requirementId=
+  useEffect(() => {
+    if (typeof window === 'undefined' || !templates.length || !canLog) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('create') !== '1') return;
+    const prog = q.get('programId') || '';
+    const req = q.get('requirementId') || '';
+    const cat = String(q.get('category') || '').toUpperCase();
+    setProgramId(prog);
+    setRequirementId(req);
+    const prp = templates.find((t) => t.kode === 'QC-PRP')
+      || templates.find((t) => t.category === 'PREREQUISITE');
+    if (prp) {
+      setEditingId(null);
+      setTemplateId(prp.id);
+      setEditItems(itemsFromTemplate(prp));
+      setMetaLine(
+        `${prp.nama} · ${QC_CATEGORY_LABELS[prp.category]}${req ? ' · dari Setup PRP' : ''}`,
+      );
+    } else if (cat === 'PREREQUISITE') {
+      setMetaLine('Pilih template Prerequisite');
+    }
+    setFormOpen(true);
+  }, [templates, canLog]);
+
   function openNew() {
     setEditingId(null);
     setNoDokumen('');
@@ -213,6 +240,8 @@ export default function QcPage() {
     setTemplateId('');
     setPlanId('');
     setBatchId('');
+    setProgramId('');
+    setRequirementId('');
     setEditItems([]);
     setCatatan('');
     setRecordedAt(undefined);
@@ -279,6 +308,8 @@ export default function QcPage() {
         ...(planId ? { productionPlanId: planId } : {}),
         productionBatchId: batchId || '',
         ...(!editingId ? { templateId } : {}),
+        ...(programId ? { programId } : {}),
+        ...(requirementId ? { requirementId } : {}),
       };
       const res = await fetch(
         editingId ? `/api/qc-results/${editingId}` : '/api/qc-results',
@@ -425,6 +456,12 @@ export default function QcPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm py-1">
+            {requirementId && (
+              <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950">
+                Dari Setup prasyarat — template Prerequisite sudah dipilih. Simpan checklist ini untuk menandai item
+                &quot;Ada&quot; di grup PRE.
+              </p>
+            )}
             {metaLine && (
               <p className="text-muted-foreground">{metaLine}</p>
             )}

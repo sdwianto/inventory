@@ -14,6 +14,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { Thermometer, Plus, RefreshCw, Check, Settings2 } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   TEMP_STAGE_LABELS,
   TEMP_ALERT_LABELS,
@@ -260,12 +261,18 @@ export default function ColdChainPage() {
       <KitchenScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/operasi', label: 'Operasi harian' },
+              { label: 'Catat suhu' },
+            ]}
+          />
+          <h1 className="mt-1 text-xl font-semibold flex items-center gap-2">
             <Thermometer className="h-5 w-5" />
-            Cold Chain
+            Catat suhu
           </h1>
           <p className="text-sm text-muted-foreground">
-            Log suhu receiving / cooking / holding + alert threshold
+            Log suhu penerimaan / masak / holding. Suhu kritis dapat menahan batch.
           </p>
         </div>
         <div className="flex gap-2">

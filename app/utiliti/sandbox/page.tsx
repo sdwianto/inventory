@@ -31,21 +31,33 @@ type StockResetDone = { stok_lokasi: number; products: number };
 type AssetResetPreview = { dryRun: true; in_repair: number | null; note: string };
 type AssetResetDone = { in_repair: number };
 
+type BatchFoodSafetyResetPreview = { dryRun: true; batches: number | null; note: string };
+type BatchFoodSafetyResetDone = { batches: number; note: string };
+
 type DbPreview = {
   label: string;
   dbName: string;
   summary: { documents: number; collections: number };
-  counts: Record<string, CountInfo | StockResetPreview | StockResetDone | AssetResetPreview | AssetResetDone>;
+  counts: Record<string, CountInfo | StockResetPreview | StockResetDone | AssetResetPreview | AssetResetDone | BatchFoodSafetyResetPreview | BatchFoodSafetyResetDone>;
   purgeMode?: 'remote' | 'mongo' | 'remote+mongo';
   warning?: string;
+  profile?: string;
 };
 
 type PreviewResponse = {
   tenantId: string | null;
   scope: 'tenant' | 'all';
   includeSales: boolean;
+  profile?: string;
   inventory: DbPreview;
   sales: DbPreview | null;
+};
+
+type SandboxProfileInfo = {
+  id: string;
+  label: string;
+  keepHint: string[];
+  allowIncludeSales: boolean;
 };
 
 type StatusResponse = {
@@ -57,6 +69,7 @@ type StatusResponse = {
   salesPurgeVia?: string;
   salesWorkerReady?: boolean | null;
   keepHint: string[];
+  profiles?: SandboxProfileInfo[];
 };
 
 function isStockResetPreview(info: unknown): info is StockResetPreview {
@@ -75,10 +88,18 @@ function isAssetResetDone(info: unknown): info is AssetResetDone {
   return !!info && typeof info === 'object' && 'in_repair' in info && !('dryRun' in info);
 }
 
+function isBatchFoodSafetyResetPreview(info: unknown): info is BatchFoodSafetyResetPreview {
+  return !!info && typeof info === 'object' && 'dryRun' in info && 'batches' in info && 'note' in info;
+}
+
+function isBatchFoodSafetyResetDone(info: unknown): info is BatchFoodSafetyResetDone {
+  return !!info && typeof info === 'object' && 'batches' in info && 'note' in info && !('dryRun' in info);
+}
+
 function renderCountRows(counts: DbPreview['counts']) {
   return Object.entries(counts)
     .filter(([name, info]) => {
-      if (name === '_stock_reset' || name === '_asset_reset') return true;
+      if (name === '_stock_reset' || name === '_asset_reset' || name === '_batch_food_safety_reset') return true;
       if ('skipped' in info && info.skipped) return false;
       if ('dryRun' in info && 'before' in info) return info.before > 0;
       if ('before' in info) return info.before > 0;
@@ -131,6 +152,29 @@ function renderCountRows(counts: DbPreview['counts']) {
         }
         return null;
       }
+      if (name === '_batch_food_safety_reset') {
+        if (isBatchFoodSafetyResetPreview(info)) {
+          return (
+            <tr key={name} className="border-t">
+              <td className="px-3 py-1.5 font-mono text-xs text-amber-700">[batch food safety]</td>
+              <td className="px-3 py-1.5 text-right text-xs text-slate-600">
+                {info.batches ?? 0} batch → PENDING ({info.note})
+              </td>
+            </tr>
+          );
+        }
+        if (isBatchFoodSafetyResetDone(info)) {
+          return (
+            <tr key={name} className="border-t">
+              <td className="px-3 py-1.5 font-mono text-xs text-amber-700">[batch food safety]</td>
+              <td className="px-3 py-1.5 text-right text-xs text-slate-600">
+                {info.batches} batch di-reset ({info.note})
+              </td>
+            </tr>
+          );
+        }
+        return null;
+      }
       const before = 'before' in info ? info.before : 0;
       const deleted = 'deleted' in info ? info.deleted : undefined;
       return (
@@ -148,6 +192,7 @@ export default function SandboxResetPage() {
   const queryClient = useQueryClient();
   const user = useSessionUser();
   const [tenantId, setTenantId] = useState('');
+  const [profile, setProfile] = useState<'full' | 'kitchen-assurance'>('full');
   const [includeSales, setIncludeSales] = useState(true);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [confirmPhrase, setConfirmPhrase] = useState('');
@@ -158,6 +203,8 @@ export default function SandboxResetPage() {
   const { data: resetJob, status: resetJobStatus } = useBgJob(resetJobId);
 
   const isMaster = user?.role === 'MASTER';
+  const isKaProfile = profile === 'kitchen-assurance';
+  const effectiveIncludeSales = isKaProfile ? false : includeSales;
 
   const { data: status } = useApiQuery<StatusResponse>(
     queryKeys.sandbox.status,
@@ -170,13 +217,23 @@ export default function SandboxResetPage() {
 
   const resetMutation = useApiMutation([queryKeys.sandbox.all]);
 
+  const activeKeepHint = useMemo(() => {
+    const fromStatus = status?.profiles?.find((p) => p.id === profile)?.keepHint;
+    return fromStatus || status?.keepHint || [];
+  }, [status, profile]);
+
   const runPreview = async () => {
     setLoadingPreview(true);
     try {
       const qs = new URLSearchParams();
       if (tenantId.trim()) qs.set('tenantId', tenantId.trim());
-      if (!includeSales) qs.set('includeSales', '0');
-      const previewParams = { tenantId: tenantId.trim() || undefined, includeSales };
+      qs.set('profile', profile);
+      if (!effectiveIncludeSales) qs.set('includeSales', '0');
+      const previewParams = {
+        tenantId: tenantId.trim() || undefined,
+        includeSales: effectiveIncludeSales,
+        profile,
+      };
       const data = await queryClient.fetchQuery({
         queryKey: queryKeys.sandbox.preview(previewParams),
         queryFn: () => fetchJson<PreviewResponse>(`/api/sandbox/preview?${qs.toString()}`),
@@ -200,7 +257,8 @@ export default function SandboxResetPage() {
         body: {
           confirmPhrase,
           tenantId: tenantId.trim() || undefined,
-          includeSales,
+          includeSales: effectiveIncludeSales,
+          profile,
         },
       }) as PreviewResponse & { jobId?: string; async?: boolean; message?: string };
 
@@ -213,7 +271,11 @@ export default function SandboxResetPage() {
       setPreview(data);
       setConfirmPhrase('');
       setAcknowledge(false);
-      toast.success('Reset sandbox selesai — transaksi dihapus, master data tetap');
+      toast.success(
+        isKaProfile
+          ? 'Reset Kitchen Assurance selesai — stok & pengadaan tetap'
+          : 'Reset sandbox selesai — transaksi dihapus, master data tetap',
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -235,7 +297,11 @@ export default function SandboxResetPage() {
         if (salesWarn) {
           toast.warning(`Reset selesai; sales remote bermasalah (mongo lokal tetap dipurge): ${salesWarn}`);
         } else {
-          toast.success('Reset sandbox selesai — transaksi inventory + sales dihapus, master data tetap');
+          toast.success(
+            result?.profile === 'kitchen-assurance'
+              ? 'Reset Kitchen Assurance selesai — stok & pengadaan tetap'
+              : 'Reset sandbox selesai — transaksi inventory + sales dihapus, master data tetap',
+          );
         }
       } else if (isBgJobFailed(resetJobStatus)) {
         toast.error(String(resetJob?.lastError || 'Reset sandbox gagal'));
@@ -296,10 +362,9 @@ export default function SandboxResetPage() {
           <div>
             <h1 className="text-xl font-bold">Reset Sandbox</h1>
             <p className="text-sm text-slate-600 mt-1">
-              Hapus data transaksi inventory + sales, termasuk Food Production (rencana → PBL/HSL → QC/HACCP → distribusi,
-              plus resep, menu, template QC/HACCP, dan price book) serta Kitchen Assurance (observation, case, follow-up,
-              policy, monitoring definitions). Setup dapur, produk, user, tenant, dan integrasi tetap.
-              Hapus data transaksi uji coba (master data tetap). Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.
+              {isKaProfile
+                ? 'Profil Kitchen Assurance: hapus cases/follow-ups/observations, hasil QC/HACCP, log suhu, dan reset status HOLD batch — tanpa menyentuh stok, Sales, PO/GRN, atau master dapur.'
+                : 'Hapus data transaksi inventory + sales, termasuk Food Production dan Kitchen Assurance. Setup dapur, produk, user, tenant, dan integrasi tetap. Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.'}
             </p>
           </div>
         </div>
@@ -310,12 +375,13 @@ export default function SandboxResetPage() {
             <div className="text-sm text-amber-900 space-y-1">
               <div className="font-semibold">Peringatan: operasi tidak bisa dibatalkan</div>
               <div className="text-xs text-amber-800">
-                Banner ini menandai risiko tinggi — data yang dihapus tidak bisa dikembalikan.
-                Stok akan di-nol-kan; aset IN_REPAIR dikembalikan ke ACTIVE.
+                {isKaProfile
+                  ? 'Hanya data uji Kitchen Assurance / Food Safety transaksi yang dibersihkan. Stok dan pengadaan tidak diubah.'
+                  : 'Banner ini menandai risiko tinggi — data yang dihapus tidak bisa dikembalikan. Stok akan di-nol-kan; aset IN_REPAIR dikembalikan ke ACTIVE.'}
               </div>
               <div>
                 Inventory DB: <b>{status?.inventoryDbName || '…'}</b>
-                {includeSales && (
+                {effectiveIncludeSales && (
                   <> · Sales DB: <b>{status?.salesDbName || '…'}</b>
                     {status?.salesPurgeVia === 'SALES_APP_URL' && (
                       <span className="text-xs text-slate-500"> (via sales.app API)</span>
@@ -323,24 +389,38 @@ export default function SandboxResetPage() {
                   </>
                 )}
               </div>
-              {includeSales && status?.salesWorkerReady === false && (
+              {effectiveIncludeSales && status?.salesWorkerReady === false && (
                 <div className="text-xs text-amber-800 bg-amber-100/80 rounded px-2 py-1">
                   sales.app belum siap menerima purge worker — deploy route{' '}
                   <code className="font-mono">/api/sandbox/worker-purge</code> di project Sales
                   dan set <code className="font-mono">ALLOW_SANDBOX_RESET=1</code> di env Sales.
                 </div>
               )}
+              {isKaProfile ? (
+                <>
+                  <div className="text-xs text-amber-800">
+                    Dihapus: ka_follow_ups, ka_safety_cases, ka_observations, ka_policies,
+                    ka_monitoring_definitions, temperature_logs, qc_results, haccp_results, haccp_verifications.
+                  </div>
+                  <div className="text-xs text-amber-800">
+                    Batch: foodSafetyStatus → PENDING; foodSafetyHistory dikosongkan (dokumen batch tetap).
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-xs text-amber-800">
+                    Food Production ikut dihapus: rencana, MRP/PBL/HSL, batch, transfer dapur, QC/HACCP result,
+                    distribusi, suhu, resep, menu, template QC/HACCP, supplier price book.
+                  </div>
+                  <div className="text-xs text-amber-800">
+                    Kitchen Assurance ikut dihapus: observations, safety cases, follow-ups, policies,
+                    monitoring definitions.
+                  </div>
+                </>
+              )}
               <div className="text-xs text-amber-800">
-                Food Production ikut dihapus: rencana, MRP/PBL/HSL, batch, transfer dapur, QC/HACCP result,
-                distribusi, suhu, resep, menu, template QC/HACCP, supplier price book.
-              </div>
-              <div className="text-xs text-amber-800">
-                Kitchen Assurance ikut dihapus: observations, safety cases, follow-ups, policies,
-                monitoring definitions.
-              </div>
-              <div className="text-xs text-amber-800">
-                Tetap dipertahankan: {status?.keepHint?.slice(0, 8).join(', ')}…
-                (termasuk kitchens, service_points, temperature_thresholds)
+                Tetap dipertahankan: {activeKeepHint.slice(0, 10).join(', ')}
+                {activeKeepHint.length > 10 ? '…' : ''}
               </div>
             </div>
           </CardContent>
@@ -348,12 +428,58 @@ export default function SandboxResetPage() {
 
         <Card>
           <CardContent className="p-4 space-y-4">
+            <div>
+              <Label>Profil reset</Label>
+              <div className="mt-2 space-y-2">
+                <label className="flex items-start gap-2 text-sm cursor-pointer border rounded-md px-3 py-2 hover:bg-slate-50">
+                  <input
+                    type="radio"
+                    name="sandbox-profile"
+                    className="mt-1"
+                    checked={profile === 'full'}
+                    onChange={() => {
+                      setProfile('full');
+                      setPreview(null);
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium">Reset penuh</span>
+                    <span className="block text-xs text-slate-500">
+                      Semua transaksi inventory (+ opsional sales), termasuk FP & KA.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm cursor-pointer border rounded-md px-3 py-2 hover:bg-slate-50">
+                  <input
+                    type="radio"
+                    name="sandbox-profile"
+                    className="mt-1"
+                    checked={profile === 'kitchen-assurance'}
+                    onChange={() => {
+                      setProfile('kitchen-assurance');
+                      setIncludeSales(false);
+                      setPreview(null);
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium">Kitchen Assurance saja</span>
+                    <span className="block text-xs text-slate-500">
+                      Ideal untuk uji modul KA — stok, Sales, PO/GRN tidak disentuh.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <Label>Scope tenant</Label>
                 <select
                   value={tenantId}
-                  onChange={(e) => setTenantId(e.target.value)}
+                  onChange={(e) => {
+                    setTenantId(e.target.value);
+                    setPreview(null);
+                  }}
                   className="w-full border rounded px-3 py-2 text-sm mt-1"
                 >
                   <option value="">Semua tenant</option>
@@ -365,14 +491,18 @@ export default function SandboxResetPage() {
                 </select>
               </div>
               <div className="flex items-end">
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <label className={`flex items-center gap-2 text-sm ${isKaProfile ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
                   <input
                     type="checkbox"
-                    checked={includeSales}
+                    checked={effectiveIncludeSales}
+                    disabled={isKaProfile}
                     onChange={(e) => setIncludeSales(e.target.checked)}
                     className="rounded"
                   />
                   Sertakan database sales ({status?.salesDbName || 'kasir_db'})
+                  {isKaProfile ? (
+                    <span className="text-xs text-slate-500">(tidak berlaku untuk profil KA)</span>
+                  ) : null}
                 </label>
               </div>
             </div>
@@ -384,7 +514,7 @@ export default function SandboxResetPage() {
 
             {preview && (
               <div className="space-y-3">
-                {includeSales && !preview.sales && (
+                {effectiveIncludeSales && !preview.sales && (
                   <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     Preview sales kosong — cek koneksi sales.app / SALES_DB_NAME.
                   </div>
@@ -430,9 +560,12 @@ export default function SandboxResetPage() {
                   className="mt-1 rounded"
                 />
                 <span>
-                  Saya paham ini akan menghapus transaksi
+                  Saya paham ini akan{' '}
+                  {isKaProfile
+                    ? 'membersihkan data uji Kitchen Assurance'
+                    : 'menghapus transaksi'}
                   {tenantId ? ` untuk tenant "${tenantId}"` : ' untuk semua tenant'}
-                  {includeSales ? ' di inventory dan sales' : ' di inventory'}.
+                  {!isKaProfile && (effectiveIncludeSales ? ' di inventory dan sales' : ' di inventory')}.
                 </span>
               </label>
               <div>
@@ -451,11 +584,15 @@ export default function SandboxResetPage() {
                 disabled={resetting || !acknowledge || !confirmOk}
               >
                 {resetting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Eraser className="w-4 h-4 mr-2" />}
-                {resetting ? 'Reset berjalan…' : 'Reset sandbox sekarang'}
+                {resetting
+                  ? 'Reset berjalan…'
+                  : isKaProfile
+                    ? 'Reset Kitchen Assurance sekarang'
+                    : 'Reset sandbox sekarang'}
               </Button>
               {resetting && resetJobId && (
                 <p className="text-xs text-slate-500">
-                  {jobProgressMessage(resetJob?.progress) || 'Menghapus transaksi di background…'}
+                  {jobProgressMessage(resetJob?.progress) || 'Menghapus data di background…'}
                   {resetJobStatus && resetJobStatus !== 'PENDING' ? ` · ${resetJobStatus}` : ''}
                 </p>
               )}

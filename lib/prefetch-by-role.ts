@@ -42,6 +42,10 @@ const FP_OPS_ROUTES = [
 
 const KA_OPS_ROUTES = [
   '/kitchen-assurance',
+  '/kitchen-assurance/setup',
+  '/kitchen-assurance/operasi',
+  '/kitchen-assurance/temuan',
+  '/kitchen-assurance/audit',
   '/kitchen-assurance/monitoring',
   '/kitchen-assurance/cases',
   '/kitchen-assurance/follow-up',
@@ -52,6 +56,8 @@ const KA_OPS_ROUTES = [
   '/food-production/haccp-verification',
   '/food-production/audit-readiness',
   '/food-production/qc',
+  '/food-production/haccp',
+  '/food-production/cold-chain',
 ] as const;
 
 const FP_MGMT_ROUTES = [

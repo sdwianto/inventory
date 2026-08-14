@@ -93,6 +93,13 @@ export interface HaccpMonitoringPlan {
   templateKodeHint?: string;
 }
 
+/** Anggota Tim HACCP (BGN 8.1.1) — lean, bukan HR master. */
+export interface HaccpTeamMember {
+  name: string;
+  role: string;
+  unit?: string;
+}
+
 export interface HaccpPlanDoc {
   id: string;
   tenantId: string;
@@ -106,6 +113,32 @@ export interface HaccpPlanDoc {
   status: HaccpPlanStatus;
   recipeIds: string[];
   menuIds: string[];
+  /** BGN 8.1 — tim multidisiplin. */
+  team: HaccpTeamMember[];
+  /** BGN 8.1.2 — ruang lingkup studi. */
+  scope?: string;
+  /** BGN 8.2 — deskripsi produk (teks; recipe/menu sebagai tautan). */
+  productDescription?: string;
+  /** BGN 8.3 — tujuan penggunaan & pengguna. */
+  intendedUse?: string;
+  /** BGN 8.4 — catatan / keterangan diagram alir. */
+  flowDiagramNote?: string;
+  /** BGN 8.4 — foto/sketsa alur (URL media). */
+  flowDiagramUrls?: string[];
+  /** BGN 8.5 — konfirmasi diagram di lapangan. */
+  flowVerifiedAt?: Date;
+  flowVerifiedBy?: string;
+  flowVerifiedByName?: string;
+  flowVerifiedNote?: string;
+  /** BGN 8.11 — validasi rencana (bukti + catatan). */
+  validationNote?: string;
+  validationEvidenceUrls?: string[];
+  validatedAt?: Date;
+  validatedBy?: string;
+  validatedByName?: string;
+  /** BGN 8.13 — bukti pelatihan lean (bukan HR). */
+  trainingNote?: string;
+  trainingEvidenceUrls?: string[];
   processSteps: HaccpProcessStep[];
   hazards: HaccpHazard[];
   ccps: HaccpCcp[];
@@ -143,6 +176,37 @@ export const HACCP_PLAN_TRANSITIONS: Record<HaccpPlanStatus, HaccpPlanStatus[]> 
   SUPERSEDED: [],
   CANCELLED: [],
 };
+
+/** Studi A–D hanya draft/review. */
+export function haccpPlanAllowsStudyEdit(status: HaccpPlanStatus): boolean {
+  return status === 'DRAFT' || status === 'UNDER_REVIEW';
+}
+
+/** Gelombang E — validasi & pelatihan boleh diisi setelah rencana disetujui/aktif. */
+export function haccpPlanAllowsCloseoutEdit(status: HaccpPlanStatus): boolean {
+  return haccpPlanAllowsStudyEdit(status) || status === 'APPROVED' || status === 'ACTIVE';
+}
+
+export function hasHaccpPlanValidation(plan?: {
+  validatedAt?: Date | string | null;
+  validationNote?: string | null;
+  validationEvidenceUrls?: string[] | null;
+} | null): boolean {
+  if (!plan) return false;
+  return Boolean(
+    plan.validatedAt
+    || String(plan.validationNote || '').trim()
+    || (plan.validationEvidenceUrls || []).length,
+  );
+}
+
+export function hasHaccpTrainingEvidence(plan?: {
+  trainingNote?: string | null;
+  trainingEvidenceUrls?: string[] | null;
+} | null): boolean {
+  if (!plan) return false;
+  return Boolean(String(plan.trainingNote || '').trim() || (plan.trainingEvidenceUrls || []).length);
+}
 
 export const HACCP_HAZARD_TYPE_LABELS: Record<HaccpHazardType, string> = {
   BIOLOGICAL: 'Biologis',
@@ -399,7 +463,9 @@ export function normalizeMonitoringPlans(
       frequency,
       responsibleRole: String(row.responsibleRole || '').trim() || undefined,
       criticalLimitKeys: clKeys,
-      templateKodeHint: String(row.templateKodeHint || '').trim() || undefined,
+      templateKodeHint: normalizeHaccpTemplateKodeHint(
+        String(row.templateKodeHint || '').trim(),
+      ) || undefined,
     });
   }
   return out;
@@ -507,12 +573,44 @@ export function formatCriticalLimit(limit: HaccpCriticalLimit): string {
   return `${op} ${limit.value ?? ''}${unit}`.trim();
 }
 
-/** Gate sebelum APPROVED/ACTIVE: minimal ada step + hazard CCP berjustifikasi + CCP + limit + monitoring. */
+/** Gate sebelum APPROVED/ACTIVE: preamble BGN 8.1–8.5 + inti CCP study. */
 export function assertHaccpPlanReadyForApproval(plan: Pick<
   HaccpPlanDoc,
-  'processSteps' | 'hazards' | 'ccps' | 'criticalLimits' | 'monitoringPlans'
+  | 'team'
+  | 'scope'
+  | 'productDescription'
+  | 'intendedUse'
+  | 'flowVerifiedAt'
+  | 'processSteps'
+  | 'hazards'
+  | 'ccps'
+  | 'criticalLimits'
+  | 'monitoringPlans'
 >): string | null {
-  if (!plan.processSteps?.length) return 'Minimal satu process step sebelum approval';
+  if (!plan.team?.length) {
+    return 'Minimal satu anggota Tim HACCP (langkah Tim & ruang lingkup) sebelum approval';
+  }
+  for (const m of plan.team) {
+    if (!String(m.name || '').trim() || !String(m.role || '').trim()) {
+      return 'Setiap anggota tim wajib punya nama dan peran';
+    }
+  }
+  if (!String(plan.scope || '').trim()) {
+    return 'Ruang lingkup studi wajib diisi sebelum approval';
+  }
+  if (!String(plan.productDescription || '').trim()) {
+    return 'Deskripsi produk wajib diisi sebelum approval';
+  }
+  if (!String(plan.intendedUse || '').trim()) {
+    return 'Tujuan penggunaan / pengguna wajib diisi sebelum approval';
+  }
+  if (!plan.processSteps?.length) return 'Minimal satu langkah proses (alur dapur) sebelum approval';
+  if (!plan.flowVerifiedAt) {
+    return 'Alur proses wajib dikonfirmasi di lapangan sebelum approval';
+  }
+  if (!String(plan.flowVerifiedByName || plan.flowVerifiedBy || '').trim()) {
+    return 'Nama verifikator lapangan wajib diisi sebelum approval';
+  }
   if (!plan.hazards?.length) return 'Minimal satu hazard analysis sebelum approval';
   const ccpHazards = plan.hazards.filter((h) => h.isCcp);
   if (!ccpHazards.length) {
@@ -524,6 +622,11 @@ export function assertHaccpPlanReadyForApproval(plan: Pick<
     }
   }
   if (!plan.ccps?.length) return 'Minimal satu CCP sebelum approval';
+  for (const ccp of plan.ccps) {
+    if (!String(ccp.correctiveAction || '').trim()) {
+      return `CCP ${ccp.key}: tindakan korektif (correctiveAction) wajib sebelum approval`;
+    }
+  }
   if (!plan.criticalLimits?.length) {
     return 'Minimal satu critical limit terstruktur sebelum approval';
   }
@@ -531,6 +634,41 @@ export function assertHaccpPlanReadyForApproval(plan: Pick<
     return 'Minimal satu monitoring plan sebelum approval';
   }
   return null;
+}
+
+/**
+ * Samakan hint monitoring plan dengan kode template runtime (HCP-*).
+ * Seed lama memakai HACCP-COOK — dinormalisasi ke HCP-COOK.
+ */
+export function normalizeHaccpTemplateKodeHint(raw: string | undefined | null): string {
+  const h = String(raw || '').trim().toUpperCase();
+  if (!h) return '';
+  if (h === 'HACCP-COOK' || h === 'HCP-COOK') return 'HCP-COOK';
+  if (h === 'HACCP-COOL' || h === 'HCP-COOL') return 'HCP-COOL';
+  if (h === 'HACCP-HOLD' || h === 'HCP-HOLD') return 'HCP-HOLD';
+  if (h === 'HACCP-RECV' || h === 'HCP-RECV' || h === 'HCP-RECEIVE') return 'HCP-RECV';
+  if (h.startsWith('HACCP-')) return `HCP-${h.slice('HACCP-'.length)}`;
+  return h;
+}
+
+export function normalizeHaccpTeam(raw: unknown): HaccpTeamMember[] | { error: string } {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return { error: 'team wajib array' };
+  const out: HaccpTeamMember[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const name = String(r.name || '').trim();
+    const role = String(r.role || '').trim();
+    if (!name && !role) continue;
+    if (!name || !role) return { error: 'Anggota tim: nama dan peran wajib' };
+    out.push({
+      name,
+      role,
+      unit: String(r.unit || '').trim() || undefined,
+    });
+  }
+  return out;
 }
 
 export function appendHaccpPlanHistory(
@@ -553,6 +691,17 @@ export const EXAMPLE_HACCP_PLAN_COOK: Omit<
   recipeIds: [],
   menuIds: [],
   isExample: true,
+  team: [
+    { name: 'Contoh Ketua Tim', role: 'Ketua Tim HACCP', unit: 'Mutu' },
+    { name: 'Contoh Kepala Dapur', role: 'Kepala Dapur', unit: 'Produksi' },
+  ],
+  scope: 'Proses memasak menu matang di dapur SPPG contoh — dari penerimaan bahan hingga holding panas.',
+  productDescription: 'Menu masakan matang untuk penerima manfaat MBG (contoh).',
+  intendedUse: 'Dikonsumsi segera / dalam holding panas oleh anak sekolah dan penerima manfaat rentan.',
+  flowDiagramNote: 'Alur: terima → siap → masak → hold → sajikan',
+  flowVerifiedAt: new Date('2026-01-15T08:00:00.000Z'),
+  flowVerifiedByName: 'Contoh Verifikator Lapangan',
+  flowVerifiedNote: 'Dicek di dapur contoh (bukan acuan hukum).',
   processSteps: [
     { key: 'receive', nama: 'Penerimaan bahan', sequence: 1 },
     { key: 'prep', nama: 'Persiapan / pengolahan awal', sequence: 2 },
@@ -611,7 +760,7 @@ export const EXAMPLE_HACCP_PLAN_COOK: Omit<
       frequency: 'Setiap batch / setiap panci',
       responsibleRole: 'GUDANG',
       criticalLimitKeys: ['cl_core_temp'],
-      templateKodeHint: 'HACCP-COOK',
+      templateKodeHint: 'HCP-COOK',
     },
   ],
 };

@@ -22,8 +22,11 @@ import {
   HACCP_PLAN_TRANSITIONS,
   appendHaccpPlanHistory,
   assertHaccpPlanReadyForApproval,
+  haccpPlanAllowsCloseoutEdit,
+  haccpPlanAllowsStudyEdit,
   normalizeHaccpPlanEmbedded,
   normalizeHaccpPlanStatus,
+  normalizeHaccpTeam,
   type HaccpPlanDoc,
   type HaccpPlanStatus,
 } from '@/lib/food-production/haccp-plan';
@@ -124,6 +127,9 @@ export async function handleHaccpPlans(ctx: HandlerContext): Promise<NextRespons
     });
     if ('error' in embedded) return err(embedded.error, 400);
 
+    const teamIn = normalizeHaccpTeam(b.team);
+    if ('error' in teamIn) return err(teamIn.error, 400);
+
     const tenantId = tenantIdForWrite(scopeAuth, b);
     const actor = auditActor(auth);
     const now = new Date();
@@ -139,6 +145,12 @@ export async function handleHaccpPlans(ctx: HandlerContext): Promise<NextRespons
       status: 'DRAFT',
       recipeIds: idList(b.recipeIds),
       menuIds: idList(b.menuIds),
+      team: teamIn,
+      scope: String(b.scope || '').trim() || undefined,
+      productDescription: String(b.productDescription || '').trim() || undefined,
+      intendedUse: String(b.intendedUse || '').trim() || undefined,
+      flowDiagramNote: String(b.flowDiagramNote || '').trim() || undefined,
+      flowDiagramUrls: idList(b.flowDiagramUrls),
       ...embedded,
       isExample: b.isExample === true,
       history: appendHaccpPlanHistory([], {
@@ -199,35 +211,96 @@ export async function handleHaccpPlans(ctx: HandlerContext): Promise<NextRespons
       withTenantFilter(scopeAuth, { id: path[1] }),
     ) as HaccpPlanDoc | null;
     if (!existing) return err('HACCP plan tidak ditemukan', 404);
-    if (existing.status !== 'DRAFT' && existing.status !== 'UNDER_REVIEW') {
-      return err(`Plan berstatus ${existing.status} tidak dapat diedit kontennya`, 400);
+    if (!haccpPlanAllowsCloseoutEdit(existing.status)) {
+      return err(`Plan berstatus ${existing.status} tidak dapat diedit`, 400);
     }
-
-    const embedded = normalizeHaccpPlanEmbedded({
-      processSteps: b.processSteps !== undefined ? b.processSteps : existing.processSteps,
-      hazards: b.hazards !== undefined ? b.hazards : existing.hazards,
-      ccps: b.ccps !== undefined ? b.ccps : existing.ccps,
-      criticalLimits: b.criticalLimits !== undefined ? b.criticalLimits : existing.criticalLimits,
-      monitoringPlans: b.monitoringPlans !== undefined ? b.monitoringPlans : existing.monitoringPlans,
-    });
-    if ('error' in embedded) return err(embedded.error, 400);
+    const studyEditable = haccpPlanAllowsStudyEdit(existing.status);
 
     const actor = auditActor(auth);
     const now = new Date();
     const patch: Record<string, unknown> = {
-      ...embedded,
       updatedAt: now,
     };
-    if (b.nama != null) {
-      const nama = String(b.nama || '').trim();
-      if (!nama) return err('nama wajib', 400);
-      patch.nama = nama;
+
+    if (studyEditable) {
+      const embedded = normalizeHaccpPlanEmbedded({
+        processSteps: b.processSteps !== undefined ? b.processSteps : existing.processSteps,
+        hazards: b.hazards !== undefined ? b.hazards : existing.hazards,
+        ccps: b.ccps !== undefined ? b.ccps : existing.ccps,
+        criticalLimits: b.criticalLimits !== undefined ? b.criticalLimits : existing.criticalLimits,
+        monitoringPlans: b.monitoringPlans !== undefined ? b.monitoringPlans : existing.monitoringPlans,
+      });
+      if ('error' in embedded) return err(embedded.error, 400);
+      Object.assign(patch, embedded);
+      if (b.nama != null) {
+        const nama = String(b.nama || '').trim();
+        if (!nama) return err('nama wajib', 400);
+        patch.nama = nama;
+      }
+      if (b.description !== undefined) {
+        patch.description = String(b.description || '').trim() || null;
+      }
+      if (b.recipeIds !== undefined) patch.recipeIds = idList(b.recipeIds);
+      if (b.menuIds !== undefined) patch.menuIds = idList(b.menuIds);
+      if (b.team !== undefined) {
+        const team = normalizeHaccpTeam(b.team);
+        if ('error' in team) return err(team.error, 400);
+        patch.team = team;
+      }
+      if (b.scope !== undefined) patch.scope = String(b.scope || '').trim() || null;
+      if (b.productDescription !== undefined) {
+        patch.productDescription = String(b.productDescription || '').trim() || null;
+      }
+      if (b.intendedUse !== undefined) {
+        patch.intendedUse = String(b.intendedUse || '').trim() || null;
+      }
+      if (b.flowDiagramNote !== undefined) {
+        patch.flowDiagramNote = String(b.flowDiagramNote || '').trim() || null;
+      }
+      if (b.flowDiagramUrls !== undefined) {
+        patch.flowDiagramUrls = idList(b.flowDiagramUrls);
+      }
+      if (b.flowVerified === true) {
+        const byName = String(b.flowVerifiedByName || '').trim()
+          || actor.userName
+          || '';
+        if (!byName) {
+          return err('Nama verifikator lapangan wajib saat menandai alur sudah dicek', 400);
+        }
+        patch.flowVerifiedAt = existing.flowVerifiedAt || now;
+        patch.flowVerifiedBy = actor.userId;
+        patch.flowVerifiedByName = byName;
+        patch.flowVerifiedNote = String(b.flowVerifiedNote || '').trim() || null;
+      } else if (b.flowVerified === false) {
+        patch.flowVerifiedAt = null;
+        patch.flowVerifiedBy = null;
+        patch.flowVerifiedByName = null;
+        patch.flowVerifiedNote = null;
+      }
     }
-    if (b.description !== undefined) {
-      patch.description = String(b.description || '').trim() || null;
+    if (b.validationNote !== undefined) {
+      patch.validationNote = String(b.validationNote || '').trim() || null;
     }
-    if (b.recipeIds !== undefined) patch.recipeIds = idList(b.recipeIds);
-    if (b.menuIds !== undefined) patch.menuIds = idList(b.menuIds);
+    if (b.validationEvidenceUrls !== undefined) {
+      patch.validationEvidenceUrls = idList(b.validationEvidenceUrls);
+    }
+    if (b.markValidated === true) {
+      const byName = String(b.validatedByName || '').trim() || actor.userName || '';
+      if (!byName) return err('Nama validator wajib saat menandai rencana tervalidasi', 400);
+      if (!String(b.validationNote ?? existing.validationNote || '').trim()
+        && !idList(b.validationEvidenceUrls ?? existing.validationEvidenceUrls).length) {
+        return err('Catatan atau foto validasi wajib', 400);
+      }
+      patch.validatedAt = existing.validatedAt || now;
+      patch.validatedBy = actor.userId;
+      patch.validatedByName = byName;
+    }
+    if (b.trainingNote !== undefined) {
+      patch.trainingNote = String(b.trainingNote || '').trim() || null;
+    }
+    if (b.trainingEvidenceUrls !== undefined) {
+      patch.trainingEvidenceUrls = idList(b.trainingEvidenceUrls);
+    }
     if (b.effectiveDate !== undefined) {
       patch.effectiveDate = String(b.effectiveDate || '').trim() || null;
     }

@@ -1,11 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
-import HaccpStudyForm, { type HaccpStudyValue } from '@/components/food-production/HaccpStudyForm';
+import HaccpStudyForm, { studyChecklist, type HaccpStudyValue } from '@/components/food-production/HaccpStudyForm';
+import HaccpWizardStepper, {
+  HACCP_WIZARD_STEPS,
+  type HaccpWizardStepId,
+} from '@/components/food-safety/HaccpWizardStepper';
+import {
+  emptyPreamble,
+  preambleChecklist,
+  HaccpWizardStepA,
+  HaccpWizardStepB,
+  HaccpWizardStepC,
+  type HaccpPreambleValue,
+} from '@/components/food-safety/HaccpPreamblePanels';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
+import { getUser } from '@/lib/auth-client';
 import { ClipboardList, Plus, RefreshCw, Save, Sprout } from 'lucide-react';
 import { HACCP_CATEGORY_LABELS } from '@/lib/food-production/haccp';
 import {
@@ -14,9 +29,14 @@ import {
   HACCP_HAZARD_TYPE_LABELS,
   HACCP_PLAN_STATUS_LABELS,
   formatCriticalLimit,
+  haccpPlanAllowsCloseoutEdit,
+  haccpPlanAllowsStudyEdit,
+  hasHaccpPlanValidation,
+  hasHaccpTrainingEvidence,
   type HaccpPlanDoc,
   type HaccpPlanStatus,
 } from '@/lib/food-production/haccp-plan';
+import HaccpWizardStepE, { type HaccpCloseoutValue } from '@/components/food-safety/HaccpWizardStepE';
 
 type PlanRow = Pick<
   HaccpPlanDoc,
@@ -35,6 +55,21 @@ type PlanRow = Pick<
   | 'description'
   | 'recipeIds'
   | 'menuIds'
+  | 'team'
+  | 'scope'
+  | 'productDescription'
+  | 'intendedUse'
+  | 'flowDiagramNote'
+  | 'flowDiagramUrls'
+  | 'flowVerifiedAt'
+  | 'flowVerifiedByName'
+  | 'flowVerifiedNote'
+  | 'validationNote'
+  | 'validationEvidenceUrls'
+  | 'validatedAt'
+  | 'validatedByName'
+  | 'trainingNote'
+  | 'trainingEvidenceUrls'
 >;
 
 const NEXT_STATUS: Partial<Record<HaccpPlanStatus, HaccpPlanStatus>> = {
@@ -51,8 +86,28 @@ const EMPTY_STUDY: HaccpStudyValue = {
   monitoringPlans: [],
 };
 
-function idsToCsv(ids?: string[]): string {
-  return (ids || []).join(', ');
+function closeoutFromPlan(plan: PlanRow): HaccpCloseoutValue {
+  return {
+    validationNote: plan.validationNote || '',
+    validationEvidenceUrls: plan.validationEvidenceUrls || [],
+    validatedAtLabel: plan.validatedAt
+      ? new Date(plan.validatedAt as unknown as string).toLocaleString('id-ID')
+      : null,
+    validatedByName: plan.validatedByName || '',
+    trainingNote: plan.trainingNote || '',
+    trainingEvidenceUrls: plan.trainingEvidenceUrls || [],
+  };
+}
+
+function emptyCloseout(): HaccpCloseoutValue {
+  return {
+    validationNote: '',
+    validationEvidenceUrls: [],
+    validatedAtLabel: null,
+    validatedByName: '',
+    trainingNote: '',
+    trainingEvidenceUrls: [],
+  };
 }
 
 function csvToIds(raw: string): string[] {
@@ -69,11 +124,66 @@ function studyFromPlan(plan: PlanRow): HaccpStudyValue {
   };
 }
 
+function estimateStudyProgress(
+  study: HaccpStudyValue,
+  preamble: HaccpPreambleValue,
+  meta: { nama?: string },
+  closeout?: HaccpCloseoutValue,
+): number {
+  let score = 0;
+  const total = 14;
+  if (meta.nama?.trim()) score += 1;
+  if (preamble.team.some((m) => m.name.trim() && m.role.trim())) score += 1;
+  if (preamble.scope.trim()) score += 1;
+  if (preamble.productDescription.trim()) score += 1;
+  if (preamble.intendedUse.trim()) score += 1;
+  if (study.processSteps.length) score += 1;
+  if (preamble.flowVerified) score += 1;
+  if (study.hazards.length) score += 1;
+  if (study.ccps.length) score += 1;
+  if (study.criticalLimits.length) score += 1;
+  if (study.monitoringPlans.length) score += 1;
+  if (study.ccps.some((c) => c.correctiveAction?.trim())) score += 1;
+  if (closeout && (closeout.validationNote.trim() || closeout.validationEvidenceUrls.length)) score += 1;
+  if (closeout && (closeout.trainingNote.trim() || closeout.trainingEvidenceUrls.length)) score += 1;
+  return Math.round((score / total) * 100);
+}
+
+function preambleFromPlan(plan: PlanRow): HaccpPreambleValue {
+  const team = (plan.team || []).map((m) => ({
+    name: m.name || '',
+    role: m.role || '',
+    unit: m.unit || '',
+  }));
+  return {
+    team: team.length ? team : [{ name: '', role: '', unit: '' }],
+    scope: plan.scope || '',
+    productDescription: plan.productDescription || '',
+    intendedUse: plan.intendedUse || '',
+    recipeIdsCsv: idsToCsv(plan.recipeIds),
+    menuIdsCsv: idsToCsv(plan.menuIds),
+    flowDiagramNote: plan.flowDiagramNote || '',
+    flowDiagramUrls: plan.flowDiagramUrls || [],
+    flowVerified: Boolean(plan.flowVerifiedAt),
+    flowVerifiedByName: plan.flowVerifiedByName || '',
+    flowVerifiedNote: plan.flowVerifiedNote || '',
+  };
+}
+
 function stepLabel(plan: PlanRow, key: string): string {
   return plan.processSteps?.find((s) => s.key === key)?.nama || key;
 }
 
 export default function HaccpPlanPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Memuat rencana HACCP…</div>}>
+      <HaccpPlanPageInner />
+    </Suspense>
+  );
+}
+
+function HaccpPlanPageInner() {
+  const searchParams = useSearchParams();
   const [rows, setRows] = useState<PlanRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
@@ -86,12 +196,30 @@ export default function HaccpPlanPage() {
   const [createBusy, setCreateBusy] = useState(false);
   const [editNama, setEditNama] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [editRecipeIds, setEditRecipeIds] = useState('');
-  const [editMenuIds, setEditMenuIds] = useState('');
   const [editStudy, setEditStudy] = useState<HaccpStudyValue>(EMPTY_STUDY);
+  const [editPreamble, setEditPreamble] = useState<HaccpPreambleValue>(emptyPreamble());
+  const [editCloseout, setEditCloseout] = useState<HaccpCloseoutValue>(emptyCloseout());
   const [saveBusy, setSaveBusy] = useState(false);
+  const [validationBusy, setValidationBusy] = useState(false);
+  const [wizardStep, setWizardStep] = useState<HaccpWizardStepId>('A');
+  const wizardMode = searchParams.get('wizard') === '1'
+    || Boolean(searchParams.get('planId'));
 
-  const editable = detail?.status === 'DRAFT' || detail?.status === 'UNDER_REVIEW';
+  const editable = Boolean(detail && haccpPlanAllowsStudyEdit(detail.status));
+  const closeoutEditable = Boolean(detail && haccpPlanAllowsCloseoutEdit(detail.status));
+
+  const progressPct = useMemo(
+    () => estimateStudyProgress(editStudy, editPreamble, { nama: editNama }, editCloseout),
+    [editStudy, editPreamble, editNama, editCloseout],
+  );
+
+  const checklist = useMemo(
+    () => [
+      { id: 'nama', label: 'Nama rencana', ok: Boolean(editNama.trim()) },
+      ...preambleChecklist(editPreamble, editStudy.processSteps.length),
+    ],
+    [editNama, editPreamble, editStudy.processSteps.length],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,12 +239,23 @@ export default function HaccpPlanPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const planId = searchParams.get('planId');
+    if (planId) void openDetail(planId);
+    if (searchParams.get('wizard') === '1' && !planId) {
+      setShowCreate(true);
+      setWizardStep('A');
+    }
+    // openDetail is stable enough for deep-link boot; avoid re-fetch loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const syncEditForm = (plan: PlanRow) => {
     setEditNama(plan.nama || '');
     setEditDescription(plan.description || '');
-    setEditRecipeIds(idsToCsv(plan.recipeIds));
-    setEditMenuIds(idsToCsv(plan.menuIds));
     setEditStudy(studyFromPlan(plan));
+    setEditPreamble(preambleFromPlan(plan));
+    setEditCloseout(closeoutFromPlan(plan));
   };
 
   const openDetail = async (id: string) => {
@@ -127,6 +266,19 @@ export default function HaccpPlanPage() {
       if (!res.ok) throw new Error(data.error || 'Gagal memuat detail');
       setDetail(data);
       syncEditForm(data);
+      const pre = preambleFromPlan(data);
+      const incomplete = preambleChecklist(pre, (data.processSteps || []).length).some((c) => !c.ok);
+      const stepQ = String(searchParams.get('step') || '').toUpperCase();
+      if (stepQ === 'E' || stepQ === 'D' || stepQ === 'A' || stepQ === 'B' || stepQ === 'C') {
+        setWizardStep(stepQ);
+      } else {
+        const studyDone = (data.ccps || []).length > 0 && (data.monitoringPlans || []).length > 0;
+        const closeoutDone = hasHaccpPlanValidation(data) && hasHaccpTrainingEvidence(data);
+        if (incomplete) setWizardStep('A');
+        else if (!studyDone) setWizardStep('D');
+        else if (!closeoutDone) setWizardStep('E');
+        else setWizardStep('D');
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
       setDetail(null);
@@ -162,39 +314,95 @@ export default function HaccpPlanPage() {
     }
   };
 
-  const saveEdit = async () => {
-    if (!detail || !editable) return;
-    if (!editNama.trim()) {
+  const saveEdit = async (opts?: { silent?: boolean }): Promise<boolean> => {
+    if (!detail || !closeoutEditable) return false;
+    if (editable && !editNama.trim()) {
       toast.error('Nama plan wajib diisi');
-      return;
+      return false;
     }
     setSaveBusy(true);
     try {
+      const closeoutBody = {
+        validationNote: editCloseout.validationNote,
+        validationEvidenceUrls: editCloseout.validationEvidenceUrls,
+        trainingNote: editCloseout.trainingNote,
+        trainingEvidenceUrls: editCloseout.trainingEvidenceUrls,
+        markValidated: Boolean(editCloseout.validationNote.trim() || editCloseout.validationEvidenceUrls.length),
+        validatedByName: editCloseout.validatedByName || getUser()?.name || undefined,
+      };
       const res = await fetch(`/api/haccp-plans/${detail.id}`, {
         method: 'PUT',
         headers: { ...actingTenantHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(editable ? {
           nama: editNama.trim(),
           description: editDescription,
-          recipeIds: csvToIds(editRecipeIds),
-          menuIds: csvToIds(editMenuIds),
+          recipeIds: csvToIds(editPreamble.recipeIdsCsv),
+          menuIds: csvToIds(editPreamble.menuIdsCsv),
+          team: editPreamble.team.filter((m) => m.name.trim() || m.role.trim()),
+          scope: editPreamble.scope,
+          productDescription: editPreamble.productDescription,
+          intendedUse: editPreamble.intendedUse,
+          flowDiagramNote: editPreamble.flowDiagramNote,
+          flowDiagramUrls: editPreamble.flowDiagramUrls,
+          flowVerified: editPreamble.flowVerified,
+          flowVerifiedByName: editPreamble.flowVerifiedByName
+            || getUser()?.name
+            || undefined,
+          flowVerifiedNote: editPreamble.flowVerifiedNote,
           processSteps: editStudy.processSteps,
           hazards: editStudy.hazards,
           ccps: editStudy.ccps,
           criticalLimits: editStudy.criticalLimits,
           monitoringPlans: editStudy.monitoringPlans,
-        }),
+          ...closeoutBody,
+        } : closeoutBody),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal menyimpan');
-      toast.success('Plan disimpan');
+      if (!opts?.silent) toast.success(editable ? 'Plan disimpan' : 'Bukti langkah E disimpan');
       setDetail(data);
       syncEditForm(data);
       await load();
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal');
+      return false;
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
+  const createValidation = async () => {
+    if (!detail || !closeoutEditable) return;
+    if (!editCloseout.validationNote.trim() && !editCloseout.validationEvidenceUrls.length) {
+      toast.error('Isi catatan atau foto validasi dulu');
+      return;
+    }
+    setValidationBusy(true);
+    try {
+      const saved = await saveEdit({ silent: true });
+      if (!saved) return;
+      const evidence = editCloseout.validationEvidenceUrls;
+      const res = await fetch('/api/haccp-verifications', {
+        method: 'POST',
+        headers: { ...actingTenantHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          verificationType: 'VALIDATION',
+          haccpPlanId: detail.id,
+          method: 'Uji coba / tinjau rencana di dapur',
+          result: evidence.length ? 'PASS' : 'PARTIAL',
+          note: editCloseout.validationNote,
+          evidenceUrls: evidence,
+          complete: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal mencatat validasi');
+      toast.success(`Validasi ${data.noDokumen} dicatat`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
     } finally {
-      setSaveBusy(false);
+      setValidationBusy(false);
     }
   };
 
@@ -207,6 +415,11 @@ export default function HaccpPlanPage() {
       criticalLimits: ex.criticalLimits,
       monitoringPlans: ex.monitoringPlans,
     });
+    setEditPreamble(preambleFromPlan({
+      ...ex,
+      id: detail?.id || '',
+      noDokumen: detail?.noDokumen || '',
+    } as PlanRow));
     if (!editNama.trim()) setEditNama(ex.nama);
     if (!editDescription.trim()) setEditDescription(ex.description || '');
     toast.message('Contoh diisi ke formulir — tetap divalidasi ahli sebelum dipakai');
@@ -264,13 +477,23 @@ export default function HaccpPlanPage() {
       <OperationalScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <p className="text-xs text-muted-foreground">
+            <Link href="/kitchen-assurance" className="text-blue-700 hover:underline">
+              Keamanan Pangan
+            </Link>
+            <span className="mx-1">/</span>
+            <Link href="/kitchen-assurance/setup" className="text-blue-700 hover:underline">
+              Setup
+            </Link>
+            <span className="mx-1">/</span>
+            Rencana HACCP
+          </p>
+          <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight">
             <ClipboardList className="h-5 w-5" />
-            Studi HACCP
+            Rencana HACCP
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Susun langkah proses, bahaya, CCP, batas kritis, dan rencana pemantauan dalam bahasa biasa.
-            Contoh wajib divalidasi ahli sebelum dipakai operasional.
+            Ikuti panduan langkah — tidak perlu hafal istilah teknis. Contoh wajib divalidasi ahli sebelum dipakai operasional.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -288,6 +511,200 @@ export default function HaccpPlanPage() {
           </Button>
         </div>
       </div>
+
+      {(wizardMode || detail) && (
+        <HaccpWizardStepper
+          active={wizardStep}
+          onSelect={setWizardStep}
+          progressPct={detail ? progressPct : null}
+        />
+      )}
+
+      {wizardStep === 'A' && !detail && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+          Buat draft rencana dulu (form di bawah / tombol Buat plan), lalu isi Tim & ruang lingkup di langkah ini.
+        </div>
+      )}
+      {wizardStep === 'A' && detail && (
+        <HaccpWizardStepA
+          value={editPreamble}
+          onChange={setEditPreamble}
+          nama={editNama}
+          onNamaChange={setEditNama}
+          description={editDescription}
+          onDescriptionChange={setEditDescription}
+          disabled={!editable}
+        />
+      )}
+      {wizardStep === 'B' && detail && (
+        <HaccpWizardStepB
+          value={editPreamble}
+          onChange={setEditPreamble}
+          disabled={!editable}
+        />
+      )}
+      {wizardStep === 'C' && detail && (
+        <HaccpWizardStepC
+          value={editPreamble}
+          onChange={setEditPreamble}
+          processSteps={editStudy.processSteps}
+          onProcessStepsChange={(steps) => setEditStudy((s) => ({ ...s, processSteps: steps }))}
+          flowVerifiedAtLabel={
+            detail.flowVerifiedAt
+              ? new Date(detail.flowVerifiedAt).toLocaleString('id-ID')
+              : null
+          }
+          disabled={!editable}
+        />
+      )}
+      {wizardStep === 'D' && detail && (
+        <HaccpStudyForm
+          value={editStudy}
+          onChange={setEditStudy}
+          disabled={!editable}
+          hideProcessSteps
+        />
+      )}
+      {wizardStep === 'D' && !detail && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+          Buat draft rencana dulu, lalu isi bahaya dan CCP di langkah ini.
+        </div>
+      )}
+      {wizardStep === 'E' && detail && !editable && closeoutEditable && (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-800">
+          Rencana sudah {HACCP_PLAN_STATUS_LABELS[detail.status]}. Studi A–D terkunci; validasi dan bukti
+          pelatihan masih bisa dilengkapi di sini.
+        </p>
+      )}
+      {wizardStep === 'E' && detail && (
+        <HaccpWizardStepE
+          value={editCloseout}
+          onChange={setEditCloseout}
+          disabled={!closeoutEditable}
+          onCreateValidation={closeoutEditable ? () => void createValidation() : undefined}
+          creatingValidation={validationBusy}
+        />
+      )}
+      {wizardStep === 'E' && !detail && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          Buat draft rencana dulu (langkah A) sebelum mencatat validasi dan pelatihan.
+        </div>
+      )}
+      {detail && (wizardStep === 'A' || wizardStep === 'B' || wizardStep === 'C') && (
+        <ul className="flex flex-wrap gap-2 text-xs">
+          {checklist.map((c) => (
+            <li
+              key={c.id}
+              className={`rounded-full border px-2 py-1 ${
+                c.ok
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                  : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}
+            >
+              {c.ok ? '✓' : '○'} {c.label}
+            </li>
+          ))}
+        </ul>
+      )}
+      {detail && wizardStep === 'D' && (
+        <ul className="flex flex-wrap gap-2 text-xs">
+          {studyChecklist(editStudy).map((c) => (
+            <li
+              key={c.id}
+              className={`rounded-full border px-2 py-1 ${
+                c.ok
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                  : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}
+            >
+              {c.ok ? '✓' : '○'} {c.label}
+            </li>
+          ))}
+        </ul>
+      )}
+      {detail && wizardStep === 'E' && (
+        <ul className="flex flex-wrap gap-2 text-xs">
+          {[
+            {
+              id: 'validation',
+              ok: Boolean(editCloseout.validationNote.trim() || editCloseout.validationEvidenceUrls.length),
+              label: 'Validasi dicatat',
+            },
+            {
+              id: 'training',
+              ok: Boolean(editCloseout.trainingNote.trim() || editCloseout.trainingEvidenceUrls.length),
+              label: 'Bukti pelatihan',
+            },
+          ].map((c) => (
+            <li
+              key={c.id}
+              className={`rounded-full border px-2 py-1 ${
+                c.ok
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                  : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}
+            >
+              {c.ok ? '✓' : '○'} {c.label}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(wizardMode || detail) && (
+        <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center justify-between gap-2 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const idx = HACCP_WIZARD_STEPS.findIndex((s) => s.id === wizardStep);
+              if (idx <= 0) return;
+              setWizardStep(HACCP_WIZARD_STEPS[idx - 1]!.id);
+            }}
+            disabled={wizardStep === 'A'}
+          >
+            Kembali
+          </Button>
+          <div className="flex flex-wrap gap-2">
+            {detail && editable && (
+              <Button type="button" variant="outline" size="sm" onClick={fillExampleStructure}>
+                Isi contoh
+              </Button>
+            )}
+            {detail && (editable || (wizardStep === 'E' && closeoutEditable)) && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={saveBusy}
+                onClick={() => void saveEdit()}
+              >
+                <Save className="mr-1 h-4 w-4" />
+                {wizardStep === 'E' && !editable ? 'Simpan bukti' : 'Simpan draft'}
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                const idx = HACCP_WIZARD_STEPS.findIndex((s) => s.id === wizardStep);
+                if (idx < 0 || idx >= HACCP_WIZARD_STEPS.length - 1) {
+                  toast.message(
+                    editable
+                      ? 'Ini langkah terakhir panduan. Ajukan review dari tombol status bila siap.'
+                      : 'Langkah terakhir. Simpan bukti validasi dan pelatihan.',
+                  );
+                  return;
+                }
+                setWizardStep(HACCP_WIZARD_STEPS[idx + 1]!.id);
+              }}
+              disabled={wizardStep === 'E'}
+            >
+              Lanjut
+            </Button>
+          </div>
+        </div>
+      )}
 
       {showCreate && (
         <div className="rounded-lg border p-4 space-y-3 max-w-xl">
@@ -382,73 +799,44 @@ export default function HaccpPlanPage() {
                 )}
               </div>
 
-              {editable && (
-                <div className="space-y-4 rounded-md border border-dashed p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-sm font-semibold">Edit studi</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Isi formulir di bawah. Tidak perlu menulis kode atau JSON.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" size="sm" variant="outline" onClick={fillExampleStructure}>
-                        Isi contoh siap pakai
-                      </Button>
-                      <Button size="sm" disabled={saveBusy} onClick={() => void saveEdit()}>
-                        <Save className="mr-1 h-3.5 w-3.5" />
-                        Simpan
-                      </Button>
-                    </div>
-                  </div>
-
-                  <label className="block text-xs space-y-1">
-                    <span className="text-muted-foreground">Nama plan</span>
-                    <input
-                      className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-                      value={editNama}
-                      onChange={(e) => setEditNama(e.target.value)}
-                    />
-                  </label>
-                  <label className="block text-xs space-y-1">
-                    <span className="text-muted-foreground">Ringkasan / tujuan plan</span>
-                    <textarea
-                      className="w-full rounded border bg-background px-2 py-1.5 text-sm min-h-[60px]"
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      placeholder="Untuk dapur apa, menu apa, atau proses apa"
-                    />
-                  </label>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <label className="text-xs space-y-1">
-                      <span className="text-muted-foreground">Resep terkait (opsional)</span>
-                      <input
-                        className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-                        value={editRecipeIds}
-                        onChange={(e) => setEditRecipeIds(e.target.value)}
-                        placeholder="Pisahkan dengan koma jika lebih dari satu"
-                      />
-                    </label>
-                    <label className="text-xs space-y-1">
-                      <span className="text-muted-foreground">Menu terkait (opsional)</span>
-                      <input
-                        className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-                        value={editMenuIds}
-                        onChange={(e) => setEditMenuIds(e.target.value)}
-                        placeholder="Pisahkan dengan koma jika lebih dari satu"
-                      />
-                    </label>
-                  </div>
-
-                  <HaccpStudyForm value={editStudy} onChange={setEditStudy} />
-                </div>
-              )}
-
               {!editable && (
                 <>
                   {detail.description && (
                     <p className="text-sm text-muted-foreground">{detail.description}</p>
                   )}
+                  <section className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Tim & ruang lingkup
+                    </h3>
+                    <ul className="space-y-1">
+                      {(detail.team || []).map((m, i) => (
+                        <li key={i}>
+                          {m.name} — {m.role}
+                          {m.unit ? ` (${m.unit})` : ''}
+                        </li>
+                      ))}
+                      {(detail.team || []).length === 0 && (
+                        <li className="text-muted-foreground">Belum ada anggota tim</li>
+                      )}
+                    </ul>
+                    <p className="text-xs text-muted-foreground">
+                      Ruang lingkup: {detail.scope || '—'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Produk: {detail.productDescription || '—'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Penggunaan: {detail.intendedUse || '—'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Alur lapangan:{' '}
+                      {detail.flowVerifiedAt
+                        ? `Dicek ${new Date(detail.flowVerifiedAt).toLocaleString('id-ID')}${
+                          detail.flowVerifiedByName ? ` oleh ${detail.flowVerifiedByName}` : ''
+                        }`
+                        : 'Belum dikonfirmasi'}
+                    </p>
+                  </section>
                   {(detail.recipeIds?.length || detail.menuIds?.length) ? (
                     <p className="text-xs text-muted-foreground">
                       Resep terkait: {(detail.recipeIds || []).join(', ') || '—'}

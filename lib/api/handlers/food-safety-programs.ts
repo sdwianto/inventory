@@ -23,8 +23,9 @@ import {
   type FoodSafetyRequirementDoc,
 } from '@/lib/food-production/food-safety-program';
 import { ensureFoodSafetyProgramsSeeded } from '@/lib/food-production/food-safety-program-seed';
-import { listPrerequisiteCompliance } from '@/lib/food-production/prerequisite-compliance';
+import { listPrerequisiteCompliance, listPrerequisiteItemCompliance } from '@/lib/food-production/prerequisite-compliance';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { BGN_HACCP_SOURCE, resolvePrpMeta } from '@/lib/food-safety/prp-meta';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleFoodSafetyPrograms(
@@ -67,6 +68,23 @@ export async function handleFoodSafetyPrograms(
       || url.searchParams.get('kitchenId')
       || undefined;
     const rows = await listPrerequisiteCompliance(db, { tenantId, asOf, kitchenId });
+    const missing = rows.filter((r) => r.status === 'MISSING').length;
+    return ok({ asOf: asOf || new Date().toISOString().slice(0, 10), kitchenId, missing, rows });
+  }
+
+  if (route === '/food-safety-requirements/compliance' && method === 'GET') {
+    const deniedRole = requireRole(auth, [...FP_OPS_WRITE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const tenantId = tenantIdForWrite(scopeAuth, {});
+    await ensureFoodSafetyProgramsSeeded(db, tenantId);
+    const asOf = url.searchParams.get('asOf') || undefined;
+    const kitchenId = resolveKitchenIdFilter(url, request)
+      || url.searchParams.get('kitchenId')
+      || undefined;
+    const rows = await listPrerequisiteItemCompliance(db, { tenantId, asOf, kitchenId });
     const missing = rows.filter((r) => r.status === 'MISSING').length;
     return ok({ asOf: asOf || new Date().toISOString().slice(0, 10), kitchenId, missing, rows });
   }
@@ -133,9 +151,11 @@ export async function handleFoodSafetyPrograms(
 
     const programId = url.searchParams.get('programId') || undefined;
     const onlyActive = url.searchParams.get('aktif') === '1';
+    const group = String(url.searchParams.get('group') || '').toUpperCase();
     const filter: Record<string, unknown> = {};
     if (programId) filter.programId = programId;
     if (onlyActive) filter.aktif = true;
+    if (group.startsWith('PRE-')) filter.requirementGroup = group;
     const list = await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
       .sort({ sortOrder: 1, kode: 1 })
@@ -165,6 +185,7 @@ export async function handleFoodSafetyPrograms(
     if (!program) return err('Program tidak ditemukan', 404);
 
     const now = new Date();
+    const meta = resolvePrpMeta(kode);
     const doc: FoodSafetyRequirementDoc = {
       id: uuidv4(),
       tenantId,
@@ -175,6 +196,10 @@ export async function handleFoodSafetyPrograms(
       description: String(b.description || '').trim() || undefined,
       source,
       sourceRef: String(b.sourceRef || '').trim() || undefined,
+      requirementGroup: String(b.requirementGroup || '').trim() || meta?.requirementGroup,
+      bgnCode: String(b.bgnCode || '').trim() || meta?.bgnCode,
+      evidenceType: String(b.evidenceType || '').trim() || meta?.evidenceType,
+      sourceUrl: String(b.sourceUrl || '').trim() || BGN_HACCP_SOURCE.href,
       aktif: b.aktif !== false,
       sortOrder: Number(b.sortOrder) > 0 ? Number(b.sortOrder) : 99,
       createdAt: now,

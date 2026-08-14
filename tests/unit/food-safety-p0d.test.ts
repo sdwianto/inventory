@@ -24,6 +24,18 @@ vi.mock('@/lib/kitchen-assurance/auto-issue', () => ({
   })),
 }));
 
+vi.mock('@/lib/kitchen-assurance/auto-follow-up', () => ({
+  ensureOpenFollowUpForCase: vi.fn(async (_db, input) => ({
+    created: true,
+    followUp: {
+      id: 'fu-1',
+      noDokumen: 'FU-001',
+      status: 'OPEN',
+    },
+    caseId: input.safetyCase?.id,
+  })),
+}));
+
 vi.mock('@/lib/api/audit-log', () => ({
   writeAuditLog: vi.fn(async () => undefined),
 }));
@@ -132,6 +144,13 @@ describe('ADR-004 P0D — applyHaccpHoldToBatch', () => {
 
     expect(result.held).toBe(true);
     expect(result.foodSafetyStatus).toBe('HOLD');
+    expect(result.kaIssue?.id).toBe('ka-1');
+    expect(result.kaIssue?.temuanHref).toContain('/kitchen-assurance/temuan');
+    expect(result.kaIssue?.temuanHref).toContain('caseId=ka-1');
+    expect(result.kaIssue?.temuanHref).toContain('batch=batch-1');
+    expect(result.kaIssue?.followUpHref).toContain('/kitchen-assurance/follow-up');
+    expect(result.kaIssue?.followUpHref).toContain('upload=1');
+    expect(result.kaIssue?.followUpId).toBe('fu-1');
     expect(effectiveFoodSafetyStatus(batchDoc as never)).toBe('HOLD');
     expect(updates).toHaveLength(1);
     const history = batchDoc.foodSafetyHistory as Array<Record<string, unknown>>;

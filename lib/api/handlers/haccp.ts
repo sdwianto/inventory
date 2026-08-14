@@ -30,6 +30,11 @@ import {
 } from '@/lib/food-production/haccp';
 import { PRODUCTION_BATCHES_COLLECTION, type ProductionBatchDoc } from '@/lib/food-production/production-batch';
 import { applyHaccpHoldToBatch } from '@/lib/food-production/haccp-batch-hold';
+import {
+  HACCP_PLANS_COLLECTION,
+  normalizeHaccpTemplateKodeHint,
+  type HaccpPlanDoc,
+} from '@/lib/food-production/haccp-plan';
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles';
@@ -207,6 +212,8 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     if (batchId) filter.productionBatchId = batchId;
     const planId = String(url.searchParams.get('productionPlanId') || '').trim();
     if (planId) filter.productionPlanId = planId;
+    const haccpPlanId = String(url.searchParams.get('haccpPlanId') || '').trim();
+    if (haccpPlanId) filter.haccpPlanId = haccpPlanId;
     const kitchenId = resolveKitchenIdFilter(url, request);
     if (kitchenId) filter.kitchenId = kitchenId;
 
@@ -225,13 +232,50 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
 
-    const templateId = String(haccpBody.templateId || '').trim();
+    let templateId = String(haccpBody.templateId || '').trim();
     const productionBatchId = String(haccpBody.productionBatchId || '').trim();
-    if (!templateId) return err('templateId wajib', 400);
+    const haccpPlanId = String(haccpBody.haccpPlanId || '').trim() || undefined;
+    const ccpKey = String(haccpBody.ccpKey || '').trim() || undefined;
+    const templateKodeHint = normalizeHaccpTemplateKodeHint(
+      String(haccpBody.templateKode || haccpBody.templateKodeHint || ''),
+    );
     if (!productionBatchId) return err('productionBatchId wajib', 400);
 
     const tenantId = tenantIdForWrite(scopeAuth, haccpBody);
     await ensureDefaultHaccpTemplates(db, tenantId);
+
+    let linkedPlan: HaccpPlanDoc | null = null;
+    if (haccpPlanId) {
+      linkedPlan = await db.collection(HACCP_PLANS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: haccpPlanId }),
+      ) as HaccpPlanDoc | null;
+      if (!linkedPlan) return err('Rencana HACCP tidak ditemukan', 404);
+      if (linkedPlan.status !== 'ACTIVE') {
+        return err('Rencana HACCP harus berstatus ACTIVE untuk mencatat hasil', 400);
+      }
+      if (ccpKey && !(linkedPlan.ccps || []).some((c) => c.key === ccpKey)) {
+        return err(`CCP ${ccpKey} tidak ada di rencana aktif`, 400);
+      }
+      if (!templateId && ccpKey) {
+        const mon = (linkedPlan.monitoringPlans || []).find((m) => m.ccpKey === ccpKey);
+        const kode = normalizeHaccpTemplateKodeHint(mon?.templateKodeHint || templateKodeHint);
+        if (kode) {
+          const byKode = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
+            withTenantFilter(scopeAuth, { kode, aktif: true }),
+          ) as HaccpTemplateDoc | null;
+          if (byKode) templateId = byKode.id;
+        }
+      }
+    }
+
+    if (!templateId && templateKodeHint) {
+      const byKode = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { kode: templateKodeHint, aktif: true }),
+      ) as HaccpTemplateDoc | null;
+      if (byKode) templateId = byKode.id;
+    }
+
+    if (!templateId) return err('templateId wajib (atau pilih CCP dari rencana aktif)', 400);
 
     const template = await db.collection(HACCP_TEMPLATES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: templateId, aktif: true }),
@@ -283,6 +327,8 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       templateKode: template.kode,
       templateNama: template.nama,
       category: template.category,
+      haccpPlanId: linkedPlan?.id || haccpPlanId,
+      ccpKey,
       productionBatchId: batch.id,
       batchNo: batch.batchNo,
       productionPlanId: batch.productionPlanId,

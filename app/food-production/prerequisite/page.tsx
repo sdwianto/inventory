@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { RefreshCw, ShieldCheck, ExternalLink } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   FOOD_SAFETY_PROGRAM_FREQUENCY_LABELS,
   FOOD_SAFETY_PROGRAM_SOURCE_LABELS,
@@ -81,12 +82,18 @@ export default function PrerequisitePage() {
       <OperationalScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/setup', label: 'Setup kesiapan' },
+              { label: 'Checklist prasyarat' },
+            ]}
+          />
+          <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight">
             <ShieldCheck className="h-5 w-5" />
-            Prerequisite Food Safety
+            Checklist prasyarat
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            11 program PRP (seed BGN contoh) + requirement. Checklist dicatat lewat QC kategori Prerequisite.
+            Program kebersihan & fasilitas (contoh BGN). Catat lewat checklist — tidak perlu hafal istilah PRP.
           </p>
         </div>
         <div className="flex gap-2">

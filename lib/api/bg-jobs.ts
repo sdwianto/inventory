@@ -147,7 +147,15 @@ export async function enqueueJob(
       'payload.dedupeKey': dedupeKey,
     });
   }
-  if (!existing && !grnId && !dedupeKey && type !== JOB_TYPES.GRN_INVOICE_SYNC) {
+  // SANDBOX_RESET: jangan reuse generik by type+tenant — profil/payload bisa beda
+  // (KA vs full). Tanpa dedupeKey selalu buat job baru.
+  if (
+    !existing
+    && !grnId
+    && !dedupeKey
+    && type !== JOB_TYPES.GRN_INVOICE_SYNC
+    && type !== JOB_TYPES.SANDBOX_RESET
+  ) {
     existing = await db.collection('bg_jobs').findOne({
       type,
       tenantId: tid,
@@ -366,6 +374,7 @@ export async function processJob(db: Db, job: BgJob) {
         tenantId: job.payload?.tenantId ? String(job.payload.tenantId) : undefined,
         includeSales: job.payload?.includeSales !== false,
         preserveJobId: job.id,
+        profile: job.payload?.profile ? String(job.payload.profile) : undefined,
       });
     } else if (job.type === JOB_TYPES.AUDIT_LOG_PURGE) {
       const { runAuditLogPurgeJob } = await import('@/lib/api/audit-purge-run');

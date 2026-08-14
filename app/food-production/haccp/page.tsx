@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,8 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
-import { ShieldCheck, Plus, RefreshCw, Eye } from 'lucide-react';
+import { ShieldCheck, Plus, RefreshCw, Eye, ArrowRight } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   HACCP_STATUS_LABELS,
   HACCP_CATEGORY_LABELS,
@@ -26,13 +28,21 @@ import {
   type HaccpItemResult,
 } from '@/lib/food-production/haccp';
 import { isNumericAutoEvalLimit } from '@/lib/food-production/haccp-critical-limit-eval';
+import { normalizeHaccpTemplateKodeHint } from '@/lib/food-production/haccp-plan';
+import { buildHaccpHoldRepairHrefs } from '@/lib/food-safety/hold-repair-href';
 
 type FoodSafetyHoldResult = {
   held?: boolean;
   skipped?: string;
   foodSafetyStatus?: string;
   error?: string;
-  kaIssue?: { noDokumen?: string; created?: boolean };
+  kaIssue?: {
+    id?: string;
+    noDokumen?: string;
+    created?: boolean;
+    temuanHref?: string;
+    followUpHref?: string;
+  };
 };
 
 function toastFoodSafetyHold(hold: FoodSafetyHoldResult | undefined) {
@@ -41,13 +51,29 @@ function toastFoodSafetyHold(hold: FoodSafetyHoldResult | undefined) {
     toast.warning(`Checklist tersimpan, tetapi penahanan batch gagal: ${hold.error}`);
     return;
   }
+  const href = hold.kaIssue?.followUpHref
+    || (hold.kaIssue?.id
+      ? buildHaccpHoldRepairHrefs({ caseId: hold.kaIssue.id }).followUpHref
+      : hold.kaIssue?.temuanHref || '/kitchen-assurance/temuan');
+  const action = {
+    label: 'Lanjut ke perbaikan',
+    onClick: () => {
+      window.location.href = href;
+    },
+  };
   if (hold.held) {
     const ka = hold.kaIssue?.noDokumen ? ` · Issue ${hold.kaIssue.noDokumen}` : '';
-    toast.warning(`Batch ditahan (food safety)${ka}`);
+    toast.warning(`Batch ditahan (food safety)${ka}`, {
+      action,
+      duration: 14_000,
+    });
     return;
   }
   if (hold.skipped === 'already_hold') {
-    toast.message('Batch sudah berstatus HOLD (food safety)');
+    toast.message('Batch sudah berstatus HOLD (food safety)', {
+      action,
+      duration: 10_000,
+    });
   }
 }
 
@@ -124,6 +150,8 @@ export default function HaccpPage() {
   const [openCreate, setOpenCreate] = useState(false);
   const [templateId, setTemplateId] = useState('');
   const [batchId, setBatchId] = useState('');
+  const [haccpPlanId, setHaccpPlanId] = useState('');
+  const [ccpKey, setCcpKey] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [detail, setDetail] = useState<HaccpRow | null>(null);
   const [editItems, setEditItems] = useState<HaccpItemEdit[]>([]);
@@ -177,6 +205,26 @@ export default function HaccpPage() {
     return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
   }, [load]);
 
+  // Deep-link dari Operasi: ?create=1&planId=&ccpKey=&templateKode=&batch=
+  useEffect(() => {
+    if (typeof window === 'undefined' || !templates.length) return;
+    const q = new URLSearchParams(window.location.search);
+    const plan = q.get('planId') || '';
+    const ccp = q.get('ccpKey') || '';
+    const kode = normalizeHaccpTemplateKodeHint(q.get('templateKode') || '');
+    const batch = q.get('batch') || '';
+    if (plan) setHaccpPlanId(plan);
+    if (ccp) setCcpKey(ccp);
+    if (batch) setBatchId(batch);
+    if (kode) {
+      const match = templates.find((t) => normalizeHaccpTemplateKodeHint(t.kode) === kode);
+      if (match) setTemplateId(match.id);
+    }
+    if (q.get('create') === '1' && canLog) {
+      setOpenCreate(true);
+    }
+  }, [templates, canLog]);
+
   async function createHaccp() {
     if (!templateId || !batchId) {
       toast.error('Pilih template dan batch');
@@ -191,6 +239,8 @@ export default function HaccpPage() {
           templateId,
           productionBatchId: batchId,
           evidenceBase64: photos,
+          ...(haccpPlanId ? { haccpPlanId } : {}),
+          ...(ccpKey ? { ccpKey } : {}),
         }),
       });
       const data = await res.json();
@@ -201,6 +251,8 @@ export default function HaccpPage() {
       setOpenCreate(false);
       setTemplateId('');
       setBatchId('');
+      setHaccpPlanId('');
+      setCcpKey('');
       setPhotos([]);
       await load();
       setDetail(data as HaccpRow);
@@ -307,12 +359,18 @@ export default function HaccpPage() {
       <KitchenScopeBar />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/operasi', label: 'Operasi harian' },
+              { label: 'Catat CCP' },
+            ]}
+          />
+          <h1 className="mt-1 text-xl font-semibold flex items-center gap-2">
             <ShieldCheck className="h-5 w-5" />
-            HACCP Evidence
+            Catat CCP
           </h1>
           <p className="text-sm text-muted-foreground">
-            Checklist CCP kritis + foto evidence per batch · export trail di Batch & Expiry
+            Checklist titik kritis + foto bukti per batch. Jika gagal kritis, batch ditahan dan lanjut ke Temuan & perbaikan.
           </p>
         </div>
         <div className="flex gap-2">
@@ -363,7 +421,15 @@ export default function HaccpPage() {
                   )}
                 </td>
                 <td className="p-3 text-right">{row.summary?.photoCount ?? 0}</td>
-                <td className="p-3 text-right">
+                <td className="p-3 text-right space-x-1">
+                  {effectiveHaccpDisposition(row) === 'FAIL' && (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/kitchen-assurance/temuan?batch=${encodeURIComponent(row.productionBatchId)}`}>
+                        Lanjut ke perbaikan
+                        <ArrowRight className="ml-1 h-3 w-3" />
+                      </Link>
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => void openDetail(row)}>
                     <Eye className="h-4 w-4" />
                   </Button>
@@ -380,18 +446,31 @@ export default function HaccpPage() {
             <DialogTitle>Catat CCP</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
+            {(haccpPlanId || ccpKey) && (
+              <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950">
+                Dari rencana aktif
+                {ccpKey ? <> · CCP <code>{ccpKey}</code></> : null}
+                . Template sudah dipilih dari rencana pemantauan bila tersedia.
+              </p>
+            )}
             <div className="space-y-1">
               <Label>Template</Label>
               <select
                 className="w-full h-10 border rounded-md px-2 text-sm"
                 value={templateId}
                 onChange={(e) => setTemplateId(e.target.value)}
+                disabled={Boolean(haccpPlanId && templateId)}
               >
                 <option value="">—</option>
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>{t.kode} — {t.nama}</option>
                 ))}
               </select>
+              {haccpPlanId && templateId ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Template dikunci dari rencana aktif — bukan pilihan acak.
+                </p>
+              ) : null}
             </div>
             <div className="space-y-1">
               <Label>Batch</Label>

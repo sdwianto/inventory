@@ -11,11 +11,13 @@ import {
   type FoodSafetyProgramDoc,
   type FoodSafetyRequirementDoc,
 } from '@/lib/food-production/food-safety-program';
-import { HACCP_PLANS_COLLECTION } from '@/lib/food-production/haccp-plan';
+import { HACCP_PLANS_COLLECTION, type HaccpPlanDoc, hasHaccpPlanValidation, hasHaccpTrainingEvidence } from '@/lib/food-production/haccp-plan';
 import { HACCP_VERIFICATIONS_COLLECTION } from '@/lib/food-production/haccp-verification';
 import { QC_RESULTS_COLLECTION } from '@/lib/food-production/qc';
 import { PRODUCTION_BATCHES_COLLECTION } from '@/lib/food-production/production-batch';
 import { HACCP_RESULTS_COLLECTION } from '@/lib/food-production/haccp';
+import { auditPillarHref } from '@/lib/food-safety/audit-links';
+import { buildPrpSetupHref, resolvePrpMeta } from '@/lib/food-safety/prp-meta';
 
 export type AuditReadinessStatus = 'NOT_READY' | 'PARTIAL' | 'READY';
 
@@ -32,6 +34,8 @@ export interface AuditReadinessPillar {
   detail: string;
   evidenceCount?: number;
   requiredCount?: number;
+  /** Gelombang E — deep-link perbaikan (Setup / Operasi / Temuan / Wizard). */
+  href?: string;
 }
 
 export interface BgnRequirementEvidence {
@@ -41,9 +45,13 @@ export interface BgnRequirementEvidence {
   kode: string;
   nama: string;
   sourceRef?: string;
+  requirementGroup?: string;
+  bgnCode?: string;
   /** Ada QC PREREQUISITE PASS yang merujuk requirement di jendela lookback. */
   hasEvidence: boolean;
   lastEvidenceAt?: string;
+  /** Gelombang D — deep-link Setup accordion item. */
+  href?: string;
 }
 
 export interface AuditReadinessSnapshot {
@@ -135,6 +143,8 @@ export async function buildAuditReadinessSnapshot(
 
   const bgnRequirements: BgnRequirementEvidence[] = bgnReqs.map((r) => {
     const at = evidenceByReq.get(r.id);
+    const meta = resolvePrpMeta(r.kode);
+    const group = r.requirementGroup || meta?.requirementGroup;
     return {
       requirementId: r.id,
       programId: r.programId,
@@ -142,8 +152,11 @@ export async function buildAuditReadinessSnapshot(
       kode: r.kode,
       nama: r.nama,
       sourceRef: r.sourceRef,
+      requirementGroup: group,
+      bgnCode: r.bgnCode || meta?.bgnCode,
       hasEvidence: Boolean(at),
       lastEvidenceAt: at ? at.toISOString() : undefined,
+      href: buildPrpSetupHref({ group, requirementId: r.id }),
     };
   });
 
@@ -157,19 +170,20 @@ export async function buildAuditReadinessSnapshot(
   const activePlan = await db.collection(HACCP_PLANS_COLLECTION).findOne({
     tenantId: input.tenantId,
     status: 'ACTIVE',
-  });
+  }) as HaccpPlanDoc | null;
   const planStatus: AuditReadinessStatus = activePlan ? 'READY' : 'NOT_READY';
 
   const verFilter: Record<string, unknown> = {
     tenantId: input.tenantId,
     status: 'COMPLETED',
+    verificationType: { $in: ['VALIDATION', 'PLAN'] },
     verifiedAt: { $gte: since },
   };
   const verCount = await db.collection(HACCP_VERIFICATIONS_COLLECTION).countDocuments(verFilter);
-  const verStatus = pillarFromCounts({
-    evidenceCount: verCount,
-    requiredCount: 1,
-  });
+  const validationOk = hasHaccpPlanValidation(activePlan) || verCount > 0;
+  const verStatus: AuditReadinessStatus = validationOk ? 'READY' : 'NOT_READY';
+  const trainingOk = hasHaccpTrainingEvidence(activePlan);
+  const trainingStatus: AuditReadinessStatus = trainingOk ? 'READY' : 'NOT_READY';
 
   const holdFilter: Record<string, unknown> = {
     tenantId: input.tenantId,
@@ -189,52 +203,75 @@ export async function buildAuditReadinessSnapshot(
   const failCount = await db.collection(HACCP_RESULTS_COLLECTION).countDocuments(haccpFailFilter);
   const failStatus: AuditReadinessStatus = failCount === 0 ? 'READY' : 'PARTIAL';
 
+  const planId = activePlan?.id;
+  const pillarHref = (key: string) => auditPillarHref(key, { planId });
+
   const pillars: AuditReadinessPillar[] = [
     {
       key: 'bgn_prp',
-      label: 'BGN / PRP evidence',
+      label: 'Prasyarat (PRP)',
       status: bgnStatus,
-      detail: `${bgnCovered}/${bgnTotal} requirement BGN punya QC Prerequisite COMPLETED (tanpa fail) dalam ${lookbackDays} hari`,
+      detail: `${bgnCovered}/${bgnTotal} item prasyarat punya bukti checklist lolos dalam ${lookbackDays} hari`,
       evidenceCount: bgnCovered,
       requiredCount: bgnTotal,
+      href: pillarHref('bgn_prp'),
     },
     {
       key: 'haccp_plan',
-      label: 'HACCP plan aktif',
+      label: 'Rencana HACCP aktif',
       status: planStatus,
       detail: activePlan
-        ? `Plan aktif: ${String((activePlan as { kode?: string }).kode || activePlan.id)}`
-        : 'Belum ada HaccpPlan berstatus ACTIVE',
+        ? `Rencana aktif: ${activePlan.kode || activePlan.id}`
+        : 'Belum ada rencana HACCP yang aktif',
       evidenceCount: activePlan ? 1 : 0,
       requiredCount: 1,
+      href: pillarHref('haccp_plan'),
     },
     {
       key: 'haccp_verification',
-      label: 'Verifikasi sistem HACCP',
+      label: 'Validasi rencana',
       status: verStatus,
-      detail: `${verCount} verifikasi COMPLETED dalam ${lookbackDays} hari`,
-      evidenceCount: verCount,
+      detail: validationOk
+        ? (activePlan?.validatedAt
+          ? 'Rencana sudah divalidasi di dapur'
+          : `${verCount} catatan validasi/verifikasi plan selesai dalam ${lookbackDays} hari`)
+        : 'Belum ada validasi rencana — isi langkah Cek & pelatihan',
+      evidenceCount: validationOk ? 1 : 0,
       requiredCount: 1,
+      href: pillarHref('haccp_verification'),
+    },
+    {
+      key: 'haccp_training',
+      label: 'Bukti pelatihan',
+      status: trainingStatus,
+      detail: trainingOk
+        ? 'Ada catatan atau foto briefing/sertifikat'
+        : 'Belum ada bukti pelatihan — unggah di langkah Cek & pelatihan',
+      evidenceCount: trainingOk ? 1 : 0,
+      requiredCount: 1,
+      href: pillarHref('haccp_training'),
     },
     {
       key: 'open_holds',
-      label: 'Batch HOLD terbuka',
+      label: 'Batch ditahan',
       status: holdStatus,
       detail: holdCount === 0
-        ? 'Tidak ada batch HOLD'
-        : `${holdCount} batch masih HOLD — selesaikan follow-up sebelum klaim siap`,
+        ? 'Tidak ada batch ditahan'
+        : `${holdCount} batch masih ditahan — selesaikan perbaikan dulu`,
       evidenceCount: holdCount === 0 ? 1 : 0,
       requiredCount: 1,
+      href: pillarHref('open_holds'),
     },
     {
       key: 'haccp_fail_window',
-      label: 'HACCP FAIL (jendela)',
+      label: 'Catatan CCP gagal',
       status: failStatus,
       detail: failCount === 0
-        ? `Tidak ada HACCP FAIL dalam ${lookbackDays} hari`
-        : `${failCount} hasil FAIL — tinjau evidence & release`,
+        ? `Tidak ada catatan CCP gagal dalam ${lookbackDays} hari`
+        : `${failCount} catatan gagal — tinjau di Operasi lalu selesaikan Temuan`,
       evidenceCount: failCount === 0 ? 1 : 0,
       requiredCount: 1,
+      href: pillarHref('haccp_fail_window'),
     },
   ];
 

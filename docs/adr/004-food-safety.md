@@ -353,3 +353,11 @@ Sistem **tidak menetapkan** batas keamanan pangan. Nilai hazard, CCP, dan critic
 - `qc_results` bertambah field dan UI QC perlu pemilih batch.
 - `PASS` belum bermakna penuh sampai HACCP Study selesai — keterbatasan ini harus dinyatakan di UI, bukan disembunyikan.
 - Semua batch dari satu result masih berbagi satu `expiryDate` (dihitung sekali di luar loop) padahal umur simpan tiap menu berbeda. Dicatat sebagai utang, di luar P0.
+
+---
+
+## Addendum — UI hub Keamanan Pangan (2026-08-13)
+
+**Keputusan:** Food Safety sebagai *audit lens* boleh punya **satu pintu UI** (“Keamanan Pangan”) dengan empat mode kerja (Setup · Operasi · Temuan · Audit) yang menuntun non-ahli. Ini **tidak** memindahkan ownership data: QC/HACCP/Cold Chain/Batch tetap Food Production; Finding/Follow-up tetap Kitchen Assurance.
+
+**Acuan UX:** [docs/haccp/haccp-ux-flow.md](../haccp/haccp-ux-flow.md) · **Baseline BGN:** [docs/haccp/bgn-requirement-matrix.md](../haccp/bgn-requirement-matrix.md).

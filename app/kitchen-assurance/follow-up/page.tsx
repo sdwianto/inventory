@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
@@ -16,6 +16,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { getActingKitchenId } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { SquareCheck, Plus, RefreshCw } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   KA_FOLLOW_UP_PRIORITY_LABELS,
   KA_FOLLOW_UP_STATUS_LABELS,
@@ -54,6 +55,16 @@ function caseIdFromQuery(): string {
   return new URLSearchParams(window.location.search).get('caseId') || '';
 }
 
+function uploadFromQuery(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('upload') === '1';
+}
+
+function followUpIdFromQuery(): string {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get('followUpId') || '';
+}
+
 function statusFromQuery(): '' | KaFollowUpStatus {
   if (typeof window === 'undefined') return 'OPEN';
   const params = new URLSearchParams(window.location.search);
@@ -69,6 +80,8 @@ export default function KaFollowUpPage() {
   const [loading, setLoading] = useState(false);
   const [caseId, setCaseId] = useState('');
   const [statusFilter, setStatusFilter] = useState<'' | KaFollowUpStatus>('OPEN');
+  const [autoUpload, setAutoUpload] = useState(false);
+  const [preferFuId, setPreferFuId] = useState('');
   const [open, setOpen] = useState(false);
   const [evidenceFor, setEvidenceFor] = useState<FuRow | null>(null);
   const [evidencePhotos, setEvidencePhotos] = useState<string[]>([]);
@@ -87,10 +100,13 @@ export default function KaFollowUpPage() {
   const canVerify = MANAGE.has(getUser()?.role || '');
   const caseHasActiveFu =
     !!caseId && rows.some((r) => r.safetyCaseId === caseId && (r.status === 'OPEN' || r.status === 'DONE'));
+  const autoOpenedRef = useRef(false);
 
   useEffect(() => {
     setCaseId(caseIdFromQuery());
     setStatusFilter(statusFromQuery());
+    setAutoUpload(uploadFromQuery());
+    setPreferFuId(followUpIdFromQuery());
   }, []);
 
   const load = useCallback(async () => {
@@ -119,6 +135,20 @@ export default function KaFollowUpPage() {
     window.addEventListener('fp-kitchen-changed', onKitchen);
     return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
   }, [load]);
+
+  useEffect(() => {
+    if (!autoUpload || autoOpenedRef.current || loading || !rows.length) return;
+    const preferred = preferFuId
+      ? rows.find((r) => r.id === preferFuId && r.status === 'OPEN')
+      : undefined;
+    const target = preferred
+      || rows.find((r) => (!caseId || r.safetyCaseId === caseId) && r.status === 'OPEN');
+    if (!target) return;
+    autoOpenedRef.current = true;
+    setEvidenceFor(target);
+    setEvidencePhotos(target.evidenceMedia || []);
+    setEvidenceNote(target.evidenceNote || '');
+  }, [autoUpload, preferFuId, loading, rows, caseId]);
 
   async function loadIssueOptions(): Promise<IssueOption[]> {
     setLoadingIssues(true);
@@ -253,12 +283,18 @@ export default function KaFollowUpPage() {
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/temuan', label: 'Temuan & perbaikan' },
+              { label: 'Tugas perbaikan' },
+            ]}
+          />
+          <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold">
             <SquareCheck className="h-5 w-5" />
-            Follow Up
+            Tugas perbaikan
           </h1>
           <p className="text-sm text-muted-foreground">
-            Task operasional dari Issue: owner, due date, evidence, verify — bukan CAPA.
+            Kerjakan perbaikan dari issue: penanggung jawab, jatuh tempo, unggah bukti, lalu verifikasi — agar batch yang ditahan bisa dilanjutkan.
           </p>
         </div>
         <div className="flex gap-2">

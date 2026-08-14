@@ -75,12 +75,31 @@ describe('ADR-004 Fase 3 — normalize embedded + approval', () => {
 
   it('approval gate menolak plan kosong', () => {
     expect(assertHaccpPlanReadyForApproval({
+      team: [],
+      scope: '',
+      productDescription: '',
+      intendedUse: '',
       processSteps: [],
       hazards: [],
       ccps: [],
       criticalLimits: [],
       monitoringPlans: [],
-    })).toMatch(/process step/i);
+    })).toMatch(/Tim HACCP/i);
+  });
+
+  it('approval gate menolak tanpa nama verifikator', () => {
+    expect(assertHaccpPlanReadyForApproval({
+      ...EXAMPLE_HACCP_PLAN_COOK,
+      flowVerifiedByName: undefined,
+      flowVerifiedBy: undefined,
+    })).toMatch(/verifikator/i);
+  });
+
+  it('approval gate menolak tanpa verifikasi alur', () => {
+    expect(assertHaccpPlanReadyForApproval({
+      ...EXAMPLE_HACCP_PLAN_COOK,
+      flowVerifiedAt: undefined,
+    })).toMatch(/lapangan/i);
   });
 
   it('approval gate menolak tanpa monitoring plan', () => {

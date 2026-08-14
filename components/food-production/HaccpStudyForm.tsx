@@ -94,14 +94,32 @@ function EmptyHint({ children }: { children: ReactNode }) {
   return <p className="text-xs text-muted-foreground italic">{children}</p>;
 }
 
+export function studyChecklist(value: HaccpStudyValue): Array<{ id: string; label: string; ok: boolean }> {
+  return [
+    { id: 'steps', label: 'Langkah proses', ok: value.processSteps.length > 0 },
+    { id: 'hazards', label: 'Analisis bahaya', ok: value.hazards.length > 0 },
+    { id: 'ccp', label: 'CCP', ok: value.ccps.length > 0 },
+    { id: 'limit', label: 'Batas aman', ok: value.criticalLimits.length > 0 },
+    { id: 'monitor', label: 'Cara pantau', ok: value.monitoringPlans.length > 0 },
+    {
+      id: 'ca',
+      label: 'Tindakan bila gagal',
+      ok: value.ccps.some((c) => Boolean(c.correctiveAction?.trim())),
+    },
+  ];
+}
+
 export default function HaccpStudyForm({
   value,
   onChange,
   disabled = false,
+  hideProcessSteps = false,
 }: {
   value: HaccpStudyValue;
   onChange: (next: HaccpStudyValue) => void;
   disabled?: boolean;
+  /** Wizard D: urutan kerja sudah di langkah C. */
+  hideProcessSteps?: boolean;
 }) {
   const patch = (partial: Partial<HaccpStudyValue>) => onChange({ ...value, ...partial });
 
@@ -282,8 +300,18 @@ export default function HaccpStudyForm({
     on ? [...new Set([...list, key])] : list.filter((k) => k !== key)
   );
 
+  const off = hideProcessSteps ? 0 : 1;
+
   return (
     <div className="space-y-4">
+      {hideProcessSteps && (
+        <p className="text-xs text-muted-foreground">
+          {value.processSteps.length
+            ? `Alur dari langkah C: ${value.processSteps.map((s) => s.nama || s.key).join(' → ')}`
+            : 'Isi urutan kerja di langkah C dulu sebelum menambah bahaya.'}
+        </p>
+      )}
+      {!hideProcessSteps && (
       <Section
         step={1}
         title="Langkah proses"
@@ -336,9 +364,10 @@ export default function HaccpStudyForm({
           </Button>
         )}
       </Section>
+      )}
 
       <Section
-        step={2}
+        step={1 + off}
         title="Analisis bahaya"
         hint="Bahaya apa yang bisa muncul di tiap langkah, dan apakah perlu dikendalikan sebagai CCP."
       >
@@ -446,7 +475,7 @@ export default function HaccpStudyForm({
       </Section>
 
       <Section
-        step={3}
+        step={2 + off}
         title="Titik kendali kritis (CCP)"
         hint="Titik di proses yang harus dikontrol ketat agar makanan aman."
       >
@@ -536,7 +565,7 @@ export default function HaccpStudyForm({
                   />
                 </label>
                 <label className="text-xs space-y-1 sm:col-span-2">
-                  <span className="text-muted-foreground">Tindakan jika gagal</span>
+                  <span className="text-muted-foreground">Tindakan jika gagal (wajib)</span>
                   <input
                     className={fieldClass()}
                     disabled={disabled}
@@ -563,7 +592,7 @@ export default function HaccpStudyForm({
       </Section>
 
       <Section
-        step={4}
+        step={3 + off}
         title="Batas kritis"
         hint="Angka atau syarat yang harus dipenuhi agar CCP dinyatakan aman."
       >
@@ -693,7 +722,7 @@ export default function HaccpStudyForm({
       </Section>
 
       <Section
-        step={5}
+        step={4 + off}
         title="Rencana pemantauan"
         hint="Siapa memantau, bagaimana, dan seberapa sering — agar batas kritis benar-benar dicek."
       >
@@ -790,7 +819,7 @@ export default function HaccpStudyForm({
                     disabled={disabled}
                     value={mon.templateKodeHint || ''}
                     onChange={(e) => updateMonitoring(index, { templateKodeHint: e.target.value })}
-                    placeholder="Contoh: HACCP-COOK"
+                    placeholder="Contoh: HCP-COOK"
                   />
                 </label>
               </div>

@@ -20,8 +20,26 @@ describe('ADR-004 Fase 5 — document type', () => {
 describe('ADR-004 Fase 5 — normalize', () => {
   it('type & result', () => {
     expect(normalizeHaccpVerificationType('plan')).toBe('PLAN');
+    expect(normalizeHaccpVerificationType('validation')).toBe('VALIDATION');
     expect(normalizeHaccpVerificationType('x')).toEqual({ error: expect.any(String) });
     expect(normalizeHaccpVerificationResult('partial')).toBe('PARTIAL');
+  });
+
+  it('VALIDATION butuh haccpPlanId; PARTIAL tanpa evidence OK', () => {
+    expect(assertHaccpVerificationReady({
+      verificationType: 'VALIDATION',
+      method: 'uji dapur',
+      result: 'PARTIAL',
+      evidenceUrls: [],
+    })).toMatch(/haccpPlanId/);
+
+    expect(assertHaccpVerificationReady({
+      verificationType: 'VALIDATION',
+      method: 'uji dapur',
+      result: 'PARTIAL',
+      haccpPlanId: 'p1',
+      evidenceUrls: [],
+    })).toBeNull();
   });
 });
 

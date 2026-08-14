@@ -42,6 +42,12 @@ export interface FoodSafetyRequirementDoc {
   /** Mapping BGN / internal — lebuh di requirement, bukan entity terpisah. */
   source: FoodSafetyProgramSource;
   sourceRef?: string;
+  /** Gelombang D — grup UI PRE-01…05. */
+  requirementGroup?: string;
+  /** Kode pasal ringkas matrix, mis. BGN-6.x — bukan file PDF palsu. */
+  bgnCode?: string;
+  evidenceType?: string;
+  sourceUrl?: string;
   aktif: boolean;
   sortOrder: number;
   createdAt: Date;

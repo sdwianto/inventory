@@ -14,7 +14,11 @@ import {
   previewSandboxPurge,
   purgeSandboxDatabase,
   SANDBOX_KEEP_HINT,
+  SANDBOX_PURGE_PROFILES,
+  keepHintForSandboxProfile,
+  normalizeSandboxPurgeProfile,
   salesRemotePurgeConfigured,
+  sandboxResetDedupeKey,
   summarizeSandboxCounts,
 } from '@/lib/api/sandbox-purge';
 import { enqueueJob, processJobById, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
@@ -88,6 +92,12 @@ export async function handleSandbox({
       salesPurgeVia: salesRemotePurgeConfigured() ? 'SALES_APP_URL' : 'MONGO_URL',
       salesWorkerReady,
       keepHint: SANDBOX_KEEP_HINT,
+      profiles: SANDBOX_PURGE_PROFILES.map((id) => ({
+        id,
+        label: id === 'kitchen-assurance' ? 'Kitchen Assurance saja' : 'Reset penuh',
+        keepHint: keepHintForSandboxProfile(id),
+        allowIncludeSales: id === 'full',
+      })),
     });
   }
 
@@ -99,12 +109,16 @@ export async function handleSandbox({
 
   if (route === '/sandbox/preview' && method === 'GET') {
     const tenantId = url.searchParams.get('tenantId')?.trim() || undefined;
-    const includeSales = url.searchParams.get('includeSales') !== '0';
+    const profile = normalizeSandboxPurgeProfile(url.searchParams.get('profile'));
+    const includeSales = profile === 'kitchen-assurance'
+      ? false
+      : url.searchParams.get('includeSales') !== '0';
     const client = await getMongoClient();
-    const result = await previewSandboxPurge(db, client, { tenantId, includeSales });
+    const result = await previewSandboxPurge(db, client, { tenantId, includeSales, profile });
     return ok({
       tenantId: tenantId || null,
       scope: tenantId ? 'tenant' : 'all',
+      profile,
       includeSales,
       salesPurgeVia: salesRemotePurgeConfigured() ? 'SALES_APP_URL' : 'MONGO_URL',
       inventory: {
@@ -125,12 +139,16 @@ export async function handleSandbox({
     }
 
     const tenantId = String(payload.tenantId || '').trim() || undefined;
-    const includeSales = payload.includeSales !== false;
+    const profile = normalizeSandboxPurgeProfile(payload.profile);
+    const includeSales = profile === 'kitchen-assurance'
+      ? false
+      : payload.includeSales !== false;
 
+    const dedupeKey = sandboxResetDedupeKey({ profile, tenantId, includeSales });
     const { jobId, reused } = await enqueueJob(db, {
       type: JOB_TYPES.SANDBOX_RESET,
       tenantId: tenantId || 'system',
-      payload: { tenantId, includeSales },
+      payload: { tenantId, includeSales, profile, dedupeKey },
     });
 
     // Pastikan domain inventory (worker claim) — perbaikan job stale domain=maintenance.
@@ -155,7 +173,10 @@ export async function handleSandbox({
       async: true,
       status: reused ? 'RUNNING' : 'PENDING',
       reused,
-      message: 'Reset sandbox berjalan di background',
+      profile,
+      message: profile === 'kitchen-assurance'
+        ? 'Reset Kitchen Assurance berjalan di background'
+        : 'Reset sandbox berjalan di background',
     }, 202);
   }
 

@@ -3,7 +3,7 @@
 const PUBLIC = [
   { method: 'GET', route: '/' },
   { method: 'GET', route: '/root' },
-  { method: 'GET', route: '/health' },
+  { method: 'GET', route: '/docs/haccp-bgn' },
   { method: 'POST', route: '/auth/login' },
   { method: 'POST', route: '/auth/logout' },
   { method: 'POST', route: '/webhooks/sales' },

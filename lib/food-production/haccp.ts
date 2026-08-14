@@ -137,6 +137,10 @@ export interface HaccpResultDoc {
   templateKode?: string;
   templateNama?: string;
   category: HaccpCategory;
+  /** Gelombang C — tautan ke rencana HACCP ACTIVE yang memicu checklist. */
+  haccpPlanId?: string;
+  /** CCP key di plan (monitoringPlans.ccpKey). */
+  ccpKey?: string;
   productionBatchId: string;
   batchNo?: string;
   productionPlanId?: string;

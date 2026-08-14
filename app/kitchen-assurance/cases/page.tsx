@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { getActingKitchenId } from '@/lib/acting-kitchen-client';
 import { FolderOpen, Plus, RefreshCw } from 'lucide-react';
+import FoodSafetyBreadcrumb from '@/components/food-safety/FoodSafetyBreadcrumb';
 import {
   KA_CASE_KIND_LABELS,
   KA_CASE_STATUS_LABELS,
@@ -87,11 +88,17 @@ function statusFromQuery(): '' | KaCaseStatus {
   return '';
 }
 
+function batchIdFromQuery(): string {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get('batchId') || '';
+}
+
 export default function KaCasesPage() {
   const [rows, setRows] = useState<CaseRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'' | KaCaseStatus>('');
   const [pillarFilter, setPillarFilter] = useState<'' | KaCategory>('');
+  const [batchIdFilter, setBatchIdFilter] = useState('');
   const [open, setOpen] = useState(false);
   const [fuFor, setFuFor] = useState<CaseRow | null>(null);
   const [fuSaving, setFuSaving] = useState(false);
@@ -120,6 +127,7 @@ export default function KaCasesPage() {
       if (kitchenId) params.set('kitchenId', kitchenId);
       if (statusFilter) params.set('status', statusFilter);
       if (pillarFilter) params.set('category', pillarFilter);
+      if (batchIdFilter) params.set('batchId', batchIdFilter);
       const q = params.toString() ? `?${params}` : '';
       const res = await fetch(`/api/ka-safety-cases${q}`, { headers: actingTenantHeaders() });
       const data = await res.json();
@@ -130,13 +138,15 @@ export default function KaCasesPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, pillarFilter]);
+  }, [statusFilter, pillarFilter, batchIdFilter]);
 
   useEffect(() => {
     const fromQuery = pillarFromQuery();
     if (fromQuery) setPillarFilter(fromQuery);
     const st = statusFromQuery();
     if (st) setStatusFilter(st);
+    const bid = batchIdFromQuery();
+    if (bid) setBatchIdFilter(bid);
   }, []);
 
   useEffect(() => {
@@ -249,12 +259,18 @@ export default function KaCasesPage() {
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
+          <FoodSafetyBreadcrumb
+            items={[
+              { href: '/kitchen-assurance/temuan', label: 'Temuan & perbaikan' },
+              { label: 'Daftar issue' },
+            ]}
+          />
+          <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold">
             <FolderOpen className="h-5 w-5" />
-            Issues / Cases
+            Daftar issue
           </h1>
           <p className="text-sm text-muted-foreground">
-            Issue → Follow Up (opsional) → Closed. Incident hanya salah satu tipe.
+            Catat masalah keamanan pangan. Lanjut ke tugas perbaikan (follow-up) bila perlu, lalu tutup setelah selesai.
           </p>
         </div>
         <div className="flex gap-2">
@@ -278,6 +294,27 @@ export default function KaCasesPage() {
 
       <OperationalScopeBar />
       <KitchenScopeBar />
+
+      {batchIdFilter ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          Difilter batch <code className="text-xs">{batchIdFilter.slice(0, 12)}…</code>
+          <Button
+            size="sm"
+            variant="link"
+            className="ml-2 h-auto p-0"
+            onClick={() => {
+              setBatchIdFilter('');
+              if (typeof window !== 'undefined') {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('batchId');
+                window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+              }
+            }}
+          >
+            Hapus filter
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {STATUS_FILTERS.map((s) => (
