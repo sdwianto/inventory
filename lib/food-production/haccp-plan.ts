@@ -581,6 +581,8 @@ export function assertHaccpPlanReadyForApproval(plan: Pick<
   | 'productDescription'
   | 'intendedUse'
   | 'flowVerifiedAt'
+  | 'flowVerifiedBy'
+  | 'flowVerifiedByName'
   | 'processSteps'
   | 'hazards'
   | 'ccps'
