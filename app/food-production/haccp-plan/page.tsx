@@ -114,6 +114,10 @@ function csvToIds(raw: string): string[] {
   return [...new Set(raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean))];
 }
 
+function idsToCsv(ids?: string[] | null): string {
+  return (ids || []).map((s) => String(s || '').trim()).filter(Boolean).join(', ');
+}
+
 function studyFromPlan(plan: PlanRow): HaccpStudyValue {
   return {
     processSteps: plan.processSteps || [],
