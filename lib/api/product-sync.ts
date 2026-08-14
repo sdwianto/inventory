@@ -23,6 +23,8 @@ function parseVendorPrices(product: Record<string, unknown>) {
 
 export function vendorProductSnapshot(product: Record<string, unknown>) {
   const prices = parseVendorPrices(product);
+  const recipeGrams = parseVendorRecipeFactor(product.recipeBaseGrams);
+  const recipeMl = parseVendorRecipeFactor(product.recipeBaseMl);
   return {
     id: product.id != null ? String(product.id) : '',
     kode: product.kode != null ? String(product.kode) : '',
@@ -33,8 +35,19 @@ export function vendorProductSnapshot(product: Record<string, unknown>) {
     aktif: product.aktif !== false,
     vendorTenantId: product.vendorTenantId != null ? String(product.vendorTenantId) : (product.tenantId != null ? String(product.tenantId) : null),
     vendorTenantName: product.vendorTenantName != null ? String(product.vendorTenantName) : null,
+    recipeBaseGrams: recipeGrams,
+    recipeBaseMl: recipeMl,
+    hasRecipeBaseGrams: Object.prototype.hasOwnProperty.call(product, 'recipeBaseGrams'),
+    hasRecipeBaseMl: Object.prototype.hasOwnProperty.call(product, 'recipeBaseMl'),
     ...prices,
   };
+}
+
+function parseVendorRecipeFactor(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 export async function upsertProductFromVendor(
@@ -66,7 +79,7 @@ export async function upsertProductFromVendor(
     });
   }
 
-  const syncSet = {
+  const syncSet: Record<string, unknown> = {
     kode: snap.kode,
     barcode: snap.barcode,
     nama: snap.nama,
@@ -87,6 +100,8 @@ export async function upsertProductFromVendor(
     syncSource: 'sales.app',
     updatedAt: now,
   };
+  if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
+  if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
 
   if (existing) {
     await db.collection('products').updateOne({ id: existing.id }, { $set: syncSet });

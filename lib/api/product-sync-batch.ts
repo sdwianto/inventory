@@ -18,7 +18,7 @@ interface BatchUpsertResult {
 type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string };
 
 function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: string, now: Date) {
-  return {
+  const syncSet: Record<string, unknown> = {
     kode: snap.kode,
     barcode: snap.barcode,
     nama: snap.nama,
@@ -38,6 +38,9 @@ function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: s
     syncSource: 'sales.app',
     updatedAt: now,
   };
+  if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
+  if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
+  return syncSet;
 }
 
 async function loadExistingForBatch(
