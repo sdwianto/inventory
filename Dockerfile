@@ -52,6 +52,8 @@ RUN apk add --no-cache su-exec \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Standalone Next tidak menelusuri PDF BGN; wajib di-copy agar /api/docs/haccp-bgn hidup.
+COPY --from=builder --chown=nextjs:nodejs /app/docs/haccp ./docs/haccp
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/run-bg-worker.mjs ./scripts/run-bg-worker.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/docker-entry.sh ./scripts/docker-entry.sh
 RUN chmod +x /app/scripts/docker-entry.sh
