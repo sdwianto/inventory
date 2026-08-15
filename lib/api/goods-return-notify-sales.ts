@@ -32,6 +32,16 @@ export async function notifySalesGoodsReturnPosted(
 
   const client = createIntegrationClient(db);
   try {
+    const missingIdentity = (doc.items || []).find(
+      (it) => !String(it.invoiceLineId || '').trim() || !String(it.vendorUomId || '').trim(),
+    );
+    if (missingIdentity) {
+      return {
+        ok: false,
+        error: `Baris ${missingIdentity.localKode || ''} tanpa lineId/vendorUomId Sales`,
+      };
+    }
+
     const result = await client.postGoodsReturnPosted({
       salesAppUrl,
       apiKey,
@@ -53,17 +63,28 @@ export async function notifySalesGoodsReturnPosted(
         postedAt: doc.postedAt ? new Date(doc.postedAt).toISOString() : new Date().toISOString(),
         reason: doc.reason,
         items: (doc.items || []).map((it) => ({
-          lineId: it.invoiceLineId || it.lineId,
+          lineId: String(it.invoiceLineId),
           kode: it.vendorKode || it.localKode,
           nama: it.localNama,
           satuan: it.satuan,
-          uomId: it.vendorUomId || it.uomId,
+          uomId: String(it.vendorUomId),
           qty: it.qty,
           harga: it.harga,
           stokId: undefined,
         })),
       },
     });
+
+    const cnPosted = result.posted !== false && String(result.status || 'POSTED') === 'POSTED';
+    if (!cnPosted) {
+      return {
+        ok: false,
+        error: `Credit note Sales belum POSTED (status ${result.status || 'DRAFT'})`,
+        creditNoteId: result.creditNoteId,
+        noCN: result.noCN,
+        amount: result.amount,
+      };
+    }
 
     const applied = await applyCreditNoteFromVendor(
       db,
@@ -76,9 +97,9 @@ export async function notifySalesGoodsReturnPosted(
         noCN: result.noCN,
         postedAt: new Date(),
         items: (doc.items || []).map((it) => ({
-          lineId: it.invoiceLineId || it.lineId,
+          lineId: it.invoiceLineId || undefined,
           stokId: it.localStokId,
-          uomId: it.vendorUomId || it.uomId,
+          uomId: it.vendorUomId,
           satuan: it.satuan,
           qty: it.qty,
           qtyBase: it.qtyBase,
@@ -93,6 +114,15 @@ export async function notifySalesGoodsReturnPosted(
       return {
         ok: false,
         error: String(applied.error),
+        creditNoteId: result.creditNoteId,
+        noCN: result.noCN,
+        amount: result.amount,
+      };
+    }
+    if (applied && 'action' in applied && applied.action === 'no_hutang') {
+      return {
+        ok: false,
+        error: 'Hutang terkait tidak ditemukan untuk apply CN',
         creditNoteId: result.creditNoteId,
         noCN: result.noCN,
         amount: result.amount,

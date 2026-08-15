@@ -401,7 +401,12 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'vendor_returns', index: { tenantId: 1, noReturn: 1 }, name: 'uniq_rtv_tenant_no', unique: true },
   { collection: 'vendor_returns', index: { tenantId: 1, status: 1, updatedAt: -1 }, name: 'idx_rtv_tenant_status' },
   { collection: 'vendor_returns', index: { tenantId: 1, noInvoice: 1 }, name: 'idx_rtv_tenant_invoice' },
-  { collection: 'vendor_returns', index: { tenantId: 1, creditNoteId: 1 }, name: 'idx_rtv_tenant_cn', sparse: true },
+  {
+    collection: 'vendor_returns',
+    index: { tenantId: 1, creditNoteId: 1 },
+    name: 'idx_rtv_tenant_cn',
+    partialFilterExpression: { creditNoteId: { $type: 'string' } },
+  },
   { collection: 'vendor_returns', index: { tenantId: 1, vendorTenantId: 1, status: 1 }, name: 'idx_rtv_tenant_vendor_status' },
   { collection: 'vendor_returns', index: { id: 1 }, name: 'uniq_rtv_id', unique: true },
   { collection: 'hutang', index: { id: 1 }, name: 'uniq_hutang_id', unique: true },

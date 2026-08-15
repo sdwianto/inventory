@@ -902,7 +902,7 @@ export async function insertEnsureGoodsReturnCnOutbox(
 
 export async function ensureGoodsReturnCnOutboxPending(
   db: Db,
-  input: { tenantId: string; returnId: string; noReturn?: string | null },
+  input: { tenantId: string; returnId: string; noReturn?: string | null; replay?: boolean },
 ): Promise<void> {
   const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
     type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
@@ -913,6 +913,13 @@ export async function ensureGoodsReturnCnOutboxPending(
     return;
   }
   const status = String(existing.status || '');
+  if (input.replay && (status === 'DONE' || status === 'FAILED' || status === 'PENDING')) {
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+      { id: existing.id, status: { $in: ['DONE', 'FAILED', 'PENDING'] } },
+      { $set: { status: 'PENDING', lastError: null, updatedAt: new Date() } },
+    );
+    return;
+  }
   if (status === 'DONE' || status === 'PROCESSING') return;
   if (status === 'FAILED' || status === 'PENDING') {
     await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
@@ -957,7 +964,29 @@ export async function claimEnsureGoodsReturnCnOutbox(
   return (claimed as IntegrationOutboxDoc | null) || null;
 }
 
-async function applyVendorReturnCnNotifyResult(
+export async function listPendingGoodsReturnCnOutbox(
+  db: Db,
+  opts: { limit?: number } = {},
+): Promise<Array<{ aggregateId: string; tenantId: string; status: string }>> {
+  const limit = opts.limit ?? 40;
+  const rows = await db
+    .collection(INTEGRATION_OUTBOX_COLLECTION)
+    .find({
+      type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+      status: { $in: ['PENDING', 'FAILED'] },
+    })
+    .sort({ updatedAt: 1 })
+    .limit(limit)
+    .project({ aggregateId: 1, tenantId: 1, status: 1 })
+    .toArray();
+  return rows.map((r) => ({
+    aggregateId: String(r.aggregateId),
+    tenantId: String(r.tenantId),
+    status: String(r.status),
+  }));
+}
+
+export async function applyVendorReturnCnNotifyResult(
   db: Db,
   returnId: string,
   result: {
@@ -1008,25 +1037,25 @@ export async function drainEnsureGoodsReturnCn(
   const existing = await getEnsureGoodsReturnCnOutbox(db, input.returnId);
   if (existing?.status === 'DONE') {
     const doc = await db.collection('vendor_returns').findOne({ id: input.returnId });
-    let status = doc?.cnSyncStatus || 'DONE';
-    if (doc && status !== 'DONE' && status !== 'SKIPPED') {
-      await db.collection('vendor_returns').updateOne(
-        { id: input.returnId },
-        { $set: { cnSyncStatus: 'DONE', cnSyncError: null, cnSyncAt: new Date() } },
-      );
-      status = 'DONE';
-    }
-    return {
-      cnSync: {
+    const hasCn = Boolean(doc?.creditNoteId || doc?.noCN);
+    const status = String(doc?.cnSyncStatus || '');
+    if (status === 'SKIPPED' || (status === 'DONE' && hasCn)) {
+      return {
+        cnSync: {
+          alreadyDone: true,
+          creditNoteId: doc?.creditNoteId || null,
+          noCN: doc?.noCN || null,
+          status,
+        },
+        outboxId: existing.id,
+        claimed: false,
         alreadyDone: true,
-        creditNoteId: doc?.creditNoteId || null,
-        noCN: doc?.noCN || null,
-        status,
-      },
-      outboxId: existing.id,
-      claimed: false,
-      alreadyDone: true,
-    };
+      };
+    }
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+      { id: existing.id, status: 'DONE' },
+      { $set: { status: 'PENDING', lastError: null, updatedAt: new Date() } },
+    );
   }
 
   await ensureGoodsReturnCnOutboxPending(db, {
@@ -1088,7 +1117,7 @@ export async function drainEnsureGoodsReturnCn(
     result = await notifySalesGoodsReturnPosted(
       db,
       input.tenantId,
-      doc as import('@/types/vendor-return').VendorReturnDoc,
+      doc as unknown as import('@/types/vendor-return').VendorReturnDoc,
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

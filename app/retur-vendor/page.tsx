@@ -80,7 +80,7 @@ export default function ReturVendorPage() {
     hasMore,
     loadMore,
     loadingMore,
-    refetch,
+    reload,
   } = useCursorQuery<JsonObject>(
     queryKeys.vendorReturns.list({ status: statusFilter, q }),
     listUrl,
@@ -90,7 +90,7 @@ export default function ReturVendorPage() {
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: queryKeys.vendorReturns.all });
     invalidateHutangCaches(qc);
-    void refetch();
+    void reload();
   };
 
   const loadDetail = async (id: string) => {
@@ -132,7 +132,7 @@ export default function ReturVendorPage() {
       const data = await fetchJson<JsonObject[] | { items?: JsonObject[] }>(
         '/api/vendor-returns/eligible-invoices',
       );
-      setEligible(Array.isArray(data) ? data : asArray(data.items));
+      setEligible((Array.isArray(data) ? data : asArray(data.items)) as JsonObject[]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat tagihan');
     } finally {
@@ -184,6 +184,8 @@ export default function ReturVendorPage() {
       setDetail(data);
       if (str(data.cnSyncStatus) === 'FAILED') {
         toast.error(str(data.cnSyncError) || 'Stok sudah keluar — faktur kredit belum terbentuk');
+      } else if (str(data.cnSyncStatus) === 'SYNCING') {
+        toast.message('Stok sudah keluar — credit note masih disinkronkan');
       } else {
         toast.success(`RTV ${str(data.noReturn)} diposting`);
       }
@@ -248,7 +250,10 @@ export default function ReturVendorPage() {
   };
 
   const isDraft = str(detail?.status) === 'DRAFT';
-  const postedFailed = str(detail?.status) === 'POSTED' && str(detail?.cnSyncStatus) === 'FAILED';
+  const cnSync = str(detail?.cnSyncStatus);
+  const postedNeedsRetry = str(detail?.status) === 'POSTED'
+    && ['FAILED', 'SYNCING', 'SKIPPED'].includes(cnSync);
+  const postedFailed = postedNeedsRetry && cnSync === 'FAILED';
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -263,7 +268,7 @@ export default function ReturVendorPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+          <Button variant="outline" size="sm" onClick={() => void reload()}>
             <RefreshCw className="w-4 h-4 mr-1" /> Muat ulang
           </Button>
           <Button size="sm" className="bg-orange-500 hover:bg-orange-600" onClick={() => void openEligible()}>
@@ -273,7 +278,7 @@ export default function ReturVendorPage() {
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
-        {['', 'DRAFT', 'POSTED'].map((st) => (
+        {['', 'DRAFT', 'POSTING', 'POSTED'].map((st) => (
           <Button
             key={st || 'all'}
             size="sm"
@@ -284,7 +289,7 @@ export default function ReturVendorPage() {
           </Button>
         ))}
         <Input
-          placeholder="Cari no RTV / invoice / GRN"
+          placeholder="Cari no RTV / invoice / GRN / vendor"
           className="h-8 w-64"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -297,6 +302,7 @@ export default function ReturVendorPage() {
             <tr>
               <th className="px-3 py-2 text-left">No RTV</th>
               <th className="px-3 py-2 text-left">Tanggal</th>
+              <th className="px-3 py-2 text-left">Vendor</th>
               <th className="px-3 py-2 text-left">Invoice</th>
               <th className="px-3 py-2 text-left">GRN</th>
               <th className="px-3 py-2 text-center">Status</th>
@@ -306,14 +312,15 @@ export default function ReturVendorPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && <TableSkeleton rows={8} cols={8} />}
+            {loading && <TableSkeleton rows={8} cols={9} />}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={8} className="text-center py-10 text-slate-400">Belum ada retur vendor</td></tr>
+              <tr><td colSpan={9} className="text-center py-10 text-slate-400">Belum ada retur vendor</td></tr>
             )}
             {rows.map((row) => (
               <tr key={str(row.id)} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-mono text-xs text-orange-700">{str(row.noReturn)}</td>
-                <td className="px-3 py-2 text-xs">{formatDateTime(row.createdAt || row.postedAt)}</td>
+                <td className="px-3 py-2 text-xs">{formatDateTime(str(row.createdAt) || str(row.postedAt) || undefined)}</td>
+                <td className="px-3 py-2 text-xs truncate max-w-[10rem]">{str(row.supplierName) || '—'}</td>
                 <td className="px-3 py-2 font-mono text-xs">{str(row.noInvoice)}</td>
                 <td className="px-3 py-2 font-mono text-xs">{str(row.noGRN) || str(row.noDO) || '—'}</td>
                 <td className="px-3 py-2 text-center">
@@ -383,17 +390,24 @@ export default function ReturVendorPage() {
           </DialogHeader>
           {detail && (
             <div className="flex-1 overflow-auto space-y-3">
-              {postedFailed && (
-                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {postedNeedsRetry && (
+                <div className={`rounded border px-3 py-2 text-sm ${postedFailed ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                   Stok sudah keluar — faktur kredit belum terbentuk.
                   {str(detail.cnSyncError) ? ` ${str(detail.cnSyncError)}` : ''}
                 </div>
               )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <div><span className="text-slate-500">Vendor</span><p className="font-semibold">{str(detail.supplierName) || '—'}</p></div>
                 <div><span className="text-slate-500">Status</span><p className="font-semibold">{str(detail.status)}</p></div>
                 <div><span className="text-slate-500">GRN / DO</span><p className="font-mono">{str(detail.noGRN) || str(detail.noDO) || '—'}</p></div>
                 <div><span className="text-slate-500">PO / SO</span><p className="font-mono">{str(detail.noPO) || '—'} / {str(detail.noSO) || '—'}</p></div>
                 <div><span className="text-slate-500">CN</span><p>{str(detail.noCN) || str(detail.cnSyncStatus)}</p></div>
+                {str(detail.status) !== 'DRAFT' && (
+                  <div>
+                    <span className="text-slate-500">Kartu stok</span>
+                    <p className="font-mono">{str(detail.noReturn)}</p>
+                  </div>
+                )}
               </div>
               <div>
                 <Label>Alasan retur</Label>
@@ -421,18 +435,22 @@ export default function ReturVendorPage() {
                   <tbody>
                     {asArray(detail.items).map((raw, idx) => {
                       const it = raw as JsonObject;
+                      const ret = (asArray(detail.returable) as JsonObject[]).find(
+                        (r) => str(r.invoiceLineId) === str(it.invoiceLineId),
+                      );
+                      const maxQty = num(ret?.maxQty ?? it.maxQty ?? it.qty);
                       return (
                       <tr key={`${str(it.lineId)}-${idx}`} className="border-t">
                         <td className="px-2 py-1.5 font-mono text-xs">{str(it.localKode)}</td>
                         <td className="px-2 py-1.5 text-xs">{str(it.localNama)}</td>
                         <td className="px-2 py-1.5 text-center text-xs">{str(it.satuan)}</td>
-                        <td className="px-2 py-1.5 text-right text-xs">{formatNumber(num(it.maxQty || it.qty))}</td>
+                        <td className="px-2 py-1.5 text-right text-xs">{formatNumber(maxQty)}</td>
                         <td className="px-2 py-1.5 text-right">
                           {isDraft ? (
                             <Input
                               type="number"
                               min={0}
-                              max={num(it.maxQty || it.qty)}
+                              max={maxQty}
                               step="any"
                               className="h-8 w-24 ml-auto text-right"
                               value={num(it.qty)}
@@ -484,7 +502,7 @@ export default function ReturVendorPage() {
                 </Button>
               </>
             )}
-            {postedFailed && (
+            {postedNeedsRetry && (
               <Button onClick={() => void retryCn()} disabled={!!acting}>
                 {acting === 'retry' ? 'Mencoba…' : 'Retry sync CN'}
               </Button>

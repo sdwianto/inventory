@@ -20,6 +20,7 @@ export type HutangLike = {
   creditNotes?: Array<{
     creditNoteId?: string;
     noReturn?: string;
+    source?: string;
     items?: Array<{ lineId?: string; stokId?: string; uomId?: string; qty?: number | string }>;
   }>;
 };
@@ -35,6 +36,25 @@ export type PostedReturnLike = {
     qty?: number;
   }>;
 };
+
+export function sumAppliedManualCreditNoteQtyByLine(
+  hutang: HutangLike,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const cn of hutang.creditNotes || []) {
+    if (String(cn.source || '') === 'inventory_return') continue;
+    for (const it of cn.items || []) {
+      const key = vendorReturnLineKey({
+        invoiceLineId: it.lineId,
+        localStokId: String(it.stokId || ''),
+        uomId: it.uomId,
+      });
+      if (!key || key === '::' || key === 'inv:') continue;
+      out[key] = (out[key] || 0) + (parseFloat(String(it.qty)) || 0);
+    }
+  }
+  return out;
+}
 
 export function sumPostedReturnQtyByLine(
   posted: PostedReturnLike[],
@@ -71,6 +91,7 @@ export function buildReturableLines(
   harga: number;
 }> {
   const used = sumPostedReturnQtyByLine(postedReturns, opts);
+  const cnUsed = sumAppliedManualCreditNoteQtyByLine(hutang);
   const rows: Array<{
     invoiceLineId: string;
     salesStokId: string;
@@ -93,7 +114,7 @@ export function buildReturableLines(
       uomId: it.uomId,
       satuan: it.satuan,
     });
-    const qtyReturned = used[key] || 0;
+    const qtyReturned = (used[key] || 0) + (cnUsed[key] || 0);
     const maxQty = Math.max(0, Math.round((qtyInvoice - qtyReturned) * 1000) / 1000);
     rows.push({
       invoiceLineId,

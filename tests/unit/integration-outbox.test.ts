@@ -180,4 +180,37 @@ describe('integration-outbox H1.1', () => {
     expect(col.docs[0].type).toBe(INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN);
     expect(INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN).toBe('ENSURE_GOODS_RETURN_CN');
   });
+
+  it('applyVendorReturnCnNotifyResult DONE hanya jika Sales CN sukses', async () => {
+    const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
+    const docs: Record<string, unknown>[] = [{ id: 'rtv-1' }];
+    const db = {
+      collection: (name: string) => {
+        if (name !== 'vendor_returns') throw new Error(name);
+        return {
+          updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
+            Object.assign(docs[0], u.$set);
+            return { modifiedCount: 1 };
+          },
+        };
+      },
+    } as never;
+
+    const failed = await applyVendorReturnCnNotifyResult(db, 'rtv-1', {
+      ok: false,
+      error: 'timeout',
+      creditNoteId: 'cn-draft',
+    });
+    expect(failed.cnSyncStatus).toBe('FAILED');
+    expect(failed.needsRecovery).toBe(true);
+    expect(docs[0].cnSyncStatus).toBe('FAILED');
+
+    const done = await applyVendorReturnCnNotifyResult(db, 'rtv-1', {
+      ok: true,
+      creditNoteId: 'cn-1',
+      noCN: 'CN1',
+    });
+    expect(done.cnSyncStatus).toBe('DONE');
+    expect(docs[0].creditNoteId).toBe('cn-1');
+  });
 });

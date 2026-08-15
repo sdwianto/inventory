@@ -42,6 +42,31 @@ describe('vendor-return returable qty', () => {
     ], returable)).toBeNull();
   });
 
+  it('mengurangi qty credit note manual dari sisa retur', () => {
+    const rows = buildReturableLines({
+      ...hutang,
+      creditNotes: [{
+        source: 'manual',
+        items: [{ lineId: 'l1', qty: 4 }],
+      }],
+    }, []);
+    expect(rows[0].maxQty).toBe(6);
+  });
+
+  it('tidak double-count CN yang berasal dari RTV', () => {
+    const rows = buildReturableLines({
+      ...hutang,
+      creditNotes: [{
+        source: 'inventory_return',
+        noReturn: 'RTV1',
+        items: [{ lineId: 'l1', qty: 4 }],
+      }],
+    }, [
+      { id: 'r1', status: 'POSTED', items: [{ invoiceLineId: 'l1', qty: 4 }] },
+    ]);
+    expect(rows[0].maxQty).toBe(6);
+  });
+
   it('sumPostedReturnQtyByLine mengabaikan DRAFT', () => {
     const sum = sumPostedReturnQtyByLine([
       { status: 'DRAFT', items: [{ invoiceLineId: 'l1', qty: 99 }] },

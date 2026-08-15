@@ -49,5 +49,6 @@ export async function applyVendorReturnStock(
       jumlah: Math.round(qty * (it.harga || 0)),
     });
   }
+  if (!nextItems.length) return { error: 'Tidak ada baris stok yang bisa dikeluarkan' };
   return { items: nextItems };
 }

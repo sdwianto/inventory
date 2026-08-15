@@ -6,8 +6,11 @@ import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
-import { drainEnsureGoodsReturnCn, insertEnsureGoodsReturnCnOutbox } from '@/lib/api/integration-outbox';
+import { drainEnsureGoodsReturnCn, insertEnsureGoodsReturnCnOutbox, ensureGoodsReturnCnOutboxPending } from '@/lib/api/integration-outbox';
 import { applyVendorReturnStock } from '@/lib/api/vendor-return-stock';
+import { assertReturnQtyWithinMax, buildReturableLines } from '@/lib/api/vendor-return-returable';
+import { vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
+import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc } from '@/types/vendor-return';
 import { integrationCorrelationId } from '@/lib/api/integration-common';
 
@@ -29,6 +32,7 @@ export async function postVendorReturn(
     doc.vendorTenantId ? String(doc.vendorTenantId) : undefined,
   );
   const canSyncCn = !!(salesApiKey && (doc.vendorInvoiceId || doc.noInvoice));
+  const priorStatus = String(doc.status || 'DRAFT');
 
   let txResult: { error?: string } | Record<string, never>;
   try {
@@ -42,6 +46,33 @@ export async function postVendorReturn(
       if (claim.modifiedCount === 0) {
         throw new Error('Retur vendor sudah diposting');
       }
+
+      try {
+      const identErr = vendorReturnSalesIdentityError(doc.items || []);
+      if (identErr) throw new Error(identErr);
+
+      const hutang = await txDb.collection('hutang').findOne({
+        ...tenantIdMatchFilter(tenantId),
+        ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
+      }, txOpts(session));
+      if (!hutang) throw new Error('Tagihan terkait tidak ditemukan');
+      const posted = await txDb.collection(VENDOR_RETURNS_COLLECTION).find({
+        ...tenantIdMatchFilter(tenantId),
+        status: { $in: ['POSTED', 'POSTING'] },
+        $or: [
+          { noInvoice: doc.noInvoice },
+          ...(doc.hutangId ? [{ hutangId: doc.hutangId }] : []),
+        ],
+      }, txOpts(session)).toArray();
+      const qtyErr = assertReturnQtyWithinMax(
+        doc.items || [],
+        buildReturableLines(
+          hutang as import('@/lib/api/vendor-return-returable').HutangLike,
+          posted as import('@/lib/api/vendor-return-returable').PostedReturnLike[],
+          { excludeReturnId: doc.id },
+        ),
+      );
+      if (qtyErr) throw new Error(qtyErr);
 
       const stock = await applyVendorReturnStock(
         txDb,
@@ -94,6 +125,15 @@ export async function postVendorReturn(
         );
       }
       return {};
+      } catch (inner) {
+        if (!session) {
+          await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+            { id: doc.id, status: 'POSTING' },
+            { $set: { status: priorStatus, postingStartedAt: null, updatedAt: new Date() } },
+          );
+        }
+        throw inner;
+      }
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -127,11 +167,11 @@ export async function postVendorReturn(
       returnId: doc.id,
     });
     cnSync = drained.cnSync;
-    const status = String(cnSync.status || (cnSync.error ? 'FAILED' : 'DONE'));
-    const needsRecovery = Boolean(cnSync.needsRecovery) || status === 'FAILED'
+    const st = String(cnSync.status || (cnSync.error ? 'FAILED' : 'DONE'));
+    const needsRecovery = Boolean(cnSync.needsRecovery) || st === 'FAILED'
       || Boolean(cnSync.error && !cnSync.creditNoteId);
 
-    if (needsRecovery && status !== 'SKIPPED') {
+    if (needsRecovery && st !== 'SKIPPED') {
       const enq = await enqueueJob(db, {
         type: JOB_TYPES.GOODS_RETURN_CN_SYNC,
         tenantId,
@@ -142,7 +182,7 @@ export async function postVendorReturn(
       });
       jobId = enq.jobId;
       scheduleJobProcessing(db);
-      cnSync = { ...cnSync, async: false, jobId: enq.jobId, status };
+      cnSync = { ...cnSync, async: false, jobId: enq.jobId, status: st };
     }
   }
 
@@ -169,11 +209,22 @@ export async function retryVendorReturnCn(
   if (doc.status !== 'POSTED') {
     return { error: 'Hanya RTV POSTED yang bisa retry sync CN' };
   }
+  const sync = String(doc.cnSyncStatus || 'NONE');
+  if (sync === 'DONE' && (doc.creditNoteId || doc.noCN)) {
+    return { ...doc, cnSync: { status: 'DONE', alreadyDone: true, creditNoteId: doc.creditNoteId, noCN: doc.noCN } };
+  }
 
   await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
     { id: doc.id },
     { $set: { cnSyncStatus: 'SYNCING', cnSyncError: null, updatedAt: new Date() } },
   );
+
+  await ensureGoodsReturnCnOutboxPending(db, {
+    tenantId,
+    returnId: doc.id,
+    noReturn: doc.noReturn,
+    replay: true,
+  });
 
   const drained = await drainEnsureGoodsReturnCn(db, {
     tenantId,

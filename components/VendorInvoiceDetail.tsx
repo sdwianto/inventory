@@ -1,13 +1,14 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str, asArray } from '@/types/json';
+import { str, num, asArray } from '@/types/json';
 import { useState } from 'react';
 import VendorInvoiceDocument from '@/components/VendorInvoiceDocument';
 import VendorInvoiceThermal from '@/components/VendorInvoiceThermal';
 import PrintPortal, { printReceipt } from '@/components/PrintPortal';
 import { Button } from '@/components/ui/button';
 import { printDocument } from '@/lib/doc-print';
+import { formatIDR } from '@/lib/format';
 import { Check, Loader2, Printer, Receipt, Undo2, X } from 'lucide-react';
 import Link from 'next/link';
 
@@ -111,6 +112,7 @@ export default function VendorInvoiceDetail({
                 <li key={str(cn.creditNoteId) || i} className="flex flex-wrap gap-x-3">
                   <span className="font-mono">{str(cn.noCN) || str(cn.creditNoteId)}</span>
                   {str(cn.noReturn) ? <span>RTV {str(cn.noReturn)}</span> : null}
+                  {cn.amount != null ? <span>{formatIDR(num(cn.amount))}</span> : null}
                   {str(cn.source) === 'inventory_return'
                     ? <span className="text-orange-700">Retur Inventory</span>
                     : <span className="text-slate-500">Manual / webhook</span>}

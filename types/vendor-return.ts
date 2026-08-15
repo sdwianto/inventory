@@ -32,6 +32,7 @@ export type VendorReturnDoc = {
   noReturn: string;
   status: VendorReturnStatus;
   vendorTenantId: string;
+  supplierName?: string | null;
   hutangId?: string | null;
   vendorInvoiceId?: string | null;
   noInvoice: string;

@@ -628,18 +628,30 @@ export async function applyCreditNoteFromVendor(
   opts: CreditNoteApplyOptions = {},
 ) {
   const tid = normalizeTenantId(customerTenantId || 'default');
-  const invoiceId = payload.invoiceId;
+  const invoiceId = String(payload.invoiceId || '').trim();
+  const noInvoice = String(payload.noInvoice || '').trim();
   const creditTotal = parseInt(String(payload.total || 0), 10);
-  if (!invoiceId || creditTotal <= 0) return { error: 'invoiceId dan total wajib' };
+  if ((!invoiceId && !noInvoice) || creditTotal <= 0) return { error: 'invoiceId/noInvoice dan total wajib' };
 
   const creditNoteId = String(payload.creditNoteId || '').trim() || null;
+  const vendorTid = vendorTenantId ? String(vendorTenantId).trim() : '';
 
-  const hutang = await db.collection('hutang').findOne({
-    ...tenantIdMatchFilter(tid),
-    vendorInvoiceId: invoiceId,
-    referenceType: 'VENDOR_INVOICE',
-  });
-  if (!hutang) return { action: 'no_hutang', invoiceId };
+  let hutang = invoiceId
+    ? await db.collection('hutang').findOne({
+      ...tenantIdMatchFilter(tid),
+      vendorInvoiceId: invoiceId,
+      referenceType: 'VENDOR_INVOICE',
+    })
+    : null;
+  if (!hutang && noInvoice) {
+    hutang = await db.collection('hutang').findOne({
+      ...tenantIdMatchFilter(tid),
+      noInvoice,
+      referenceType: 'VENDOR_INVOICE',
+      ...(vendorTid ? { vendorTenantId: vendorTid } : {}),
+    });
+  }
+  if (!hutang) return { action: 'no_hutang', invoiceId: invoiceId || noInvoice };
 
   const existingNotes = Array.isArray(hutang.creditNotes) ? hutang.creditNotes : [];
   if (creditNoteId) {
@@ -652,9 +664,36 @@ export async function applyCreditNoteFromVendor(
   }
 
   const reduce = Math.min(creditTotal, hutang.sisa || 0);
-  if (reduce <= 0) return { action: 'nothing_to_reduce' };
-
   const now = new Date();
+  const cnTrail = {
+    creditNoteId: payload.creditNoteId,
+    noCN: payload.noCN,
+    amount: Math.max(0, reduce),
+    postedAt: payload.postedAt || now,
+    source: payload.source || null,
+    noReturn: payload.noReturn || null,
+    appliedVia: opts.appliedVia || null,
+    correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
+    items: Array.isArray(payload.items)
+      ? payload.items.map((it) => ({
+        lineId: it.lineId,
+        stokId: it.stokId,
+        uomId: it.uomId,
+        satuan: it.satuan,
+        qty: it.qty,
+        qtyBase: it.qtyBase,
+      }))
+      : undefined,
+  };
+  if (reduce <= 0) {
+    if (creditNoteId) {
+      await db.collection('hutang').updateOne(
+        { id: hutang.id, creditNotes: { $not: { $elemMatch: { creditNoteId } } } },
+        { $push: { creditNotes: cnTrail }, $set: { updatedAt: now } } as never,
+      );
+    }
+    return { action: 'nothing_to_reduce' as const, hutangId: hutang.id };
+  }
   const newTerbayar = (hutang.terbayar || 0) + reduce;
   const newSisa = hutang.total - newTerbayar;
   const fullyPaid = newSisa <= 0;
@@ -682,26 +721,7 @@ export async function applyCreditNoteFromVendor(
           updatedAt: now,
         },
         $push: {
-          creditNotes: {
-            creditNoteId: payload.creditNoteId,
-            noCN: payload.noCN,
-            amount: reduce,
-            postedAt: payload.postedAt || now,
-            source: payload.source || null,
-            noReturn: payload.noReturn || null,
-            appliedVia: opts.appliedVia || null,
-            correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
-            items: Array.isArray(payload.items)
-              ? payload.items.map((it) => ({
-                lineId: it.lineId,
-                stokId: it.stokId,
-                uomId: it.uomId,
-                satuan: it.satuan,
-                qty: it.qty,
-                qtyBase: it.qtyBase,
-              }))
-              : undefined,
-          },
+          creditNotes: cnTrail,
         } as never,
       },
       txOpts(session),

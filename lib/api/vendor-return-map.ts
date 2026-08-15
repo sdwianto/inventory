@@ -20,6 +20,21 @@ type ProductRow = {
   aktif?: boolean;
 };
 
+export function vendorReturnSalesIdentityError(
+  items: Array<{ localKode?: string; invoiceLineId?: string | null; vendorUomId?: string }>,
+): string | null {
+  for (const it of items) {
+    const kode = String(it.localKode || '').trim() || 'baris';
+    if (!String(it.invoiceLineId || '').trim()) {
+      return `Baris ${kode} tanpa lineId invoice Sales`;
+    }
+    if (!String(it.vendorUomId || '').trim()) {
+      return `Baris ${kode} tanpa vendorUomId`;
+    }
+  }
+  return null;
+}
+
 export function hutangLineIdentityError(line: {
   lineId?: string;
   uomId?: string;
@@ -118,9 +133,9 @@ export async function buildVendorReturnLinesFromHutang(
     const vendorUomId = String(row.uomId || '').trim();
     const satuan = String(row.satuan || '').trim().toUpperCase();
     const localUom = uoms.find((u) => String(u.vendorUomId || '') === vendorUomId)
-      || uoms.find((u) => String(u.satuan || '').toUpperCase() === satuan);
+      || uoms.find((u) => String(u.id || '') === vendorUomId);
     if (!localUom) {
-      skipped.push(`Satuan lokal tidak cocok untuk ${row.kode} (vendor uom ${vendorUomId || satuan})`);
+      skipped.push(`Satuan lokal tidak cocok untuk ${row.kode} (vendor uom ${vendorUomId || satuan}) — mapping vendorUomId wajib`);
       continue;
     }
     const resolved = resolveLineQtyBaseFromUoms({

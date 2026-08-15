@@ -7,10 +7,11 @@ const SWEEP_LIMIT = 100;
 
 export type StuckGrnPostingSweepResult = {
   grnReverted: number;
+  rtvReverted: number;
   scanned: number;
 };
 
-/** GRN stuck POSTING > 10 menit → kembali DRAFT. */
+/** GRN / RTV stuck POSTING > 10 menit → kembali DRAFT. */
 export async function sweepStuckGrnPosting(db: Db): Promise<StuckGrnPostingSweepResult> {
   const cutoff = new Date(Date.now() - STUCK_MS);
   const stuck = await db.collection('goods_receipts')
@@ -36,5 +37,30 @@ export async function sweepStuckGrnPosting(db: Db): Promise<StuckGrnPostingSweep
     );
     if (r.modifiedCount > 0) grnReverted += 1;
   }
-  return { grnReverted, scanned: stuck.length };
+
+  const stuckRtv = await db.collection('vendor_returns')
+    .find({
+      status: 'POSTING',
+      $or: [
+        { postingStartedAt: { $lt: cutoff } },
+        { postingStartedAt: { $exists: false }, updatedAt: { $lt: cutoff } },
+      ],
+    })
+    .project({ id: 1 })
+    .limit(SWEEP_LIMIT)
+    .toArray();
+
+  let rtvReverted = 0;
+  for (const row of stuckRtv) {
+    const r = await db.collection('vendor_returns').updateOne(
+      { id: row.id, status: 'POSTING' },
+      {
+        $set: { status: 'DRAFT', updatedAt: new Date() },
+        $unset: { postingStartedAt: '' },
+      },
+    );
+    if (r.modifiedCount > 0) rtvReverted += 1;
+  }
+
+  return { grnReverted, rtvReverted, scanned: stuck.length + stuckRtv.length };
 }

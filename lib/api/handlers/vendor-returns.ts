@@ -11,8 +11,13 @@ import { storeBase64Image } from '@/lib/api/media-storage';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
-import { buildVendorReturnLinesFromHutang } from '@/lib/api/vendor-return-map';
-import { assertReturnQtyWithinMax, buildReturableLines } from '@/lib/api/vendor-return-returable';
+import { buildVendorReturnLinesFromHutang, vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
+import {
+  assertReturnQtyWithinMax,
+  buildReturableLines,
+  type HutangLike,
+  type PostedReturnLike,
+} from '@/lib/api/vendor-return-returable';
 import { postVendorReturn, retryVendorReturnCn } from '@/lib/api/vendor-return-post';
 import { VENDOR_RETURNS_COLLECTION, vendorReturnLineKey, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import type { HandlerContext } from '@/types/api/handler';
@@ -29,6 +34,42 @@ interface RtvBody extends Record<string, unknown> {
   photos?: unknown[];
   items?: unknown[];
   userName?: string;
+}
+
+async function resolvePostedGrn(
+  db: HandlerContext['db'],
+  tenantId: string,
+  refs: { grnId?: unknown; noGRN?: unknown; noDO?: unknown },
+): Promise<{ error: string } | { id: string; noGRN?: string; noDO?: string }> {
+  const grnId = String(refs.grnId || '').trim();
+  const noGRN = String(refs.noGRN || '').trim();
+  const noDO = String(refs.noDO || '').trim();
+  if (!grnId && !noGRN && !noDO) {
+    return { error: 'Tagihan tanpa dokumen penerimaan (GRN/DO) — retur hanya untuk barang yang sudah diterima' };
+  }
+  const or: Record<string, unknown>[] = [];
+  if (grnId) or.push({ id: grnId });
+  if (noGRN) or.push({ noGRN });
+  if (noDO) or.push({ noDO });
+  const grn = await db.collection('goods_receipts').findOne({
+    ...tenantIdMatchFilter(tenantId),
+    $or: or,
+  });
+  if (!grn) return { error: 'GRN terkait tidak ditemukan' };
+  if (String(grn.status) !== 'POSTED') return { error: 'GRN terkait harus POSTED sebelum retur vendor' };
+  return {
+    id: String(grn.id),
+    noGRN: grn.noGRN ? String(grn.noGRN) : undefined,
+    noDO: grn.noDO ? String(grn.noDO) : undefined,
+  };
+}
+
+function asHutangLike(doc: unknown): HutangLike {
+  return (doc && typeof doc === 'object' ? doc : {}) as HutangLike;
+}
+
+function asPostedReturns(docs: unknown[]): PostedReturnLike[] {
+  return docs as PostedReturnLike[];
 }
 
 async function persistPhotos(tenantId: string, raw: unknown[]): Promise<string[] | { error: string }> {
@@ -162,8 +203,10 @@ export async function handleVendorReturns({
     if (denied) return denied;
 
     const status = url.searchParams.get('status');
+    const vendorTenantId = String(url.searchParams.get('vendorTenantId') || '').trim();
     const q = String(url.searchParams.get('q') || '').trim();
     let filter: Record<string, unknown> = status ? { status } : {};
+    if (vendorTenantId) filter.vendorTenantId = vendorTenantId;
     if (q) {
       filter = {
         ...filter,
@@ -172,6 +215,7 @@ export async function handleVendorReturns({
           { noInvoice: { $regex: q, $options: 'i' } },
           { noGRN: { $regex: q, $options: 'i' } },
           { noCN: { $regex: q, $options: 'i' } },
+          { supplierName: { $regex: q, $options: 'i' } },
         ],
       };
     }
@@ -217,15 +261,25 @@ export async function handleVendorReturns({
       : [];
     const postedByInvoice = new Map<string, typeof posted>();
     for (const p of posted) {
-      const k = String(p.noInvoice || '');
+      const k = String(p.hutangId || p.noInvoice || '');
       const arr = postedByInvoice.get(k) || [];
       arr.push(p);
       postedByInvoice.set(k, arr);
     }
 
-    const rows = [];
+    const rows: Array<Record<string, unknown>> = [];
     for (const h of hutangList) {
-      const returable = buildReturableLines(h, postedByInvoice.get(String(h.noInvoice || '')) || []);
+      const grn = await resolvePostedGrn(db, tenantId, {
+        grnId: h.grnId,
+        noGRN: h.noGRN,
+        noDO: h.noDO,
+      });
+      if ('error' in grn) continue;
+      const postedKey = String(h.id || h.noInvoice || '');
+      const returable = buildReturableLines(
+        asHutangLike(h),
+        asPostedReturns(postedByInvoice.get(postedKey) || postedByInvoice.get(String(h.noInvoice || '')) || []),
+      );
       const maxQty = returable.reduce((s, r) => s + (r.maxQty || 0), 0);
       if (maxQty <= 0) continue;
       rows.push({
@@ -264,6 +318,12 @@ export async function handleVendorReturns({
     if (doc.status !== 'DRAFT') return err('Hanya DRAFT yang bisa diposting', 400);
     const reason = String(rtvBody.reason || doc.reason || '').trim();
     if (!reason) return err('Alasan retur wajib sebelum post', 400);
+    const grn = await resolvePostedGrn(db, tenantId, {
+      grnId: doc.grnId,
+      noGRN: doc.noGRN,
+      noDO: doc.noDO,
+    });
+    if ('error' in grn) return err(grn.error, 400);
 
     let items = doc.items || [];
     if (Array.isArray(rtvBody.items)) {
@@ -272,6 +332,11 @@ export async function handleVendorReturns({
       items = hydrated;
     }
     if (!items.length) return err('Minimal satu baris retur', 400);
+    if (items.some((it) => (parseFloat(String(it.qty)) || 0) <= 0)) {
+      return err('Semua baris retur harus qty > 0', 400);
+    }
+    const identErr = vendorReturnSalesIdentityError(items);
+    if (identErr) return err(identErr, 400);
 
     const hutang = await db.collection('hutang').findOne({
       ...tenantIdMatchFilter(tenantId),
@@ -279,7 +344,7 @@ export async function handleVendorReturns({
     });
     if (!hutang) return err('Tagihan terkait tidak ditemukan', 400);
     const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
-    const returable = buildReturableLines(hutang, posted, { excludeReturnId: doc.id });
+    const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
     const qtyErr = assertReturnQtyWithinMax(items, returable);
     if (qtyErr) return err(qtyErr, 400);
 
@@ -352,7 +417,7 @@ export async function handleVendorReturns({
       });
       if (hutang) {
         const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
-        returable = buildReturableLines(hutang, posted, { excludeReturnId: doc.id });
+        returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
       }
     }
     return ok(clean({ ...doc, returable } as JsonObject));
@@ -367,11 +432,32 @@ export async function handleVendorReturns({
 
     const hutang = await loadHutangForReturn(db, tenantId, rtvBody);
     if (!hutang) return err('Tagihan tidak ditemukan. Isi hutangId atau noInvoice.', 400);
+    if (String(hutang.referenceType || '') !== 'VENDOR_INVOICE') {
+      return err('Retur hanya untuk tagihan invoice vendor', 400);
+    }
+    if (!String(hutang.noInvoice || '').trim()) {
+      return err('Tagihan tanpa nomor invoice tidak bisa diretur', 400);
+    }
     const approval = String(hutang.approvalStatus || hutang.status || '');
     if (approval === 'REJECTED') return err('Tagihan ditolak tidak bisa diretur', 400);
+    const grn = await resolvePostedGrn(db, tenantId, {
+      grnId: hutang.grnId,
+      noGRN: hutang.noGRN,
+      noDO: hutang.noDO,
+    });
+    if ('error' in grn) return err(grn.error, 400);
+
+    const existingDraft = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({
+      ...tenantIdMatchFilter(tenantId),
+      hutangId: String(hutang.id || ''),
+      status: 'DRAFT',
+    }) as VendorReturnDoc | null;
+    if (existingDraft) {
+      return ok(clean(existingDraft as unknown as JsonObject));
+    }
 
     const posted = await loadPostedReturns(db, tenantId, String(hutang.noInvoice || ''), String(hutang.id || ''));
-    const mapped = await buildVendorReturnLinesFromHutang(db, tenantId, hutang, posted);
+    const mapped = await buildVendorReturnLinesFromHutang(db, tenantId, asHutangLike(hutang), asPostedReturns(posted));
     if (!mapped.items.length) {
       const why = mapped.skipped[0] || 'Tidak ada qty returable pada tagihan ini';
       return err(why, 400);
@@ -383,9 +469,11 @@ export async function handleVendorReturns({
       mapped.items = hydrated;
     }
 
-    const returable = buildReturableLines(hutang, posted);
+    const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted));
     const qtyErr = assertReturnQtyWithinMax(mapped.items, returable);
     if (qtyErr) return err(qtyErr, 400);
+    const identErr = vendorReturnSalesIdentityError(mapped.items);
+    if (identErr) return err(identErr, 400);
 
     let photos: string[] = [];
     if (Array.isArray(rtvBody.photos)) {
@@ -403,12 +491,13 @@ export async function handleVendorReturns({
       noReturn: await nextDocNumber(db, writeTid, 'RTV', 'RTV'),
       status: 'DRAFT',
       vendorTenantId: String(hutang.vendorTenantId || rtvBody.vendorTenantId || ''),
+      supplierName: hutang.supplierName ? String(hutang.supplierName) : null,
       hutangId: String(hutang.id || ''),
       vendorInvoiceId: String(hutang.vendorInvoiceId || hutang.referenceId || ''),
       noInvoice: String(hutang.noInvoice || ''),
-      noGRN: hutang.noGRN ? String(hutang.noGRN) : null,
-      grnId: hutang.grnId ? String(hutang.grnId) : null,
-      noDO: hutang.noDO ? String(hutang.noDO) : null,
+      noGRN: hutang.noGRN ? String(hutang.noGRN) : (grn.noGRN || null),
+      grnId: hutang.grnId ? String(hutang.grnId) : grn.id,
+      noDO: hutang.noDO ? String(hutang.noDO) : (grn.noDO || null),
       noPO: hutang.noPO ? String(hutang.noPO) : null,
       noSO: hutang.noSO ? String(hutang.noSO) : null,
       reason: String(rtvBody.reason || '').trim(),
@@ -457,7 +546,7 @@ export async function handleVendorReturns({
       });
       if (hutang) {
         const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
-        const returable = buildReturableLines(hutang, posted, { excludeReturnId: doc.id });
+        const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
         const qtyErr = assertReturnQtyWithinMax(hydrated, returable);
         if (qtyErr) return err(qtyErr, 400);
       }
