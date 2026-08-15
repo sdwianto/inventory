@@ -3,8 +3,9 @@
 import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { stampTenantId } from '@/lib/api/tenant-operational';
-import { warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
+import { warehouseLabel, normalizeWarehouseKode, isValidWarehouseKode, type WarehouseCode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode, setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { txOpts } from '@/lib/api/transaction';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { nextDocNumber } from '@/lib/api/document-sequence';
@@ -113,6 +114,76 @@ export async function recordMasterProductStockChange(
   }, session);
 
   return { noPenyesuaian: noPS, selisih };
+}
+
+export type RelocateWarehouseResult =
+  | { moved: number; from: WarehouseCode; to: WarehouseCode }
+  | { error: string };
+
+/**
+ * Pindahkan qty SKU ke gudang baru (satu gudang per SKU) + jejak kartu stok.
+ */
+export async function relocateProductWarehouseWithAudit(
+  db: Db,
+  {
+    tenantId,
+    product,
+    nextGudang,
+    auth,
+    reason,
+    session,
+  }: {
+    tenantId: string;
+    product: StockLedgerProduct;
+    nextGudang: string;
+    auth?: AuthContext | null;
+    reason?: string;
+    session?: ClientSession;
+  },
+): Promise<RelocateWarehouseResult> {
+  const tid = tenantId || 'default';
+  const stokId = product?.id != null ? String(product.id) : '';
+  if (!stokId) return { error: 'Produk tidak valid' };
+  const to = normalizeWarehouseKode(nextGudang);
+  if (!isValidWarehouseKode(to)) return { error: 'Gudang produk tidak valid' };
+  const from = resolveProductGudangKode(product);
+  if (from === to) return { moved: 0, from, to };
+
+  const qtyFrom = parseFloat(String(await getQtyStokLokasi(db, tid, stokId, from, session))) || 0;
+  const qtyTo = parseFloat(String(await getQtyStokLokasi(db, tid, stokId, to, session))) || 0;
+  const total = qtyFrom + qtyTo;
+  const note = reason || `Reclassify gudang ${from} → ${to}`;
+
+  if (qtyFrom > 0) {
+    await recordMasterProductStockChange(db, {
+      tenantId: tid,
+      product,
+      gudangKode: from,
+      qtyBefore: qtyFrom,
+      qtyAfter: 0,
+      auth,
+      reason: `${note} (keluar ${warehouseLabel(from)})`,
+      session,
+    });
+  }
+
+  const wh = await setProductWarehouseStock(db, tid, stokId, to, total, session);
+  if ('error' in wh) return { error: wh.error };
+
+  if (total > 0 && qtyTo !== total) {
+    await recordMasterProductStockChange(db, {
+      tenantId: tid,
+      product: { ...product, gudangKode: to },
+      gudangKode: to,
+      qtyBefore: qtyTo,
+      qtyAfter: total,
+      auth,
+      reason: `${note} (masuk ${warehouseLabel(to)})`,
+      session,
+    });
+  }
+
+  return { moved: qtyFrom, from, to };
 }
 
 /** Saldo stok dari seluruh baris kartu stok (sumber kebenaran mutasi). */

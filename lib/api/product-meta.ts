@@ -5,15 +5,16 @@ import { v4 as uuidv4 } from 'uuid';
 
 export const DEFAULT_PRODUK_GRUP = [
   'Buah',
-  'Lainnya',
-  'Makanan Ringan',
-  'Minuman',
-  'Protein Hewani',
-  'Palen',
-  'Roti',
   'Sayuran',
+  'Protein Hewani',
+  'Bumbu',
+  'Roti',
   'Sembako',
+  'Minuman',
+  'Makanan Ringan',
+  'Palen',
   'Toiletries',
+  'Lainnya',
   'Umum',
 ];
 

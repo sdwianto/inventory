@@ -19,12 +19,12 @@ import {
   isValidProductGudang,
   resolveProductGudangKode,
   setProductWarehouseStock,
-  inferGudangKodeFromProduct,
 } from '@/lib/api/product-warehouse';
+import { classifyProduct, resolveClassificationSource } from '@/lib/api/product-classification';
+import { recordMasterProductStockChange, relocateProductWarehouseWithAudit } from '@/lib/api/stock-ledger';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { requireRole, PRODUCT_MANAGE_ROLES, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
-import { recordMasterProductStockChange } from '@/lib/api/stock-ledger';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
 import { parseCursorPageParams, applyAscStringIdCursor, encodeStringCursor, sliceCursorPage } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
@@ -81,6 +81,7 @@ interface ProductBody extends Record<string, unknown> {
   stokAlasan?: string;
   ids?: unknown[];
   itemRole?: string;
+  classificationSource?: string;
   /**
    * Faktor resep dapur → basis kemasan: 1 products.satuan = N gram.
    * Dipakai Food Production (GR→SAK/BTL), bukan pengadaan integer UOM.
@@ -100,6 +101,7 @@ interface ProductDoc extends Record<string, unknown> {
   gudangKode?: string;
   stok?: number;
   itemRole?: ItemRole;
+  classificationSource?: 'inferred' | 'manual';
   recipeBaseGrams?: number;
   recipeBaseMl?: number;
 }
@@ -243,7 +245,8 @@ export async function handleProducts({
     if (!productBody.kode || !productBody.nama) return err('Kode dan nama wajib');
 
     const tenantId = tenantIdForWrite(scopeAuth, productBody);
-    const grup = String(productBody.grup || 'Umum').trim();
+    const grup = String(productBody.grup || '').trim();
+    if (!grup) return err('Pilih grup dari daftar master', 400);
 
     const uomParsed = validateAndNormalizeUomInputs(resolveUomInputsFromProductBody(productBody));
     if ('error' in uomParsed) return err(uomParsed.error, 400);
@@ -260,9 +263,10 @@ export async function handleProducts({
     if (existing) return err('Kode sudah ada di tenant ini');
 
     const draft = { grup, nama: productBody.nama };
+    const classified = classifyProduct(draft);
     const gudangKode = isValidProductGudang(productBody.gudangKode)
       ? String(productBody.gudangKode).trim().toUpperCase()
-      : inferGudangKodeFromProduct(draft);
+      : classified.gudangKode;
     if (!isValidProductGudang(gudangKode)) {
       return err('Pilih gudang produk: GKERING (Kering), GBASAH (Basah), atau GJANITOR (Janitor)', 400);
     }
@@ -276,7 +280,12 @@ export async function handleProducts({
     if (productBody.itemRole !== undefined && !isItemRole(productBody.itemRole)) {
       return err('itemRole tidak valid (INGREDIENT|SEMI_FINISHED|FINISHED_GOOD|PACKAGING|CONSUMABLE)', 400);
     }
-    const itemRole = normalizeItemRole(productBody.itemRole, 'INGREDIENT');
+    const itemRole = productBody.itemRole !== undefined
+      ? normalizeItemRole(productBody.itemRole, 'INGREDIENT')
+      : classified.itemRole;
+    const classificationSource = productBody.classificationSource === 'inferred'
+      ? 'inferred'
+      : resolveClassificationSource({ itemRole, gudangKode, inferred: classified });
 
     const doc: ProductDoc = {
       id: productId,
@@ -286,6 +295,7 @@ export async function handleProducts({
       grup,
       gudangKode,
       itemRole,
+      classificationSource,
       ...denorm,
       uomCount: uomDocs.length,
       stokDisplay: formatStockDualLabel(parseFloat(String(productBody.stok || 0)), uomDocs),
@@ -550,21 +560,44 @@ export async function handleProducts({
         update.itemRole = update.itemRole;
       }
 
-      if (update.gudangKode !== undefined) {
-        const nextGudang = String(update.gudangKode || '').trim().toUpperCase();
+      const classified = classifyProduct({
+        grup: String(update.grup ?? existing.grup ?? ''),
+        nama: String(update.nama ?? existing.nama ?? ''),
+      });
+      const followInferred = productBody.classificationSource === 'inferred';
+      if (followInferred) {
+        update.itemRole = classified.itemRole;
+        update.gudangKode = classified.gudangKode;
+        update.classificationSource = 'inferred';
+      }
+
+      if (update.gudangKode !== undefined || followInferred) {
+        const nextGudang = String(update.gudangKode || classified.gudangKode || '').trim().toUpperCase();
         if (!isValidProductGudang(nextGudang)) {
           return err('Gudang produk tidak valid (GKERING / GBASAH / GJANITOR)', 400);
         }
-        if (nextGudang !== resolveProductGudangKode(existing)) {
-          const otherRows = await db.collection<{ qty?: number | string }>('stok_lokasi').find({
-            tenantId: tid, stokId: id, lokasiKode: { $ne: nextGudang },
-          }).toArray();
-          const otherQty = otherRows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
-          if (otherQty > 0) {
-            return err('Tidak bisa pindah gudang — masih ada stok di gudang lama', 400);
-          }
+        const currentGudang = resolveProductGudangKode(existing);
+        if (nextGudang !== currentGudang) {
+          const moved = await relocateProductWarehouseWithAudit(db, {
+            tenantId: tid,
+            product: existing,
+            nextGudang,
+            auth: userAuth,
+            reason: followInferred
+              ? `Ikuti klasifikasi otomatis ${classified.gudangKode}`
+              : 'Pindah gudang via edit master produk',
+          });
+          if ('error' in moved) return err(moved.error, 400);
         }
         update.gudangKode = nextGudang;
+      }
+
+      if (!followInferred && (update.itemRole !== undefined || update.gudangKode !== undefined)) {
+        update.classificationSource = resolveClassificationSource({
+          itemRole: update.itemRole ?? existing.itemRole,
+          gudangKode: update.gudangKode ?? existing.gudangKode,
+          inferred: classified,
+        });
       }
       const stokDiubah = update.stok !== undefined;
       if (stokDiubah) {

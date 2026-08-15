@@ -4,7 +4,7 @@ export const EMPTY_PRODUCT: JsonObject = {
   kode: '',
   barcode: '',
   nama: '',
-  grup: 'Umum',
+  grup: '',
   satuan: 'PCS',
   itemRole: 'INGREDIENT',
   gudangKode: 'GKERING',

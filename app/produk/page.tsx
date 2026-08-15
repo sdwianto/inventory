@@ -33,6 +33,12 @@ import {
   normalizeItemRole,
   type ItemRole,
 } from '@/lib/food-production/item-role';
+import {
+  classifyProduct,
+  isWeakProdukGrup,
+  sortProdukGrupOptions,
+  suggestProdukGrup,
+} from '@/lib/api/product-classification';
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
@@ -95,6 +101,10 @@ export default function ProdukPage() {
       : '';
   const metaEnabled = showForm || showMeta;
   const { grupList, satuanList } = useProdukMeta(metaScopeTenantId, isMaster, metaEnabled);
+  const grupOptions = useMemo(
+    () => sortProdukGrupOptions(grupList.map((g) => ({ id: str(g.id), nama: str(g.nama) }))),
+    [grupList],
+  );
 
   const { data: vendorTiersData } = useApiQuery<JsonObject>(
     queryKeys.integrations.vendorTiers,
@@ -271,6 +281,7 @@ export default function ProdukPage() {
           minStok: num(form.minStok),
           gudangKode: str(form.gudangKode, 'GKERING'),
           itemRole: normalizeItemRole(form.itemRole),
+          classificationSource: form.classificationSource === 'manual' ? 'manual' : 'inferred',
         };
       } else {
         const fields = productToFormFields({ ...form, uoms } as ProductLike, str(form.tenantId));
@@ -283,6 +294,7 @@ export default function ProdukPage() {
         };
         if (!editing) payload.stok = num(form.stok);
       }
+      payload.classificationSource = form.classificationSource === 'manual' ? 'manual' : 'inferred';
       // Faktor resep dapur — lokal & vendor (bukan field locked sales.app).
       payload.recipeBaseGrams = form.recipeBaseGrams === '' || form.recipeBaseGrams == null
         ? null
@@ -830,12 +842,22 @@ export default function ProdukPage() {
               <select
                 className={PRODUCT_SELECT_CLASS}
                 value={str(form.grup)}
-                onChange={(e) => setForm({ ...form, grup: e.target.value })}
+                onChange={(e) => {
+                  const grup = e.target.value;
+                  const inferred = classifyProduct({ grup, nama: str(form.nama) });
+                  setForm({
+                    ...form,
+                    grup,
+                    ...(form.classificationSource === 'manual'
+                      ? {}
+                      : { itemRole: inferred.itemRole, gudangKode: inferred.gudangKode, classificationSource: 'inferred' }),
+                  });
+                }}
                 disabled={grupList.length === 0 || Boolean(editing && isVendorSynced(editing))}
               >
                 <option value="">{grupList.length ? '— Pilih grup —' : '— Belum ada grup —'}</option>
-                {grupList.map((g) => (
-                  <option key={str(g.id)} value={str(g.nama)}>{str(g.nama)}</option>
+                {grupOptions.map((g) => (
+                  <option key={g.id} value={g.nama}>{g.nama}</option>
                 ))}
                 {!!form.grup && !grupList.some((g) => g.nama === form.grup) && (
                   <option value={str(form.grup)}>{str(form.grup)} (legacy)</option>
@@ -847,7 +869,7 @@ export default function ProdukPage() {
               <select
                 className={PRODUCT_SELECT_CLASS}
                 value={normalizeItemRole(form.itemRole)}
-                onChange={(e) => setForm({ ...form, itemRole: e.target.value })}
+                onChange={(e) => setForm({ ...form, itemRole: e.target.value, classificationSource: 'manual' })}
               >
                 {ITEM_ROLES_UI.map((role) => (
                   <option key={role} value={role}>{ITEM_ROLE_LABELS[role]}</option>
@@ -856,12 +878,47 @@ export default function ProdukPage() {
                   <option value="SEMI_FINISHED">{ITEM_ROLE_LABELS.SEMI_FINISHED}</option>
                 )}
               </select>
+              <p className="text-[11px] text-slate-500 mt-1">
+                {form.classificationSource === 'manual'
+                  ? 'Dikoreksi manual — sync Sales tidak menimpa peran/gudang.'
+                  : 'Otomatis dari grup Sales. Boleh dikoreksi.'}
+                {' '}
+                <button
+                  type="button"
+                  className="text-orange-700 hover:underline"
+                  onClick={() => {
+                    const inferred = classifyProduct({ grup: str(form.grup), nama: str(form.nama) });
+                    setForm({
+                      ...form,
+                      itemRole: inferred.itemRole,
+                      gudangKode: inferred.gudangKode,
+                      classificationSource: 'inferred',
+                    });
+                  }}
+                >
+                  Ikuti klasifikasi otomatis
+                </button>
+              </p>
             </div>
             <div className="col-span-2">
               <Label>Nama Produk *</Label>
               <Input
                 value={str(form.nama)}
-                onChange={(e) => setForm({ ...form, nama: e.target.value })}
+                onChange={(e) => {
+                  const nama = e.target.value;
+                  const nextGrup = (!editing && form.classificationSource !== 'manual' && isWeakProdukGrup(form.grup))
+                    ? (suggestProdukGrup(nama) || form.grup)
+                    : form.grup;
+                  const inferred = classifyProduct({ grup: str(nextGrup), nama });
+                  setForm({
+                    ...form,
+                    nama,
+                    grup: nextGrup,
+                    ...(form.classificationSource === 'manual'
+                      ? {}
+                      : { itemRole: inferred.itemRole, gudangKode: inferred.gudangKode, classificationSource: 'inferred' }),
+                  });
+                }}
                 disabled={Boolean(editing && isVendorSynced(editing))}
               />
             </div>
@@ -935,9 +992,9 @@ export default function ProdukPage() {
             <div className="col-span-2">
               <WarehousePicker
                 value={str(form.gudangKode)}
-                onChange={(kode) => setForm({ ...form, gudangKode: kode })}
+                onChange={(kode) => setForm({ ...form, gudangKode: kode, classificationSource: 'manual' })}
               />
-              <p className="text-[11px] text-slate-400 mt-2">Satu produk hanya disimpan di satu gudang.</p>
+              <p className="text-[11px] text-slate-400 mt-2">Satu produk hanya disimpan di satu gudang. Koreksi manual dihormati saat sync dari Sales.</p>
             </div>
 
             <div>

@@ -2,7 +2,8 @@
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
-import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { vendorProductSnapshot, bulkSyncVendorProductUoms } from '@/lib/api/product-sync';
 import type { JsonObject } from '@/types/json';
 
@@ -126,25 +127,25 @@ export async function bulkUpsertProductsFromVendor(
       result.byVendor[vTenant] = (result.byVendor[vTenant] || 0) + 1;
 
       if (existing) {
+        const classPatch = await applyInferredClassification(db, tid, existing, snap);
         bulkOps.push({
           updateOne: {
             filter: { id: existing.id },
-            update: { $set: syncSet },
+            update: { $set: { ...syncSet, ...classPatch } },
           },
         });
         uomSyncQueue.push({ productId: existing.id, raw, snap });
         result.updated += 1;
       } else {
-        const gudangKode = inferGudangKodeFromProduct(snap);
+        const classified = inferredClassificationPatch(snap);
         const id = uuidv4();
         toCreate.push({
-          gudangKode,
+          gudangKode: classified.gudangKode,
           doc: {
             id,
             tenantId: tid,
             ...syncSet,
-            gudangKode,
-            itemRole: 'INGREDIENT',
+            ...classified,
             hargaBeli: 0,
             stok: 0,
             minStok: 0,

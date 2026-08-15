@@ -84,6 +84,7 @@
     "coverage",
     "tests",
     "playwright.config.ts",
-    "_vendor"
+    "_vendor",
+    "scripts"
   ]
 }

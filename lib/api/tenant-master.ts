@@ -46,12 +46,12 @@ export const DEMO_PRODUCTS = [
   { kode: 'B00003', barcode: '8998866200615', nama: 'Telur Ayam 1 Kg', grup: 'Telur', satuan: 'KG', gudangKode: 'GBASAH', hargaBeli: 20000, hargaSpesial: 22000, hargaGrosir: 23000, hargaEcer: 24000, stok: 120, minStok: 20 },
   { kode: 'B00004', barcode: '8992696404120', nama: 'Gula Pasir 1Kg', grup: 'Sembako', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 13000, hargaSpesial: 14500, hargaGrosir: 15000, hargaEcer: 16000, stok: 100, minStok: 20 },
   { kode: 'B00005', barcode: '8993175533539', nama: 'Indomie Goreng', grup: 'Mie Instan', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 2800, hargaSpesial: 3000, hargaGrosir: 3100, hargaEcer: 3500, stok: 500, minStok: 100 },
-  { kode: 'B00006', barcode: '8992775002095', nama: 'Sabun Lifebuoy', grup: 'Toiletries', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 4000, hargaSpesial: 4500, hargaGrosir: 4700, hargaEcer: 5000, stok: 150, minStok: 30 },
+  { kode: 'B00006', barcode: '8992775002095', nama: 'Sabun Lifebuoy', grup: 'Toiletries', satuan: 'PCS', gudangKode: 'GJANITOR', hargaBeli: 4000, hargaSpesial: 4500, hargaGrosir: 4700, hargaEcer: 5000, stok: 150, minStok: 30 },
   { kode: 'B00007', barcode: '8993175534222', nama: 'Aqua 600ml', grup: 'Minuman', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 2500, hargaSpesial: 2800, hargaGrosir: 3000, hargaEcer: 3500, stok: 300, minStok: 50 },
   { kode: 'B00008', barcode: '8998866102018', nama: 'Teh Botol Sosro 350ml', grup: 'Minuman', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 3500, hargaSpesial: 4000, hargaGrosir: 4200, hargaEcer: 4500, stok: 200, minStok: 40 },
   { kode: 'B00009', barcode: '8994807009113', nama: 'Roti Tawar Sari Roti', grup: 'Roti', satuan: 'PCS', gudangKode: 'GBASAH', hargaBeli: 12000, hargaSpesial: 14000, hargaGrosir: 15000, hargaEcer: 17000, stok: 30, minStok: 5 },
   { kode: 'B00010', barcode: '8992937100204', nama: 'Kopi Kapal Api Sachet', grup: 'Minuman', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 1500, hargaSpesial: 1700, hargaGrosir: 1800, hargaEcer: 2000, stok: 800, minStok: 100 },
-  { kode: 'B00011', barcode: '8999999013127', nama: 'Pasta Gigi Pepsodent 190g', grup: 'Toiletries', satuan: 'PCS', gudangKode: 'GKERING', hargaBeli: 10000, hargaSpesial: 11500, hargaGrosir: 12000, hargaEcer: 13500, stok: 60, minStok: 10 },
+  { kode: 'B00011', barcode: '8999999013127', nama: 'Pasta Gigi Pepsodent 190g', grup: 'Toiletries', satuan: 'PCS', gudangKode: 'GJANITOR', hargaBeli: 10000, hargaSpesial: 11500, hargaGrosir: 12000, hargaEcer: 13500, stok: 60, minStok: 10 },
   { kode: 'B00012', barcode: '8993175001234', nama: 'Susu UHT Ultra 250ml', grup: 'Susu', satuan: 'PCS', gudangKode: 'GBASAH', hargaBeli: 5500, hargaSpesial: 6000, hargaGrosir: 6200, hargaEcer: 6500, stok: 180, minStok: 30 },
 ];
 

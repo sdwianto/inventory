@@ -128,6 +128,27 @@ export async function handleBgJobs({
     return err('Method not allowed', 405);
   }
 
+  if (route === '/bg-jobs/reclassify-product-classification') {
+    if (method === 'GET') {
+      return ok({
+        message: 'Reclassify peran+gudang dari grup/nama — gunakan POST (MASTER/ADMIN/OWNER). Query dryRun=1 untuk preview.',
+        method: 'POST',
+      });
+    }
+    if (method === 'POST') {
+      const deniedRole = requireRole(auth, ['MASTER', 'ADMIN', 'OWNER']);
+      if (deniedRole) return deniedRole;
+      const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
+      if (denied) return denied;
+      if (!tenantId) return err('Tenant operasional wajib', 400);
+      const dryRun = url.searchParams.get('dryRun') === '1';
+      const { reclassifyProductsForTenant } = await import('@/lib/api/apply-product-classification');
+      const result = await reclassifyProductsForTenant(db, tenantId, { dryRun });
+      return ok({ message: dryRun ? 'Preview reclassify' : 'Reclassify selesai', tenantId, ...result });
+    }
+    return err('Method not allowed', 405);
+  }
+
   if (path[0] === 'bg-jobs' && path.length === 3 && path[2] === 'stream' && method === 'GET') {
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;

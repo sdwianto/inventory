@@ -12,11 +12,9 @@ import {
 import { productFilterById } from '@/lib/api/tenant-operational';
 import { syncProductStokFromLokasi } from '@/lib/api/stok-lokasi';
 import { txOpts } from '@/lib/api/transaction';
+import { classifyProduct } from '@/lib/api/product-classification';
 
 export const DEFAULT_PRODUCT_GUDANG: WarehouseCode = 'GKERING';
-
-const BASAH_GRUPS = new Set(['Roti', 'Telur', 'Susu', 'Sayur', 'Daging', 'Ikan', 'Buah', 'Basah']);
-const BASAH_NAME_HINTS = ['telur', 'susu', 'roti', 'ikan', 'daging', 'sayur', 'buah', 'ayam', 'basah'];
 
 export function isValidProductGudang(kode: string | null | undefined): boolean {
   return isValidWarehouseKode(kode);
@@ -28,11 +26,7 @@ export function resolveProductGudangKode(prod: { gudangKode?: string | null } | 
 }
 
 export function inferGudangKodeFromProduct(prod: { grup?: string; nama?: string } | null | undefined): WarehouseCode {
-  const grup = String(prod?.grup || '').trim();
-  if (BASAH_GRUPS.has(grup)) return 'GBASAH';
-  const nama = String(prod?.nama || '').toLowerCase();
-  if (BASAH_NAME_HINTS.some((h) => nama.includes(h))) return 'GBASAH';
-  return DEFAULT_PRODUCT_GUDANG;
+  return classifyProduct(prod).gudangKode;
 }
 
 export function assertProductWarehouse(

@@ -115,6 +115,7 @@ export const PRODUCT_LIST_PROJECTION = {
   minStok: 1,
   gudangKode: 1,
   itemRole: 1,
+  classificationSource: 1,
   aktif: 1,
   syncSource: 1,
   vendorStokId: 1,

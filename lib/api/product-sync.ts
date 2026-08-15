@@ -2,7 +2,8 @@ import type { Db } from 'mongodb';
 // Upsert master produk dari sales.app — kode produk sama dengan katalog vendor.
 
 import { v4 as uuidv4 } from 'uuid';
-import { inferGudangKodeFromProduct, setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { pickBaseUom, uomInputsFromLegacyProductBody, validateAndNormalizeUomInputs } from '@/lib/uom/conversion';
 import type { NormalizedUomInput } from '@/lib/uom/types';
 import {
@@ -104,18 +105,19 @@ export async function upsertProductFromVendor(
   if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
 
   if (existing) {
-    await db.collection('products').updateOne({ id: existing.id }, { $set: syncSet });
+    const classPatch = await applyInferredClassification(db, tid, existing, snap);
+    await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch } });
     await syncVendorProductUoms(db, tid, existing.id, product, snap);
     return { action: 'updated', id: existing.id, kode: snap.kode, vendorTenantId: vTenant };
   }
 
-  const gudangKode = inferGudangKodeFromProduct(snap);
+  const classified = inferredClassificationPatch(snap);
+  const gudangKode = classified.gudangKode;
   const doc = {
     id: uuidv4(),
     tenantId: tid,
     ...syncSet,
-    gudangKode,
-    itemRole: 'INGREDIENT' as const,
+    ...classified,
     hargaBeli: 0,
     hargaSpesial: snap.hargaSpesial,
     hargaGrosir: snap.hargaGrosir,
