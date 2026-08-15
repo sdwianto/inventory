@@ -273,7 +273,7 @@ export default function SandboxResetPage() {
       setAcknowledge(false);
       toast.success(
         isKaProfile
-          ? 'Reset Kitchen Assurance selesai — stok & pengadaan tetap'
+          ? 'Reset Keamanan Pangan selesai — stok & pengadaan tetap'
           : 'Reset sandbox selesai — transaksi dihapus, master data tetap',
       );
     } catch (e) {
@@ -299,7 +299,7 @@ export default function SandboxResetPage() {
         } else {
           toast.success(
             result?.profile === 'kitchen-assurance'
-              ? 'Reset Kitchen Assurance selesai — stok & pengadaan tetap'
+              ? 'Reset Keamanan Pangan selesai — stok & pengadaan tetap'
               : 'Reset sandbox selesai — transaksi inventory + sales dihapus, master data tetap',
           );
         }
@@ -363,8 +363,8 @@ export default function SandboxResetPage() {
             <h1 className="text-xl font-bold">Reset Sandbox</h1>
             <p className="text-sm text-slate-600 mt-1">
               {isKaProfile
-                ? 'Profil Kitchen Assurance: hapus cases/follow-ups/observations, hasil QC/HACCP, log suhu, dan reset status HOLD batch — tanpa menyentuh stok, Sales, PO/GRN, atau master dapur.'
-                : 'Hapus data transaksi inventory + sales, termasuk Food Production dan Kitchen Assurance. Setup dapur, produk, user, tenant, dan integrasi tetap. Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.'}
+                ? 'Profil Keamanan Pangan: hapus cases/follow-ups/observations, hasil QC/HACCP, log suhu, dan reset status HOLD batch — tanpa menyentuh stok, Sales, PO/GRN, atau master dapur.'
+                : 'Hapus data transaksi inventory + sales, termasuk Food Production dan Keamanan Pangan. Setup dapur, produk, user, tenant, dan integrasi tetap. Matikan dengan ALLOW_SANDBOX_RESET=0 setelah go-live.'}
             </p>
           </div>
         </div>
@@ -376,7 +376,7 @@ export default function SandboxResetPage() {
               <div className="font-semibold">Peringatan: operasi tidak bisa dibatalkan</div>
               <div className="text-xs text-amber-800">
                 {isKaProfile
-                  ? 'Hanya data uji Kitchen Assurance / Food Safety transaksi yang dibersihkan. Stok dan pengadaan tidak diubah.'
+                  ? 'Hanya data uji Keamanan Pangan / Food Safety transaksi yang dibersihkan. Stok dan pengadaan tidak diubah.'
                   : 'Banner ini menandai risiko tinggi — data yang dihapus tidak bisa dikembalikan. Stok akan di-nol-kan; aset IN_REPAIR dikembalikan ke ACTIVE.'}
               </div>
               <div>
@@ -413,7 +413,7 @@ export default function SandboxResetPage() {
                     distribusi, suhu, resep, menu, template QC/HACCP, supplier price book.
                   </div>
                   <div className="text-xs text-amber-800">
-                    Kitchen Assurance ikut dihapus: observations, safety cases, follow-ups, policies,
+                    Keamanan Pangan ikut dihapus: observations, safety cases, follow-ups, policies,
                     monitoring definitions.
                   </div>
                 </>
@@ -462,7 +462,7 @@ export default function SandboxResetPage() {
                     }}
                   />
                   <span>
-                    <span className="font-medium">Kitchen Assurance saja</span>
+                    <span className="font-medium">Keamanan Pangan saja</span>
                     <span className="block text-xs text-slate-500">
                       Ideal untuk uji modul KA — stok, Sales, PO/GRN tidak disentuh.
                     </span>
@@ -562,7 +562,7 @@ export default function SandboxResetPage() {
                 <span>
                   Saya paham ini akan{' '}
                   {isKaProfile
-                    ? 'membersihkan data uji Kitchen Assurance'
+                    ? 'membersihkan data uji Keamanan Pangan'
                     : 'menghapus transaksi'}
                   {tenantId ? ` untuk tenant "${tenantId}"` : ' untuk semua tenant'}
                   {!isKaProfile && (effectiveIncludeSales ? ' di inventory dan sales' : ' di inventory')}.
@@ -587,7 +587,7 @@ export default function SandboxResetPage() {
                 {resetting
                   ? 'Reset berjalan…'
                   : isKaProfile
-                    ? 'Reset Kitchen Assurance sekarang'
+                    ? 'Reset Keamanan Pangan sekarang'
                     : 'Reset sandbox sekarang'}
               </Button>
               {resetting && resetJobId && (

@@ -70,11 +70,19 @@ describe('sandbox purge profile kitchen-assurance', () => {
     expect(ka).not.toContain('bg_jobs');
   });
 
-  it('full profile still includes KA + procurement collections', () => {
+  it('full profile still includes KA + procurement + warehouse/FEFO ledgers', () => {
     const full = collectionsForSandboxProfile('full');
     expect(full).toEqual([...SANDBOX_TRANSACTION_COLLECTIONS]);
     expect(full).toContain('goods_receipts');
     expect(full).toContain('ka_safety_cases');
+    expect(full).toContain('vendor_returns');
+    expect(full).toContain('ingredient_lots');
+    expect(full).toContain('stok_bin');
+    expect(full).toContain('putaway_moves');
+    expect(full).toContain('integration_outbox');
+    expect(full).toContain('audit_log');
+    expect(full).toContain('execution_outbox');
+    expect(full).not.toContain('warehouse_bins');
   });
 
   it('KA keep hint documents stok and GRN retention', () => {

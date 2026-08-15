@@ -22,8 +22,8 @@ export function normalizeSandboxPurgeProfile(raw: unknown): SandboxPurgeProfile 
 /**
  * Koleksi yang dihapus saat reset sandbox penuh.
  * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
- * Kitchen Assurance: observation / case / follow-up + policy & monitoring definitions.
- * Setup dapur (kitchens, service_points, armadas, temperature_thresholds) tetap.
+ * Keamanan Pangan (kode: kitchen-assurance / ka_*): observation / case / follow-up + policy & monitoring.
+ * Setup dapur (kitchens, service_points, armadas, temperature_thresholds, warehouse_bins) tetap.
  */
 export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'hutang_pembayaran',
@@ -64,6 +64,25 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'document_sequences',
   'bg_jobs',
   'idempotency_keys',
+  // Warehouse / FEFO ledger (bukan master bin)
+  'stok_bin',
+  'putaway_moves',
+  'ingredient_lots',
+  // Integrasi & jejak eksekusi
+  'integration_outbox',
+  'audit_log',
+  'execution_outbox',
+  'execution_audit',
+  'dashboard_snapshots',
+  // Ops reconcile artifacts
+  'fefo_batch_reconcile_reports',
+  'ingredient_lot_reconcile_reports',
+  'issue_fefo_shortfall_reports',
+  'dist_fefo_shortfall_reports',
+  'release_fefo_shortfall_reports',
+  'dist_return_fefo_shortfall_reports',
+  'hsl_waste_reconcile_reports',
+  'stok_bin_reconcile_reports',
   // Food Production — dokumen operasional
   'distribution_orders',
   'temperature_logs',
@@ -87,7 +106,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'haccp_templates',
   'food_safety_programs',
   'food_safety_requirements',
-  // Kitchen Assurance — transaksi + definisi simulasi
+  // Keamanan Pangan (KA) — transaksi + definisi simulasi
   'ka_follow_ups',
   'ka_safety_cases',
   'ka_observations',
@@ -98,7 +117,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
 ] as const;
 
 /**
- * Profil Kitchen Assurance: transaksi KA + jejak Food Safety uji.
+ * Profil Keamanan Pangan (kode: kitchen-assurance): transaksi KA + jejak Food Safety uji.
  * Tidak menyentuh stok, Sales, PO/GRN, resep, program PRP, HACCP Study.
  */
 export const SANDBOX_KA_COLLECTIONS = [
@@ -131,6 +150,7 @@ export const SANDBOX_KEEP_HINT = [
   'service_points',
   'armadas',
   'temperature_thresholds',
+  'warehouse_bins',
   'assets',
   'users',
   'tenants',
@@ -653,7 +673,7 @@ export async function runSandboxResetJob(
 
   await updateJobProgress(inventoryDb, options.preserveJobId, {
     message: profile === 'kitchen-assurance'
-      ? 'Reset Kitchen Assurance (cases, QC/HACCP results, temp logs)…'
+      ? 'Reset Keamanan Pangan (cases, QC/HACCP results, temp logs)…'
       : includeSales
         ? 'Menghapus transaksi inventory + sales…'
         : 'Menghapus transaksi inventory…',

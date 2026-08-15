@@ -94,7 +94,7 @@ export async function handleSandbox({
       keepHint: SANDBOX_KEEP_HINT,
       profiles: SANDBOX_PURGE_PROFILES.map((id) => ({
         id,
-        label: id === 'kitchen-assurance' ? 'Kitchen Assurance saja' : 'Reset penuh',
+        label: id === 'kitchen-assurance' ? 'Keamanan Pangan saja' : 'Reset penuh',
         keepHint: keepHintForSandboxProfile(id),
         allowIncludeSales: id === 'full',
       })),
@@ -175,7 +175,7 @@ export async function handleSandbox({
       reused,
       profile,
       message: profile === 'kitchen-assurance'
-        ? 'Reset Kitchen Assurance berjalan di background'
+        ? 'Reset Keamanan Pangan berjalan di background'
         : 'Reset sandbox berjalan di background',
     }, 202);
   }
