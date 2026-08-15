@@ -49,6 +49,18 @@ describe('product classification', () => {
     });
   });
 
+  it('puts Palen + Sunlight into Janitor, not packaging/kering', () => {
+    expect(suggestProdukGrup('Sunlight 650g')).toBe('Toiletries');
+    expect(classifyProduct({ grup: 'Palen', nama: 'Sunlight 650g' })).toEqual({
+      itemRole: 'CONSUMABLE',
+      gudangKode: 'GJANITOR',
+    });
+    expect(classifyProduct({ grup: 'Palen', nama: 'Alumunium Foil Persegi' })).toEqual({
+      itemRole: 'PACKAGING',
+      gudangKode: 'GKERING',
+    });
+  });
+
   it('does not overwrite FINISHED_GOOD or manual source', () => {
     expect(isManualClassification({ itemRole: 'FINISHED_GOOD' })).toBe(true);
     expect(isManualClassification({ classificationSource: 'manual', itemRole: 'INGREDIENT' })).toBe(true);

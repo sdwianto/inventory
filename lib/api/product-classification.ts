@@ -149,11 +149,12 @@ export function classifyProduct(prod: { grup?: string; nama?: string } | null | 
     ? { ...fromGrup }
     : { itemRole: 'INGREDIENT', gudangKode: 'GKERING' };
 
-  if (!fromGrup) {
-    const suggested = suggestProdukGrup(nama);
-    if (suggested && GRUP_MATRIX[suggested]) {
-      result = { ...GRUP_MATRIX[suggested] };
-    }
+  const suggested = suggestProdukGrup(nama);
+  // Nama kebersihan mengalahkan Palen/grup lemah — Sunlight di Palen tetap ke Janitor.
+  if (suggested === 'Toiletries' && GRUP_MATRIX.Toiletries) {
+    result = { ...GRUP_MATRIX.Toiletries };
+  } else if (!fromGrup && suggested && GRUP_MATRIX[suggested]) {
+    result = { ...GRUP_MATRIX[suggested] };
   }
 
   if (result.gudangKode === 'GBASAH' && isDryProcessedName(nama)) {

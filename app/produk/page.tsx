@@ -84,6 +84,11 @@ export default function ProdukPage() {
   const { tenants: masterTenants } = useMasterTenants(isMaster);
   const tenants = masterTenants as TenantOption[];
   const canManageProducts = (PRODUCT_MANAGE_ROLES as readonly string[]).includes(String(user?.role || ''));
+  const catalogGudangKode = useMemo(() => {
+    const selected = WAREHOUSES.filter((w) => gudangFilter[w.kode]).map((w) => w.kode);
+    if (!selected.length || selected.length === WAREHOUSES.length) return '';
+    return selected.join(',');
+  }, [gudangFilter]);
   const {
     products,
     loading,
@@ -92,7 +97,13 @@ export default function ProdukPage() {
     loadingMore,
     error,
     reload,
-  } = useProdukCatalog({ filterTenantId, isMaster, q: debouncedQ });
+  } = useProdukCatalog({
+    filterTenantId,
+    isMaster,
+    q: debouncedQ,
+    gudangKode: catalogGudangKode,
+    itemRole: itemRoleFilter,
+  });
 
   const metaScopeTenantId = showMeta
     ? metaTenantId
@@ -423,6 +434,8 @@ export default function ProdukPage() {
   const fetchExportRows = async () => {
     const EXPORT_MAX = 2000;
     let base = `/api/products?q=${encodeURIComponent(debouncedQ)}&includeUom=1`;
+    if (catalogGudangKode) base += `&gudangKode=${encodeURIComponent(catalogGudangKode)}`;
+    if (itemRoleFilter) base += `&itemRole=${encodeURIComponent(itemRoleFilter)}`;
     base = withActingTenantQuery(base, filterTenantId, isMaster);
     const all = await fetchAllCursorPages<JsonObject>(base, {
       limit: 500,

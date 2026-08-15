@@ -1,5 +1,5 @@
 import type { NextResponse } from 'next/server';
-import { ok, clean } from '@/lib/api/db';
+import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { enrichGrnList } from '@/lib/api/grn-enrich';
 import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection';
@@ -14,7 +14,7 @@ import {
 } from '@/lib/api/cursor-page';
 import { payableHutangFilter, approvalStatusFilter, stripHutangListSnapshot } from '@/lib/api/hutang-filters';
 import { loadPoRequestedShipDatesByNoPo } from '@/lib/api/grn-enrich';
-import { buildProductSearchFilter, mergeProductSearchWithVendorName, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
+import { buildProductSearchFilter, mergeProductSearchWithVendorName, applyProductCatalogFilters, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -134,6 +134,12 @@ export async function handlePages({
 
     const q = (url.searchParams.get('q') || '').trim();
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
+    const catalog = applyProductCatalogFilters(filter, {
+      gudangKode: url.searchParams.get('gudangKode'),
+      itemRole: url.searchParams.get('itemRole'),
+    });
+    if (catalog.error) return err(catalog.error, 400);
+    filter = catalog.filter as Record<string, unknown>;
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
     const { limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });

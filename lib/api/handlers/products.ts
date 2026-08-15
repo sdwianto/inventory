@@ -11,7 +11,7 @@ import {
   resolveOperationalScope,
 } from '@/lib/api/tenant-master';
 import { assertMasterAccess } from '@/lib/api/tenant-validate';
-import { buildProductSearchFilter, mergeProductSearchWithVendorName, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
+import { buildProductSearchFilter, mergeProductSearchWithVendorName, applyProductCatalogFilters, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { bulkDeleteMaster } from '@/lib/api/bulk-delete-master';
 import { getStokByWarehouseBatch, syncProductStokFromLokasi, getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
@@ -168,18 +168,17 @@ export async function handleProducts({
 
     const q = (url.searchParams.get('q') || '').trim();
     const grup = url.searchParams.get('grup') || '';
-    const itemRoleParam = (url.searchParams.get('itemRole') || '').trim();
     const syncSource = (url.searchParams.get('syncSource') || '').trim();
     const idsParam = (url.searchParams.get('ids') || '').trim();
     const skip = Math.max(parseInt(url.searchParams.get('skip') || '0', 10) || 0, 0);
     let filter: Record<string, unknown> = buildProductSearchFilter(q);
     if (grup) filter.grup = grup;
-    if (itemRoleParam) {
-      if (!isItemRole(itemRoleParam)) {
-        return err('itemRole filter tidak valid', 400);
-      }
-      filter.itemRole = itemRoleParam;
-    }
+    const catalog = applyProductCatalogFilters(filter, {
+      gudangKode: url.searchParams.get('gudangKode'),
+      itemRole: url.searchParams.get('itemRole'),
+    });
+    if (catalog.error) return err(catalog.error, 400);
+    filter = catalog.filter as Record<string, unknown>;
     if (syncSource) {
       // `local` = master inventori (bukan SKU katalog vendor). Include dokumen
       // tanpa field syncSource (data lama), bukan hanya string persis "local".

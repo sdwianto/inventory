@@ -10,6 +10,8 @@ type UseProdukCatalogOptions = {
   isMaster?: boolean;
   pageLimit?: number;
   q?: string;
+  gudangKode?: string;
+  itemRole?: string;
 };
 
 export function useProdukCatalog({
@@ -17,15 +19,22 @@ export function useProdukCatalog({
   isMaster = false,
   pageLimit = PRODUCT_PAGE_DEFAULT_LIMIT,
   q = '',
+  gudangKode = '',
+  itemRole = '',
 }: UseProdukCatalogOptions) {
+  const catalogFilters = useMemo(
+    () => ({ gudangKode, itemRole }),
+    [gudangKode, itemRole],
+  );
+
   const baseUrl = useMemo(
-    () => buildProdukPageUrl(filterTenantId, q, isMaster),
-    [q, filterTenantId, isMaster],
+    () => buildProdukPageUrl(filterTenantId, q, isMaster, catalogFilters),
+    [q, filterTenantId, isMaster, catalogFilters],
   );
 
   const queryKey = useMemo(
-    () => produkPageQueryKey(filterTenantId, q),
-    [filterTenantId, q],
+    () => produkPageQueryKey(filterTenantId, q, catalogFilters),
+    [filterTenantId, q, catalogFilters],
   );
 
   const enabled = !isMaster || !!filterTenantId;

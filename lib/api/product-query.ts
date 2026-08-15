@@ -1,6 +1,8 @@
 // Filter pencarian produk — exact barcode/kode lebih cepat dari regex penuh.
 
 import type { Filter } from 'mongodb';
+import { isItemRole } from '@/lib/food-production/item-role';
+import { isValidWarehouseKode } from '@/lib/api/warehouses';
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -40,6 +42,28 @@ export function buildProductSearchFilter(q?: string | null): Filter<Record<strin
       ...vendorClauses,
     ],
   };
+}
+
+/** Filter katalog: gudangKode (satu atau koma) + itemRole. */
+export function applyProductCatalogFilters(
+  filter: Filter<Record<string, unknown>>,
+  params: { gudangKode?: string | null; itemRole?: string | null },
+): { filter: Filter<Record<string, unknown>>; error?: string } {
+  const next: Filter<Record<string, unknown>> = { ...filter };
+  const itemRole = String(params.itemRole || '').trim();
+  if (itemRole) {
+    if (!isItemRole(itemRole)) return { filter: next, error: 'itemRole filter tidak valid' };
+    next.itemRole = itemRole;
+  }
+  const raw = String(params.gudangKode || '').trim();
+  if (raw) {
+    const codes = [...new Set(raw.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    if (!codes.length || codes.some((c) => !isValidWarehouseKode(c))) {
+      return { filter: next, error: 'gudangKode filter tidak valid' };
+    }
+    next.gudangKode = codes.length === 1 ? codes[0] : { $in: codes };
+  }
+  return { filter: next };
 }
 
 /** Gabungkan filter produk dengan vendorTenantId yang cocok nama vendor. */

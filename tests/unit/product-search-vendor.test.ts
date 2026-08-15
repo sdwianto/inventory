@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildProductSearchFilter,
   mergeFilterWithVendorTenantIds,
+  applyProductCatalogFilters,
 } from '@/lib/api/product-query';
 
 describe('buildProductSearchFilter vendor', () => {
@@ -40,5 +41,24 @@ describe('mergeFilterWithVendorTenantIds', () => {
     );
     expect(merged.$or).toHaveLength(2);
     expect(merged.$or?.[1]).toEqual({ vendorTenantId: { $in: ['v2'] } });
+  });
+});
+
+describe('applyProductCatalogFilters', () => {
+  it('filters a single warehouse', () => {
+    const { filter, error } = applyProductCatalogFilters({}, { gudangKode: 'GJANITOR' });
+    expect(error).toBeUndefined();
+    expect(filter.gudangKode).toBe('GJANITOR');
+  });
+
+  it('filters multiple warehouses', () => {
+    const { filter, error } = applyProductCatalogFilters({}, { gudangKode: 'GKERING,GBASAH' });
+    expect(error).toBeUndefined();
+    expect(filter.gudangKode).toEqual({ $in: ['GKERING', 'GBASAH'] });
+  });
+
+  it('rejects invalid warehouse', () => {
+    const { error } = applyProductCatalogFilters({}, { gudangKode: 'GFOO' });
+    expect(error).toBe('gudangKode filter tidak valid');
   });
 });
