@@ -43,6 +43,16 @@ describe('PRP PRE-01…05 meta', () => {
     expect(g['PRE-01']).toHaveLength(1);
   });
 
+  it('groupRequirementsByPre merapikan kode yang tampil dua kali', () => {
+    const g = groupRequirementsByPre([
+      { kode: 'CLN-01', nama: 'a' },
+      { kode: 'CLN-01', nama: 'a-dup' },
+      { kode: 'SITE-01', nama: 'b' },
+    ]);
+    expect(g['PRE-01']).toHaveLength(2);
+    expect(g['PRE-01'].map((r) => r.kode)).toEqual(['CLN-01', 'SITE-01']);
+  });
+
   it('deep-link Setup & Catat sekarang stabil untuk Audit', () => {
     expect(buildPrpSetupHref({ group: 'PRE-04', requirementId: 'req-1' }))
       .toBe('/kitchen-assurance/setup?group=PRE-04&requirementId=req-1');

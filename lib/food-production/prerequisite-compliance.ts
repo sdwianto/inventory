@@ -12,6 +12,7 @@ import {
   type FoodSafetyRequirementDoc,
 } from '@/lib/food-production/food-safety-program';
 import { QC_RESULTS_COLLECTION, type QcResultDoc } from '@/lib/food-production/qc';
+import { uniqueRequirementsByKode } from '@/lib/food-safety/prp-meta';
 
 export type PrerequisiteComplianceRow = {
   programId: string;
@@ -34,10 +35,12 @@ export async function listPrerequisiteCompliance(
   },
 ): Promise<PrerequisiteComplianceRow[]> {
   const asOf = String(input.asOf || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  const programs = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION)
-    .find({ tenantId: input.tenantId, aktif: true })
-    .sort({ sortOrder: 1, kode: 1 })
-    .toArray() as unknown as FoodSafetyProgramDoc[];
+  const programs = uniqueRequirementsByKode(
+    await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION)
+      .find({ tenantId: input.tenantId, aktif: true })
+      .sort({ sortOrder: 1, kode: 1 })
+      .toArray() as unknown as FoodSafetyProgramDoc[],
+  );
 
   const out: PrerequisiteComplianceRow[] = [];
   for (const prog of programs) {
@@ -120,10 +123,12 @@ export async function listPrerequisiteItemCompliance(
     periods.add(period);
   }
 
-  const reqs = await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION)
-    .find({ tenantId: input.tenantId, aktif: true })
-    .project({ id: 1, programId: 1, kode: 1 })
-    .toArray() as unknown as Array<Pick<FoodSafetyRequirementDoc, 'id' | 'programId' | 'kode'>>;
+  const reqs = uniqueRequirementsByKode(
+    await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION)
+      .find({ tenantId: input.tenantId, aktif: true })
+      .project({ id: 1, programId: 1, kode: 1 })
+      .toArray() as unknown as Array<Pick<FoodSafetyRequirementDoc, 'id' | 'programId' | 'kode'>>,
+  );
 
   const qcFilter: Record<string, unknown> = {
     tenantId: input.tenantId,

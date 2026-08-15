@@ -170,6 +170,22 @@ export function buildPrpRecordHref(opts: {
   return `/food-production/qc?${p.toString()}`;
 }
 
+/** Satu baris per kode — cegah checklist dobel dari seed tenantId beda kapital. */
+export function uniqueRequirementsByKode<T extends { kode?: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const kode = String(row.kode || '').trim().toUpperCase();
+    if (kode.includes('__DUP__')) continue;
+    if (kode) {
+      if (seen.has(kode)) continue;
+      seen.add(kode);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 export function groupRequirementsByPre<T extends { kode?: string; requirementGroup?: string }>(
   rows: T[],
 ): Record<PrpRequirementGroup, T[]> {
@@ -180,7 +196,7 @@ export function groupRequirementsByPre<T extends { kode?: string; requirementGro
     'PRE-04': [] as T[],
     'PRE-05': [] as T[],
   };
-  for (const row of rows) {
+  for (const row of uniqueRequirementsByKode(rows)) {
     const fromField = String(row.requirementGroup || '').toUpperCase();
     const fromKode = resolvePrpMeta(String(row.kode || ''))?.requirementGroup;
     const g = (['PRE-01', 'PRE-02', 'PRE-03', 'PRE-04', 'PRE-05'] as const)

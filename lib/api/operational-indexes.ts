@@ -350,6 +350,13 @@ const INDEX_SPECS: IndexSpec[] = [
     name: 'uniq_fs_req_tenant_program_kode',
     unique: true,
   },
+  {
+    collection: 'food_safety_requirements',
+    index: { tenantId: 1, kode: 1 },
+    name: 'uniq_fs_req_tenant_kode_aktif',
+    unique: true,
+    partialFilterExpression: { aktif: true },
+  },
   { collection: 'ka_policies', index: { tenantId: 1, id: 1 }, name: 'idx_ka_pol_tenant_id' },
   { collection: 'ka_policies', index: { tenantId: 1, kode: 1 }, name: 'uniq_ka_pol_tenant_kode', unique: true },
   { collection: 'ka_policies', index: { tenantId: 1, capabilityId: 1, aktif: 1 }, name: 'idx_ka_pol_tenant_capability' },

@@ -73,27 +73,54 @@ describe('ADR-004 Fase 2 — program seed & periode', () => {
     expect(resolveChecklistPeriod('2026-08-12', 'WEEKLY')).toMatch(/^2026-W\d{2}$/);
   });
 
-  it('ensureFoodSafetyProgramsSeeded idempoten', async () => {
-    const store = { programs: [] as Array<Record<string, unknown>>, requirements: [] as Array<Record<string, unknown>> };
-    const chain = (rows: unknown[]) => ({
-      project: () => ({ toArray: async () => rows }),
-      toArray: async () => rows,
-    });
+  function catalogMock() {
+    const store = {
+      programs: [] as Array<Record<string, unknown>>,
+      requirements: [] as Array<Record<string, unknown>>,
+    };
+    const rowsOf = (name: string) => (
+      name === 'food_safety_programs' ? store.programs : store.requirements
+    );
+    const matches = (row: Record<string, unknown>, filter: Record<string, unknown> = {}) => {
+      const tid = filter.tenantId as { $regex?: string; $options?: string } | string | undefined;
+      if (typeof tid === 'string' && row.tenantId !== tid) return false;
+      if (tid && typeof tid === 'object' && tid.$regex) {
+        const re = new RegExp(tid.$regex, tid.$options || '');
+        if (!re.test(String(row.tenantId || ''))) return false;
+      }
+      if (filter.aktif === true && row.aktif === false) return false;
+      if (filter.aktif && typeof filter.aktif === 'object' && (filter.aktif as { $ne?: boolean }).$ne === false) {
+        if (row.aktif === false) return false;
+      }
+      return true;
+    };
     const db = {
       collection: (name: string) => ({
-        countDocuments: async () => (
-          name === 'food_safety_programs' ? store.programs.length : store.requirements.length
+        countDocuments: async (filter: Record<string, unknown> = {}) => (
+          rowsOf(name).filter((r) => matches(r, filter)).length
         ),
         insertMany: async (docs: Array<Record<string, unknown>>) => {
-          if (name === 'food_safety_programs') store.programs.push(...docs);
-          else store.requirements.push(...docs);
+          rowsOf(name).push(...docs);
         },
-        find: () => chain(
-          name === 'food_safety_programs' ? store.programs : store.requirements,
-        ),
-        updateOne: async () => ({ modifiedCount: 1 }),
+        find: (filter: Record<string, unknown> = {}) => {
+          const rows = rowsOf(name).filter((r) => matches(r, filter));
+          return {
+            project: () => ({ toArray: async () => rows }),
+            toArray: async () => rows,
+          };
+        },
+        updateOne: async (filter: Record<string, unknown>, update: { $set?: Record<string, unknown> }) => {
+          const row = rowsOf(name).find((r) => r.id === filter.id);
+          if (row && update.$set) Object.assign(row, update.$set);
+          return { modifiedCount: row ? 1 : 0 };
+        },
       }),
     };
+    return { store, db };
+  }
+
+  it('ensureFoodSafetyProgramsSeeded idempoten', async () => {
+    const { store, db } = catalogMock();
     const first = await ensureFoodSafetyProgramsSeeded(db as never, 't1');
     expect(first.seeded).toBe(true);
     expect(first.programs).toBe(11);
@@ -103,7 +130,58 @@ describe('ADR-004 Fase 2 — program seed & periode', () => {
 
     const second = await ensureFoodSafetyProgramsSeeded(db as never, 't1');
     expect(second.seeded).toBe(false);
-    expect(store.programs).toHaveLength(11);
+    expect(store.programs.filter((p) => p.aktif !== false)).toHaveLength(11);
+  });
+
+  it('ensureFoodSafetyProgramsSeeded merapikan salinan tenantId beda kapital', async () => {
+    const { store, db } = catalogMock();
+    const now = new Date();
+    store.programs.push(
+      {
+        id: 'prog-old',
+        tenantId: 'T1',
+        kode: 'PRP-CLN',
+        aktif: true,
+        createdAt: now,
+      },
+      {
+        id: 'prog-new',
+        tenantId: 't1',
+        kode: 'PRP-CLN',
+        aktif: true,
+        createdAt: new Date(now.getTime() + 1),
+      },
+    );
+    store.requirements.push(
+      {
+        id: 'req-old',
+        tenantId: 'T1',
+        programId: 'prog-old',
+        kode: 'CLN-01',
+        nama: 'Area produksi bersih sebelum mulai',
+        aktif: true,
+        createdAt: now,
+      },
+      {
+        id: 'req-new',
+        tenantId: 't1',
+        programId: 'prog-new',
+        kode: 'CLN-01',
+        nama: 'Area produksi bersih sebelum mulai',
+        aktif: true,
+        createdAt: new Date(now.getTime() + 1),
+      },
+    );
+
+    const result = await ensureFoodSafetyProgramsSeeded(db as never, 't1');
+    expect(result.seeded).toBe(false);
+
+    const aktifCln = store.requirements.filter(
+      (r) => String(r.kode).toUpperCase() === 'CLN-01' && r.aktif !== false,
+    );
+    expect(aktifCln).toHaveLength(1);
+    expect(aktifCln[0].tenantId).toBe('t1');
+    expect(store.requirements.filter((r) => String(r.kode).includes('__DUP__')).length).toBeGreaterThan(0);
   });
 });
 

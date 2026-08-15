@@ -25,7 +25,7 @@ import {
 import { ensureFoodSafetyProgramsSeeded } from '@/lib/food-production/food-safety-program-seed';
 import { listPrerequisiteCompliance, listPrerequisiteItemCompliance } from '@/lib/food-production/prerequisite-compliance';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
-import { BGN_HACCP_SOURCE, resolvePrpMeta } from '@/lib/food-safety/prp-meta';
+import { BGN_HACCP_SOURCE, resolvePrpMeta, uniqueRequirementsByKode } from '@/lib/food-safety/prp-meta';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleFoodSafetyPrograms(
@@ -48,10 +48,11 @@ export async function handleFoodSafetyPrograms(
     if (onlyActive) filter.aktif = true;
     const list = await db.collection(FOOD_SAFETY_PROGRAMS_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
-      .sort({ sortOrder: 1, kode: 1 })
+      .sort({ sortOrder: 1, kode: 1, createdAt: 1 })
       .limit(100)
       .toArray();
-    return ok(list.map((d) => clean(d as Record<string, unknown>)));
+    const unique = uniqueRequirementsByKode(list as Array<{ kode?: string }>);
+    return ok(unique.map((d) => clean(d as Record<string, unknown>)));
   }
 
   // ADR-004 Fase 2 — status kepatuhan periode (MISSING / RECORDED).
@@ -158,10 +159,11 @@ export async function handleFoodSafetyPrograms(
     if (group.startsWith('PRE-')) filter.requirementGroup = group;
     const list = await db.collection(FOOD_SAFETY_REQUIREMENTS_COLLECTION)
       .find(withTenantFilter(scopeAuth, filter))
-      .sort({ sortOrder: 1, kode: 1 })
+      .sort({ sortOrder: 1, kode: 1, createdAt: 1 })
       .limit(200)
       .toArray();
-    return ok(list.map((d) => clean(d as Record<string, unknown>)));
+    const unique = uniqueRequirementsByKode(list as Array<{ kode?: string }>);
+    return ok(unique.map((d) => clean(d as Record<string, unknown>)));
   }
 
   if (route === '/food-safety-requirements' && method === 'POST') {
