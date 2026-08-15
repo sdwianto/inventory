@@ -6,17 +6,30 @@ import {
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { relocateProductWarehouseWithAudit } from '@/lib/api/stock-ledger';
 
-type ClassifiableProduct = {
+type ClassifiableProduct = Record<string, unknown> & {
   id?: string;
   kode?: string;
   nama?: string;
   satuan?: string;
   grup?: string;
-  hargaBeli?: unknown;
+  hargaBeli?: number | string;
   itemRole?: unknown;
   gudangKode?: string | null;
   classificationSource?: unknown;
 };
+
+function toLedgerProduct(prod: Record<string, unknown>) {
+  return {
+    id: prod.id != null ? String(prod.id) : undefined,
+    kode: prod.kode != null ? String(prod.kode) : undefined,
+    nama: prod.nama != null ? String(prod.nama) : undefined,
+    satuan: prod.satuan != null ? String(prod.satuan) : undefined,
+    hargaBeli: typeof prod.hargaBeli === 'number' || typeof prod.hargaBeli === 'string'
+      ? prod.hargaBeli
+      : undefined,
+    gudangKode: prod.gudangKode != null ? String(prod.gudangKode) : null,
+  };
+}
 
 export function inferredClassificationPatch(prod: { grup?: string; nama?: string }) {
   const c = classifyProduct(prod);
@@ -30,18 +43,20 @@ export function inferredClassificationPatch(prod: { grup?: string; nama?: string
 export async function applyInferredClassification(
   db: Db,
   tenantId: string,
-  existing: ClassifiableProduct | null | undefined,
+  existing: ClassifiableProduct | Record<string, unknown> | null | undefined,
   snap: { grup?: string; nama?: string },
 ): Promise<Record<string, unknown>> {
   if (existing && isManualClassification(existing)) return {};
   const patch = inferredClassificationPatch(snap);
+  const existingId = existing?.id != null ? String(existing.id) : '';
   if (
-    existing?.id
+    existing
+    && existingId
     && resolveProductGudangKode(existing) !== patch.gudangKode
   ) {
     const moved = await relocateProductWarehouseWithAudit(db, {
       tenantId,
-      product: existing,
+      product: toLedgerProduct(existing),
       nextGudang: patch.gudangKode,
       reason: `Reclassify gudang dari grup ${snap.grup || '-'}`,
     });
@@ -89,7 +104,10 @@ export async function reclassifyProductsForTenant(
       });
       continue;
     }
-    const next = inferredClassificationPatch(prod);
+    const next = inferredClassificationPatch({
+      grup: prod.grup != null ? String(prod.grup) : '',
+      nama: prod.nama != null ? String(prod.nama) : '',
+    });
     const roleSame = String(prod.itemRole || 'INGREDIENT') === next.itemRole;
     const gudangSame = resolveProductGudangKode(prod) === next.gudangKode;
     if (roleSame && gudangSame && prod.classificationSource === 'inferred') {
@@ -110,9 +128,9 @@ export async function reclassifyProductsForTenant(
     if (!gudangSame) {
       const moved = await relocateProductWarehouseWithAudit(db, {
         tenantId: tid,
-        product: prod,
+        product: toLedgerProduct(prod),
         nextGudang: next.gudangKode,
-        reason: `Reclassify gudang dari grup ${prod.grup || '-'}`,
+        reason: `Reclassify gudang dari grup ${String(prod.grup || '-')}`,
       });
       if ('error' in moved) throw new Error(`${prod.kode}: ${moved.error}`);
       if (moved.moved > 0) relocated += 1;

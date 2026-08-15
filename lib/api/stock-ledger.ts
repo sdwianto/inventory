@@ -144,8 +144,9 @@ export async function relocateProductWarehouseWithAudit(
   const tid = tenantId || 'default';
   const stokId = product?.id != null ? String(product.id) : '';
   if (!stokId) return { error: 'Produk tidak valid' };
-  const to = normalizeWarehouseKode(nextGudang);
-  if (!isValidWarehouseKode(to)) return { error: 'Gudang produk tidak valid' };
+  const toRaw = normalizeWarehouseKode(nextGudang);
+  if (!isValidWarehouseKode(toRaw)) return { error: 'Gudang produk tidak valid' };
+  const to = toRaw as WarehouseCode;
   const from = resolveProductGudangKode(product);
   if (from === to) return { moved: 0, from, to };
 
