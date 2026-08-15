@@ -20,6 +20,7 @@ import { txOpts } from '@/lib/api/transaction';
 export type StockMutationSourceType =
   | 'RELEASE'
   | 'GRN'
+  | 'VENDOR_RETURN'
   | 'PENYESUAIAN'
   | 'TRANSFER'
   | 'MASTER_PRODUK'

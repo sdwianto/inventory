@@ -33,6 +33,13 @@ export const queryKeys = {
     all: ['goods-receipts'] as const,
     detail: (id: string) => ['goods-receipts', 'detail', id] as const,
   },
+  vendorReturns: {
+    all: ['vendor-returns'] as const,
+    list: (params: { status?: string; q?: string } = {}) =>
+      ['vendor-returns', 'list', params] as const,
+    detail: (id: string) => ['vendor-returns', 'detail', id] as const,
+    eligible: ['vendor-returns', 'eligible'] as const,
+  },
   hutang: {
     all: ['hutang'] as const,
     detail: (id: string) => ['hutang', 'detail', id] as const,

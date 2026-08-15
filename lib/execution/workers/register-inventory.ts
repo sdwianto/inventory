@@ -7,6 +7,7 @@ import {
   executeAuditLogPurgeJob,
   executeCatalogSyncJob,
   executeGrnInvoiceSyncJob,
+  executeGoodsReturnCnSyncJob,
   executeGrnPostSideEffectsJob,
   executeGrnResolveProductsJob,
   executeGrnSyncShippedJob,
@@ -92,6 +93,26 @@ export function registerInventoryHandlers(): void {
         ctx.db,
         ctx.tenantId,
         String(payload.grnId || ''),
+        payload,
+      ),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'GOODS_RETURN_CN_SYNC',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['SYNC'],
+    requiresLock: true,
+    lockTtlTier: 'NORMAL',
+    lockKeyFromPayload: (payload, job) => (
+      `rtv-cn:${job.tenantId}:${String(payload.returnId || job.id)}`
+    ),
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeGoodsReturnCnSyncJob(
+        ctx.db,
+        ctx.tenantId,
+        String(payload.returnId || ''),
         payload,
       ),
     ),

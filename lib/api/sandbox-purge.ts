@@ -46,6 +46,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'customer_purchase_orders',
   'local_purchase_orders',
   'goods_receipts',
+  'vendor_returns',
   'inventory_releases',
   'maintenance_requests',
   'maintenance_service_orders',

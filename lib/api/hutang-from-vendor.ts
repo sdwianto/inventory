@@ -618,7 +618,12 @@ export type CreditNoteApplyOptions = {
 export async function applyCreditNoteFromVendor(
   db: Db,
   customerTenantId: string,
-  payload: VendorInvoicePayload & { creditNoteId?: string; noCN?: string },
+  payload: VendorInvoicePayload & {
+    creditNoteId?: string;
+    noCN?: string;
+    source?: string;
+    noReturn?: string;
+  },
   vendorTenantId: string | null | undefined,
   opts: CreditNoteApplyOptions = {},
 ) {
@@ -682,6 +687,8 @@ export async function applyCreditNoteFromVendor(
             noCN: payload.noCN,
             amount: reduce,
             postedAt: payload.postedAt || now,
+            source: payload.source || null,
+            noReturn: payload.noReturn || null,
             appliedVia: opts.appliedVia || null,
             correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
             items: Array.isArray(payload.items)

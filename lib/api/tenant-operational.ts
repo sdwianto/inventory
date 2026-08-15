@@ -30,6 +30,7 @@ export const OPERATIONAL_COLLECTIONS = [
   'penyusutan_log',
   'tutup_buku_log',
   'goods_receipts',
+  'vendor_returns',
   'customer_purchase_orders',
   'local_purchase_orders',
   'maintenance_requests',

@@ -22,6 +22,7 @@ export function invalidateHutangCaches(qc: QueryClient, opts?: InvalidateOpts) {
   invalidateNavBadges(qc, opts);
   void qc.invalidateQueries({ queryKey: ['pages', 'hutang'] });
   void qc.invalidateQueries({ queryKey: queryKeys.hutang.all });
+  void qc.invalidateQueries({ queryKey: queryKeys.vendorReturns.all });
 }
 
 /** Dashboard + stok + produk (setelah catalog sync / perubahan master). */
@@ -44,6 +45,7 @@ export function invalidateOperationalCaches(
   void qc.invalidateQueries({ queryKey: ['pages', 'penerimaan'] });
   void qc.invalidateQueries({ queryKey: ['pages', 'hutang'] });
   void qc.invalidateQueries({ queryKey: queryKeys.hutang.all });
+  void qc.invalidateQueries({ queryKey: queryKeys.vendorReturns.all });
   void qc.invalidateQueries({ queryKey: queryKeys.customerPurchaseOrders.all });
   void qc.invalidateQueries({ queryKey: queryKeys.maintenance.requests.all });
   void qc.invalidateQueries({ queryKey: queryKeys.maintenance.schedules.all });

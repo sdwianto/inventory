@@ -17,7 +17,7 @@ import {
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, LayoutGrid, ClipboardList,
   PackageOpen, KeyRound, MapPinned, Car,
-  ShieldAlert, SquareCheck, ShieldCheck,
+  ShieldAlert, SquareCheck, ShieldCheck, Undo2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
@@ -73,6 +73,7 @@ const NAV: NavEntry[] = [
   { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true, badgeKey: 'grnPending' },
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
+  { type: 'item', href: '/retur-vendor', label: 'Retur Vendor', icon: Undo2 },
   { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
   {
     type: 'group', key: 'maintenance', label: 'Maintenance', icon: Wrench,
@@ -222,25 +223,25 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     '/food-production/service-point',
     '/food-production/distribution',
   ],
-  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/retur-vendor', '/produk',
     ...FP_OPS_ROUTES,
     ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/transfer', '/stok/bins', '/stok/putaway'],
-  SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
+  SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/retur-vendor', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
     ...LOGISTICS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
-  ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+  ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
-  OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
+  OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
@@ -451,11 +452,10 @@ export default function AppShell({ children }: AppShellProps) {
     if (pathname?.startsWith('/produk') || pathname?.startsWith('/pelanggan') || pathname?.startsWith('/member') || pathname?.startsWith('/supplier')) next.master = true;
     if (pathname?.startsWith('/food-production')) next.foodProduction = true;
     if (pathname?.startsWith('/transaksi') || pathname?.startsWith('/piutang')) next.penjualan = true;
-    if (pathname?.startsWith('/pembelian') || pathname?.startsWith('/hutang') || pathname?.startsWith('/pengeluaran-pengadaan')) next.pembelian = true;
+    if (pathname?.startsWith('/pembelian') || pathname?.startsWith('/hutang') || pathname?.startsWith('/pengeluaran-pengadaan') || pathname?.startsWith('/retur-vendor')) next.pembelian = true;
     if (pathname?.startsWith('/penjualan')) next.penjualan = true;
     if (pathname?.startsWith('/laporan')) next.laporan = true;
     if (pathname?.startsWith('/akunting')) next.akunting = true;
-    if (pathname?.startsWith('/retur')) next.retur = true;
     if (pathname?.startsWith('/utiliti')) next.utiliti = true;
     if (pathname?.startsWith('/maintenance')) next.maintenance = true;
     if (pathname?.startsWith('/kitchen-assurance')) next.kitchenAssurance = true;

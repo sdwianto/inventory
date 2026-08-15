@@ -26,6 +26,7 @@ import { runGrnPostSideEffects } from '@/lib/api/grn-post-side-effects-run';
 
 export const JOB_TYPES = {
   GRN_INVOICE_SYNC: 'GRN_INVOICE_SYNC',
+  GOODS_RETURN_CN_SYNC: 'GOODS_RETURN_CN_SYNC',
   CATALOG_SYNC: 'CATALOG_SYNC',
   HUTANG_SYNC: 'HUTANG_SYNC',
   PO_VENDOR_SYNC: 'PO_VENDOR_SYNC',
@@ -154,6 +155,7 @@ export async function enqueueJob(
     && !grnId
     && !dedupeKey
     && type !== JOB_TYPES.GRN_INVOICE_SYNC
+    && type !== JOB_TYPES.GOODS_RETURN_CN_SYNC
     && type !== JOB_TYPES.SANDBOX_RESET
   ) {
     existing = await db.collection('bg_jobs').findOne({
@@ -263,6 +265,24 @@ export async function runGrnInvoiceSyncJob(db: Db, job: BgJob) {
   return { ok: true, result, outboxId: drained.outboxId, drained: true };
 }
 
+export async function runGoodsReturnCnSyncJob(db: Db, job: BgJob) {
+  const returnId = String(job.payload?.returnId || '').trim();
+  if (!returnId) return { error: 'returnId wajib untuk GOODS_RETURN_CN_SYNC' };
+  const { drainEnsureGoodsReturnCn } = await import('@/lib/api/integration-outbox');
+  const drained = await drainEnsureGoodsReturnCn(db, {
+    tenantId: job.tenantId,
+    returnId,
+  });
+  const result = drained.cnSync;
+  if (drained.alreadyDone || result.status === 'DONE' || result.status === 'SKIPPED') {
+    return { ok: true, result, outboxId: drained.outboxId, drained: true };
+  }
+  if (result.error) {
+    return { error: result.error, result, outboxId: drained.outboxId, drained: true };
+  }
+  return { ok: true, result, outboxId: drained.outboxId, drained: true };
+}
+
 async function runCatalogSyncJob(db: Db, job: BgJob) {
   return executeCatalogSyncJob(db, job.tenantId, job.id);
 }
@@ -325,6 +345,8 @@ export async function processJob(db: Db, job: BgJob) {
   try {
     if (job.type === JOB_TYPES.GRN_INVOICE_SYNC) {
       outcome = await runGrnInvoiceSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.GOODS_RETURN_CN_SYNC) {
+      outcome = await runGoodsReturnCnSyncJob(db, job);
     } else if (job.type === JOB_TYPES.CATALOG_SYNC) {
       outcome = await runCatalogSyncJob(db, job);
     } else if (job.type === JOB_TYPES.HUTANG_SYNC) {

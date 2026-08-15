@@ -50,6 +50,9 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
         100,
       );
       break;
+    case '/retur-vendor':
+      prefetchCursorPage(queryClient, queryKeys.vendorReturns.list(), '/api/vendor-returns', 100);
+      break;
     case '/produk':
       prefetchCursorPage(
         queryClient,

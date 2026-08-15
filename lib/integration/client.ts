@@ -37,6 +37,29 @@ export type CreateInvoiceFromGrnResult = {
   raw: Record<string, unknown>;
 };
 
+export type PostGoodsReturnPostedInput = {
+  salesAppUrl: string;
+  apiKey: string;
+  correlationId?: string;
+  idempotencyKey: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+  returnId?: string | null;
+};
+
+export type PostGoodsReturnPostedResult = {
+  creditNoteId: string;
+  noCN: string;
+  amount: number;
+  currency: string;
+  status: string;
+  invoiceId: string;
+  noInvoice: string;
+  created?: boolean;
+  posted?: boolean;
+  raw: Record<string, unknown>;
+};
+
 export type CreateSalesOrderFromPoInput = {
   salesAppUrl: string;
   apiKey: string;
@@ -150,6 +173,33 @@ function normalizeInvoiceResponse(data: Record<string, unknown>): CreateInvoiceF
   };
 }
 
+function normalizeGoodsReturnResponse(data: Record<string, unknown>): PostGoodsReturnPostedResult {
+  const nested = (data.result && typeof data.result === 'object')
+    ? data.result as Record<string, unknown>
+    : data;
+  const creditNoteId = String(nested.creditNoteId || nested.id || '').trim();
+  const noCN = String(nested.noCN || '').trim();
+  if (!creditNoteId) {
+    throw new IntegrationError('Sales.app tidak mengembalikan creditNoteId — CN tidak dibuat', {
+      code: 'VALIDATION',
+      errorClass: 'validation',
+      retryable: false,
+    });
+  }
+  return {
+    creditNoteId,
+    noCN,
+    amount: parseInt(String(nested.amount ?? nested.total ?? 0), 10) || 0,
+    currency: String(nested.currency || 'IDR'),
+    status: String(nested.status || 'POSTED'),
+    invoiceId: String(nested.invoiceId || ''),
+    noInvoice: String(nested.noInvoice || ''),
+    created: nested.created as boolean | undefined,
+    posted: nested.posted as boolean | undefined,
+    raw: nested,
+  };
+}
+
 /**
  * IntegrationClient — satu pintu domain ke peer app.
  * Retry / CB / bulkhead hidup di Transport, bukan di sini.
@@ -218,6 +268,84 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'SUCCEEDED',
         invoiceId: normalized.invoiceId,
+      });
+      return normalized;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), {
+          correlationId,
+          cause: e,
+        });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
+      });
+      throw err;
+    }
+  }
+
+  /** Category A: CreateCreditNote from Inventory RTV — sync SUCCESS|FAILED only. */
+  async postGoodsReturnPosted(input: PostGoodsReturnPostedInput): Promise<PostGoodsReturnPostedResult> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const url = `${base}/api/v1/integrations/goods-return-posted`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'CreateCreditNoteFromGoodsReturn',
+      grnId: input.returnId || null,
+    });
+
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url,
+        pool: 'invoice',
+        timeoutMs: input.timeoutMs ?? 35_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify({
+          ...input.body,
+          correlationId,
+        }),
+      });
+
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+
+      if (res.status === 202) {
+        throw new IntegrationError(
+          'Sales mengembalikan 202 Pending — jalur happy path Category A tidak diizinkan',
+          {
+            code: 'ASYNC_NOT_ALLOWED',
+            errorClass: 'server',
+            httpStatus: 202,
+            retryable: false,
+            correlationId,
+          },
+        );
+      }
+
+      throwIfHttpFailed(res, data, correlationId);
+      const normalized = normalizeGoodsReturnResponse(data);
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'SUCCEEDED',
+        invoiceId: normalized.creditNoteId,
       });
       return normalized;
     } catch (e) {

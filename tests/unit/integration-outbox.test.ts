@@ -4,6 +4,7 @@ import {
   applyGrnInvoiceNotifyResult,
   claimEnsureGrnInvoiceOutbox,
   insertEnsureGrnInvoiceOutbox,
+  insertEnsureGoodsReturnCnOutbox,
 } from '@/lib/api/integration-outbox';
 
 function memoryCollection() {
@@ -158,5 +159,25 @@ describe('integration-outbox H1.1', () => {
     expect(r.invoiceSyncStatus).toBe('FAILED');
     expect(r.needsRecovery).toBe(true);
     expect(grns[0].invoiceSyncStatus).toBe('FAILED');
+  });
+
+  it('inserts ENSURE_GOODS_RETURN_CN once per RTV (dedupe)', async () => {
+    const col = memoryCollection();
+    const db = { collection: () => col } as never;
+    const a = await insertEnsureGoodsReturnCnOutbox(db, {
+      tenantId: 'sppg',
+      returnId: 'rtv-1',
+      noReturn: 'RTV-1',
+    });
+    const b = await insertEnsureGoodsReturnCnOutbox(db, {
+      tenantId: 'sppg',
+      returnId: 'rtv-1',
+      noReturn: 'RTV-1',
+    });
+    expect(a.inserted).toBe(true);
+    expect(b.inserted).toBe(false);
+    expect(col.docs).toHaveLength(1);
+    expect(col.docs[0].type).toBe(INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN);
+    expect(INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN).toBe('ENSURE_GOODS_RETURN_CN');
   });
 });

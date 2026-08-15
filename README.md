@@ -47,7 +47,8 @@ Jika produk di sales.app ada di tenant lain (bukan `default`), ubah `SALES_VENDO
 3. **sales.app** → Integrasi → webhook (URL: `https://<inventory-host>/api/webhooks/sales`):
    - `delivery.shipped` — GRN otomatis
    - `invoice.posted` — hutang vendor otomatis
-   - `credit_note.posted` — koreksi hutang
+   - `credit_note.posted` — koreksi hutang (CN manual atau recovery)
+   - Category A `POST …/goods-return-posted` — RTV Inventory → Credit Note Sales (ADR-005)
    - `product.created` / `product.updated` — sync produk
 4. Copy **webhook secret** → `WEBHOOK_SECRET` di inventory
 5. **inventory** → Master Produk → **Sync dari sales.app** (tarik katalog awal)

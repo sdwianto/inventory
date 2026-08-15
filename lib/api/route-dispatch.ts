@@ -73,6 +73,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
   sync: async () => (await import('@/lib/api/handlers/catalog-sync')).handleCatalogSync,
   hutang: async () => (await import('@/lib/api/handlers/vendor-hutang')).handleVendorHutang,
+  'vendor-returns': async () => (await import('@/lib/api/handlers/vendor-returns')).handleVendorReturns,
   'procurement-expenses': async () => (await import('@/lib/api/handlers/procurement-expenses')).handleProcurementExpenses,
   'customer-purchase-orders': async () => (await import('@/lib/api/handlers/customer-po')).handleCustomerPo,
   'inventory-releases': async () => (await import('@/lib/api/handlers/inventory-releases')).handleInventoryReleases,

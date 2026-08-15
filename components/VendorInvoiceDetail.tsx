@@ -1,14 +1,15 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str } from '@/types/json';
+import { str, asArray } from '@/types/json';
 import { useState } from 'react';
 import VendorInvoiceDocument from '@/components/VendorInvoiceDocument';
 import VendorInvoiceThermal from '@/components/VendorInvoiceThermal';
 import PrintPortal, { printReceipt } from '@/components/PrintPortal';
 import { Button } from '@/components/ui/button';
 import { printDocument } from '@/lib/doc-print';
-import { Check, Loader2, Printer, Receipt, X } from 'lucide-react';
+import { Check, Loader2, Printer, Receipt, Undo2, X } from 'lucide-react';
+import Link from 'next/link';
 
 const PRINT_ID = 'vendor-invoice-a4-print';
 
@@ -100,7 +101,34 @@ export default function VendorInvoiceDetail({
 
         <VendorInvoiceDocument detail={detail} className="mx-auto" />
 
+        {asArray(detail.creditNotes).length > 0 && (
+          <div className="mt-4 border rounded p-3 no-print">
+            <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Credit note / retur</p>
+            <ul className="space-y-1 text-xs">
+              {asArray(detail.creditNotes).map((raw, i) => {
+                const cn = raw as JsonObject;
+                return (
+                <li key={str(cn.creditNoteId) || i} className="flex flex-wrap gap-x-3">
+                  <span className="font-mono">{str(cn.noCN) || str(cn.creditNoteId)}</span>
+                  {str(cn.noReturn) ? <span>RTV {str(cn.noReturn)}</span> : null}
+                  {str(cn.source) === 'inventory_return'
+                    ? <span className="text-orange-700">Retur Inventory</span>
+                    : <span className="text-slate-500">Manual / webhook</span>}
+                </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2 pt-4 mt-4 border-t no-print justify-end">
+          {approval !== 'REJECTED' && str(detail.id) && (
+            <Button asChild variant="outline">
+              <Link href={`/retur-vendor?hutangId=${encodeURIComponent(str(detail.id))}`}>
+                <Undo2 className="w-4 h-4 mr-1" /> Buat Retur
+              </Link>
+            </Button>
+          )}
           {approval === 'PENDING_REVIEW' && (
             <>
               <Button onClick={onApprove} disabled={acting === 'approve'} className="bg-green-600 hover:bg-green-700">

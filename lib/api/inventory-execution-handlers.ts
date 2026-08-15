@@ -153,6 +153,23 @@ export async function executeGrnInvoiceSyncJob(
   });
 }
 
+export async function executeGoodsReturnCnSyncJob(
+  db: Db,
+  tenantId: string,
+  returnId: string,
+  payload: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  if (!returnId?.trim()) return { error: 'returnId wajib untuk GOODS_RETURN_CN_SYNC' };
+  const { runGoodsReturnCnSyncJob } = await import('@/lib/api/bg-jobs');
+  return runGoodsReturnCnSyncJob(db, {
+    id: 'platform',
+    type: 'GOODS_RETURN_CN_SYNC',
+    tenantId,
+    payload: { ...payload, returnId } as JsonObject,
+    status: 'RUNNING',
+  });
+}
+
 export async function executeGrnPostSideEffectsJob(
   db: Db,
   tenantId: string,

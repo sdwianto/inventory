@@ -10,9 +10,11 @@ import { logger } from '@/lib/api/logger';
 
 export const INTEGRATION_OUTBOX_COLLECTION = 'integration_outbox';
 
-/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO. */
+/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_GOODS_RETURN_CN / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO. */
 export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_GRN_INVOICE: 'ENSURE_GRN_INVOICE',
+  /** RTV POSTED → CreateCreditNote di Sales app. */
+  ENSURE_GOODS_RETURN_CN: 'ENSURE_GOODS_RETURN_CN',
   /** Customer PO APPROVED → Sales Order di Sales app. */
   ENSURE_CREATE_SO: 'ENSURE_CREATE_SO',
   /** Customer PO CANCELLED → push cancel SO ke Sales (W1-2 slice 2). */
@@ -852,4 +854,286 @@ export async function drainEnsurePushCancelSo(
     salesNotify,
   };
 }
+
+export async function insertEnsureGoodsReturnCnOutbox(
+  db: Db,
+  input: {
+    tenantId: string;
+    returnId: string;
+    noReturn?: string | null;
+    correlationId?: string | null;
+  },
+  session?: ClientSession,
+): Promise<{ inserted: boolean; id: string }> {
+  const now = new Date();
+  const id = randomUUID();
+  const doc: IntegrationOutboxDoc = {
+    id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+    aggregateId: input.returnId,
+    tenantId: input.tenantId,
+    payload: {
+      returnId: input.returnId,
+      noReturn: input.noReturn || null,
+    },
+    status: 'PENDING',
+    attempts: 0,
+    lastError: null,
+    correlationId: input.correlationId || null,
+    createdAt: now,
+    updatedAt: now,
+    processedAt: null,
+  };
+  try {
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).insertOne(doc, txOpts(session));
+    return { inserted: true, id };
+  } catch (e) {
+    const code = e && typeof e === 'object' && 'code' in e ? Number((e as { code: number }).code) : 0;
+    if (code === 11000) {
+      const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne(
+        { type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN, aggregateId: input.returnId },
+        txOpts(session),
+      );
+      return { inserted: false, id: String(existing?.id || id) };
+    }
+    throw e;
+  }
+}
+
+export async function ensureGoodsReturnCnOutboxPending(
+  db: Db,
+  input: { tenantId: string; returnId: string; noReturn?: string | null },
+): Promise<void> {
+  const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+    aggregateId: input.returnId,
+  });
+  if (!existing) {
+    await insertEnsureGoodsReturnCnOutbox(db, input);
+    return;
+  }
+  const status = String(existing.status || '');
+  if (status === 'DONE' || status === 'PROCESSING') return;
+  if (status === 'FAILED' || status === 'PENDING') {
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+      { id: existing.id, status: { $in: ['FAILED', 'PENDING'] } },
+      { $set: { status: 'PENDING', lastError: null, updatedAt: new Date() } },
+    );
+  }
+}
+
+export async function getEnsureGoodsReturnCnOutbox(
+  db: Db,
+  returnId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  return (await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+    aggregateId: returnId,
+  })) as IntegrationOutboxDoc | null;
+}
+
+export async function claimEnsureGoodsReturnCnOutbox(
+  db: Db,
+  returnId: string,
+): Promise<IntegrationOutboxDoc | null> {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - STALE_PROCESSING_MS);
+  const claimed = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOneAndUpdate(
+    {
+      type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+      aggregateId: returnId,
+      $or: [
+        { status: 'PENDING' },
+        { status: 'FAILED' },
+        { status: 'PROCESSING', updatedAt: { $lt: staleBefore } },
+      ],
+    },
+    {
+      $set: { status: 'PROCESSING', updatedAt: now },
+      $inc: { attempts: 1 },
+    },
+    { returnDocument: 'after' },
+  );
+  return (claimed as IntegrationOutboxDoc | null) || null;
+}
+
+async function applyVendorReturnCnNotifyResult(
+  db: Db,
+  returnId: string,
+  result: {
+    ok: boolean;
+    skipped?: boolean;
+    creditNoteId?: string;
+    noCN?: string;
+    amount?: number;
+    error?: string;
+  },
+): Promise<{
+  cnSyncStatus: string;
+  needsRecovery: boolean;
+  patch: Record<string, unknown>;
+}> {
+  const now = new Date();
+  let cnSyncStatus = 'FAILED';
+  let needsRecovery = false;
+  const patch: Record<string, unknown> = { cnSyncAt: now, updatedAt: now };
+
+  if (result.skipped) {
+    cnSyncStatus = 'SKIPPED';
+    patch.cnSyncError = null;
+  } else if (result.ok && (result.creditNoteId || result.noCN)) {
+    cnSyncStatus = 'DONE';
+    patch.creditNoteId = result.creditNoteId || null;
+    patch.noCN = result.noCN || null;
+    patch.cnSyncError = null;
+  } else {
+    cnSyncStatus = 'FAILED';
+    patch.cnSyncError = result.error || 'Gagal sync credit note ke Sales';
+    needsRecovery = true;
+  }
+  patch.cnSyncStatus = cnSyncStatus;
+  await db.collection('vendor_returns').updateOne({ id: returnId }, { $set: patch });
+  return { cnSyncStatus, needsRecovery, patch };
+}
+
+export async function drainEnsureGoodsReturnCn(
+  db: Db,
+  input: { tenantId: string; returnId: string },
+): Promise<{
+  cnSync: Record<string, unknown>;
+  outboxId: string | null;
+  claimed: boolean;
+  alreadyDone: boolean;
+}> {
+  const existing = await getEnsureGoodsReturnCnOutbox(db, input.returnId);
+  if (existing?.status === 'DONE') {
+    const doc = await db.collection('vendor_returns').findOne({ id: input.returnId });
+    let status = doc?.cnSyncStatus || 'DONE';
+    if (doc && status !== 'DONE' && status !== 'SKIPPED') {
+      await db.collection('vendor_returns').updateOne(
+        { id: input.returnId },
+        { $set: { cnSyncStatus: 'DONE', cnSyncError: null, cnSyncAt: new Date() } },
+      );
+      status = 'DONE';
+    }
+    return {
+      cnSync: {
+        alreadyDone: true,
+        creditNoteId: doc?.creditNoteId || null,
+        noCN: doc?.noCN || null,
+        status,
+      },
+      outboxId: existing.id,
+      claimed: false,
+      alreadyDone: true,
+    };
+  }
+
+  await ensureGoodsReturnCnOutboxPending(db, {
+    tenantId: input.tenantId,
+    returnId: input.returnId,
+  });
+
+  const claimed = await claimEnsureGoodsReturnCnOutbox(db, input.returnId);
+  if (!claimed) {
+    const again = await getEnsureGoodsReturnCnOutbox(db, input.returnId);
+    if (again?.status === 'DONE') {
+      return {
+        cnSync: { alreadyDone: true, status: 'DONE' },
+        outboxId: again.id,
+        claimed: false,
+        alreadyDone: true,
+      };
+    }
+    if (again?.status === 'PROCESSING') {
+      return {
+        cnSync: {
+          error: 'Outbox sedang diproses worker lain — recovery akan menyelesaikan',
+          code: 'OUTBOX_BUSY',
+        },
+        outboxId: again.id,
+        claimed: false,
+        alreadyDone: false,
+      };
+    }
+    return {
+      cnSync: { error: 'Outbox tidak bisa diklaim', code: 'OUTBOX_CLAIM_FAILED' },
+      outboxId: again?.id || null,
+      claimed: false,
+      alreadyDone: false,
+    };
+  }
+
+  const doc = await db.collection('vendor_returns').findOne({ id: input.returnId });
+  if (!doc) {
+    await markOutboxFailed(db, claimed.id, 'Retur vendor tidak ditemukan');
+    return {
+      cnSync: { error: 'Retur vendor tidak ditemukan' },
+      outboxId: claimed.id,
+      claimed: true,
+      alreadyDone: false,
+    };
+  }
+
+  const { notifySalesGoodsReturnPosted } = await import('@/lib/api/goods-return-notify-sales');
+  let result: {
+    ok: boolean;
+    skipped?: boolean;
+    creditNoteId?: string;
+    noCN?: string;
+    amount?: number;
+    error?: string;
+  };
+  try {
+    result = await notifySalesGoodsReturnPosted(
+      db,
+      input.tenantId,
+      doc as import('@/types/vendor-return').VendorReturnDoc,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.error('integration_outbox_drain_rtv_exception', {
+      tenantId: input.tenantId,
+      returnId: input.returnId,
+      outboxId: claimed.id,
+      error: msg,
+    });
+    result = { ok: false, error: msg };
+  }
+
+  const applied = await applyVendorReturnCnNotifyResult(db, input.returnId, result);
+  const errMsg = result.error || (typeof applied.patch.cnSyncError === 'string' ? applied.patch.cnSyncError : null);
+
+  if (applied.cnSyncStatus === 'DONE' || applied.cnSyncStatus === 'SKIPPED') {
+    await markOutboxDone(db, claimed.id, {
+      lastError: applied.needsRecovery ? errMsg : null,
+    });
+  } else {
+    await markOutboxFailed(db, claimed.id, errMsg || 'credit note sync failed');
+  }
+
+  logger.info('integration_outbox_drained', {
+    tenantId: input.tenantId,
+    returnId: input.returnId,
+    outboxId: claimed.id,
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
+    status: applied.cnSyncStatus,
+    attempts: claimed.attempts,
+  });
+
+  return {
+    cnSync: {
+      ...result,
+      status: applied.cnSyncStatus,
+      needsRecovery: applied.needsRecovery,
+      creditNoteId: result.creditNoteId,
+      noCN: result.noCN,
+      error: errMsg,
+    },
+    outboxId: claimed.id,
+    claimed: true,
+    alreadyDone: false,
+  };
+}
+
 

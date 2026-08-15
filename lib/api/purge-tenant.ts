@@ -24,6 +24,7 @@ const EXTRA_COLLECTIONS = [
   'ka_open_case_missing_fu_reconcile_reports',
   'putaway_moves',
   'goods_receipts',
+  'vendor_returns',
 
   'customer_purchase_orders',
   'local_purchase_orders',
