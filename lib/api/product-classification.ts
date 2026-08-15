@@ -44,9 +44,10 @@ export const GRUP_NAME_HINTS: GrupHint[] = [
   {
     grup: 'Bumbu',
     hints: [
-      'desaku', 'ladaku', 'marinasi', 'bumbu', 'garam', 'merica', 'lada',
+      'desaku', 'ladaku', 'marinasi', 'bumbu', 'garam', 'merica',
       'ketumbar', 'kunyit', 'lengkuas', 'jahe', 'saos', 'saus', 'kecap',
       'terasi', 'kaldu', 'abon', 'msg', 'penyedap', 'cabe bubuk', 'cabai kering',
+      'bbk', 'knorr', 'knoor',
     ],
   },
   {
@@ -60,7 +61,7 @@ export const GRUP_NAME_HINTS: GrupHint[] = [
     grup: 'Sayuran',
     hints: [
       'sayur', 'wortel', 'bayam', 'kangkung', 'sawi', 'brokoli', 'kubis',
-      'bawang', 'tomat', 'kentang', 'jagung',
+      'bawang', 'tomat', 'kentang', 'jagung', 'selada',
     ],
   },
   {
