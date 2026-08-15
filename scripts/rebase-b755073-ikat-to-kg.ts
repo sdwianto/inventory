@@ -67,6 +67,7 @@ async function main() {
     const tenantId = String(p.tenantId || '');
     const fromSatuan = String(p.satuan || '').trim().toUpperCase();
     const factor = factorFromSatuan(fromSatuan);
+    const stokNow = Number(p.stok) || 0;
     const lokasiBefore = await db.collection('stok_lokasi').find({ stokId: id, tenantId }).toArray();
     const lokasiSumBefore = lokasiBefore.reduce((s, r) => s + (Number(r.qty) || 0), 0);
     const qtySource = lokasiSumBefore > 0 ? lokasiSumBefore : stokNow;
