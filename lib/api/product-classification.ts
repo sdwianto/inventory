@@ -89,6 +89,8 @@ const GRUP_MATRIX: Record<string, { itemRole: ItemRole; gudangKode: WarehouseCod
   Daging: { itemRole: 'INGREDIENT', gudangKode: 'GBASAH' },
   Ikan: { itemRole: 'INGREDIENT', gudangKode: 'GBASAH' },
   Basah: { itemRole: 'INGREDIENT', gudangKode: 'GBASAH' },
+  Hewani: { itemRole: 'INGREDIENT', gudangKode: 'GBASAH' },
+  Sayur: { itemRole: 'INGREDIENT', gudangKode: 'GBASAH' },
   Bumbu: { itemRole: 'INGREDIENT', gudangKode: 'GKERING' },
   Sembako: { itemRole: 'INGREDIENT', gudangKode: 'GKERING' },
   Minuman: { itemRole: 'INGREDIENT', gudangKode: 'GKERING' },
@@ -147,7 +149,7 @@ export function classifyProduct(prod: { grup?: string; nama?: string } | null | 
     ? { ...fromGrup }
     : { itemRole: 'INGREDIENT', gudangKode: 'GKERING' };
 
-  if (!fromGrup && isWeakProdukGrup(grup)) {
+  if (!fromGrup) {
     const suggested = suggestProdukGrup(nama);
     if (suggested && GRUP_MATRIX[suggested]) {
       result = { ...GRUP_MATRIX[suggested] };

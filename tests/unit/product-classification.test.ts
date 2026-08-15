@@ -26,6 +26,10 @@ describe('product classification', () => {
     expect(inferGudangKodeFromProduct({ grup: 'Bumbu', nama: 'Abon Ayam 1kg' })).toBe('GKERING');
   });
 
+  it('maps custom Hewani telur grup to wet warehouse', () => {
+    expect(classifyProduct({ grup: 'Hewani', nama: 'Telur Ayam Horn' }).gudangKode).toBe('GBASAH');
+  });
+
   it('maps Buah and Sayuran to wet warehouse', () => {
     expect(classifyProduct({ grup: 'Buah', nama: 'Alpukat 1kg isi 6' }).gudangKode).toBe('GBASAH');
     expect(classifyProduct({ grup: 'Sayuran', nama: 'Bayam' }).gudangKode).toBe('GBASAH');
