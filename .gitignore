@@ -81,6 +81,10 @@ agenthub/agents/youtube/db
 # Local media uploads (tenant logos, etc.)
 storage/media/
 
+# Review Excel master produk (bisa berisi data tenant)
+docs/konversi/Review-Recipe-Bridge.xlsx
+docs/konversi/Review-Recipe-Bridge*.xlsx
+
 # Mobile development
 android-sdk/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node

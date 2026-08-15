@@ -6,8 +6,15 @@
  *
  * Packaged / count base (SAK, BTL, IKAT, …): isi `products.recipeBaseGrams`
  * (1 base unit = N gram) atau `recipeBaseMl` / `nutrition.gramsPerUnit` agar
- * resep boleh memakai GR/ML. Tanpa faktor eksplisit, konversi ditolak (tidak menebak).
+ * resep boleh memakai GR/ML. Jika field kosong, infer dari nama (1kg/150g/600ml)
+ * kecuali SKU operasional (shouldSkipRecipeNameInfer).
  */
+
+import {
+  parsePackNetFromNama,
+  positiveOrNull,
+  shouldSkipRecipeNameInfer,
+} from './pack-net-from-nama';
 
 export type RecipeUomFamily = 'MASS' | 'VOLUME' | 'COUNT' | 'UNKNOWN';
 
@@ -45,6 +52,12 @@ const COUNT_LABELS = new Set([
   'LEMBAR',
   'POTONG',
   'PTG',
+  'JRG',
+  'JERIGEN',
+  'ROL',
+  'ROLL',
+  'BAL',
+  'BALL',
 ]);
 
 export function normalizeRecipeSatuan(raw: unknown): string {
@@ -60,15 +73,91 @@ export function recipeUomFamily(satuan: string | null | undefined): RecipeUomFam
   return 'UNKNOWN';
 }
 
+export type RecipeKitchenOpts = {
+  recipeBaseGrams?: number | null;
+  recipeBaseMl?: number | null;
+  gramsPerUnit?: number | null;
+  nama?: string | null;
+  kode?: string | null;
+};
+
+export type RecipeConversionProduct = {
+  satuan?: string | null;
+  kode?: string | null;
+  nama?: string | null;
+  /** 1 base unit = N grams (packaged / count base). */
+  recipeBaseGrams?: number | null;
+  /** 1 base unit = N ml. */
+  recipeBaseMl?: number | null;
+  /** Fallback grams from nutrition master. */
+  nutrition?: { gramsPerUnit?: number | null } | null;
+};
+
+export type RecipeBridgeResolved = {
+  recipeBaseGrams: number | null;
+  recipeBaseMl: number | null;
+  source: 'master' | 'inferred' | 'none';
+};
+
+/** Master field menang; jika kosong, infer dari nama (kecuali skip operasional). */
+export function resolveRecipeBridge(product: RecipeConversionProduct | RecipeKitchenOpts): RecipeBridgeResolved {
+  const masterGrams = positiveOrNull(
+    'recipeBaseGrams' in product ? product.recipeBaseGrams : undefined,
+  ) ?? positiveOrNull(
+    'nutrition' in product ? product.nutrition?.gramsPerUnit : undefined,
+  ) ?? positiveOrNull(
+    'gramsPerUnit' in product ? product.gramsPerUnit : undefined,
+  );
+  const masterMl = positiveOrNull(product.recipeBaseMl);
+  if (masterGrams != null || masterMl != null) {
+    return { recipeBaseGrams: masterGrams, recipeBaseMl: masterMl, source: 'master' };
+  }
+  if (shouldSkipRecipeNameInfer(product.kode, product.nama)) {
+    return { recipeBaseGrams: null, recipeBaseMl: null, source: 'none' };
+  }
+  const inferred = parsePackNetFromNama(product.nama);
+  if (inferred.grams != null || inferred.ml != null) {
+    return { recipeBaseGrams: inferred.grams, recipeBaseMl: inferred.ml, source: 'inferred' };
+  }
+  return { recipeBaseGrams: null, recipeBaseMl: null, source: 'none' };
+}
+
+export type RecipeBridgeFactorSource = 'master' | 'inferred' | 'none';
+
+export type RecipeBridgeReview = {
+  inferredGrams: number | null;
+  inferredMl: number | null;
+  factorSource: RecipeBridgeFactorSource;
+  proposedKitchenDefault: string;
+};
+
+/** Kolom review Excel: master menang; infer hanya jika field master kosong dan bukan skip. */
+export function reviewRecipeBridge(product: RecipeConversionProduct): RecipeBridgeReview {
+  const inferred = parsePackNetFromNama(product.nama);
+  const resolved = resolveRecipeBridge(product);
+  return {
+    inferredGrams: inferred.grams,
+    inferredMl: inferred.ml,
+    factorSource: resolved.source,
+    proposedKitchenDefault: defaultKitchenSatuan(product.satuan, {
+      recipeBaseGrams: resolved.recipeBaseGrams,
+      recipeBaseMl: resolved.recipeBaseMl,
+      nama: product.nama,
+      kode: product.kode,
+    }),
+  };
+}
+
 /** Kitchen satuan options compatible with a product base satuan. */
 export function kitchenSatuanOptionsForBase(
   baseSatuan: string | null | undefined,
-  opts?: { recipeBaseGrams?: number | null; recipeBaseMl?: number | null; gramsPerUnit?: number | null },
+  opts?: RecipeKitchenOpts,
 ): string[] {
   const base = normalizeRecipeSatuan(baseSatuan);
   if (!base) return [];
   const family = recipeUomFamily(base);
   const out = new Set<string>([base]);
+  const bridge = resolveRecipeBridge({ ...opts, satuan: base });
   if (family === 'MASS') {
     out.add('GR');
     out.add('ONS');
@@ -77,15 +166,12 @@ export function kitchenSatuanOptionsForBase(
     out.add('ML');
     out.add('L');
   } else if (family === 'COUNT') {
-    // Packaged count base: allow GR/ML only when explicit factor exists.
-    const grams = Number(opts?.recipeBaseGrams ?? opts?.gramsPerUnit);
-    const ml = Number(opts?.recipeBaseMl);
-    if (Number.isFinite(grams) && grams > 0) {
+    if (bridge.recipeBaseGrams != null) {
       out.add('GR');
       out.add('ONS');
       out.add('KG');
     }
-    if (Number.isFinite(ml) && ml > 0) {
+    if (bridge.recipeBaseMl != null) {
       out.add('ML');
       out.add('L');
     }
@@ -96,33 +182,21 @@ export function kitchenSatuanOptionsForBase(
 /** Prefer smallest kitchen unit in the same family as base. */
 export function defaultKitchenSatuan(
   baseSatuan: string | null | undefined,
-  opts?: { recipeBaseGrams?: number | null; recipeBaseMl?: number | null; gramsPerUnit?: number | null },
+  opts?: RecipeKitchenOpts,
 ): string {
   const base = normalizeRecipeSatuan(baseSatuan);
   if (!base) return '';
   const family = recipeUomFamily(base);
   if (family === 'MASS') return 'GR';
   if (family === 'VOLUME') return 'ML';
-  // COUNT / kemasan: satuan terkecil dari bridge resep (bukan BTL/PCS).
+  const bridge = resolveRecipeBridge({ ...opts, satuan: base });
   if (family === 'COUNT') {
-    const grams = Number(opts?.recipeBaseGrams ?? opts?.gramsPerUnit);
-    const ml = Number(opts?.recipeBaseMl);
-    if (Number.isFinite(grams) && grams > 0) return 'GR';
-    if (Number.isFinite(ml) && ml > 0) return 'ML';
+    if (bridge.recipeBaseGrams != null) return 'GR';
+    if (bridge.recipeBaseMl != null) return 'ML';
   }
   const optsList = kitchenSatuanOptionsForBase(base, opts);
   return optsList[0] || base;
 }
-
-export type RecipeConversionProduct = {
-  satuan?: string | null;
-  /** 1 base unit = N grams (packaged / count base). */
-  recipeBaseGrams?: number | null;
-  /** 1 base unit = N ml. */
-  recipeBaseMl?: number | null;
-  /** Fallback grams from nutrition master. */
-  nutrition?: { gramsPerUnit?: number | null } | null;
-};
 
 export type RecipeConversionOk = {
   factorToBase: number;
@@ -169,14 +243,10 @@ export function factorKitchenToBase(
     return { factorToBase: km / bm, baseSatuan: base };
   }
 
-  // Kitchen mass → packaged/count base via explicit grams-per-base-unit.
+  // Kitchen mass → packaged/count base via explicit grams-per-base-unit (master or infer nama).
   if (kFam === 'MASS' && (bFam === 'COUNT' || bFam === 'UNKNOWN')) {
-    const gramsPerBase = Number(
-      product.recipeBaseGrams
-      ?? product.nutrition?.gramsPerUnit
-      ?? NaN,
-    );
-    if (!(gramsPerBase > 0)) {
+    const gramsPerBase = resolveRecipeBridge(product).recipeBaseGrams;
+    if (!(gramsPerBase != null && gramsPerBase > 0)) {
       return {
         error: `Produk basis ${base}: isi recipeBaseGrams (atau nutrition.gramsPerUnit) untuk konversi dari ${kitchen}`,
       };
@@ -188,8 +258,8 @@ export function factorKitchenToBase(
 
   // Kitchen volume → packaged/count base via explicit ml-per-base-unit.
   if (kFam === 'VOLUME' && (bFam === 'COUNT' || bFam === 'UNKNOWN')) {
-    const mlPerBase = Number(product.recipeBaseMl ?? NaN);
-    if (!(mlPerBase > 0)) {
+    const mlPerBase = resolveRecipeBridge(product).recipeBaseMl;
+    if (!(mlPerBase != null && mlPerBase > 0)) {
       return {
         error: `Produk basis ${base}: isi recipeBaseMl untuk konversi dari ${kitchen}`,
       };

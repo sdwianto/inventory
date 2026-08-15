@@ -174,6 +174,8 @@ async function enrichLines(
 
     const productConv: RecipeConversionProduct = {
       satuan: p.satuan != null ? String(p.satuan) : undefined,
+      kode: p.kode != null ? String(p.kode) : undefined,
+      nama: p.nama != null ? String(p.nama) : undefined,
       recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
       recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
       nutrition: p.nutrition && typeof p.nutrition === 'object'
@@ -185,6 +187,8 @@ async function enrichLines(
       recipeBaseGrams: productConv.recipeBaseGrams,
       recipeBaseMl: productConv.recipeBaseMl,
       gramsPerUnit: productConv.nutrition?.gramsPerUnit,
+      nama: productConv.nama,
+      kode: productConv.kode,
     });
     let kitchen = normalizeRecipeSatuan(line.satuan);
     if (!kitchen) {
@@ -192,6 +196,8 @@ async function enrichLines(
         recipeBaseGrams: productConv.recipeBaseGrams,
         recipeBaseMl: productConv.recipeBaseMl,
         gramsPerUnit: productConv.nutrition?.gramsPerUnit,
+        nama: productConv.nama,
+        kode: productConv.kode,
       });
     }
     if (kitchen && allowed.length && !allowed.includes(kitchen)) {

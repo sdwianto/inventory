@@ -79,6 +79,8 @@ function productConvFromOpt(p: ProductOpt | undefined): RecipeConversionProduct 
   if (!p) return {};
   return {
     satuan: p.satuan,
+    kode: p.kode,
+    nama: p.nama,
     recipeBaseGrams: p.recipeBaseGrams,
     recipeBaseMl: p.recipeBaseMl,
     nutrition: p.gramsPerUnit != null ? { gramsPerUnit: p.gramsPerUnit } : undefined,
@@ -91,6 +93,8 @@ function kitchenOptsForProduct(p: ProductOpt | undefined): string[] {
     recipeBaseGrams: p.recipeBaseGrams,
     recipeBaseMl: p.recipeBaseMl,
     gramsPerUnit: p.gramsPerUnit,
+    nama: p.nama,
+    kode: p.kode,
   });
 }
 
@@ -100,6 +104,8 @@ function defaultSatuanForProduct(p: ProductOpt | undefined): string {
     recipeBaseGrams: p.recipeBaseGrams,
     recipeBaseMl: p.recipeBaseMl,
     gramsPerUnit: p.gramsPerUnit,
+    nama: p.nama,
+    kode: p.kode,
   });
 }
 

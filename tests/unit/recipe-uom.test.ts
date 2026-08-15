@@ -191,3 +191,34 @@ describe('PRODUCT_LIST_PROJECTION — recipe bridge', () => {
     });
   });
 });
+
+describe('recipe-uom — infer nama + COUNT extra labels', () => {
+  it('PCS + nama 1kg tanpa field master → opsi GR, default GR, 100 GR = 0.1 PCS', () => {
+    const opts = { nama: 'Abon Sapi Cap Kupu 1kg' };
+    expect(kitchenSatuanOptionsForBase('PCS', opts)).toEqual(
+      expect.arrayContaining(['PCS', 'GR', 'ONS', 'KG']),
+    );
+    expect(defaultKitchenSatuan('PCS', opts)).toBe('GR');
+    const r = toBaseRecipeQty(100, 'GR', { satuan: 'PCS', nama: 'Abon Sapi Cap Kupu 1kg' });
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.qtyBase).toBeCloseTo(0.1);
+  });
+
+  it('JRG + recipeBaseMl → COUNT, default ML', () => {
+    expect(recipeUomFamily('JRG')).toBe('COUNT');
+    expect(recipeUomFamily('ROL')).toBe('COUNT');
+    expect(recipeUomFamily('BAL')).toBe('COUNT');
+    expect(recipeUomFamily('BALL')).toBe('COUNT');
+    expect(defaultKitchenSatuan('JRG', { recipeBaseMl: 5700 })).toBe('ML');
+    const r = toBaseRecipeQty(570, 'ML', { satuan: 'JRG', recipeBaseMl: 5700 });
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.qtyBase).toBeCloseTo(0.1);
+  });
+
+  it('skip operasional: nama 1kg tidak membuka GR', () => {
+    expect(kitchenSatuanOptionsForBase('PCS', { kode: 'B189497', nama: 'Barang 1kg' })).toEqual(['PCS']);
+    expect(defaultKitchenSatuan('PCS', { kode: 'B189497', nama: 'Barang 1kg' })).toBe('PCS');
+  });
+});
