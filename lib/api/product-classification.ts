@@ -32,6 +32,8 @@ export const GRUP_NAME_HINTS: GrupHint[] = [
     hints: [
       'sabun', 'deterjen', 'detergen', 'pemutih', 'sunlight', 'lifebuoy',
       'pasta gigi', 'disinfektan', 'hand soap', 'pembersih',
+      'vixal', 'wipol', 'harpic', 'soklin', 'so klin', 'bayclin',
+      'superpel', 'super pel', 'karbol', 'tisu toilet', 'tissue toilet',
     ],
   },
   {

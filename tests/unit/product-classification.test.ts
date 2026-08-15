@@ -61,6 +61,30 @@ describe('product classification', () => {
     });
   });
 
+  it('keeps packaging, food, and janitor SKUs on the right warehouse', () => {
+    const cases: Array<{ grup: string; nama: string; gudangKode: 'GKERING' | 'GBASAH' | 'GJANITOR'; itemRole: string }> = [
+      { grup: 'Palen', nama: 'Kresek Hitam 90x120', gudangKode: 'GKERING', itemRole: 'PACKAGING' },
+      { grup: 'Palen', nama: 'Kertas HVS A4', gudangKode: 'GKERING', itemRole: 'PACKAGING' },
+      { grup: 'Toiletries', nama: 'Sunlight 610g', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Palen', nama: 'Sabun Cuci Piring', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Umum', nama: 'Deterjen Bubuk 1kg', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Palen', nama: 'Vixal 720g', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Palen', nama: 'Wipol 720g', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Umum', nama: 'Tisu Toilet GreenSoft', gudangKode: 'GJANITOR', itemRole: 'CONSUMABLE' },
+      { grup: 'Palen', nama: 'Tisu Jolly Pop up', gudangKode: 'GKERING', itemRole: 'PACKAGING' },
+      { grup: 'Hewani', nama: 'Daging Sapi Slice', gudangKode: 'GBASAH', itemRole: 'INGREDIENT' },
+      { grup: 'Sayur', nama: 'Selada Keriting', gudangKode: 'GBASAH', itemRole: 'INGREDIENT' },
+      { grup: 'Bumbu', nama: 'Abon Sapi 1kg', gudangKode: 'GKERING', itemRole: 'INGREDIENT' },
+      { grup: 'Sembako', nama: 'Beras Premium 5kg', gudangKode: 'GKERING', itemRole: 'INGREDIENT' },
+    ];
+    for (const row of cases) {
+      expect(classifyProduct({ grup: row.grup, nama: row.nama }), `${row.grup} / ${row.nama}`).toEqual({
+        itemRole: row.itemRole,
+        gudangKode: row.gudangKode,
+      });
+    }
+  });
+
   it('does not overwrite FINISHED_GOOD or manual source', () => {
     expect(isManualClassification({ itemRole: 'FINISHED_GOOD' })).toBe(true);
     expect(isManualClassification({ classificationSource: 'manual', itemRole: 'INGREDIENT' })).toBe(true);
