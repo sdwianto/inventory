@@ -8,6 +8,7 @@ import {
   recipeUomFamily,
   toBaseRecipeQty,
 } from '@/lib/food-production/recipe-uom';
+import { PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 
 describe('recipe-uom — keluarga satuan', () => {
   it('mengenali massa, volume, hitung', () => {
@@ -123,6 +124,21 @@ describe('recipe-uom — opsi & default dapur', () => {
     expect(kitchenSatuanOptionsForBase('SAK', { recipeBaseGrams: 25000 })).toEqual(
       expect.arrayContaining(['SAK', 'GR', 'KG']),
     );
+    expect(defaultKitchenSatuan('SAK', { recipeBaseGrams: 25000 })).toBe('GR');
+  });
+
+  it('base BTL + recipeBaseGrams → GR default (semua kemasan COUNT)', () => {
+    expect(kitchenSatuanOptionsForBase('BTL', { recipeBaseGrams: 150 })).toEqual(
+      expect.arrayContaining(['BTL', 'GR', 'ONS', 'KG']),
+    );
+    expect(defaultKitchenSatuan('BTL', { recipeBaseGrams: 150 })).toBe('GR');
+  });
+
+  it('base PCS + recipeBaseMl → ML default', () => {
+    expect(kitchenSatuanOptionsForBase('PCS', { recipeBaseMl: 600 })).toEqual(
+      expect.arrayContaining(['PCS', 'ML', 'L']),
+    );
+    expect(defaultKitchenSatuan('PCS', { recipeBaseMl: 600 })).toBe('ML');
   });
 });
 
@@ -162,5 +178,16 @@ describe('recipe-uom — dual qty + legacy helper', () => {
       factorToBase: 0.001,
       satuan: 'GR',
     } as never, 'KECIL')).toBeCloseTo(0.7);
+  });
+});
+
+describe('PRODUCT_LIST_PROJECTION — recipe bridge', () => {
+  it('exposes recipeBaseGrams/Ml so COUNT products can pick GR/ML in recipe UI', () => {
+    expect(PRODUCT_LIST_PROJECTION).toMatchObject({
+      satuan: 1,
+      recipeBaseGrams: 1,
+      recipeBaseMl: 1,
+      nutrition: 1,
+    });
   });
 });

@@ -103,6 +103,13 @@ export function defaultKitchenSatuan(
   const family = recipeUomFamily(base);
   if (family === 'MASS') return 'GR';
   if (family === 'VOLUME') return 'ML';
+  // COUNT / kemasan: satuan terkecil dari bridge resep (bukan BTL/PCS).
+  if (family === 'COUNT') {
+    const grams = Number(opts?.recipeBaseGrams ?? opts?.gramsPerUnit);
+    const ml = Number(opts?.recipeBaseMl);
+    if (Number.isFinite(grams) && grams > 0) return 'GR';
+    if (Number.isFinite(ml) && ml > 0) return 'ML';
+  }
   const optsList = kitchenSatuanOptionsForBase(base, opts);
   return optsList[0] || base;
 }

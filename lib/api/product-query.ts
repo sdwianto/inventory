@@ -99,6 +99,10 @@ export const PRODUCT_LIST_PROJECTION = {
   nama: 1,
   grup: 1,
   satuan: 1,
+  /** Bridge resep dapur — wajib di list agar COUNT (BTL/PCS/…) bisa pilih GR/ML. */
+  recipeBaseGrams: 1,
+  recipeBaseMl: 1,
+  nutrition: 1,
   hargaBeli: 1,
   hargaSpesial: 1,
   hargaGrosir: 1,
