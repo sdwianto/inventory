@@ -127,6 +127,7 @@ export const PRODUCT_LIST_PROJECTION = {
   recipeBaseGrams: 1,
   recipeBaseMl: 1,
   nutrition: 1,
+  tkpiCode: 1,
   hargaBeli: 1,
   hargaSpesial: 1,
   hargaGrosir: 1,

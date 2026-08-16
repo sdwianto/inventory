@@ -23,12 +23,55 @@ import {
   portionExceptionMatchSet,
 } from '@/lib/food-production/recipe';
 import {
+  getTkpiFood,
+  suggestTkpiMatches,
+  tkpiPickerQuery,
+} from '@/lib/food-production/tkpi-catalog';
+import {
   defaultKitchenSatuan,
   kitchenSatuanOptionsForBase,
   toBaseRecipeQty,
   type RecipeConversionProduct,
 } from '@/lib/food-production/recipe-uom';
 import { formatNumber } from '@/lib/format';
+
+function toProductOpt(p: Record<string, unknown>): ProductOpt {
+  const nutrition = p.nutrition && typeof p.nutrition === 'object'
+    ? (p.nutrition as Record<string, unknown>)
+    : undefined;
+  const tkpiCode = String(p.tkpiCode || nutrition?.tkpiCode || '').trim() || undefined;
+  const fromFacts = String(nutrition?.tkpiNama || '').trim() || undefined;
+  const tkpiNama = fromFacts || (tkpiCode ? (getTkpiFood(tkpiCode)?.nama || undefined) : undefined);
+  return {
+    id: String(p.id || ''),
+    kode: String(p.kode || ''),
+    nama: String(p.nama || ''),
+    satuan: p.satuan ? String(p.satuan) : '',
+    recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
+    recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+    gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
+    itemRole: p.itemRole ? String(p.itemRole) : undefined,
+    aktif: p.aktif !== false,
+    tkpiCode,
+    tkpiNama,
+  };
+}
+
+function HighlightNeedle({ text, needle }: { text: string; needle: string }) {
+  const n = needle.trim();
+  if (!n) return <>{text}</>;
+  const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'ig'));
+  return (
+    <>
+      {parts.map((part, i) => (
+        part.toLowerCase() === n.toLowerCase()
+          ? <span key={i} className="text-red-600">{part}</span>
+          : <span key={i} className="text-blue-800">{part}</span>
+      ))}
+    </>
+  );
+}
 
 interface ProductOpt {
   id: string;
@@ -40,6 +83,8 @@ interface ProductOpt {
   gramsPerUnit?: number;
   itemRole?: string;
   aktif?: boolean;
+  tkpiCode?: string;
+  tkpiNama?: string;
 }
 
 interface RecipeLineForm {
@@ -218,6 +263,19 @@ export default function FoodProductionRecipePage() {
   }>>([]);
   const [exceptionSaving, setExceptionSaving] = useState(false);
   const [exceptionPickerKey, setExceptionPickerKey] = useState(0);
+  const [tkpiPick, setTkpiPick] = useState<{ productId: string; nama: string } | null>(null);
+  const [tkpiHits, setTkpiHits] = useState<Array<{
+    kode: string;
+    nama: string;
+    energiKcal: number;
+    proteinG?: number;
+    bddPct?: number;
+    kelompok?: string;
+  }>>([]);
+  const [tkpiQ, setTkpiQ] = useState('');
+  const [tkpiBusy, setTkpiBusy] = useState(false);
+  const [tkpiSaving, setTkpiSaving] = useState(false);
+  const applyingTkpi = useRef(new Set<string>());
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<{
     summary?: { recipes: number; ready: number; blocked: number; productsAvailable?: number };
@@ -268,22 +326,7 @@ export default function FoodProductionRecipePage() {
       const list = Array.isArray(pData)
         ? pData
         : (Array.isArray(pData?.items) ? pData.items : (Array.isArray(pData?.data) ? pData.data : []));
-      setProducts(list.map((p: Record<string, unknown>) => {
-        const nutrition = p.nutrition && typeof p.nutrition === 'object'
-          ? (p.nutrition as { gramsPerUnit?: number })
-          : undefined;
-        return {
-          id: String(p.id),
-          kode: String(p.kode || ''),
-          nama: String(p.nama || ''),
-          satuan: p.satuan ? String(p.satuan) : '',
-          recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
-          recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
-          gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
-          itemRole: p.itemRole ? String(p.itemRole) : undefined,
-          aktif: p.aktif !== false,
-        };
-      }));
+      setProducts(list.map((p: Record<string, unknown>) => toProductOpt(p)));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat resep');
     } finally {
@@ -294,6 +337,15 @@ export default function FoodProductionRecipePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    for (const line of lines) {
+      if (!line.productId) continue;
+      const product = products.find((p) => p.id === line.productId);
+      if (product) void applyUniqueTkpiIfNeeded(product);
+    }
+  }, [open, lines, products]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -367,6 +419,96 @@ export default function FoodProductionRecipePage() {
       toast.error(e instanceof Error ? e.message : 'Gagal menghapus');
     } finally {
       setExceptionSaving(false);
+    }
+  }
+
+  async function persistProductTkpi(productId: string, tkpiCode: string) {
+    const res = await fetch(`/api/nutrition-profiles/${productId}/apply-tkpi`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+      body: JSON.stringify({ tkpiCode }),
+    });
+    const data = await res.json() as Record<string, unknown>;
+    if (!res.ok) throw new Error(String(data?.error || 'Gagal simpan TKPI'));
+    const nutrition = data.nutrition && typeof data.nutrition === 'object'
+      ? (data.nutrition as Record<string, unknown>)
+      : undefined;
+    const food = getTkpiFood(tkpiCode);
+    setProducts((prev) => prev.map((p) => (
+      p.id === productId
+        ? {
+          ...p,
+          tkpiCode,
+          tkpiNama: String(nutrition?.tkpiNama || food?.nama || p.tkpiNama || tkpiCode),
+          gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : p.gramsPerUnit,
+        }
+        : p
+    )));
+  }
+
+  async function applyUniqueTkpiIfNeeded(product: ProductOpt) {
+    if (!product.id || product.tkpiCode || applyingTkpi.current.has(product.id)) return;
+    const matches = suggestTkpiMatches(product.nama, 3);
+    if (matches.length !== 1) return;
+    applyingTkpi.current.add(product.id);
+    try {
+      await persistProductTkpi(product.id, matches[0].kode);
+    } catch {
+      /* tampilkan pilih jika gagal simpan */
+    } finally {
+      applyingTkpi.current.delete(product.id);
+    }
+  }
+
+  async function loadTkpiHits(q: string) {
+    const needle = q.trim();
+    if (needle.length < 2) {
+      setTkpiHits([]);
+      return;
+    }
+    setTkpiBusy(true);
+    try {
+      const res = await fetch(
+        `/api/nutrition-profiles/tkpi?q=${encodeURIComponent(needle)}&limit=80`,
+        { headers: { ...actingTenantHeaders() } },
+      );
+      const data = await res.json() as { items?: Array<Record<string, unknown>> };
+      if (!res.ok) throw new Error('Gagal cari TKPI');
+      setTkpiHits((Array.isArray(data.items) ? data.items : []).map((h) => ({
+        kode: String(h.kode || ''),
+        nama: String(h.nama || ''),
+        energiKcal: Number(h.energiKcal) || 0,
+        proteinG: h.proteinG != null ? Number(h.proteinG) : undefined,
+        bddPct: h.bddPct != null ? Number(h.bddPct) : undefined,
+        kelompok: h.kelompok != null ? String(h.kelompok) : undefined,
+      })));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal cari TKPI');
+      setTkpiHits([]);
+    } finally {
+      setTkpiBusy(false);
+    }
+  }
+
+  function openTkpiPicker(product: ProductOpt) {
+    const q = tkpiPickerQuery(product.nama);
+    setTkpiPick({ productId: product.id, nama: product.nama });
+    setTkpiQ(q);
+    void loadTkpiHits(q);
+  }
+
+  async function chooseTkpi(kode: string) {
+    if (!tkpiPick || tkpiSaving) return;
+    setTkpiSaving(true);
+    try {
+      await persistProductTkpi(tkpiPick.productId, kode);
+      toast.success('TKPI disimpan ke master produk');
+      setTkpiPick(null);
+      setTkpiHits([]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal simpan TKPI');
+    } finally {
+      setTkpiSaving(false);
     }
   }
 
@@ -760,7 +902,7 @@ export default function FoodProductionRecipePage() {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-4xl w-[min(96vw,56rem)] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-6xl w-[min(98vw,80rem)] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? 'Ubah Resep' : 'Tambah Resep'}</DialogTitle>
           </DialogHeader>
@@ -905,8 +1047,9 @@ export default function FoodProductionRecipePage() {
               </Button>
             </div>
             <div className="rounded-md border overflow-hidden">
-              <div className="hidden sm:grid sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_minmax(7rem,1fr)_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
+              <div className="hidden sm:grid sm:grid-cols-[minmax(0,1.5fr)_minmax(13.5rem,1.2fr)_5.5rem_4.5rem_5.5rem_minmax(6.5rem,0.85fr)_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
                 <div>Produk</div>
+                <div className="whitespace-nowrap">TKPI/100gr BDD</div>
                 <div>Qty besar</div>
                 <div>% kecil</div>
                 <div>Qty kecil</div>
@@ -932,7 +1075,7 @@ export default function FoodProductionRecipePage() {
                   return (
                   <div
                     key={idx}
-                    className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_5.5rem_4.5rem_5.5rem_minmax(7rem,1fr)_2.5rem] items-start px-2 py-1.5"
+                    className="grid gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(13.5rem,1.2fr)_5.5rem_4.5rem_5.5rem_minmax(6.5rem,0.85fr)_2.5rem] items-start px-2 py-1.5"
                   >
                     <div className="min-w-0">
                       <span className="sm:hidden text-[11px] text-muted-foreground">Produk</span>
@@ -955,20 +1098,8 @@ export default function FoodProductionRecipePage() {
                           )));
                         }}
                         onProductPick={(p) => {
-                          const productId = str(p.id);
-                          const picked: ProductOpt = {
-                            id: productId,
-                            kode: str(p.kode),
-                            nama: str(p.nama),
-                            satuan: str(p.satuan),
-                            recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
-                            recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
-                            gramsPerUnit:
-                              p.nutrition && typeof p.nutrition === 'object'
-                                && (p.nutrition as { gramsPerUnit?: number }).gramsPerUnit != null
-                                ? Number((p.nutrition as { gramsPerUnit?: number }).gramsPerUnit)
-                                : undefined,
-                          };
+                          const picked = toProductOpt(p);
+                          const productId = picked.id;
                           const kitchenSatuan = defaultSatuanForProduct(picked) || str(p.satuan);
                           const pct = productIsFullPortion(productId, picked.kode) ? '100' : undefined;
                           setLines((prev) => {
@@ -1000,11 +1131,66 @@ export default function FoodProductionRecipePage() {
                             );
                           });
                           setProducts((prev) => {
-                            if (prev.some((x) => x.id === productId)) return prev;
-                            return [...prev, picked];
+                            const existing = prev.find((x) => x.id === productId);
+                            const merged: ProductOpt = existing
+                              ? {
+                                ...existing,
+                                ...picked,
+                                tkpiCode: existing.tkpiCode || picked.tkpiCode,
+                                tkpiNama: existing.tkpiNama || picked.tkpiNama,
+                              }
+                              : picked;
+                            void applyUniqueTkpiIfNeeded(merged);
+                            if (!existing) return [...prev, merged];
+                            return prev.map((x) => (x.id === productId ? merged : x));
                           });
                         }}
                       />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="sm:hidden text-[11px] text-muted-foreground">TKPI/100gr BDD</span>
+                      {(() => {
+                        if (!product) {
+                          return <span className="text-[11px] text-muted-foreground">—</span>;
+                        }
+                        const unique = !product.tkpiCode ? suggestTkpiMatches(product.nama, 3) : [];
+                        const food = product.tkpiCode
+                          ? getTkpiFood(product.tkpiCode)
+                          : (unique.length === 1 ? getTkpiFood(unique[0].kode) : null);
+                        const attachedNama = product.tkpiNama
+                          || food?.nama
+                          || (product.tkpiCode || '');
+                        const uniqueNama = unique.length === 1 ? unique[0].nama : '';
+                        const label = attachedNama || uniqueNama;
+                        if (label) {
+                          return (
+                            <div className="min-w-0">
+                              <button
+                                type="button"
+                                className="text-left text-[11px] leading-tight text-blue-800 underline-offset-2 hover:underline"
+                                title={product.tkpiCode ? `TKPI ${product.tkpiCode} — klik untuk ganti` : 'Klik untuk ganti'}
+                                onClick={() => openTkpiPicker(product)}
+                              >
+                                {label}
+                              </button>
+                              {food && (
+                                <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground tabular-nums whitespace-nowrap">
+                                  {formatNumber(food.energiKcal)} kkal · P {formatNumber(food.proteinG)}g · L {formatNumber(food.lemakG)}g · K {formatNumber(food.karbohidratG)}g
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+                        return (
+                          <button
+                            type="button"
+                            className="text-xs text-amber-800 underline-offset-2 hover:underline"
+                            onClick={() => openTkpiPicker(product)}
+                          >
+                            pilih
+                          </button>
+                        );
+                      })()}
                     </div>
                     <div>
                       <span className="sm:hidden text-[11px] text-muted-foreground">Qty besar</span>
@@ -1111,6 +1297,70 @@ export default function FoodProductionRecipePage() {
             >
               {saving ? 'Menyimpan…' : 'Simpan'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!tkpiPick}
+        onOpenChange={(o) => {
+          if (!o) {
+            setTkpiPick(null);
+            setTkpiHits([]);
+            setTkpiQ('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Pilih TKPI — {tkpiPick?.nama}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Pilihan tersimpan ke master produk, dipakai semua resep dengan kode itu.
+          </p>
+          <div className="space-y-2 py-1">
+            <Input
+              className="h-9"
+              placeholder="Cari nama / kode TKPI…"
+              value={tkpiQ}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTkpiQ(v);
+                void loadTkpiHits(v);
+              }}
+            />
+            {tkpiBusy && <p className="text-[11px] text-muted-foreground">Mencari…</p>}
+            {!tkpiBusy && tkpiHits.length === 0 && tkpiQ.trim().length >= 2 && (
+              <p className="text-sm text-muted-foreground py-4 text-center">Tidak ada di TKPI 2019.</p>
+            )}
+            {tkpiHits.length > 0 && (
+              <ul className="max-h-72 overflow-y-auto text-sm divide-y border rounded-md">
+                {tkpiHits.map((hit) => (
+                  <li key={hit.kode}>
+                    <button
+                      type="button"
+                      disabled={tkpiSaving}
+                      className="w-full text-left px-3 py-2 hover:bg-muted/50 disabled:opacity-50"
+                      onClick={() => void chooseTkpi(hit.kode)}
+                    >
+                      <div className="font-mono text-[11px] text-muted-foreground">{hit.kode}</div>
+                      <div className="leading-snug">
+                        <HighlightNeedle text={hit.nama} needle={tkpiQ} />
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {hit.energiKcal} kkal
+                        {hit.proteinG != null ? ` · P ${hit.proteinG}g` : ''}
+                        {hit.bddPct != null ? ` · BDD ${hit.bddPct}%` : ''}
+                        {hit.kelompok ? ` · ${hit.kelompok}` : ''}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTkpiPick(null)}>Batal</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

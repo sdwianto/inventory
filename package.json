@@ -73,6 +73,7 @@
         "migrate:recipe-qty-base:dry-run": "node scripts/backfill-recipe-qty-base.mjs",
         "migrate:recipe-qty-base": "node scripts/backfill-recipe-qty-base.mjs --apply",
         "export:recipe-bridge-review": "npx tsx scripts/export-recipe-bridge-review.ts",
+        "export:tkpi-mapping-review": "npx tsx scripts/export-tkpi-mapping-review.ts",
         "rebase:b755073": "npx tsx scripts/rebase-b755073-ikat-to-kg.ts",
         "worker:bg-jobs": "node scripts/run-bg-worker.mjs",
         "execution:worker": "node scripts/ensure-node-version.mjs && node scripts/run-execution-worker.mjs",

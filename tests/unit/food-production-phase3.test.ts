@@ -13,7 +13,7 @@ import {
   AKG_PROFILES,
   AKG_COMPLIANCE_MIN_PCT,
 } from '@/lib/food-production/nutrition';
-import { resolveTkpiCodeByProductName } from '@/lib/food-production/tkpi-catalog';
+import { resolveTkpiCodeByProductName, suggestTkpiMatches, searchTkpiFoods, tkpiPickerQuery } from '@/lib/food-production/tkpi-catalog';
 import { DEFAULT_PCT_KECIL, computeQtyKecil } from '@/lib/food-production/recipe';
 import {
   analyzeRecipeStandardCost,
@@ -118,6 +118,31 @@ describe('food-production phase 3', () => {
     expect(analyzed.missingProductIds).toHaveLength(0);
     expect(analyzed.perPorsi.energiKcal).toBeGreaterThan(0);
     expect(analyzed.warnings.some((w) => /PACK/.test(w))).toBe(true);
+  });
+
+  it('suggestTkpiMatches returns top TKPI hits including ties (Apel Fuji, Durian)', () => {
+    const apel = suggestTkpiMatches('Apel Fuji Premium', 3);
+    expect(apel[0]?.kode).toBe('ER004');
+    expect(apel[0]?.nama).toBe('Apel, segar');
+    expect(apel[1]?.kode).toBe('ER003');
+    expect(apel[1]?.nama).toBe('Apel malang, segar');
+    expect(apel.length).toBeGreaterThanOrEqual(2);
+
+    const durian = suggestTkpiMatches('Durian Kupas', 3);
+    expect(durian[0]?.kode).toBe('ER023');
+    expect(durian[0]?.nama).toBe('Durian, segar');
+
+    expect(suggestTkpiMatches('Kelengkeng', 3)).toEqual([]);
+  });
+
+  it('searchTkpiFoods jagung returns many ranked variants for the recipe picker', () => {
+    expect(tkpiPickerQuery('Jagung manis')).toBe('jagung');
+    expect(tkpiPickerQuery('B175812 Jagung manis')).toBe('jagung');
+    const hits = searchTkpiFoods('jagung', 80);
+    expect(hits.length).toBeGreaterThan(5);
+    expect(hits.some((h) => /jagung muda/i.test(h.nama))).toBe(true);
+    expect(hits.some((h) => /tepung jagung|jagung kuning, tepung/i.test(h.nama))).toBe(true);
+    expect(hits[0]?.nama.toLowerCase().startsWith('jagung')).toBe(true);
   });
 
   it('analyzes recipe nutrition per porsi + AKG pct', () => {

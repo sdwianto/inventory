@@ -84,6 +84,8 @@ storage/media/
 # Review Excel master produk (bisa berisi data tenant)
 docs/konversi/Review-Recipe-Bridge.xlsx
 docs/konversi/Review-Recipe-Bridge*.xlsx
+docs/akg/Review-Mapping-Produk-TKPI.xlsx
+docs/akg/Review-Mapping-Produk-TKPI*.xlsx
 
 # Mobile development
 android-sdk/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node

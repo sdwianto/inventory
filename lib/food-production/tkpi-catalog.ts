@@ -30,6 +30,106 @@ const NAME_STOP = new Set([
 
 export type TkpiResolveVia = 'code' | 'alias' | 'search';
 
+export type TkpiMatchSuggestion = {
+  kode: string;
+  nama: string;
+  kelompok?: string;
+  energiKcal: number;
+  score: number;
+  via: 'alias' | 'search';
+};
+
+function tokenizeProductNama(nama: string): string[] {
+  return String(nama || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !NAME_STOP.has(t) && !/^[a-z]{0,3}\d{4,}$/.test(t));
+}
+
+/** Token pertama untuk dialog pilih TKPI (Jagung manis → jagung). */
+export function tkpiPickerQuery(nama: string): string {
+  const tokens = tokenizeProductNama(nama);
+  if (tokens[0]) return tokens[0];
+  const first = String(nama || '').trim().toLowerCase().split(/\s+/).find((t) => t.length > 1);
+  return first || '';
+}
+
+function scoreTkpiNama(tkpiNama: string, tokens: string[]): number {
+  if (!tokens.length) return 0;
+  const hay = tkpiNama.toLowerCase();
+  const first = tokens[0];
+  if (!hay.includes(first)) return 0;
+  let score = 5;
+  if (hay.startsWith(first)) score += 10;
+  const extra = tokens.slice(1);
+  const extraInName = extra.filter((t) => hay.includes(t));
+  if (extra.length && extraInName.length === extra.length) score += 20;
+  else score += extraInName.length * 4;
+  const extrasAreBrand = extra.length > 0 && extraInName.length === 0;
+  const genericSegar = hay === `${first}, segar` || hay === first;
+  if (genericSegar) score += extrasAreBrand || extra.length === 0 ? 15 : 8;
+  return score;
+}
+
+/**
+ * Top-N TKPI suggestions for review Excel (ties allowed).
+ * Tidak menulis DB — beda dengan resolveTkpiCodeByProductName yang menolak seri.
+ */
+export function suggestTkpiMatches(nama: string, limit = 3): TkpiMatchSuggestion[] {
+  const cap = Math.min(5, Math.max(1, Number(limit) || 3));
+  const raw = String(nama || '').trim();
+  if (!raw) return [];
+
+  const out: TkpiMatchSuggestion[] = [];
+  const used = new Set<string>();
+
+  for (const a of TKPI_PRODUCT_ALIASES) {
+    if (!a.match.test(raw)) continue;
+    const row = getTkpiFood(a.kode);
+    if (!row) continue;
+    out.push({
+      kode: row.kode,
+      nama: row.nama,
+      kelompok: row.kelompok,
+      energiKcal: row.energiKcal,
+      score: 1000,
+      via: 'alias',
+    });
+    used.add(row.kode.toUpperCase());
+    break;
+  }
+
+  const tokens = tokenizeProductNama(raw);
+  if (tokens.length) {
+    const first = tokens[0];
+    const scored: TkpiMatchSuggestion[] = [];
+    for (const row of loadTkpiFoods()) {
+      if (used.has(row.kode.toUpperCase())) continue;
+      const hay = `${row.kode} ${row.nama}`.toLowerCase();
+      if (!hay.includes(first)) continue;
+      const score = scoreTkpiNama(row.nama, tokens);
+      if (score < 5) continue;
+      scored.push({
+        kode: row.kode,
+        nama: row.nama,
+        kelompok: row.kelompok,
+        energiKcal: row.energiKcal,
+        score,
+        via: 'search',
+      });
+    }
+    scored.sort((a, b) => b.score - a.score || a.nama.localeCompare(b.nama, 'id'));
+    for (const hit of scored) {
+      if (out.length >= cap) break;
+      out.push(hit);
+    }
+  }
+
+  return out.slice(0, cap);
+}
+
 export function resolveTkpiCodeByProductName(nama: string): { kode: string; via: 'alias' | 'search' } | null {
   const raw = String(nama || '').trim();
   if (!raw) return null;
@@ -37,11 +137,7 @@ export function resolveTkpiCodeByProductName(nama: string): { kode: string; via:
     if (a.match.test(raw)) return { kode: a.kode, via: 'alias' };
   }
 
-  const tokens = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length > 2 && !NAME_STOP.has(t));
+  const tokens = tokenizeProductNama(raw);
   if (!tokens.length) return null;
 
   // Coba frasa bertingkat: full → tanpa token terakhir
@@ -93,17 +189,22 @@ export function getTkpiFood(kode: string): TkpiFoodRow | null {
 
 export function searchTkpiFoods(q: string, limit = 40): TkpiFoodRow[] {
   const needle = String(q || '').trim().toLowerCase();
+  const cap = Math.min(100, Math.max(1, Number(limit) || 40));
   const all = loadTkpiFoods();
-  if (!needle) return all.slice(0, limit);
-  const out: TkpiFoodRow[] = [];
-  for (const row of all) {
+  if (!needle) return all.slice(0, cap);
+  const hits = all.filter((row) => {
     const hay = `${row.kode} ${row.nama} ${row.kelompok || ''}`.toLowerCase();
-    if (hay.includes(needle)) {
-      out.push(row);
-      if (out.length >= limit) break;
-    }
-  }
-  return out;
+    return hay.includes(needle);
+  });
+  hits.sort((a, b) => {
+    const an = a.nama.toLowerCase();
+    const bn = b.nama.toLowerCase();
+    const aStart = an.startsWith(needle) ? 0 : 1;
+    const bStart = bn.startsWith(needle) ? 0 : 1;
+    if (aStart !== bStart) return aStart - bStart;
+    return an.localeCompare(bn, 'id');
+  });
+  return hits.slice(0, cap);
 }
 
 export function akgProfilesRecord(): Record<string, NutritionTotals> {
