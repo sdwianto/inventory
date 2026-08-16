@@ -3,9 +3,9 @@
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
   splitPorsiByKategoriFamily,
+  recipeQtyForFamily,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
-import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import {
   ceilProcurementQty,
   computeRecipeLineContributions,
@@ -15,6 +15,7 @@ import {
 import {
   applyRecipeBufferQty,
   materialExcludedSet,
+  materialOverrideSatuanMap,
   materialOverridesMap,
   resolvePlanLineRecipeSlots,
   type PlanMaterialOverride,
@@ -44,6 +45,8 @@ export type RencanaKebutuhanPlanInput = {
   kategoriPorsiList?: string[];
   materialOverrides?: PlanMaterialOverride[];
   recipeBufferPct?: Record<string, number>;
+  /** Acuan porsi dapur rencana ini — jangan campur dapur filter sidebar. */
+  acuanByKategori?: Partial<Record<string, number>> | null;
   lines: Array<{
     menuId?: string;
     menuKode?: string;
@@ -74,6 +77,7 @@ export function buildRencanaKebutuhanLines(input: {
   for (const plan of input.plans) {
     if (plan.status === 'CANCELLED') continue;
     const overrideQtyByKey = materialOverridesMap(plan.materialOverrides);
+    const overrideSatuanByKey = materialOverrideSatuanMap(plan.materialOverrides);
     const excludedKeys = materialExcludedSet(plan.materialOverrides);
     for (const planLine of plan.lines || []) {
       const resolved = resolvePlanLineRecipeSlots(planLine, input.menusById);
@@ -87,7 +91,8 @@ export function buildRencanaKebutuhanLines(input: {
       const kpList = planLine.kategoriPorsiList?.length
         ? planLine.kategoriPorsiList
         : (plan.kategoriPorsiList || []);
-      const split = splitPorsiByKategoriFamily(kpList, targetPorsi, input.acuanByKategori);
+      const acuan = plan.acuanByKategori ?? input.acuanByKategori;
+      const split = splitPorsiByKategoriFamily(kpList, targetPorsi, acuan);
 
       for (const slot of resolved.slots) {
         const recipe = input.recipesById.get(slot.recipeId);
@@ -107,6 +112,7 @@ export function buildRencanaKebutuhanLines(input: {
           porsiKecil: split.porsiKecil,
           excludedKeys,
           overrideQtyByKey,
+          overrideSatuanByKey,
           recipeBufferPct: plan.recipeBufferPct,
         });
         for (const c of contributions) {
@@ -136,7 +142,7 @@ export function buildRencanaKebutuhanLines(input: {
   }
 
   const lines = [...acc.values()]
-    .map((line) => ({ ...line, qty: ceilProcurementQty(line.qty) }))
+    .map((line) => ({ ...line, qty: ceilProcurementQty(line.qty, line.satuan) }))
     .filter((line) => line.qty > 0)
     .sort((a, b) =>
       String(a.productNama || a.productKode || a.productId)
@@ -145,7 +151,52 @@ export function buildRencanaKebutuhanLines(input: {
   return { lines, errors: [...new Set(errors)] };
 }
 
-/** Qty bahan untuk satu resep pada target porsi (dual besar/kecil). */
+function fmtNeedQty(n: number): string {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '0';
+  const rounded = Math.round((x + Number.EPSILON) * 1e6) / 1e6;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return String(rounded).replace('.', ',');
+}
+
+/** `1 PCS × 500 porsi / 500 hasil = 1 PCS` */
+export function formatRecipeNeedFormula(input: {
+  qtyResep: number;
+  satuan?: string;
+  porsiRencana: number;
+  yieldQty: number;
+  qtyHasil: number;
+}): string {
+  const sat = String(input.satuan || '').trim();
+  const satPart = sat ? ` ${sat}` : '';
+  const yieldQty = Number(input.yieldQty) > 0 ? Number(input.yieldQty) : 1;
+  return `${fmtNeedQty(input.qtyResep)}${satPart} × ${fmtNeedQty(input.porsiRencana)} porsi / ${fmtNeedQty(yieldQty)} hasil = ${fmtNeedQty(input.qtyHasil)}${satPart}`;
+}
+
+export function recipeYieldOneWarning(yieldQty: number, porsiRencana: number): string | null {
+  const y = Number(yieldQty) > 0 ? Number(yieldQty) : 1;
+  const p = Number(porsiRencana) || 0;
+  if (y <= 1 && p > 1) {
+    return 'Hasil resep 1 porsi — kebutuhan = qty × porsi rencana. Ubah Hasil di master resep jika qty bahan dimaksud untuk satu batch besar.';
+  }
+  return null;
+}
+
+export type RecipeIngredientNeedRow = {
+  productId: string;
+  productKode?: string;
+  productNama?: string;
+  satuan?: string;
+  qty: number;
+  qtyBesarPart?: number;
+  qtyKecilPart?: number;
+  qtyResepBesar: number;
+  yieldQty: number;
+  porsiRencana: number;
+  formula: string;
+};
+
+/** Qty bahan untuk satu resep pada target porsi (dual besar/kecil), tampil satuan dapur. */
 export function recipeIngredientNeeds(input: {
   recipe: {
     yieldQty?: number;
@@ -158,20 +209,13 @@ export function recipeIngredientNeeds(input: {
   acuanByKategori?: Partial<Record<string, number>> | null;
   /** Buffer persen (mis. 3) — diterapkan ke qty hitungan. */
   bufferPct?: number;
-}): Array<{
-  productId: string;
-  productKode?: string;
-  productNama?: string;
-  satuan?: string;
-  qty: number;
-  qtyBesarPart?: number;
-  qtyKecilPart?: number;
-}> {
+}): RecipeIngredientNeedRow[] {
   const menuFactor = Number(input.recipePerMenuPorsi) || 1;
   const bufferPct = Number(input.bufferPct) || 0;
+  const porsiRencana = Number(input.menuTargetPorsi) || 0;
   const split = splitPorsiByKategoriFamily(
     input.kategoriPorsiList,
-    Number(input.menuTargetPorsi) || 0,
+    porsiRencana,
     input.acuanByKategori,
   );
   const porsiBesarNeeded = split.porsiBesar * menuFactor;
@@ -180,29 +224,48 @@ export function recipeIngredientNeeds(input: {
   const wastePct = Number(input.recipe.wastePct) || 0;
   return (input.recipe.lines || [])
     .map((rLine) => {
+      const kitchenSatuan = rLine.satuan || rLine.baseSatuan;
+      const qtyResepBesar = recipeQtyForFamily(rLine, 'BESAR');
+      const qtyResepKecil = recipeQtyForFamily(rLine, 'KECIL');
       const qtyBesarPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
-        recipeBaseQtyForFamily(rLine, 'BESAR'),
+        qtyResepBesar,
         porsiBesarNeeded,
         yieldQty,
         wastePct,
       ), bufferPct));
       const qtyKecilPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
-        recipeBaseQtyForFamily(rLine, 'KECIL'),
+        qtyResepKecil,
         porsiKecilNeeded,
         yieldQty,
         wastePct,
       ), bufferPct));
-      // Qty input rencana = bilangan bulat ke atas (pengadaan tidak pakai pecahan).
-      // Breakdown besar/kecil tetap pecahan untuk transparansi hitungan.
-      const qty = ceilProcurementQty(qtyBesarPart + qtyKecilPart);
+      const qtyExact = qtyBesarPart + qtyKecilPart;
+      const qty = ceilProcurementQty(qtyExact, kitchenSatuan);
+      const satPart = String(kitchenSatuan || '').trim();
+      let formula: string;
+      if (porsiBesarNeeded > 0 && porsiKecilNeeded > 0) {
+        formula = `${fmtNeedQty(qtyBesarPart)}${satPart ? ` ${satPart}` : ''} besar + ${fmtNeedQty(qtyKecilPart)}${satPart ? ` ${satPart}` : ''} kecil = ${fmtNeedQty(qtyExact)}${satPart ? ` ${satPart}` : ''}`;
+      } else {
+        formula = formatRecipeNeedFormula({
+          qtyResep: porsiKecilNeeded > 0 ? qtyResepKecil : qtyResepBesar,
+          satuan: kitchenSatuan,
+          porsiRencana,
+          yieldQty,
+          qtyHasil: roundQty(qtyExact),
+        });
+      }
       return {
         productId: rLine.productId,
         productKode: rLine.productKode,
         productNama: rLine.productNama,
-        satuan: rLine.baseSatuan || rLine.satuan,
+        satuan: kitchenSatuan,
         qty,
         qtyBesarPart,
         qtyKecilPart,
+        qtyResepBesar,
+        yieldQty,
+        porsiRencana,
+        formula,
       };
     })
     .filter((l) => l.qty > 0);

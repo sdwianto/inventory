@@ -13,12 +13,14 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { isIngredientRole } from '@/lib/food-production/item-role';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
-import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2, ListChecks } from 'lucide-react';
 import { str } from '@/types/json';
 import {
   DEFAULT_PCT_KECIL,
   computeQtyKecil,
   clampPctKecil,
+  isFullPortionProduct,
+  portionExceptionMatchSet,
 } from '@/lib/food-production/recipe';
 import {
   defaultKitchenSatuan,
@@ -207,6 +209,15 @@ export default function FoodProductionRecipePage() {
   const [lines, setLines] = useState<RecipeLineForm[]>([emptyLine()]);
   const [gambarPhotos, setGambarPhotos] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
+  const [exceptionOpen, setExceptionOpen] = useState(false);
+  const [exceptions, setExceptions] = useState<Array<{
+    id: string;
+    productId: string;
+    productKode?: string;
+    productNama?: string;
+  }>>([]);
+  const [exceptionSaving, setExceptionSaving] = useState(false);
+  const [exceptionPickerKey, setExceptionPickerKey] = useState(0);
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<{
     summary?: { recipes: number; ready: number; blocked: number; productsAvailable?: number };
@@ -233,17 +244,27 @@ export default function FoodProductionRecipePage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rRes, pRes, kRes] = await Promise.all([
+      const [rRes, pRes, kRes, eRes] = await Promise.all([
         fetch('/api/recipes', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/products?limit=200&enrichUom=0', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/recipes?nextKode=1', { headers: { ...actingTenantHeaders() } }),
+        fetch('/api/recipe-portion-exceptions', { headers: { ...actingTenantHeaders() } }),
       ]);
       const rData = await rRes.json();
       const pData = await pRes.json();
       const kData = await kRes.json();
+      const eData = await eRes.json();
       if (!rRes.ok) throw new Error(rData?.error || 'Gagal memuat resep');
       setRows(Array.isArray(rData) ? rData : []);
       if (kRes.ok && kData?.kode) setNextKode(String(kData.kode));
+      if (eRes.ok && Array.isArray(eData)) {
+        setExceptions(eData.map((row: Record<string, unknown>) => ({
+          id: String(row.id),
+          productId: String(row.productId),
+          productKode: row.productKode != null ? String(row.productKode) : undefined,
+          productNama: row.productNama != null ? String(row.productNama) : undefined,
+        })));
+      }
       const list = Array.isArray(pData)
         ? pData
         : (Array.isArray(pData?.items) ? pData.items : (Array.isArray(pData?.data) ? pData.data : []));
@@ -295,6 +316,59 @@ export default function FoodProductionRecipePage() {
     },
     [],
   );
+
+  const exceptionKeys = useMemo(
+    () => portionExceptionMatchSet(exceptions),
+    [exceptions],
+  );
+
+  function productIsFullPortion(productId: string, kode?: string): boolean {
+    return isFullPortionProduct({ productId, productKode: kode }, exceptionKeys);
+  }
+
+  async function addPortionException(productId: string) {
+    if (!productId || exceptionSaving) return;
+    if (exceptions.some((e) => e.productId === productId)) {
+      toast.message('Produk sudah di daftar pengecualian');
+      return;
+    }
+    setExceptionSaving(true);
+    try {
+      const res = await fetch('/api/recipe-portion-exceptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({ productId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal menambah pengecualian');
+      toast.success('Item tetap 100% untuk porsi kecil');
+      setExceptionPickerKey((k) => k + 1);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menambah pengecualian');
+    } finally {
+      setExceptionSaving(false);
+    }
+  }
+
+  async function removePortionException(id: string) {
+    if (exceptionSaving) return;
+    setExceptionSaving(true);
+    try {
+      const res = await fetch(`/api/recipe-portion-exceptions/${id}`, {
+        method: 'DELETE',
+        headers: { ...actingTenantHeaders() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal menghapus');
+      toast.success('Pengecualian dihapus');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menghapus');
+    } finally {
+      setExceptionSaving(false);
+    }
+  }
 
   const namaSuggestions = useMemo(() => {
     if (editing) return [];
@@ -426,7 +500,9 @@ export default function FoodProductionRecipePage() {
           productId: l.productId,
           qtyBesar: Number(l.qtyBesar),
           qty: Number(l.qtyBesar),
-          pctKecil: clampPctKecil(l.pctKecil),
+          pctKecil: productIsFullPortion(l.productId, products.find((p) => p.id === l.productId)?.kode)
+            ? 100
+            : clampPctKecil(l.pctKecil),
           satuan: l.satuan || undefined,
           notes: l.notes.trim() || undefined,
         })),
@@ -604,6 +680,14 @@ export default function FoodProductionRecipePage() {
             <FileUp className="h-4 w-4 mr-1" />
             Import bank
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setExceptionOpen(true)}
+          >
+            <ListChecks className="h-4 w-4 mr-1" />
+            Pengecualian porsi
+          </Button>
           <Button size="sm" onClick={openCreate}>
             <Plus className="h-4 w-4 mr-1" />
             Tambah Resep
@@ -701,6 +785,9 @@ export default function FoodProductionRecipePage() {
                 value={form.yieldQty}
                 onChange={(e) => setForm((f) => ({ ...f, yieldQty: e.target.value }))}
               />
+              <p className="text-xs text-muted-foreground">
+                Qty bahan diisi untuk satu batch = Hasil. RPN akan mengalikan (porsi rencana / Hasil).
+              </p>
             </div>
             <div className="space-y-1 sm:col-span-2" ref={namaWrapRef}>
               <Label>Nama Resep *</Label>
@@ -828,11 +915,14 @@ export default function FoodProductionRecipePage() {
               </div>
               <div className="divide-y">
                 {lines.map((line, idx) => {
-                  const qtyKecilPreview = computeQtyKecil(
-                    Number(line.qtyBesar) || 0,
-                    clampPctKecil(line.pctKecil),
-                  );
                   const product = products.find((p) => p.id === line.productId);
+                  const fullPortion = productIsFullPortion(line.productId, product?.kode);
+                  const qtyKecilPreview = fullPortion
+                    ? (Number(line.qtyBesar) || 0)
+                    : computeQtyKecil(
+                      Number(line.qtyBesar) || 0,
+                      clampPctKecil(line.pctKecil),
+                    );
                   const satuanOpts = kitchenOptsForProduct(product);
                   const preview = basePreview(
                     Number(line.qtyBesar) || 0,
@@ -880,6 +970,7 @@ export default function FoodProductionRecipePage() {
                                 : undefined,
                           };
                           const kitchenSatuan = defaultSatuanForProduct(picked) || str(p.satuan);
+                          const pct = productIsFullPortion(productId, picked.kode) ? '100' : undefined;
                           setLines((prev) => {
                             const existingIdx = prev.findIndex(
                               (l, i) => i !== idx && l.productId === productId,
@@ -893,6 +984,7 @@ export default function FoodProductionRecipePage() {
                                     ...l,
                                     qtyBesar: String((Number(l.qtyBesar) || 0) + addQty),
                                     satuan: l.satuan || kitchenSatuan,
+                                    ...(pct ? { pctKecil: pct } : {}),
                                   };
                                 })
                                 .filter((_, i) => i !== idx);
@@ -902,7 +994,7 @@ export default function FoodProductionRecipePage() {
                             return consolidateFormLines(
                               prev.map((l, i) => (
                                 i === idx
-                                  ? { ...l, productId, satuan: kitchenSatuan }
+                                  ? { ...l, productId, satuan: kitchenSatuan, ...(pct ? { pctKecil: pct } : {}) }
                                   : l
                               )),
                             );
@@ -934,12 +1026,17 @@ export default function FoodProductionRecipePage() {
                         min={1}
                         max={100}
                         step="any"
-                        value={line.pctKecil}
+                        value={fullPortion ? '100' : line.pctKecil}
+                        disabled={fullPortion}
                         aria-label={`Persen kecil baris ${idx + 1}`}
+                        title={fullPortion ? 'Pengecualian porsi: tetap 100%' : undefined}
                         onChange={(e) => setLines((prev) => prev.map((l, i) => (
                           i === idx ? { ...l, pctKecil: e.target.value } : l
                         )))}
                       />
+                      {fullPortion && (
+                        <span className="mt-0.5 block text-[10px] text-amber-800">Tetap 100%</span>
+                      )}
                     </div>
                     <div>
                       <span className="sm:hidden text-[11px] text-muted-foreground">Qty kecil</span>
@@ -1014,6 +1111,64 @@ export default function FoodProductionRecipePage() {
             >
               {saving ? 'Menyimpan…' : 'Simpan'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={exceptionOpen} onOpenChange={setExceptionOpen}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Pengecualian porsi kecil</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Item di daftar ini tidak dipotong % porsi kecil — qty kecil tetap 100% (sama dengan qty besar).
+            Contoh: telur, buah dihitung PCS.
+          </p>
+          <div className="space-y-2 py-1">
+            <Label className="text-xs">Tambah bahan</Label>
+            <ProductSearchSelect
+              key={exceptionPickerKey}
+              value=""
+              withWarehouseStock={false}
+              placeholder="Cari kode / nama bahan…"
+              filterProduct={filterIngredientProduct}
+              onChange={() => { /* pilih lewat onProductPick */ }}
+              onProductPick={(p) => {
+                const id = str(p.id);
+                if (id) void addPortionException(id);
+              }}
+            />
+            {exceptions.length === 0 && (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                Belum ada pengecualian.
+              </p>
+            )}
+            {exceptions.length > 0 && (
+            <div className="divide-y rounded-md border">
+              {exceptions.map((row) => (
+                <div key={row.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1">
+                    <span className="font-mono text-xs">{row.productKode || '—'}</span>
+                    <span className="ml-2 text-slate-700">{row.productNama || row.productId}</span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    disabled={exceptionSaving}
+                    onClick={() => void removePortionException(row.id)}
+                    aria-label={`Hapus ${row.productKode || row.productId}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExceptionOpen(false)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

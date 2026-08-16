@@ -133,6 +133,13 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'recipes', index: { tenantId: 1, nama: 1 }, name: 'idx_recipes_tenant_nama' },
   { collection: 'recipes', index: { tenantId: 1, id: 1 }, name: 'idx_recipes_tenant_id' },
   { collection: 'recipes', index: { tenantId: 1, kode: 1, version: 1 }, name: 'uniq_recipes_tenant_kode_ver', unique: true },
+  { collection: 'recipe_portion_exceptions', index: { tenantId: 1, id: 1 }, name: 'idx_rpe_tenant_id' },
+  {
+    collection: 'recipe_portion_exceptions',
+    index: { tenantId: 1, productId: 1 },
+    name: 'uniq_rpe_tenant_product',
+    unique: true,
+  },
   { collection: 'menus', index: { tenantId: 1, nama: 1 }, name: 'idx_menus_tenant_nama' },
   { collection: 'menus', index: { tenantId: 1, id: 1 }, name: 'idx_menus_tenant_id' },
   { collection: 'menus', index: { tenantId: 1, kode: 1, version: 1 }, name: 'uniq_menus_tenant_kode_ver', unique: true },

@@ -113,8 +113,8 @@ describe('recipe-uom pipeline (aktual)', () => {
       recipePerMenuPorsi: 1,
       kategoriPorsiList: ['PORSI_BESAR'],
     });
-    expect(needs[0].qty).toBe(1); // ceil(0.3)
-    expect(needs[0].satuan).toBe('KG');
+    expect(needs[0].qty).toBe(300);
+    expect(needs[0].satuan).toBe('GR');
 
     const cost = analyzeRecipeStandardCost({
       recipe: {

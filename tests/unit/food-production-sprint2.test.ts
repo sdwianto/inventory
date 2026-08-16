@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeRecipeLines } from '@/lib/food-production/recipe';
+import { normalizeRecipeLines, applyFullPortionExceptions, computeQtyKecil } from '@/lib/food-production/recipe';
 import { normalizeMenuItems } from '@/lib/food-production/menu';
 import {
   ITEM_ROLES_UI,
@@ -85,6 +85,33 @@ describe('food-production sprint 2', () => {
       [{ productId: 'fg1', qty: 1 }],
       { finishedGoodProductId: 'fg1' },
     )).toEqual({ error: expect.stringMatching(/barang jadi/i) });
+  });
+
+  it('full-portion exceptions keep qty kecil = qty besar', () => {
+    const line = {
+      productId: 'telur',
+      productKode: 'B203740',
+      qty: 500,
+      qtyBesar: 500,
+      pctKecil: 70,
+      qtyKecil: 350,
+      qtyBaseBesar: 500,
+      qtyBaseKecil: 350,
+    };
+    expect(computeQtyKecil(500, 70)).toBe(350);
+
+    const unchanged = applyFullPortionExceptions([line], new Set());
+    expect(unchanged[0].qtyKecil).toBe(350);
+    expect(unchanged[0].pctKecil).toBe(70);
+
+    const byId = applyFullPortionExceptions([line], new Set(['telur']));
+    expect(byId[0].pctKecil).toBe(100);
+    expect(byId[0].qtyKecil).toBe(500);
+    expect(byId[0].qtyBaseKecil).toBe(500);
+
+    const byKode = applyFullPortionExceptions([line], new Set(['B203740']));
+    expect(byKode[0].qtyKecil).toBe(500);
+    expect(byKode[0].pctKecil).toBe(100);
   });
 
   it('normalizes recipe nama as identity', async () => {

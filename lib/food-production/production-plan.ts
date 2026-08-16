@@ -119,6 +119,14 @@ export interface ProductionPlanDoc {
    * Contoh: { [recipeId]: 3 } menambah 3% ke qty hitungan resep (bukan override manual).
    */
   recipeBufferPct?: Record<string, number>;
+  /**
+   * Hasil gabung: RPN sumber yang dilebur ke dokumen ini.
+   */
+  consolidatedFromIds?: string[];
+  consolidatedFromNos?: string[];
+  /** Sumber yang sudah dilebur ke RPN lain. */
+  consolidatedIntoId?: string;
+  consolidatedIntoNo?: string;
   status: ProductionPlanStatus;
   history: DocHistoryEntry[];
   catatan?: string;
@@ -222,6 +230,22 @@ export function materialOverridesMap(
     const key = materialOverrideKey(o.recipeId, o.productId);
     if (!key.startsWith('::') && !key.endsWith('::')) {
       map.set(key, Number(o.qty) || 0);
+    }
+  }
+  return map;
+}
+
+/** Satuan override (dapur atau basis) — untuk konversi / deteksi override usang. */
+export function materialOverrideSatuanMap(
+  overrides: PlanMaterialOverride[] | undefined | null,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const o of overrides || []) {
+    if (o.excluded) continue;
+    const key = materialOverrideKey(o.recipeId, o.productId);
+    const sat = String(o.satuan || '').trim();
+    if (!key.startsWith('::') && !key.endsWith('::') && sat) {
+      map.set(key, sat);
     }
   }
   return map;
@@ -397,6 +421,118 @@ export function normalizePlanLines(raw: unknown): ProductionPlanLine[] | { error
 
 export function isPlanEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
+}
+
+/** Draft / Diajukan / Disetujui — boleh digabung selama belum ada stok keluar. */
+export const CONSOLIDATE_ELIGIBLE_STATUSES = new Set<string>([
+  'DRAFT',
+  'SUBMITTED',
+  'APPROVED',
+]);
+
+export function consolidateBlockedReason(status: string): string | null {
+  if (CONSOLIDATE_ELIGIBLE_STATUSES.has(status)) return null;
+  if (status === 'PROCESSING') return 'Sudah diproses — stok sudah keluar atau produksi jalan';
+  if (status === 'COMPLETED') return 'Rencana selesai tidak dapat digabung';
+  if (status === 'CANCELLED') return 'Rencana sudah dibatalkan';
+  return `Status ${status} tidak dapat digabung`;
+}
+
+export function mergeKategoriPorsiLists(
+  lists: Array<KategoriPorsi[] | undefined | null>,
+): KategoriPorsi[] {
+  const seen = new Set<KategoriPorsi>();
+  for (const list of lists) {
+    for (const k of list || []) {
+      if (isKategoriPorsi(k)) seen.add(k);
+    }
+  }
+  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((v) => seen.has(v));
+}
+
+/** Gabung baris resep/menu: kunci sama → jumlah porsi + union kategori. */
+export function mergeProductionPlanLines(
+  plans: Array<{ lines?: ProductionPlanLine[] }>,
+): ProductionPlanLine[] {
+  const acc = new Map<string, ProductionPlanLine>();
+  const order: string[] = [];
+  for (const plan of plans) {
+    for (const line of plan.lines || []) {
+      const key = planLineDedupeKey(line);
+      if (!key) continue;
+      const prev = acc.get(key);
+      if (!prev) {
+        acc.set(key, {
+          ...line,
+          targetPorsi: Number(line.targetPorsi) || 0,
+        });
+        order.push(key);
+        continue;
+      }
+      const kp = mergeKategoriPorsiLists([prev.kategoriPorsiList, line.kategoriPorsiList]);
+      const notes = [prev.notes, line.notes].filter(Boolean).join('; ') || undefined;
+      acc.set(key, {
+        recipeId: prev.recipeId || line.recipeId,
+        recipeKode: line.recipeKode || prev.recipeKode,
+        recipeNama: line.recipeNama || prev.recipeNama,
+        menuId: prev.menuId || line.menuId,
+        menuKode: line.menuKode || prev.menuKode,
+        menuNama: line.menuNama || prev.menuNama,
+        menuVersion: line.menuVersion ?? prev.menuVersion,
+        kategoriPorsiList: kp.length ? kp : prev.kategoriPorsiList,
+        targetPorsi: (Number(prev.targetPorsi) || 0) + (Number(line.targetPorsi) || 0),
+        notes,
+      });
+    }
+  }
+  return order.map((k) => acc.get(k)!);
+}
+
+export function mergeRecipeBufferPct(
+  maps: Array<Record<string, number> | undefined | null>,
+): Record<string, number> | undefined {
+  const out: Record<string, number> = {};
+  for (const map of maps) {
+    if (!map) continue;
+    for (const [id, pct] of Object.entries(map)) {
+      const n = Number(pct);
+      if (!id || !Number.isFinite(n) || n <= 0) continue;
+      out[id] = Math.max(out[id] || 0, Math.min(100, Math.round(n)));
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+export type ConsolidatePlanInput = {
+  id: string;
+  noDokumen?: string;
+  tanggal: string;
+  kitchenId: string;
+  status: string;
+};
+
+export function assertConsolidatePlans(
+  plans: ConsolidatePlanInput[],
+): { error: string } | { tanggal: string; kitchenId: string; ids: string[] } {
+  const ids = [...new Set(plans.map((p) => String(p.id || '').trim()).filter(Boolean))];
+  if (ids.length < 2) return { error: 'Pilih minimal 2 rencana untuk digabung' };
+  if (plans.length !== ids.length) return { error: 'Daftar rencana tidak lengkap atau duplikat' };
+
+  const tanggal = String(plans[0]?.tanggal || '').trim();
+  const kitchenId = String(plans[0]?.kitchenId || '').trim();
+  if (!tanggal || !kitchenId) return { error: 'Tanggal dan dapur wajib' };
+
+  for (const p of plans) {
+    if (String(p.tanggal || '').trim() !== tanggal) {
+      return { error: 'Rencana harus pada tanggal yang sama' };
+    }
+    if (String(p.kitchenId || '').trim() !== kitchenId) {
+      return { error: 'Rencana harus di dapur yang sama' };
+    }
+    const blocked = consolidateBlockedReason(p.status);
+    if (blocked) return { error: `${p.noDokumen || p.id}: ${blocked}` };
+  }
+  return { tanggal, kitchenId, ids };
 }
 
 export function totalTargetPorsi(lines: ProductionPlanLine[] | undefined): number {

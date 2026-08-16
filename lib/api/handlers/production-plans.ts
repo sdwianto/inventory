@@ -18,6 +18,10 @@ import {
   normalizeKategoriPorsiList,
   totalTargetPorsi,
   RECIPE_NEED_BUFFER_PCT,
+  assertConsolidatePlans,
+  mergeProductionPlanLines,
+  mergeKategoriPorsiLists,
+  mergeRecipeBufferPct,
   type ProductionPlanDoc,
   type ProductionPlanLine,
   type ProductionPlanStatus,
@@ -27,13 +31,14 @@ import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
 import {
   FP_DOC_TYPES,
+  FP_DOC_PREFIX,
   FP_DEFAULT_TRANSITIONS,
   assertStatusTransition,
   appendDocHistory,
   type DocHistoryEntry,
   type FpDocStatus,
 } from '@/lib/food-production/document';
-import { nextFpDocNumber } from '@/lib/food-production/document-number';
+import { nextDocNumber, nextFpDocNumber } from '@/lib/food-production/document-number';
 import { todayIsoDate } from '@/lib/food-production/recipe';
 import {
   MATERIAL_ISSUES_COLLECTION,
@@ -44,6 +49,15 @@ import {
   RESULT_OPEN_STATUSES,
   planCompleteGateMessage,
 } from '@/lib/food-production/production-result';
+import {
+  MATERIAL_REQUIREMENTS_COLLECTION,
+  isMrpEditable,
+} from '@/lib/food-production/material-requirement';
+import {
+  PURCHASE_REQUIREMENTS_COLLECTION,
+  PR_ACTIVE_STATUSES,
+} from '@/lib/food-production/purchase-requirement';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import type { HandlerContext } from '@/types/api/handler';
@@ -73,6 +87,7 @@ interface PlanBody extends Record<string, unknown> {
   clear?: boolean;
   bufferPct?: number | boolean;
   enabled?: boolean;
+  ids?: unknown;
 }
 
 async function enrichKitchen(
@@ -298,6 +313,236 @@ export async function handleProductionPlans({
       ...auditActor(auth),
     });
     return ok(projectPlan(doc as unknown as Record<string, unknown>));
+  }
+
+  // POST /production-plans/consolidate — gabung RPN dapur+tanggal yang sama
+  if (path[0] === 'production-plans' && path[1] === 'consolidate' && !path[2] && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const rawIds = Array.isArray(planBody.ids) ? planBody.ids : [];
+    const ids = [...new Set(rawIds.map((v) => String(v || '').trim()).filter(Boolean))];
+    if (ids.length < 2) return err('Pilih minimal 2 rencana untuk digabung', 400);
+
+    const found = await db.collection(PRODUCTION_PLANS_COLLECTION)
+      .find(withTenantFilter(scopeAuth, { id: { $in: ids } }))
+      .toArray() as unknown as ProductionPlanDoc[];
+    if (found.length !== ids.length) return err('Ada rencana yang tidak ditemukan', 404);
+
+    const byId = new Map(found.map((p) => [p.id, p]));
+    const ordered = ids.map((id) => byId.get(id)!).sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a.noDokumen).localeCompare(String(b.noDokumen));
+    });
+
+    const asserted = assertConsolidatePlans(ordered.map((p) => ({
+      id: p.id,
+      noDokumen: p.noDokumen,
+      tanggal: p.tanggal,
+      kitchenId: p.kitchenId,
+      status: p.status,
+    })));
+    if ('error' in asserted) return err(asserted.error, 400);
+
+    const tenantIds = [...new Set(ordered.map((p) => String(p.tenantId || '')))];
+    if (tenantIds.length !== 1) return err('Rencana harus dalam tenant yang sama', 400);
+
+    const sourceIds = ordered.map((p) => p.id);
+    const [blockingIssue, blockingResult, blockingPr, blockingMrp] = await Promise.all([
+      db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: { $in: sourceIds },
+          status: { $nin: ['CANCELLED'] },
+        }),
+        { projection: { productionPlanId: 1, noDokumen: 1, status: 1 } },
+      ),
+      db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: { $in: sourceIds },
+          status: { $nin: ['CANCELLED'] },
+        }),
+        { projection: { productionPlanId: 1, noDokumen: 1, status: 1 } },
+      ),
+      db.collection(PURCHASE_REQUIREMENTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: { $in: sourceIds },
+          status: { $in: ['DRAFT', ...PR_ACTIVE_STATUSES, 'COMPLETED'] },
+        }),
+        { projection: { productionPlanId: 1, noDokumen: 1, status: 1 } },
+      ),
+      db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: { $in: sourceIds },
+          status: { $nin: ['CANCELLED', 'DRAFT', 'SUBMITTED'] },
+        }),
+        { projection: { productionPlanId: 1, noDokumen: 1, status: 1 } },
+      ),
+    ]);
+    if (blockingIssue) {
+      return err(
+        `Tidak bisa gabung — ada pengeluaran stok ${String(blockingIssue.noDokumen || '')}`.trim(),
+        400,
+      );
+    }
+    if (blockingResult) {
+      return err(
+        `Tidak bisa gabung — ada hasil produksi ${String(blockingResult.noDokumen || '')}`.trim(),
+        400,
+      );
+    }
+    if (blockingPr) {
+      return err(
+        `Tidak bisa gabung — ada permintaan pembelian ${String(blockingPr.noDokumen || '')} yang masih aktif. Batalkan PR dulu.`,
+        400,
+      );
+    }
+    if (blockingMrp) {
+      return err(
+        `Tidak bisa gabung — MRP ${String(blockingMrp.noDokumen || '')} sudah ${String(blockingMrp.status)}. Batalkan MRP dulu.`,
+        400,
+      );
+    }
+
+    const mergedLinesRaw = mergeProductionPlanLines(ordered);
+    const tenantFilter = withTenantFilter(scopeAuth, {});
+    const lines = await enrichLines(db, tenantFilter, mergedLinesRaw, {
+      requireActive: true,
+      requireMenuItems: true,
+    });
+    if ('error' in lines) return err(lines.error, 400);
+    const normalized = normalizePlanLines(lines);
+    if ('error' in normalized) return err(normalized.error, 400);
+
+    const kategoriList = mergeKategoriPorsiLists(
+      ordered.map((p) => p.kategoriPorsiList?.length
+        ? p.kategoriPorsiList
+        : (p.kategoriPorsi ? [p.kategoriPorsi] : [])),
+    );
+    const fromLineKp = mergeKategoriPorsiLists(normalized.map((l) => l.kategoriPorsiList));
+    const headerKp = kategoriList.length ? kategoriList : fromLineKp;
+    if (!headerKp.length) return err('Minimal satu kategori porsi wajib dipilih', 400);
+
+    const recipeBufferPct = mergeRecipeBufferPct(ordered.map((p) => p.recipeBufferPct));
+    const sourceNos = ordered.map((p) => p.noDokumen);
+    const catatan = `Digabung dari ${sourceNos.join(', ')}`;
+    const tenantId = tenantIds[0];
+    const actor = actorFields(auth);
+    const first = ordered[0];
+
+    let created: ProductionPlanDoc;
+    try {
+      created = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const now = new Date();
+        const noDokumen = await nextDocNumber(
+          txDb,
+          tenantId,
+          FP_DOC_TYPES.PRODUCTION_PLAN,
+          FP_DOC_PREFIX[FP_DOC_TYPES.PRODUCTION_PLAN],
+          session,
+        );
+        const history: DocHistoryEntry[] = appendDocHistory([], {
+          at: now,
+          fromStatus: null,
+          toStatus: 'DRAFT',
+          userId: actor.userId,
+          userName: actor.userName,
+          note: catatan,
+        });
+        const doc: ProductionPlanDoc = {
+          id: uuidv4(),
+          tenantId,
+          noDokumen,
+          tanggal: asserted.tanggal,
+          kitchenId: asserted.kitchenId,
+          kitchenNama: first.kitchenNama,
+          kitchenWarehouseKode: first.kitchenWarehouseKode,
+          kategoriPorsi: headerKp[0],
+          kategoriPorsiList: headerKp,
+          lines: normalized,
+          ...(recipeBufferPct ? { recipeBufferPct } : {}),
+          consolidatedFromIds: sourceIds,
+          consolidatedFromNos: sourceNos,
+          status: 'DRAFT',
+          history,
+          catatan,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: actor.userId,
+          createdByName: actor.userName,
+        };
+        await txDb.collection(PRODUCTION_PLANS_COLLECTION).insertOne(doc, txOpts(session));
+
+        for (const src of ordered) {
+          const srcHistory = appendDocHistory(src.history, {
+            at: now,
+            fromStatus: src.status,
+            toStatus: 'CANCELLED',
+            userId: actor.userId,
+            userName: actor.userName,
+            note: `Digabung ke ${noDokumen}`,
+          });
+          await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id: src.id }),
+            {
+              $set: {
+                status: 'CANCELLED',
+                history: srcHistory,
+                consolidatedIntoId: doc.id,
+                consolidatedIntoNo: noDokumen,
+                updatedAt: now,
+              },
+            },
+            txOpts(session),
+          );
+        }
+
+        const draftMrps = await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION)
+          .find(withTenantFilter(scopeAuth, {
+            productionPlanId: { $in: sourceIds },
+            status: { $in: ['DRAFT', 'SUBMITTED'] },
+          }))
+          .toArray();
+        for (const mrp of draftMrps) {
+          if (!isMrpEditable(String(mrp.status || ''))) continue;
+          const mrpHistory = appendDocHistory(
+            Array.isArray(mrp.history) ? mrp.history : [],
+            {
+              at: now,
+              fromStatus: String(mrp.status || ''),
+              toStatus: 'CANCELLED',
+              userId: actor.userId,
+              userName: actor.userName,
+              note: `Dibatalkan karena RPN digabung ke ${noDokumen}`,
+            },
+          );
+          await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id: mrp.id }),
+            { $set: { status: 'CANCELLED', history: mrpHistory, updatedAt: now } },
+            txOpts(session),
+          );
+        }
+
+        return doc;
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Gagal menggabungkan rencana';
+      return err(msg, 500);
+    }
+
+    await writeAuditLog(db, {
+      tenantId,
+      action: 'PRODUCTION_PLAN_CONSOLIDATE',
+      entityType: 'production_plan',
+      entityId: created.id,
+      summary: `Gabung ${sourceNos.join(', ')} → ${created.noDokumen}`,
+      ...auditActor(auth),
+    });
+    return ok(projectPlan(created as unknown as Record<string, unknown>));
   }
 
   // GET /production-plans/:id

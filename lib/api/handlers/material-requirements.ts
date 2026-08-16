@@ -22,7 +22,7 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
-import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
+import { RECIPES_COLLECTION, applyFullPortionExceptions, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import {
   PORTION_TARGETS_COLLECTION,
@@ -47,6 +47,7 @@ import {
   type FpDocStatus,
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
+import { loadRecipePortionExceptionSet } from '@/lib/api/handlers/recipe-portion-exceptions';
 import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
@@ -147,6 +148,13 @@ async function buildExplosion(
       if (!line.productKode && p.kode != null) line.productKode = String(p.kode);
       if (!line.productNama && p.nama != null) line.productNama = String(p.nama);
       if (!line.satuan && p.satuan != null) line.satuan = String(p.satuan);
+    }
+  }
+
+  const exceptionKeys = await loadRecipePortionExceptionSet(db, tenantFilter);
+  if (exceptionKeys.size) {
+    for (const recipe of recipes) {
+      recipe.lines = applyFullPortionExceptions(recipe.lines, exceptionKeys);
     }
   }
 

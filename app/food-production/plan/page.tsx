@@ -11,6 +11,7 @@ import PrintPortal from '@/components/PrintPortal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
@@ -33,19 +34,29 @@ import {
   CalendarDays, Plus, Pencil, RefreshCw, Trash2, History,
   ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, ShoppingBag,
-  UtensilsCrossed, FileText, Printer,
+  UtensilsCrossed, FileText, Printer, Combine,
 } from 'lucide-react';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
-import { MRP_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-requirement';
+import {
+  ceilProcurementQty,
+  MRP_ELIGIBLE_PLAN_STATUSES,
+  procurementQtyStep,
+} from '@/lib/food-production/material-requirement';
+import { normalizeRecipeSatuan } from '@/lib/food-production/recipe-uom';
 import {
   KATEGORI_PORSI_OPTIONS,
   PLAN_STATUS_LABELS,
   RECIPE_NEED_BUFFER_PCT,
+  CONSOLIDATE_ELIGIBLE_STATUSES,
   kategoriPorsiListLabel,
   getRecipeBufferPct,
   isPlanEditable,
   materialOverrideKey,
   normalizeKategoriPorsiList,
+  summarizePlanLines,
+  mergeProductionPlanLines,
+  totalTargetPorsi,
+  consolidateBlockedReason,
   type KategoriPorsi,
   type PlanMaterialOverride,
   type ProductionPlanStatus,
@@ -64,6 +75,7 @@ import {
 import {
   buildRencanaKebutuhanLines,
   recipeIngredientNeeds,
+  recipeYieldOneWarning,
   type RencanaKebutuhanLine,
 } from '@/lib/food-production/rencana-kebutuhan';
 import { printDocument } from '@/lib/doc-print';
@@ -112,6 +124,10 @@ interface RecipeOpt {
     pctKecil?: number;
     qtyKecil?: number;
     satuan?: string;
+    qtyBaseBesar?: number;
+    qtyBaseKecil?: number;
+    factorToBase?: number;
+    baseSatuan?: string;
   }>;
 }
 
@@ -276,6 +292,9 @@ function FoodProductionPlanPageContent() {
   const [portionPanelOpen, setPortionPanelOpen] = useState(true);
   const [needsOpen, setNeedsOpen] = useState(false);
   const [needsPrinting, setNeedsPrinting] = useState(false);
+  const [consolidateOpen, setConsolidateOpen] = useState(false);
+  const [consolidateIds, setConsolidateIds] = useState<string[]>([]);
+  const [consolidating, setConsolidating] = useState(false);
   const [needsDoc, setNeedsDoc] = useState<{
     tanggal: string;
     kitchenLabel: string;
@@ -305,6 +324,9 @@ function FoodProductionPlanPageContent() {
   const [kitchenScopeTick, setKitchenScopeTick] = useState(0);
   /** Acuan porsi untuk tanggal/dapur di dialog (bisa beda dari panel kiri). */
   const [dialogTargets, setDialogTargets] = useState<PortionTargetMap>(() => emptyPortionTargets());
+  /** Acuan per tanggal+dapur rencana — jangan pakai filter sidebar untuk kartu RPN lain. */
+  const [acuanByPlanKey, setAcuanByPlanKey] = useState<Record<string, PortionTargetMap>>({});
+  const acuanFetchedRef = useRef<Set<string>>(new Set());
   const [planAkgProfile, setPlanAkgProfile] = useState('PORSI_KECIL');
   type AkgPerPorsi = {
     energiKcal: number;
@@ -465,6 +487,23 @@ function FoodProductionPlanPageContent() {
     }
   }, [month, filterStatus]);
 
+  const refreshRecipes = useCallback(async () => {
+    try {
+      const rRes = await fetch('/api/recipes', { headers: { ...actingTenantHeaders() } });
+      const rData = await rRes.json();
+      if (!rRes.ok) return;
+      const recipeMap: Record<string, RecipeOpt> = {};
+      if (Array.isArray(rData)) {
+        for (const r of rData as RecipeOpt[]) {
+          if (r?.id) recipeMap[r.id] = r;
+        }
+      }
+      setRecipesById(recipeMap);
+    } catch {
+      /* biarkan resep yang sudah ter-load */
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -474,6 +513,14 @@ function FoodProductionPlanPageContent() {
     window.addEventListener('fp-kitchen-changed', onKitchen);
     return () => window.removeEventListener('fp-kitchen-changed', onKitchen);
   }, [load]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void refreshRecipes();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshRecipes]);
 
   // Deep-link dari Laporan / Hasil: buka tanggal RPN terkait + expand baris.
   useEffect(() => {
@@ -546,13 +593,16 @@ function FoodProductionPlanPageContent() {
     if (!showAll && selectedDate) {
       list = list.filter((r) => dateKey(r.tanggal) === selectedDate);
     }
+    if (filterStatus !== 'CANCELLED') {
+      list = list.filter((r) => r.status !== 'CANCELLED');
+    }
     // Terbaru di atas: tanggal desc, lalu noDokumen desc (RPN…002 di atas …001).
     return [...list].sort((a, b) => {
       const d = String(b.tanggal).localeCompare(String(a.tanggal));
       if (d !== 0) return d;
       return String(b.noDokumen).localeCompare(String(a.noDokumen));
     });
-  }, [rows, selectedDate, showAll]);
+  }, [rows, selectedDate, showAll, filterStatus]);
 
   const listTitle = showAll || !selectedDate
     ? 'Semua rencana bulan ini'
@@ -582,6 +632,9 @@ function FoodProductionPlanPageContent() {
         ...(data?.targets || {}),
       } as PortionTargetMap;
       setPortionTargets(targets);
+      const key = `${dateKey(tanggal)}::${kitchenId}`;
+      acuanFetchedRef.current.add(key);
+      setAcuanByPlanKey((prev) => ({ ...prev, [key]: targets }));
       setPortionDraft({
         PORSI_BESAR: String(targets.PORSI_BESAR ?? 0),
         PORSI_KECIL: String(targets.PORSI_KECIL ?? 0),
@@ -596,6 +649,59 @@ function FoodProductionPlanPageContent() {
   useEffect(() => {
     void loadPortionTargets(selectedDate, scopeKitchenId);
   }, [loadPortionTargets, selectedDate, scopeKitchenId]);
+
+  function planAcuanKey(tanggal: string, kitchenId: string) {
+    return `${dateKey(tanggal)}::${kitchenId}`;
+  }
+
+  const ensurePlanAcuan = useCallback(async (tanggal: string, kitchenId: string) => {
+    const tgl = dateKey(tanggal);
+    const kid = String(kitchenId || '').trim();
+    if (!tgl || !kid) return;
+    const key = `${tgl}::${kid}`;
+    if (acuanFetchedRef.current.has(key)) return;
+    acuanFetchedRef.current.add(key);
+    try {
+      const qs = new URLSearchParams({ tanggal: tgl, kitchenId: kid });
+      const res = await fetch(`/api/portion-targets?${qs}`, {
+        headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        acuanFetchedRef.current.delete(key);
+        return;
+      }
+      const targets = {
+        ...emptyPortionTargets(),
+        ...(data?.targets || {}),
+      } as PortionTargetMap;
+      setAcuanByPlanKey((prev) => ({ ...prev, [key]: targets }));
+    } catch {
+      acuanFetchedRef.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const kid = String(row.kitchenId || '').trim();
+      const tgl = dateKey(row.tanggal);
+      if (!kid || !tgl) continue;
+      const key = `${tgl}::${kid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      void ensurePlanAcuan(row.tanggal, kid);
+    }
+  }, [rows, ensurePlanAcuan]);
+
+  function acuanForPlan(row: Pick<PlanRow, 'tanggal' | 'kitchenId'>): PortionTargetMap {
+    const key = planAcuanKey(row.tanggal, row.kitchenId);
+    if (acuanByPlanKey[key]) return acuanByPlanKey[key];
+    if (row.kitchenId === scopeKitchenId && dateKey(row.tanggal) === selectedDate) {
+      return portionTargets;
+    }
+    return emptyPortionTargets();
+  }
 
   useEffect(() => {
     const onKitchen = () => {
@@ -643,6 +749,9 @@ function FoodProductionPlanPageContent() {
         ...(data?.targets || targets),
       } as PortionTargetMap;
       setPortionTargets(saved);
+      const key = `${dateKey(selectedDate)}::${scopeKitchenId}`;
+      acuanFetchedRef.current.add(key);
+      setAcuanByPlanKey((prev) => ({ ...prev, [key]: saved }));
       setPortionDraft({
         PORSI_BESAR: String(saved.PORSI_BESAR ?? 0),
         PORSI_KECIL: String(saved.PORSI_KECIL ?? 0),
@@ -999,6 +1108,7 @@ function FoodProductionPlanPageContent() {
     const willOpen = !expandedRecipeKeys[key];
     setExpandedRecipeKeys((prev) => ({ ...prev, [key]: willOpen }));
     if (willOpen) {
+      void refreshRecipes();
       const recipe = recipesById[recipeId];
       const ids = (recipe?.lines || []).map((l) => l.productId).filter(Boolean);
       if (ids.length) void ensureIngredientStock(ids);
@@ -1021,6 +1131,15 @@ function FoodProductionPlanPageContent() {
     return (row.materialOverrides || []).find(
       (o) => o.recipeId === recipeId && o.productId === productId,
     ) || null;
+  }
+
+  function qtyOverrideApplies(ov: PlanMaterialOverride | null, kitchenSatuan?: string): boolean {
+    if (!ov || ov.excluded) return false;
+    if (!Number.isFinite(Number(ov.qty))) return false;
+    const ovSat = normalizeRecipeSatuan(ov.satuan);
+    const kitchen = normalizeRecipeSatuan(kitchenSatuan);
+    if (ovSat && kitchen && ovSat !== kitchen) return false;
+    return true;
   }
 
   async function toggleRecipeBuffer(row: PlanRow, recipeId: string, enabled: boolean) {
@@ -1096,8 +1215,8 @@ function FoodProductionPlanPageContent() {
           });
           return;
         }
-        // Kebutuhan belanja tidak pecahan — simpan bilangan bulat (ceil agar tidak kurang).
-        body.qty = Math.max(0, Math.ceil(qty - 1e-9));
+        // Pembulatan sesuai satuan dapur (GR utuh, KG 3 desimal) — jangan ceil 0,02 KG jadi 1 KG.
+        body.qty = ceilProcurementQty(qty, input.satuan);
         if (prev?.excluded) body.excluded = true;
       } else {
         return;
@@ -1138,13 +1257,15 @@ function FoodProductionPlanPageContent() {
       productNama?: string;
       satuan?: string;
       qty: number;
+      formula?: string;
     };
   }) {
     const { row, recipeId, ing } = input;
     const ov = getPlanOverride(row, recipeId, ing.productId);
     const excluded = ov?.excluded === true;
-    const hasQtyOverride = ov != null && !excluded && Number(ov.qty) !== Number(ing.qty);
-    const displayQty = ov != null && !excluded ? Number(ov.qty) : ing.qty;
+    const qtyOv = qtyOverrideApplies(ov, ing.satuan);
+    const hasQtyOverride = qtyOv && Number(ov!.qty) !== Number(ing.qty);
+    const displayQty = qtyOv ? Number(ov!.qty) : ing.qty;
     const draftKey = overrideDraftKey(row.id, recipeId, ing.productId);
     const canEditQty = canManage && isPlanEditable(row.status);
     const draftVal = qtyOverrideDraft[draftKey];
@@ -1162,6 +1283,11 @@ function FoodProductionPlanPageContent() {
         {!excluded && hasQtyOverride && (
           <span className="ml-1 block text-[9px] font-normal text-amber-700">diubah</span>
         )}
+        {!excluded && ing.formula ? (
+          <span className="mt-0.5 block text-[9px] font-normal leading-snug text-slate-500">
+            {ing.formula}
+          </span>
+        ) : null}
       </td>
     ) : (
       <td className="p-2 text-right" onClick={(e) => e.stopPropagation()}>
@@ -1170,8 +1296,8 @@ function FoodProductionPlanPageContent() {
             <Input
               type="number"
               min={0}
-              step={1}
-              inputMode="numeric"
+              step={procurementQtyStep(ing.satuan)}
+              inputMode="decimal"
               className={cn(
                 'h-7 w-[5.5rem] text-right tabular-nums text-xs px-1.5',
                 excluded && 'line-through text-slate-400 bg-slate-50',
@@ -1197,6 +1323,15 @@ function FoodProductionPlanPageContent() {
               onBlur={() => {
                 if (excluded) return;
                 const text = draftVal != null ? draftVal : String(displayQty);
+                const parsed = parseQtyInput(text);
+                if (Number.isFinite(parsed) && Math.abs(parsed - Number(displayQty)) < 1e-9) {
+                  setQtyOverrideDraft((prevDraft) => {
+                    const next = { ...prevDraft };
+                    delete next[draftKey];
+                    return next;
+                  });
+                  return;
+                }
                 void saveMaterialOverride({
                   row,
                   recipeId,
@@ -1225,7 +1360,7 @@ function FoodProductionPlanPageContent() {
               }}
               title={excluded
                 ? 'Item dicoret — aktifkan lagi untuk mengubah qty'
-                : 'Edit qty kebutuhan (bulat) — dipakai ke MRP/PO'}
+                : (ing.formula || 'Edit qty kebutuhan — dipakai ke MRP/PO')}
             />
             {ing.satuan ? (
               <span className={cn('text-[10px] text-slate-500', excluded && 'line-through')}>
@@ -1233,6 +1368,11 @@ function FoodProductionPlanPageContent() {
               </span>
             ) : null}
           </div>
+          {!excluded && ing.formula ? (
+            <span className="max-w-[14rem] text-right text-[9px] leading-snug text-slate-500">
+              {ing.formula}
+            </span>
+          ) : null}
           {!excluded && hasQtyOverride ? (
             <button
               type="button"
@@ -1355,6 +1495,7 @@ function FoodProductionPlanPageContent() {
               ? p.kategoriPorsiList
               : (p.kategoriPorsi ? [p.kategoriPorsi] : [])),
         })),
+        acuanByKategori: acuanForPlan(p),
       })),
       menusById: menusMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['menusById'],
       recipesById: recipesMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['recipesById'],
@@ -1595,6 +1736,51 @@ function FoodProductionPlanPageContent() {
     && lines.some((l) => l.recipeId && l.kategoriPorsiList.length > 0),
   );
   const dayPorsi = filteredList.reduce((s, r) => s + (Number(r.totalTargetPorsi) || 0), 0);
+  const dayPlansForConsolidate = !showAll && selectedDate ? filteredList : [];
+  const consolidateEligible = dayPlansForConsolidate.filter(
+    (r) => CONSOLIDATE_ELIGIBLE_STATUSES.has(r.status),
+  );
+  const canConsolidate = canManage && consolidateEligible.length >= 2;
+  const selectedToMerge = dayPlansForConsolidate.filter((r) => consolidateIds.includes(r.id));
+  const mergePreviewLines = mergeProductionPlanLines(selectedToMerge);
+  const mergePreviewPorsi = totalTargetPorsi(mergePreviewLines);
+  const mergeHasApproved = selectedToMerge.some((r) => r.status === 'APPROVED');
+
+  function openConsolidate() {
+    setConsolidateIds(consolidateEligible.map((r) => r.id));
+    setConsolidateOpen(true);
+  }
+
+  async function submitConsolidate() {
+    if (consolidating) return;
+    const ids = selectedToMerge
+      .filter((r) => CONSOLIDATE_ELIGIBLE_STATUSES.has(r.status))
+      .map((r) => r.id);
+    if (ids.length < 2) {
+      toast.error('Pilih minimal 2 rencana untuk digabung');
+      return;
+    }
+    setConsolidating(true);
+    try {
+      const res = await fetch('/api/production-plans/consolidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders(), ...actingKitchenHeaders() },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal menggabungkan rencana');
+      toast.success(
+        `Digabung menjadi ${data.noDokumen}. ${ids.length} rencana lama dibatalkan.`,
+      );
+      setConsolidateOpen(false);
+      await load();
+      if (data?.id) setExpandedId(data.id);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menggabungkan rencana');
+    } finally {
+      setConsolidating(false);
+    }
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -1765,6 +1951,16 @@ function FoodProductionPlanPageContent() {
                   {showAll ? 'Filter tanggal' : 'Lihat semua'}
                 </Button>
               )}
+              {selectedDate && canConsolidate && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openConsolidate}
+                  title="Gabung beberapa RPN menjadi satu rencana"
+                >
+                  <Combine className="w-3 h-3 mr-1" /> Gabung rencana
+                </Button>
+              )}
               {selectedDate && canManage && (
                 <Button
                   size="sm"
@@ -1907,7 +2103,7 @@ function FoodProductionPlanPageContent() {
                                     menuTargetPorsi: Number(l.targetPorsi) || 0,
                                     recipePerMenuPorsi: 1,
                                     kategoriPorsiList: lineKp,
-                                    acuanByKategori: portionTargets,
+                                    acuanByKategori: acuanForPlan(row),
                                     bufferPct,
                                   })
                                   : [];
@@ -1938,6 +2134,17 @@ function FoodProductionPlanPageContent() {
                                           <span className="ml-2 text-[10px] text-amber-700 font-medium">
                                             +{bufferPct}%
                                           </span>
+                                        )}
+                                        {recipeYieldOneWarning(
+                                          Number(recipe?.yieldQty) || 1,
+                                          Number(l.targetPorsi) || 0,
+                                        ) && (
+                                          <p className="mt-1 text-[10px] leading-snug text-amber-800">
+                                            {recipeYieldOneWarning(
+                                              Number(recipe?.yieldQty) || 1,
+                                              Number(l.targetPorsi) || 0,
+                                            )}
+                                          </p>
                                         )}
                                       </td>
                                       <td
@@ -2114,7 +2321,7 @@ function FoodProductionPlanPageContent() {
                                         menuTargetPorsi: Number(l.targetPorsi) || 0,
                                         recipePerMenuPorsi: Number(child.porsi) || 1,
                                         kategoriPorsiList: lineKp,
-                                        acuanByKategori: portionTargets,
+                                        acuanByKategori: acuanForPlan(row),
                                         bufferPct,
                                       })
                                       : [];
@@ -2154,6 +2361,17 @@ function FoodProductionPlanPageContent() {
                                                 <span className="ml-2 text-[10px] text-amber-700 font-medium">
                                                   +{bufferPct}%
                                                 </span>
+                                              )}
+                                              {recipeYieldOneWarning(
+                                                Number(recipe?.yieldQty) || 1,
+                                                Number(l.targetPorsi) || 0,
+                                              ) && (
+                                                <p className="mt-1 text-[10px] leading-snug text-amber-800">
+                                                  {recipeYieldOneWarning(
+                                                    Number(recipe?.yieldQty) || 1,
+                                                    Number(l.targetPorsi) || 0,
+                                                  )}
+                                                </p>
                                               )}
                                             </div>
                                           </td>
@@ -2572,6 +2790,94 @@ function FoodProductionPlanPageContent() {
           )}
         </div>
       </div>
+
+      <Dialog open={consolidateOpen} onOpenChange={setConsolidateOpen}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Gabung rencana</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            {selectedDate ? formatPlanDateLabel(selectedDate) : ''}
+            {dayPlansForConsolidate[0]?.kitchenNama
+              ? ` · ${dayPlansForConsolidate[0].kitchenNama}`
+              : ''}
+            {' · pilih RPN yang mau digabung'}
+          </p>
+          <div className="space-y-2 py-1">
+            {dayPlansForConsolidate.map((row) => {
+              const eligible = CONSOLIDATE_ELIGIBLE_STATUSES.has(row.status);
+              const blocked = eligible ? null : consolidateBlockedReason(row.status);
+              const checked = consolidateIds.includes(row.id);
+              return (
+                <label
+                  key={row.id}
+                  className={cn(
+                    'flex items-start gap-2 rounded-md border p-2 text-sm',
+                    !eligible && 'opacity-60',
+                    checked && eligible && 'border-orange-300 bg-orange-50/50',
+                  )}
+                >
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={checked}
+                    disabled={!eligible || consolidating}
+                    onCheckedChange={(v) => {
+                      const on = v === true;
+                      setConsolidateIds((prev) => {
+                        if (on) return prev.includes(row.id) ? prev : [...prev, row.id];
+                        return prev.filter((id) => id !== row.id);
+                      });
+                    }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-xs font-medium">{row.noDokumen}</span>
+                      <span className={cn(
+                        'rounded-full px-1.5 py-0 text-[10px]',
+                        PLAN_STATUS_BADGE[row.status] || 'bg-slate-100',
+                      )}>
+                        {PLAN_STATUS_LABELS[row.status] || row.status}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-slate-600">
+                      {summarizePlanLines(row.lines)} · {row.totalTargetPorsi ?? 0} porsi
+                    </span>
+                    {blocked && (
+                      <span className="mt-0.5 block text-[10px] text-amber-800">{blocked}</span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {selectedToMerge.length >= 2 && (
+            <p className="text-xs text-slate-600">
+              Hasil: {mergePreviewLines.length} resep · {mergePreviewPorsi} porsi
+            </p>
+          )}
+          {mergeHasApproved && (
+            <p className="text-xs text-amber-800">
+              Ada RPN Disetujui — hasil gabungan menjadi Draft dan perlu diajukan/disetujui lagi.
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={consolidating}
+              onClick={() => setConsolidateOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              className="bg-orange-500 hover:bg-orange-600"
+              disabled={consolidating || selectedToMerge.length < 2}
+              onClick={() => void submitConsolidate()}
+            >
+              {consolidating ? 'Menggabung…' : 'Gabung'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={open}

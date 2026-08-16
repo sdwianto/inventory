@@ -103,6 +103,66 @@ export function computeQtyKecil(qtyBesar: number, pctKecil: number): number {
   return Math.round((besar * pct / 100 + Number.EPSILON) * 1e6) / 1e6;
 }
 
+/** Kunci match pengecualian: productId dan/atau productKode. */
+export function portionExceptionMatchSet(
+  rows: Array<{ productId?: string; productKode?: string }>,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const id = String(row.productId || '').trim();
+    const kode = String(row.productKode || '').trim();
+    if (id) keys.add(id);
+    if (kode) keys.add(kode);
+  }
+  return keys;
+}
+
+export function isFullPortionProduct(
+  line: { productId?: string; productKode?: string },
+  keys: Set<string>,
+): boolean {
+  if (!keys.size) return false;
+  const id = String(line.productId || '').trim();
+  const kode = String(line.productKode || '').trim();
+  return Boolean((id && keys.has(id)) || (kode && keys.has(kode)));
+}
+
+/**
+ * Item di daftar pengecualian: porsi kecil = 100% (qty kecil = qty besar).
+ * Tidak mengubah baris yang tidak masuk daftar.
+ */
+export function applyFullPortionExceptions<T extends {
+  productId?: string;
+  productKode?: string;
+  qty?: number;
+  qtyBesar?: number;
+  qtyKecil?: number;
+  pctKecil?: number;
+  qtyBaseBesar?: number;
+  qtyBaseKecil?: number;
+}>(lines: T[] | undefined | null, keys: Set<string>): T[] {
+  const list = lines || [];
+  if (!keys.size) return list;
+  return list.map((line) => {
+    if (!isFullPortionProduct(line, keys)) return line;
+    const qtyBesar = Number(line.qtyBesar ?? line.qty) || 0;
+    const qtyBaseBesar = line.qtyBaseBesar;
+    const next: T = {
+      ...line,
+      pctKecil: 100,
+      qtyKecil: qtyBesar,
+    };
+    if (line.qtyBesar != null || line.qty != null) {
+      next.qty = qtyBesar;
+      next.qtyBesar = qtyBesar;
+    }
+    if (qtyBaseBesar != null && Number.isFinite(Number(qtyBaseBesar))) {
+      next.qtyBaseKecil = Number(qtyBaseBesar);
+    }
+    return next;
+  });
+}
+
 /** Resolve dual-qty fields from legacy or new payload. */
 export function resolveRecipeLineQtys(row: Record<string, unknown>): {
   qtyBesar: number;

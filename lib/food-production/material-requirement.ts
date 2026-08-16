@@ -5,7 +5,11 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
-import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
+import {
+  normalizeRecipeSatuan,
+  recipeBaseQtyForFamily,
+  recipeUomFamily,
+} from '@/lib/food-production/recipe-uom';
 import {
   splitPorsiByKategoriFamily,
   type RecipeDoc,
@@ -15,6 +19,7 @@ import {
   getRecipeBufferPct,
   materialExcludedSet,
   materialOverrideKey,
+  materialOverrideSatuanMap,
   materialOverridesMap,
   resolvePlanLineRecipeSlots,
   type ProductionPlanDoc,
@@ -47,6 +52,8 @@ export function computeRecipeLineContributions(input: {
   porsiKecil: number;
   excludedKeys: Set<string>;
   overrideQtyByKey: Map<string, number>;
+  /** Satuan qty override (dapur atau stok). Jika beda dengan resep, override diabaikan. */
+  overrideSatuanByKey?: Map<string, string>;
   recipeBufferPct?: Record<string, number>;
 }): RecipeLineContribution[] {
   const factor = Number(input.recipeFactor) || 1;
@@ -72,9 +79,19 @@ export function computeRecipeLineContributions(input: {
     const ovKey = materialOverrideKey(input.recipe.id, rLine.productId);
     if (input.excludedKeys.has(ovKey)) continue;
     const bufferPct = getRecipeBufferPct(input.recipeBufferPct, input.recipe.id);
-    const add = input.overrideQtyByKey.has(ovKey)
-      ? Number(input.overrideQtyByKey.get(ovKey)) || 0
-      : applyRecipeBufferQty(computed, bufferPct);
+    let add: number;
+    if (input.overrideQtyByKey.has(ovKey)) {
+      const resolved = resolveOverrideToBaseQty({
+        qty: Number(input.overrideQtyByKey.get(ovKey)) || 0,
+        satuan: input.overrideSatuanByKey?.get(ovKey),
+        line: rLine,
+      });
+      add = resolved == null
+        ? applyRecipeBufferQty(computed, bufferPct)
+        : resolved;
+    } else {
+      add = applyRecipeBufferQty(computed, bufferPct);
+    }
     if (!(add > 0)) continue;
     out.push({
       productId: rLine.productId,
@@ -191,13 +208,66 @@ export function roundQty(n: number, digits = 4): number {
 }
 
 /**
- * Qty belanja/pengadaan — selalu bilangan bulat ke atas (hindari pecahan di PO).
- * Epsilon kecil supaya 80.0000001 dari float tidak jadi 81.
+ * Qty belanja/pengadaan — ceil sesuai resolusi satuan.
+ * PCS/GR/ML: bilangan bulat. KG/L: 3 desimal (gram / ml) agar 24 GR tidak jadi 1 KG.
+ * Tanpa satuan: tetap ceil integer (kompatibilitas).
  */
-export function ceilProcurementQty(n: number): number {
+export function ceilProcurementQty(n: number, satuan?: string): number {
   const q = Number(n) || 0;
   if (!(q > 0)) return 0;
+  const s = normalizeRecipeSatuan(satuan);
+  const family = recipeUomFamily(s);
+  if (family === 'MASS' && (s === 'KG' || s === 'KILOGRAM')) {
+    return Math.ceil(q * 1000 - 1e-9) / 1000;
+  }
+  if (family === 'VOLUME' && (s === 'L' || s === 'LT' || s === 'LTR' || s === 'LITER')) {
+    return Math.ceil(q * 1000 - 1e-9) / 1000;
+  }
   return Math.ceil(q - 1e-9);
+}
+
+export function procurementQtyStep(satuan?: string): number {
+  const s = normalizeRecipeSatuan(satuan);
+  const family = recipeUomFamily(s);
+  if (family === 'MASS' && (s === 'KG' || s === 'KILOGRAM')) return 0.001;
+  if (family === 'VOLUME' && (s === 'L' || s === 'LT' || s === 'LTR' || s === 'LITER')) return 0.001;
+  return 1;
+}
+
+/**
+ * Override qty → satuan basis stok. `null` = override usang (satuan tidak cocok), pakai hitungan resep.
+ * - satuan dapur (GR) × factorToBase → KG
+ * - satuan stok sama dengan dapur → as-is
+ * - override KG sementara resep GR → abaikan (sisa ceil 1 PCS / 1 KG lama)
+ */
+export function resolveOverrideToBaseQty(input: {
+  qty: number;
+  satuan?: string | null;
+  line: {
+    satuan?: string;
+    baseSatuan?: string;
+    factorToBase?: number;
+  };
+}): number | null {
+  const qty = Number(input.qty);
+  if (!Number.isFinite(qty) || qty < 0) return null;
+  const ovSat = normalizeRecipeSatuan(input.satuan);
+  const kitchen = normalizeRecipeSatuan(input.line.satuan);
+  const base = normalizeRecipeSatuan(input.line.baseSatuan);
+  const factor = Number(input.line.factorToBase);
+
+  if (!ovSat) return qty;
+  if (kitchen && ovSat === kitchen) {
+    if (base && kitchen !== base && factor > 0 && Number.isFinite(factor)) {
+      return Math.round((qty * factor + Number.EPSILON) * 1e9) / 1e9;
+    }
+    return qty;
+  }
+  if (base && ovSat === base) {
+    if (kitchen && kitchen !== base) return null;
+    return qty;
+  }
+  return null;
 }
 
 /**
@@ -260,6 +330,7 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
   const acc = new Map<string, Acc>();
   const warnings: string[] = [];
   const overrideQtyByKey = materialOverridesMap(plan.materialOverrides);
+  const overrideSatuanByKey = materialOverrideSatuanMap(plan.materialOverrides);
   const excludedKeys = materialExcludedSet(plan.materialOverrides);
   if (overrideQtyByKey.size) {
     warnings.push(`${overrideQtyByKey.size} qty kebutuhan diubah manual di rencana`);
@@ -315,6 +386,7 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         porsiKecil: split.porsiKecil,
         excludedKeys,
         overrideQtyByKey,
+        overrideSatuanByKey,
         recipeBufferPct: plan.recipeBufferPct,
       });
       for (const c of contributions) {
@@ -344,9 +416,9 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
   const lines: MaterialRequirementLine[] = [...acc.entries()]
     .map(([productId, row]) => {
       // Gross/net pengadaan = bilangan bulat ke atas (satu kali di agregat produk).
-      const qtyGross = ceilProcurementQty(row.qtyGross);
+      const qtyGross = ceilProcurementQty(row.qtyGross, row.satuan);
       const qtyOnHand = roundQty(Number(onHandByProduct.get(productId) || 0));
-      const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand));
+      const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand), row.satuan);
       return {
         productId,
         productKode: row.productKode,

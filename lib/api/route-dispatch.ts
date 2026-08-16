@@ -30,6 +30,9 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'haccp-verifications': async () => (await import('@/lib/api/handlers/haccp-verifications')).handleHaccpVerifications,
   'supplier-price-book': async () => (await import('@/lib/api/handlers/supplier-price-book')).handleSupplierPriceBook,
   recipes: async () => (await import('@/lib/api/handlers/recipes')).handleRecipes,
+  'recipe-portion-exceptions': async () => (
+    await import('@/lib/api/handlers/recipe-portion-exceptions')
+  ).handleRecipePortionExceptions,
   menus: async () => (await import('@/lib/api/handlers/menus')).handleMenus,
   'production-plans': async () => (await import('@/lib/api/handlers/production-plans')).handleProductionPlans,
   'portion-targets': async () => (await import('@/lib/api/handlers/portion-targets')).handlePortionTargets,

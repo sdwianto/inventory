@@ -4,13 +4,15 @@ import {
   scaleRecipeIngredientQty,
   roundQty,
   ceilProcurementQty,
+  computeRecipeLineContributions,
+  resolveOverrideToBaseQty,
   decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
 } from '@/lib/food-production/material-requirement';
-import { recipeIngredientNeeds } from '@/lib/food-production/rencana-kebutuhan';
+import { recipeIngredientNeeds, formatRecipeNeedFormula, recipeYieldOneWarning, buildRencanaKebutuhanLines } from '@/lib/food-production/rencana-kebutuhan';
 import { FP_DOC_PREFIX, FP_DOC_TYPES } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
-import type { RecipeDoc } from '@/lib/food-production/recipe';
+import { applyFullPortionExceptions, type RecipeDoc } from '@/lib/food-production/recipe';
 
 describe('food-production sprint 4 — MRP', () => {
   it('uses KBH document prefix', () => {
@@ -28,6 +30,185 @@ describe('food-production sprint 4 — MRP', () => {
     expect(ceilProcurementQty(16.068)).toBe(17);
     expect(ceilProcurementQty(10)).toBe(10);
     expect(ceilProcurementQty(0)).toBe(0);
+    expect(ceilProcurementQty(0.0168, 'KG')).toBe(0.017);
+    expect(ceilProcurementQty(0.024, 'KG')).toBe(0.024);
+    expect(ceilProcurementQty(16.8, 'GR')).toBe(17);
+    expect(ceilProcurementQty(0.4, 'KG')).toBe(0.4);
+  });
+
+  it('recipeIngredientNeeds scales batch qty by plan portions / yield', () => {
+    const line = {
+      productId: 'apel',
+      productKode: 'B1',
+      productNama: 'Apel',
+      qty: 1,
+      qtyBesar: 1,
+      pctKecil: 70,
+      qtyKecil: 0.7,
+      satuan: 'PCS',
+    };
+    const sameBatch = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 0, lines: [line] },
+      menuTargetPorsi: 500,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR'],
+    });
+    expect(sameBatch[0].qty).toBe(1);
+    expect(sameBatch[0].formula).toBe('1 PCS × 500 porsi / 500 hasil = 1 PCS');
+
+    const doubleBatch = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 0, lines: [line] },
+      menuTargetPorsi: 1000,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR'],
+    });
+    expect(doubleBatch[0].qty).toBe(2);
+    expect(doubleBatch[0].formula).toBe('1 PCS × 1000 porsi / 500 hasil = 2 PCS');
+
+    const perPortion = recipeIngredientNeeds({
+      recipe: { yieldQty: 1, wastePct: 0, lines: [line] },
+      menuTargetPorsi: 500,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR'],
+    });
+    expect(perPortion[0].qty).toBe(500);
+    expect(perPortion[0].formula).toBe('1 PCS × 500 porsi / 1 hasil = 500 PCS');
+  });
+
+  it('recipeIngredientNeeds porsi kecil 100% untuk pengecualian PCS (bukan 70%)', () => {
+    const line = {
+      productId: 'kelengkeng',
+      productKode: 'B203740',
+      productNama: 'Kelengkeng',
+      qty: 500,
+      qtyBesar: 500,
+      pctKecil: 70,
+      qtyKecil: 350,
+      satuan: 'PCS',
+    };
+    const without = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 0, lines: [line] },
+      menuTargetPorsi: 1200,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_KECIL'],
+    });
+    expect(without[0].qtyKecilPart).toBe(840); // 350 × 1200/500
+    expect(without[0].qty).toBe(840);
+
+    const excepted = applyFullPortionExceptions([line], new Set(['B203740']));
+    expect(excepted[0].qtyKecil).toBe(500);
+    expect(excepted[0].pctKecil).toBe(100);
+
+    const withExc = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 0, lines: excepted },
+      menuTargetPorsi: 1200,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_KECIL'],
+    });
+    expect(withExc[0].qtyKecilPart).toBe(1200); // 500 × 1200/500
+    expect(withExc[0].qty).toBe(1200);
+    expect(withExc[0].formula).toBe('500 PCS × 1200 porsi / 500 hasil = 1200 PCS');
+  });
+
+  it('recipeIngredientNeeds memakai qty kecil + satuan dapur GR, bukan ceil ke 1 KG', () => {
+    const line = {
+      productId: 'semangka',
+      productKode: 'B918294',
+      productNama: 'Semangka',
+      qty: 10,
+      qtyBesar: 10,
+      pctKecil: 70,
+      qtyKecil: 7,
+      satuan: 'GR',
+      qtyBaseBesar: 0.01,
+      qtyBaseKecil: 0.007,
+      factorToBase: 0.001,
+      baseSatuan: 'KG',
+    };
+    const needs = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 0, lines: [line] },
+      menuTargetPorsi: 1200,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_KECIL'],
+    });
+    expect(needs[0].satuan).toBe('GR');
+    expect(needs[0].qtyResepBesar).toBe(10);
+    expect(needs[0].qtyKecilPart).toBeCloseTo(16.8); // 7 × 1200/500
+    expect(needs[0].qty).toBe(17); // ceil gram
+    expect(needs[0].formula).toBe('7 GR × 1200 porsi / 500 hasil = 16,8 GR');
+  });
+
+  it('recipeIngredientNeeds memecah besar 100% dan kecil 70% sesuai kategori', () => {
+    const lines = recipeIngredientNeeds({
+      recipe: {
+        yieldQty: 500,
+        wastePct: 0,
+        lines: [{
+          productId: 'apel',
+          qty: 1,
+          qtyBesar: 1,
+          pctKecil: 70,
+          qtyKecil: 0.7,
+          satuan: 'PCS',
+        }],
+      },
+      menuTargetPorsi: 500,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: { PORSI_BESAR: 300, PORSI_KECIL: 200 },
+    });
+    expect(lines[0].qtyBesarPart).toBeCloseTo(0.6); // 1 × 300/500
+    expect(lines[0].qtyKecilPart).toBeCloseTo(0.28); // 0.7 × 200/500
+    expect(lines[0].qty).toBe(1); // ceil(0.88)
+  });
+
+  it('formatRecipeNeedFormula dan peringatan hasil 1 porsi', () => {
+    expect(formatRecipeNeedFormula({
+      qtyResep: 1,
+      satuan: 'PCS',
+      porsiRencana: 500,
+      yieldQty: 500,
+      qtyHasil: 1,
+    })).toBe('1 PCS × 500 porsi / 500 hasil = 1 PCS');
+    expect(recipeYieldOneWarning(1, 500)).toMatch(/Hasil resep 1 porsi/);
+    expect(recipeYieldOneWarning(500, 500)).toBeNull();
+  });
+
+  it('buildRencanaKebutuhanLines memakai acuan dapur rencana, bukan fallback global', () => {
+    const recipe = {
+      id: 'r1',
+      kode: 'RSP-1',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'apel',
+        productKode: 'B1',
+        productNama: 'Apel',
+        qty: 1,
+        qtyBesar: 1,
+        pctKecil: 70,
+        qtyKecil: 0.7,
+        satuan: 'PCS',
+      }],
+    };
+    const built = buildRencanaKebutuhanLines({
+      plans: [{
+        noDokumen: 'RPN1',
+        status: 'DRAFT',
+        kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+        acuanByKategori: { PORSI_BESAR: 500, PORSI_KECIL: 0 },
+        lines: [{
+          recipeId: 'r1',
+          targetPorsi: 500,
+          kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+        }],
+      }],
+      menusById: new Map(),
+      recipesById: new Map([['r1', recipe]]),
+      acuanByKategori: { PORSI_BESAR: 250, PORSI_KECIL: 250 },
+    });
+    expect(built.errors).toEqual([]);
+    expect(built.lines[0].qty).toBe(500);
   });
 
   it('recipeIngredientNeeds ceils total qty for rencana menu card', () => {
@@ -129,10 +310,10 @@ describe('food-production sprint 4 — MRP', () => {
     expect(beras?.qtyOnHand).toBe(15);
     expect(beras?.qtyNet).toBe(5);
     expect(beras?.shortage).toBe(true);
-    // garam 200/100 * 0.2 = 0.4 → ceil pengadaan = 1
+    // garam 200/100 * 0.2 = 0.4 KG (bukan ceil ke 1 KG)
     const garam = result.lines.find((l) => l.productId === 'garam');
-    expect(garam?.qtyGross).toBe(1);
-    expect(garam?.qtyNet).toBe(1);
+    expect(garam?.qtyGross).toBe(0.4);
+    expect(garam?.qtyNet).toBe(0.4);
     expect(result.summary.shortageCount).toBe(2);
     expect(result.summary.lineCount).toBe(2);
   });
@@ -195,8 +376,8 @@ describe('food-production sprint 4 — MRP', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const beras = result.lines.find((l) => l.productId === 'beras');
-    // 100/100 * 0.3 KG = 0.3 → ceil = 1 KG (bukan 300)
-    expect(beras?.qtyGross).toBe(1);
+    // 100/100 * 0.3 KG = 0.3 KG (bukan ceil ke 1 KG)
+    expect(beras?.qtyGross).toBe(0.3);
     expect(beras?.satuan).toBe('KG');
   });
 
@@ -521,5 +702,44 @@ describe('food-production sprint 4 — MRP', () => {
       hasBlockingIssue: false,
       hasBlockingPr: false,
     }).mode).toBe('blocked');
+  });
+
+  it('mengabaikan override 1 KG usang jika resep sudah 10 GR', () => {
+    const line = {
+      productId: 'semangka',
+      productKode: 'B918294',
+      productNama: 'Semangka',
+      qty: 10,
+      qtyBesar: 10,
+      pctKecil: 70,
+      qtyKecil: 7,
+      satuan: 'GR',
+      qtyBaseBesar: 0.01,
+      qtyBaseKecil: 0.007,
+      factorToBase: 0.001,
+      baseSatuan: 'KG',
+    };
+    expect(resolveOverrideToBaseQty({
+      qty: 1,
+      satuan: 'KG',
+      line,
+    })).toBeNull();
+    expect(resolveOverrideToBaseQty({
+      qty: 17,
+      satuan: 'GR',
+      line,
+    })).toBeCloseTo(0.017);
+
+    const contrib = computeRecipeLineContributions({
+      recipe: { id: 'r1', yieldQty: 500, wastePct: 0, lines: [line] },
+      recipeFactor: 1,
+      porsiBesar: 0,
+      porsiKecil: 1200,
+      excludedKeys: new Set(),
+      overrideQtyByKey: new Map([['r1::semangka', 1]]),
+      overrideSatuanByKey: new Map([['r1::semangka', 'KG']]),
+    });
+    expect(contrib[0].qty).toBeCloseTo(0.0168);
+    expect(contrib[0].satuan).toBe('KG');
   });
 });

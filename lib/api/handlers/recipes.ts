@@ -12,6 +12,7 @@ import {
   normalizeRecipeLines,
   normalizeRecipeNama,
   todayIsoDate,
+  applyFullPortionExceptions,
   type RecipeDoc,
   type RecipeLine,
 } from '@/lib/food-production/recipe';
@@ -38,6 +39,7 @@ import { storeBase64Image, deleteMediaFile } from '@/lib/api/media-storage';
 import { validateBase64Image } from '@/lib/api/image-base64';
 import type { HandlerContext } from '@/types/api/handler';
 import { NextResponse } from 'next/server';
+import { loadRecipePortionExceptionSet } from '@/lib/api/handlers/recipe-portion-exceptions';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 
@@ -230,7 +232,8 @@ async function enrichLines(
       baseSatuan: converted.baseSatuan,
     });
   }
-  return out;
+  const exceptionKeys = await loadRecipePortionExceptionSet(db, tenantFilter);
+  return applyFullPortionExceptions(out, exceptionKeys);
 }
 
 async function allocateRecipeKode(
@@ -502,7 +505,14 @@ export async function handleRecipes({
       .limit(200)
       .toArray();
 
-    return ok(list.map((doc) => clean(doc)));
+    const exceptionKeys = await loadRecipePortionExceptionSet(db, withTenantFilter(scopeAuth, {}));
+    return ok(list.map((doc) => {
+      const recipe = doc as unknown as RecipeDoc;
+      return clean({
+        ...recipe,
+        lines: applyFullPortionExceptions(recipe.lines, exceptionKeys),
+      } as unknown as Record<string, unknown>);
+    }));
   }
 
   if (route === '/recipes' && method === 'POST') {
