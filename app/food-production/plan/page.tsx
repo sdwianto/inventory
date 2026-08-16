@@ -203,6 +203,12 @@ const emptyLine = (kategoriPorsiList: KategoriPorsi[] = []): PlanLineForm => ({
   targetPorsi: '0',
 });
 
+function formatEstKcal(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 10) return Math.round(n).toLocaleString('id-ID');
+  return n.toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 function unionKategoriFromLines(lines: PlanLineForm[]): KategoriPorsi[] {
   const seen = new Set<KategoriPorsi>();
   for (const line of lines) {
@@ -2049,7 +2055,7 @@ function FoodProductionPlanPageContent() {
                         <div className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-slate-800">
                           <span className="font-medium">Est. AKG / porsi: </span>
                           <span className="tabular-nums">
-                            ~{Math.round(planAkgById[row.id].perPorsi.energiKcal)} kkal
+                            ~{formatEstKcal(planAkgById[row.id].perPorsi.energiKcal)} kkal
                             {' · '}
                             {planAkgById[row.id].perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
                             {' · '}
@@ -2171,7 +2177,7 @@ function FoodProductionPlanPageContent() {
                                       >
                                         {lineAkg?.perPorsi ? (
                                           <>
-                                            <div className="font-medium">~{Math.round(lineAkg.perPorsi.energiKcal)} kkal</div>
+                                            <div className="font-medium">~{formatEstKcal(lineAkg.perPorsi.energiKcal)} kkal</div>
                                             <div className="text-muted-foreground">
                                               {lineAkg.perPorsiAkgPct?.energiKcal ?? 0}% AKG
                                             </div>
@@ -2404,7 +2410,7 @@ function FoodProductionPlanPageContent() {
                                               return (
                                                 <>
                                                   <div className="font-medium">
-                                                    ~{Math.round(childAkg.perPorsi.energiKcal)} kkal
+                                                    ~{formatEstKcal(childAkg.perPorsi.energiKcal)} kkal
                                                   </div>
                                                   <div className="text-muted-foreground">
                                                     {childAkg.perPorsiAkgPct?.energiKcal ?? 0}% AKG
@@ -2984,7 +2990,7 @@ function FoodProductionPlanPageContent() {
                 {draftAkgLoading && <span className="text-muted-foreground text-xs">menghitung…</span>}
                 {!draftAkgLoading && draftAkg && (
                   <span className="tabular-nums">
-                    ~{Math.round(draftAkg.perPorsi.energiKcal)} kkal
+                    ~{formatEstKcal(draftAkg.perPorsi.energiKcal)} kkal
                     {' · '}
                     {draftAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
                     {' · '}
@@ -3137,7 +3143,7 @@ function FoodProductionPlanPageContent() {
                     >
                       {line.recipeId && lineEst?.perPorsi ? (
                         <>
-                          <span className="font-medium">~{Math.round(lineEst.perPorsi.energiKcal)} kkal</span>
+                          <span className="font-medium">~{formatEstKcal(lineEst.perPorsi.energiKcal)} kkal</span>
                           <span className="text-muted-foreground">
                             {lineEst.perPorsiAkgPct?.energiKcal ?? 0}% AKG
                           </span>

@@ -28,6 +28,10 @@ import {
   tkpiPickerQuery,
 } from '@/lib/food-production/tkpi-catalog';
 import {
+  getUsdaFood,
+  suggestUsdaMatches,
+} from '@/lib/food-production/usda-catalog';
+import {
   defaultKitchenSatuan,
   kitchenSatuanOptionsForBase,
   toBaseRecipeQty,
@@ -40,8 +44,11 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     ? (p.nutrition as Record<string, unknown>)
     : undefined;
   const tkpiCode = String(p.tkpiCode || nutrition?.tkpiCode || '').trim() || undefined;
+  const usdaCode = String(p.usdaCode || nutrition?.usdaCode || '').trim() || undefined;
   const fromFacts = String(nutrition?.tkpiNama || '').trim() || undefined;
   const tkpiNama = fromFacts || (tkpiCode ? (getTkpiFood(tkpiCode)?.nama || undefined) : undefined);
+  const usdaNama = String(nutrition?.usdaNama || '').trim()
+    || (usdaCode ? (getUsdaFood(usdaCode)?.namaId || getUsdaFood(usdaCode)?.nama || undefined) : undefined);
   return {
     id: String(p.id || ''),
     kode: String(p.kode || ''),
@@ -54,6 +61,8 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     aktif: p.aktif !== false,
     tkpiCode,
     tkpiNama,
+    usdaCode,
+    usdaNama,
   };
 }
 
@@ -85,6 +94,8 @@ interface ProductOpt {
   aktif?: boolean;
   tkpiCode?: string;
   tkpiNama?: string;
+  usdaCode?: string;
+  usdaNama?: string;
 }
 
 interface RecipeLineForm {
@@ -267,6 +278,16 @@ export default function FoodProductionRecipePage() {
   const [tkpiHits, setTkpiHits] = useState<Array<{
     kode: string;
     nama: string;
+    namaId?: string;
+    energiKcal: number;
+    proteinG?: number;
+    bddPct?: number;
+    kelompok?: string;
+  }>>([]);
+  const [usdaHits, setUsdaHits] = useState<Array<{
+    kode: string;
+    nama: string;
+    namaId?: string;
     energiKcal: number;
     proteinG?: number;
     bddPct?: number;
@@ -440,6 +461,34 @@ export default function FoodProductionRecipePage() {
           ...p,
           tkpiCode,
           tkpiNama: String(nutrition?.tkpiNama || food?.nama || p.tkpiNama || tkpiCode),
+          usdaCode: undefined,
+          usdaNama: undefined,
+          gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : p.gramsPerUnit,
+        }
+        : p
+    )));
+  }
+
+  async function persistProductUsda(productId: string, usdaCode: string) {
+    const res = await fetch(`/api/nutrition-profiles/${productId}/apply-usda`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+      body: JSON.stringify({ usdaCode }),
+    });
+    const data = await res.json() as Record<string, unknown>;
+    if (!res.ok) throw new Error(String(data?.error || 'Gagal simpan USDA'));
+    const nutrition = data.nutrition && typeof data.nutrition === 'object'
+      ? (data.nutrition as Record<string, unknown>)
+      : undefined;
+    const food = getUsdaFood(usdaCode);
+    setProducts((prev) => prev.map((p) => (
+      p.id === productId
+        ? {
+          ...p,
+          usdaCode,
+          usdaNama: String(nutrition?.usdaNama || food?.namaId || food?.nama || p.usdaNama || usdaCode),
+          tkpiCode: undefined,
+          tkpiNama: undefined,
           gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : p.gramsPerUnit,
         }
         : p
@@ -447,12 +496,25 @@ export default function FoodProductionRecipePage() {
   }
 
   async function applyUniqueTkpiIfNeeded(product: ProductOpt) {
-    if (!product.id || product.tkpiCode || applyingTkpi.current.has(product.id)) return;
-    const matches = suggestTkpiMatches(product.nama, 3);
-    if (matches.length !== 1) return;
+    if (!product.id || product.tkpiCode || product.usdaCode || applyingTkpi.current.has(product.id)) return;
+    const tkpi = suggestTkpiMatches(product.nama, 3);
+    if (tkpi.length === 1) {
+      applyingTkpi.current.add(product.id);
+      try {
+        await persistProductTkpi(product.id, tkpi[0].kode);
+      } catch {
+        /* tampilkan pilih jika gagal simpan */
+      } finally {
+        applyingTkpi.current.delete(product.id);
+      }
+      return;
+    }
+    if (tkpi.length > 0) return;
+    const usda = suggestUsdaMatches(product.nama, 3);
+    if (usda.length !== 1 || usda[0].via !== 'alias') return;
     applyingTkpi.current.add(product.id);
     try {
-      await persistProductTkpi(product.id, matches[0].kode);
+      await persistProductUsda(product.id, usda[0].kode);
     } catch {
       /* tampilkan pilih jika gagal simpan */
     } finally {
@@ -460,10 +522,25 @@ export default function FoodProductionRecipePage() {
     }
   }
 
+  function mapCatalogHits(rows: Array<Record<string, unknown>> | undefined) {
+    return (Array.isArray(rows) ? rows : []).map((h) => ({
+      kode: String(h.kode || ''),
+      nama: String(h.nama || ''),
+      namaId: h.namaId != null ? String(h.namaId) : undefined,
+      energiKcal: Number(h.energiKcal) || 0,
+      proteinG: h.proteinG != null ? Number(h.proteinG) : undefined,
+      lemakG: h.lemakG != null ? Number(h.lemakG) : undefined,
+      karbohidratG: h.karbohidratG != null ? Number(h.karbohidratG) : undefined,
+      bddPct: h.bddPct != null ? Number(h.bddPct) : undefined,
+      kelompok: h.kelompok != null ? String(h.kelompok) : undefined,
+    }));
+  }
+
   async function loadTkpiHits(q: string) {
     const needle = q.trim();
     if (needle.length < 2) {
       setTkpiHits([]);
+      setUsdaHits([]);
       return;
     }
     setTkpiBusy(true);
@@ -472,26 +549,24 @@ export default function FoodProductionRecipePage() {
         `/api/nutrition-profiles/tkpi?q=${encodeURIComponent(needle)}&limit=80`,
         { headers: { ...actingTenantHeaders() } },
       );
-      const data = await res.json() as { items?: Array<Record<string, unknown>> };
+      const data = await res.json() as {
+        items?: Array<Record<string, unknown>>;
+        usdaItems?: Array<Record<string, unknown>>;
+      };
       if (!res.ok) throw new Error('Gagal cari TKPI');
-      setTkpiHits((Array.isArray(data.items) ? data.items : []).map((h) => ({
-        kode: String(h.kode || ''),
-        nama: String(h.nama || ''),
-        energiKcal: Number(h.energiKcal) || 0,
-        proteinG: h.proteinG != null ? Number(h.proteinG) : undefined,
-        bddPct: h.bddPct != null ? Number(h.bddPct) : undefined,
-        kelompok: h.kelompok != null ? String(h.kelompok) : undefined,
-      })));
+      setTkpiHits(mapCatalogHits(data.items));
+      setUsdaHits(mapCatalogHits(data.usdaItems));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal cari TKPI');
       setTkpiHits([]);
+      setUsdaHits([]);
     } finally {
       setTkpiBusy(false);
     }
   }
 
   function openTkpiPicker(product: ProductOpt) {
-    const q = tkpiPickerQuery(product.nama);
+    const q = tkpiPickerQuery(product.nama) || product.nama;
     setTkpiPick({ productId: product.id, nama: product.nama });
     setTkpiQ(q);
     void loadTkpiHits(q);
@@ -505,8 +580,25 @@ export default function FoodProductionRecipePage() {
       toast.success('TKPI disimpan ke master produk');
       setTkpiPick(null);
       setTkpiHits([]);
+      setUsdaHits([]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal simpan TKPI');
+    } finally {
+      setTkpiSaving(false);
+    }
+  }
+
+  async function chooseUsda(kode: string) {
+    if (!tkpiPick || tkpiSaving) return;
+    setTkpiSaving(true);
+    try {
+      await persistProductUsda(tkpiPick.productId, kode);
+      toast.success('Gizi USDA (cadangan) disimpan ke master produk');
+      setTkpiPick(null);
+      setTkpiHits([]);
+      setUsdaHits([]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal simpan USDA');
     } finally {
       setTkpiSaving(false);
     }
@@ -1049,7 +1141,7 @@ export default function FoodProductionRecipePage() {
             <div className="rounded-md border overflow-hidden">
               <div className="hidden sm:grid sm:grid-cols-[minmax(0,1.5fr)_minmax(13.5rem,1.2fr)_5.5rem_4.5rem_5.5rem_minmax(6.5rem,0.85fr)_2.5rem] gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
                 <div>Produk</div>
-                <div className="whitespace-nowrap">TKPI/100gr BDD</div>
+                <div className="whitespace-nowrap">TKPI/USDA 100g</div>
                 <div>Qty besar</div>
                 <div>% kecil</div>
                 <div>Qty kecil</div>
@@ -1138,6 +1230,8 @@ export default function FoodProductionRecipePage() {
                                 ...picked,
                                 tkpiCode: existing.tkpiCode || picked.tkpiCode,
                                 tkpiNama: existing.tkpiNama || picked.tkpiNama,
+                                usdaCode: existing.usdaCode || picked.usdaCode,
+                                usdaNama: existing.usdaNama || picked.usdaNama,
                               }
                               : picked;
                             void applyUniqueTkpiIfNeeded(merged);
@@ -1148,30 +1242,48 @@ export default function FoodProductionRecipePage() {
                       />
                     </div>
                     <div className="min-w-0">
-                      <span className="sm:hidden text-[11px] text-muted-foreground">TKPI/100gr BDD</span>
+                      <span className="sm:hidden text-[11px] text-muted-foreground">TKPI/USDA per 100g</span>
                       {(() => {
                         if (!product) {
                           return <span className="text-[11px] text-muted-foreground">—</span>;
                         }
-                        const unique = !product.tkpiCode ? suggestTkpiMatches(product.nama, 3) : [];
-                        const food = product.tkpiCode
+                        const uniqueTkpi = !product.tkpiCode && !product.usdaCode
+                          ? suggestTkpiMatches(product.nama, 3)
+                          : [];
+                        const uniqueUsda = !product.tkpiCode && !product.usdaCode && uniqueTkpi.length === 0
+                          ? suggestUsdaMatches(product.nama, 3)
+                          : [];
+                        const tkpiFood = product.tkpiCode
                           ? getTkpiFood(product.tkpiCode)
-                          : (unique.length === 1 ? getTkpiFood(unique[0].kode) : null);
-                        const attachedNama = product.tkpiNama
-                          || food?.nama
-                          || (product.tkpiCode || '');
-                        const uniqueNama = unique.length === 1 ? unique[0].nama : '';
-                        const label = attachedNama || uniqueNama;
+                          : (uniqueTkpi.length === 1 ? getTkpiFood(uniqueTkpi[0].kode) : null);
+                        const usdaFood = product.usdaCode
+                          ? getUsdaFood(product.usdaCode)
+                          : (uniqueUsda.length === 1 ? getUsdaFood(uniqueUsda[0].kode) : null);
+                        const food = tkpiFood || usdaFood;
+                        const isUsda = Boolean(usdaFood && !tkpiFood);
+                        const label = product.tkpiNama
+                          || product.usdaNama
+                          || tkpiFood?.nama
+                          || usdaFood?.namaId
+                          || usdaFood?.nama
+                          || (uniqueTkpi.length === 1 ? uniqueTkpi[0].nama : '')
+                          || (uniqueUsda.length === 1 ? (uniqueUsda[0].namaId || uniqueUsda[0].nama) : '')
+                          || product.tkpiCode
+                          || product.usdaCode
+                          || '';
                         if (label) {
                           return (
                             <div className="min-w-0">
                               <button
                                 type="button"
                                 className="text-left text-[11px] leading-tight text-blue-800 underline-offset-2 hover:underline"
-                                title={product.tkpiCode ? `TKPI ${product.tkpiCode} — klik untuk ganti` : 'Klik untuk ganti'}
+                                title={isUsda
+                                  ? `USDA ${product.usdaCode || usdaFood?.kode} — cadangan, bukan TKPI`
+                                  : (product.tkpiCode ? `TKPI ${product.tkpiCode} — klik untuk ganti` : 'Klik untuk ganti')}
                                 onClick={() => openTkpiPicker(product)}
                               >
                                 {label}
+                                {isUsda ? ' · USDA' : ''}
                               </button>
                               {food && (
                                 <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground tabular-nums whitespace-nowrap">
@@ -1307,21 +1419,23 @@ export default function FoodProductionRecipePage() {
           if (!o) {
             setTkpiPick(null);
             setTkpiHits([]);
+            setUsdaHits([]);
             setTkpiQ('');
           }
         }}
       >
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Pilih TKPI — {tkpiPick?.nama}</DialogTitle>
+            <DialogTitle>Pilih gizi — {tkpiPick?.nama}</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">
-            Pilihan tersimpan ke master produk, dipakai semua resep dengan kode itu.
+            Utamakan TKPI 2019. Jika tidak ada, pakai cadangan USDA SR Legacy
+            (sumber yang sama dengan tabel Andrafarm). Tersimpan ke master produk.
           </p>
           <div className="space-y-2 py-1">
             <Input
               className="h-9"
-              placeholder="Cari nama / kode TKPI…"
+              placeholder="Cari nama / kode TKPI atau USDA…"
               value={tkpiQ}
               onChange={(e) => {
                 const v = e.target.value;
@@ -1330,11 +1444,13 @@ export default function FoodProductionRecipePage() {
               }}
             />
             {tkpiBusy && <p className="text-[11px] text-muted-foreground">Mencari…</p>}
-            {!tkpiBusy && tkpiHits.length === 0 && tkpiQ.trim().length >= 2 && (
-              <p className="text-sm text-muted-foreground py-4 text-center">Tidak ada di TKPI 2019.</p>
+            {!tkpiBusy && tkpiHits.length === 0 && usdaHits.length === 0 && tkpiQ.trim().length >= 2 && (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                Tidak ada di TKPI 2019 maupun cadangan USDA.
+              </p>
             )}
             {tkpiHits.length > 0 && (
-              <ul className="max-h-72 overflow-y-auto text-sm divide-y border rounded-md">
+              <ul className="max-h-56 overflow-y-auto text-sm divide-y border rounded-md">
                 {tkpiHits.map((hit) => (
                   <li key={hit.kode}>
                     <button
@@ -1357,6 +1473,39 @@ export default function FoodProductionRecipePage() {
                   </li>
                 ))}
               </ul>
+            )}
+            {usdaHits.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[11px] font-medium text-amber-900">
+                  Cadangan USDA {tkpiHits.length ? '(jika TKPI tidak cocok)' : '(tidak ada di TKPI 2019)'}
+                </p>
+                <ul className="max-h-48 overflow-y-auto text-sm divide-y border border-amber-200 rounded-md bg-amber-50/40">
+                  {usdaHits.map((hit) => (
+                    <li key={hit.kode}>
+                      <button
+                        type="button"
+                        disabled={tkpiSaving}
+                        className="w-full text-left px-3 py-2 hover:bg-amber-50 disabled:opacity-50"
+                        onClick={() => void chooseUsda(hit.kode)}
+                      >
+                        <div className="font-mono text-[11px] text-muted-foreground">{hit.kode}</div>
+                        <div className="leading-snug">
+                          <HighlightNeedle text={hit.namaId || hit.nama} needle={tkpiQ} />
+                          {hit.namaId ? (
+                            <span className="block text-[11px] text-muted-foreground">{hit.nama}</span>
+                          ) : null}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {hit.energiKcal} kkal
+                          {hit.proteinG != null ? ` · P ${hit.proteinG}g` : ''}
+                          {hit.bddPct != null ? ` · BDD ${hit.bddPct}%` : ''}
+                          {' · USDA SR'}
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
           <DialogFooter>

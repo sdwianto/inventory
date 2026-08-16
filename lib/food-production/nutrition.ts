@@ -22,6 +22,10 @@ import {
   isAmbiguousSatuan,
   type TkpiResolveVia,
 } from '@/lib/food-production/tkpi-catalog';
+import {
+  nutritionFromUsdaCode,
+  resolveUsdaCodeByProductName,
+} from '@/lib/food-production/usda-catalog';
 import akgProfilesJson from '@/data/tkpi/akg-profiles.json';
 
 /** Toleransi pemenuhan target MBG (% dari target). */
@@ -39,6 +43,9 @@ export interface NutritionFacts {
   /** Kode bahan TKPI bila diisi dari katalog. */
   tkpiCode?: string;
   tkpiNama?: string;
+  /** Cadangan USDA SR Legacy bila tidak ada di TKPI. */
+  usdaCode?: string;
+  usdaNama?: string;
   energiKcal: number;
   proteinG: number;
   lemakG: number;
@@ -54,17 +61,20 @@ export interface ProductNutritionRef {
   productKode?: string;
   productNama?: string;
   satuan?: string;
+  recipeBaseGrams?: number | null;
   /** Kode TKPI di master produk (bila sudah di-apply). */
   tkpiCode?: string | null;
+  usdaCode?: string | null;
   nutrition?: NutritionFacts | null;
 }
 
-export type NutritionSource = 'stored' | 'tkpi' | 'alias' | 'search';
+export type NutritionSource = 'stored' | 'tkpi' | 'alias' | 'search' | 'usda';
 
 export interface ResolvedProductNutrition {
   nutrition: NutritionFacts | null;
   source?: NutritionSource;
   tkpiCode?: string;
+  usdaCode?: string;
   warning?: string;
 }
 
@@ -88,6 +98,7 @@ export interface NutritionLineBreakdown {
   missing?: boolean;
   source?: NutritionSource;
   tkpiCode?: string;
+  usdaCode?: string;
 }
 
 export interface NutritionAnalysis {
@@ -257,12 +268,16 @@ export function normalizeNutritionFacts(raw: unknown): NutritionFacts | { error:
   }
   const tkpiCode = row.tkpiCode != null ? String(row.tkpiCode).trim() : undefined;
   const tkpiNama = row.tkpiNama != null ? String(row.tkpiNama).trim() : undefined;
+  const usdaCode = row.usdaCode != null ? String(row.usdaCode).trim() : undefined;
+  const usdaNama = row.usdaNama != null ? String(row.usdaNama).trim() : undefined;
   return {
     basis,
     gramsPerUnit,
     ...(bddPct != null ? { bddPct } : {}),
     ...(tkpiCode ? { tkpiCode } : {}),
     ...(tkpiNama ? { tkpiNama } : {}),
+    ...(usdaCode ? { usdaCode } : {}),
+    ...(usdaNama ? { usdaNama } : {}),
     energiKcal: roundNut(energi),
     proteinG: roundNut(protein),
     lemakG: roundNut(lemak),
@@ -290,7 +305,7 @@ function viaToSource(via: TkpiResolveVia | 'alias' | 'search'): NutritionSource 
 }
 
 /**
- * Resolve gizi produk: stored nutrition → tkpiCode → alias/nama → katalog TKPI.
+ * Resolve gizi produk: stored nutrition → tkpiCode → alias/nama TKPI → usdaCode → alias USDA.
  * Tidak menulis ke DB; hanya untuk perhitungan analisis.
  */
 export function resolveProductNutrition(
@@ -313,6 +328,7 @@ export function resolveProductNutrition(
       nutrition: stored,
       source: 'stored',
       tkpiCode: stored.tkpiCode || product?.tkpiCode || undefined,
+      usdaCode: stored.usdaCode || product?.usdaCode || undefined,
       warning: packWarn,
     };
   }
@@ -345,7 +361,76 @@ export function resolveProductNutrition(
     }
   }
 
+  const usdaStored = String(product?.usdaCode || stored?.usdaCode || '').trim();
+  if (usdaStored) {
+    const fromUsdaCode = nutritionFromUsdaCode(usdaStored, satuan, storedGrams);
+    if (fromUsdaCode) {
+      return {
+        nutrition: fromUsdaCode,
+        source: 'usda',
+        usdaCode: fromUsdaCode.usdaCode,
+        warning: [packWarn, usdaFallbackWarning(fromUsdaCode.usdaNama)].filter(Boolean).join(' — ') || undefined,
+      };
+    }
+  }
+
+  const usdaMatched = resolveUsdaCodeByProductName(nama);
+  if (usdaMatched) {
+    const fromUsda = nutritionFromUsdaCode(usdaMatched.kode, satuan, storedGrams);
+    if (fromUsda) {
+      return {
+        nutrition: fromUsda,
+        source: 'usda',
+        usdaCode: fromUsda.usdaCode,
+        warning: [packWarn, usdaFallbackWarning(fromUsda.usdaNama)].filter(Boolean).join(' — ') || undefined,
+      };
+    }
+  }
+
   return { nutrition: null };
+}
+
+function usdaFallbackWarning(label?: string): string {
+  return `gizi cadangan USDA SR (${label || 'USDA'}) — bukan TKPI 2019`;
+}
+
+/** Qty dapur → gram untuk hitungan TKPI per 100 g BDD. Satuan massa tidak memakai gramsPerUnit stok. */
+export function kitchenQtyToGrams(
+  qty: number,
+  satuan?: string | null,
+  gramsPerCount?: number | null,
+): number {
+  const q = Number(qty);
+  if (!(q > 0)) return 0;
+  const s = String(satuan || '').trim().toUpperCase();
+  if (s === 'GR' || s === 'G' || s === 'GRAM') return q;
+  if (s === 'KG' || s === 'KILOGRAM') return q * 1000;
+  if (s === 'ONS') return q * 100;
+  if (s === 'MG') return q / 1000;
+  if (s === 'ML') return q;
+  if (s === 'L' || s === 'LT' || s === 'LITER') return q * 1000;
+  const per = Number(gramsPerCount);
+  return q * (Number.isFinite(per) && per > 0 ? per : 100);
+}
+
+export function contributionFromGrams(
+  grams: number,
+  nutrition: NutritionFacts | null | undefined,
+): NutritionTotals | null {
+  if (!(grams > 0) || !nutrition || !hasCompleteMacros(nutrition)) return null;
+  if (nutrition.basis === 'PER_UNIT') return null;
+  const bdd = Number(nutrition.bddPct);
+  const bddFactor = Number.isFinite(bdd) && bdd > 0 && bdd <= 100 ? bdd / 100 : 1;
+  const factor = (grams * bddFactor) / 100;
+  return scaleNutrition({
+    energiKcal: nutrition.energiKcal,
+    proteinG: nutrition.proteinG,
+    lemakG: nutrition.lemakG,
+    karbohidratG: nutrition.karbohidratG,
+    seratG: nutrition.seratG || 0,
+    natriumMg: nutrition.natriumMg || 0,
+    gulaG: nutrition.gulaG || 0,
+  }, factor);
 }
 
 /** Nutrition contributed by `qty` of product (in product base unit). */
@@ -492,7 +577,7 @@ export function analyzeRecipeNutrition(input: {
     const product = productsById.get(line.productId);
     const productNama = line.productNama || product?.productNama;
     const productKode = line.productKode || product?.productKode;
-    // gramsPerUnit / tebakan TKPI relatif ke satuan basis produk; qty gizi = qtyBase.
+    // PER_100G: gram dari qty dapur (GR/KG), bukan qtyBase × gramsPerUnit stok (PCS).
     const baseSatuan = line.baseSatuan || product?.satuan;
     const kitchenSatuan = line.satuan || baseSatuan;
     const qtyKitchen = recipeQtyForFamily(line, porsiFamily);
@@ -503,7 +588,16 @@ export function analyzeRecipeNutrition(input: {
       productKode,
       satuan: baseSatuan,
     }, { productNama, productKode, satuan: baseSatuan });
-    const contrib = contributionFromProduct(qtyBase, resolved.nutrition);
+    let contrib: NutritionTotals | null;
+    if (resolved.nutrition?.basis === 'PER_100G') {
+      const gramsHint = Number(resolved.nutrition.gramsPerUnit) > 0
+        ? Number(resolved.nutrition.gramsPerUnit)
+        : (product?.recipeBaseGrams != null ? Number(product.recipeBaseGrams) : null);
+      const grams = kitchenQtyToGrams(qtyKitchen, kitchenSatuan, gramsHint);
+      contrib = contributionFromGrams(grams, resolved.nutrition);
+    } else {
+      contrib = contributionFromProduct(qtyBase, resolved.nutrition);
+    }
     if (resolved.warning) warnings.push(`${productNama || productKode || line.productId}: ${resolved.warning}`);
     if (!contrib) {
       missingProductIds.push(line.productId);
@@ -528,6 +622,7 @@ export function analyzeRecipeNutrition(input: {
       contribution: contrib,
       source: resolved.source,
       tkpiCode: resolved.tkpiCode,
+      usdaCode: resolved.usdaCode,
     });
   }
 
@@ -538,7 +633,7 @@ export function analyzeRecipeNutrition(input: {
     warnings.push(
       `${missingProductIds.length} bahan belum punya data gizi`
       + (missingLabels.length ? ` (${missingLabels.join(', ')})` : '')
-      + ' — tidak ketemu di TKPI',
+      + ' — tidak ketemu di TKPI/USDA',
     );
   }
 

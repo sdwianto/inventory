@@ -14,6 +14,7 @@ import {
   AKG_COMPLIANCE_MIN_PCT,
 } from '@/lib/food-production/nutrition';
 import { resolveTkpiCodeByProductName, suggestTkpiMatches, searchTkpiFoods, tkpiPickerQuery } from '@/lib/food-production/tkpi-catalog';
+import { resolveUsdaCodeByProductName, suggestUsdaMatches, searchUsdaFoods, nutritionFromUsdaCode } from '@/lib/food-production/usda-catalog';
 import { DEFAULT_PCT_KECIL, computeQtyKecil } from '@/lib/food-production/recipe';
 import {
   analyzeRecipeStandardCost,
@@ -72,6 +73,122 @@ describe('food-production phase 3', () => {
     if ('error' in (n as object)) return;
     const c = contributionFromProduct(1, n); // 100g × 50% BDD → 50g → 0.5× per-100g
     expect(c?.energiKcal).toBe(100);
+  });
+
+  it('PER_100G on recipe uses kitchen GR (TKPI/100g), not qtyBase × gramsPerUnit PCS', () => {
+    const analyzed = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r-jus',
+        kode: 'RSP-0001',
+        nama: 'Jus Buah',
+        yieldQty: 1,
+        lines: [{
+          productId: 'semangka',
+          qty: 10,
+          qtyBesar: 10,
+          satuan: 'GR',
+          qtyBaseBesar: 0.01,
+          baseSatuan: 'KG',
+          factorToBase: 0.001,
+          productNama: 'Semangka',
+        }],
+      },
+      productsById: new Map([['semangka', {
+        productId: 'semangka',
+        productNama: 'Semangka',
+        satuan: 'PCS',
+        nutrition: {
+          basis: 'PER_100G',
+          gramsPerUnit: 100,
+          bddPct: 100,
+          energiKcal: 28,
+          proteinG: 0.5,
+          lemakG: 0.2,
+          karbohidratG: 6.9,
+        },
+      }]]),
+    });
+    expect(analyzed.perPorsi.energiKcal).toBeCloseTo(2.8, 1);
+    expect(analyzed.missingProductIds).toHaveLength(0);
+  });
+
+  it('keeps mapped TKPI lines when one ingredient is missing', () => {
+    const analyzed = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r-jus',
+        kode: 'RSP-0001',
+        nama: 'Jus Buah',
+        yieldQty: 1,
+        lines: [
+          {
+            productId: 'semangka',
+            qty: 10,
+            qtyBesar: 10,
+            satuan: 'GR',
+            productNama: 'Semangka',
+          },
+          {
+            productId: 'bumbu-fiktif',
+            qty: 1,
+            qtyBesar: 1,
+            satuan: 'PCS',
+            productNama: 'Bumbu Rahasia XYZ',
+          },
+        ],
+      },
+      productsById: new Map([['semangka', {
+        productId: 'semangka',
+        productNama: 'Semangka',
+        satuan: 'PCS',
+        nutrition: {
+          basis: 'PER_100G',
+          gramsPerUnit: 100,
+          bddPct: 100,
+          energiKcal: 28,
+          proteinG: 0.5,
+          lemakG: 0.2,
+          karbohidratG: 6.9,
+        },
+      }]]),
+    });
+    expect(analyzed.missingProductIds).toEqual(['bumbu-fiktif']);
+    expect(analyzed.perPorsi.energiKcal).toBeCloseTo(2.8, 1);
+  });
+
+  it('divides batch TKPI by yieldQty for per-porsi (10 GR / 500 porsi)', () => {
+    const analyzed = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r-jus',
+        kode: 'RSP-0001',
+        nama: 'Jus Buah',
+        yieldQty: 500,
+        lines: [{
+          productId: 'semangka',
+          qty: 10,
+          qtyBesar: 10,
+          satuan: 'GR',
+          qtyBaseBesar: 0.01,
+          baseSatuan: 'KG',
+          productNama: 'Semangka',
+        }],
+      },
+      productsById: new Map([['semangka', {
+        productId: 'semangka',
+        productNama: 'Semangka',
+        satuan: 'PCS',
+        nutrition: {
+          basis: 'PER_100G',
+          gramsPerUnit: 100,
+          bddPct: 100,
+          energiKcal: 28,
+          proteinG: 0.5,
+          lemakG: 0.2,
+          karbohidratG: 6.9,
+        },
+      }]]),
+    });
+    expect(analyzed.batch.energiKcal).toBeCloseTo(2.8, 1);
+    expect(analyzed.perPorsi.energiKcal).toBeCloseTo(2.8 / 500, 2);
   });
 
   it('resolves nutrition from TKPI alias when products.nutrition empty', () => {
@@ -133,6 +250,51 @@ describe('food-production phase 3', () => {
     expect(durian[0]?.nama).toBe('Durian, segar');
 
     expect(suggestTkpiMatches('Kelengkeng', 3)).toEqual([]);
+  });
+
+  it('falls back to USDA SR longan when Kelengkeng is missing from TKPI', () => {
+    expect(searchUsdaFoods('kelengkeng', 5)[0]?.kode).toBe('USDA-09172');
+    expect(suggestUsdaMatches('Kelengkeng', 3)[0]?.kode).toBe('USDA-09172');
+    expect(resolveUsdaCodeByProductName('Kelengkeng')?.kode).toBe('USDA-09172');
+
+    const facts = nutritionFromUsdaCode('USDA-09172', 'GR');
+    expect(facts?.energiKcal).toBe(60);
+    expect(facts?.proteinG).toBeCloseTo(1.31, 2);
+
+    const resolved = resolveProductNutrition({
+      productId: 'kelengkeng',
+      productNama: 'Kelengkeng',
+      satuan: 'PCS',
+      nutrition: null,
+    });
+    expect(resolved.source).toBe('usda');
+    expect(resolved.usdaCode).toBe('USDA-09172');
+    expect(resolved.nutrition?.energiKcal).toBe(60);
+    expect(resolved.warning).toMatch(/USDA/i);
+
+    const analyzed = analyzeRecipeNutrition({
+      recipe: {
+        id: 'r-jus',
+        kode: 'RSP-0001',
+        nama: 'Jus Buah',
+        yieldQty: 1,
+        lines: [{
+          productId: 'kelengkeng',
+          qty: 10,
+          qtyBesar: 10,
+          satuan: 'GR',
+          productNama: 'Kelengkeng',
+        }],
+      },
+      productsById: new Map([['kelengkeng', {
+        productId: 'kelengkeng',
+        productNama: 'Kelengkeng',
+        satuan: 'PCS',
+        nutrition: null,
+      }]]),
+    });
+    expect(analyzed.missingProductIds).toHaveLength(0);
+    expect(analyzed.perPorsi.energiKcal).toBeCloseTo(6, 1);
   });
 
   it('searchTkpiFoods jagung returns many ranked variants for the recipe picker', () => {

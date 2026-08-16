@@ -21,12 +21,15 @@ interface ProfileRow {
   nama?: string;
   satuan?: string;
   tkpiCode?: string | null;
+  usdaCode?: string | null;
   hasNutrition: boolean;
   nutrition?: {
     basis: string;
     gramsPerUnit?: number;
     bddPct?: number;
     tkpiCode?: string;
+    usdaCode?: string;
+    usdaNama?: string;
     energiKcal: number;
     proteinG: number;
     lemakG: number;
@@ -40,6 +43,7 @@ interface ProfileRow {
 interface TkpiHit {
   kode: string;
   nama: string;
+  namaId?: string;
   energiKcal: number;
   proteinG: number;
   bddPct: number;
@@ -87,6 +91,7 @@ export default function NutritionPage() {
   const [saving, setSaving] = useState(false);
   const [tkpiQ, setTkpiQ] = useState('');
   const [tkpiHits, setTkpiHits] = useState<TkpiHit[]>([]);
+  const [usdaHits, setUsdaHits] = useState<TkpiHit[]>([]);
   const [tkpiBusy, setTkpiBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -134,6 +139,7 @@ export default function NutritionPage() {
     setTkpiQ(q);
     if (q.trim().length < 2) {
       setTkpiHits([]);
+      setUsdaHits([]);
       return;
     }
     setTkpiBusy(true);
@@ -145,6 +151,7 @@ export default function NutritionPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal cari TKPI');
       setTkpiHits(Array.isArray(data.items) ? data.items : []);
+      setUsdaHits(Array.isArray(data.usdaItems) ? data.usdaItems : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal cari TKPI');
     } finally {
@@ -166,10 +173,35 @@ export default function NutritionPage() {
       toast.success(`Gizi dari TKPI ${kode} diterapkan`);
       setEdit(null);
       setTkpiHits([]);
+      setUsdaHits([]);
       setTkpiQ('');
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal terapkan TKPI');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyUsda(kode: string) {
+    if (!edit) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/nutrition-profiles/${edit.productId}/apply-usda`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({ usdaCode: kode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal terapkan USDA');
+      toast.success(`Gizi cadangan USDA ${kode} diterapkan`);
+      setEdit(null);
+      setTkpiHits([]);
+      setUsdaHits([]);
+      setTkpiQ('');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal terapkan USDA');
     } finally {
       setSaving(false);
     }
@@ -291,7 +323,9 @@ export default function NutritionPage() {
                     {row.kode} · {row.satuan}
                     {(row.tkpiCode || row.nutrition?.tkpiCode)
                       ? ` · TKPI ${row.tkpiCode || row.nutrition?.tkpiCode}`
-                      : ''}
+                      : (row.usdaCode || row.nutrition?.usdaCode)
+                        ? ` · USDA ${row.usdaCode || row.nutrition?.usdaCode}`
+                        : ''}
                   </div>
                 </td>
                 <td className="p-3">{row.nutrition?.basis || '—'}</td>
@@ -357,6 +391,7 @@ export default function NutritionPage() {
         if (!o) {
           setEdit(null);
           setTkpiHits([]);
+          setUsdaHits([]);
           setTkpiQ('');
         }
       }}>
@@ -365,10 +400,10 @@ export default function NutritionPage() {
             <DialogTitle>Gizi — {edit?.nama}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 border rounded-md p-3 bg-muted/30">
-            <Label className="text-xs">Cari & terapkan dari TKPI 2019</Label>
+            <Label className="text-xs">Cari TKPI 2019, atau cadangan USDA bila tidak ada</Label>
             <Input
               className="h-9"
-              placeholder="nama / kode TKPI (min. 2 huruf)"
+              placeholder="nama / kode (min. 2 huruf)"
               value={tkpiQ}
               onChange={(e) => void searchTkpi(e.target.value)}
             />
@@ -391,6 +426,27 @@ export default function NutritionPage() {
                   </li>
                 ))}
               </ul>
+            )}
+            {usdaHits.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[11px] font-medium text-amber-900">Cadangan USDA SR</p>
+                <ul className="max-h-36 overflow-y-auto text-sm divide-y border border-amber-200 rounded-md bg-amber-50/50">
+                  {usdaHits.map((hit) => (
+                    <li key={hit.kode} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                      <div className="min-w-0">
+                        <div className="font-mono text-[11px] text-muted-foreground">{hit.kode}</div>
+                        <div className="truncate">{hit.namaId || hit.nama}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {hit.energiKcal} kkal · P {hit.proteinG}g · USDA
+                        </div>
+                      </div>
+                      <Button size="sm" variant="outline" disabled={saving} onClick={() => void applyUsda(hit.kode)}>
+                        USDA
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
           <div className="grid grid-cols-2 gap-3 py-2">

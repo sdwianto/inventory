@@ -40,6 +40,11 @@ import {
   nutritionFromTkpiCode,
   akgProfileMeta,
 } from '@/lib/food-production/tkpi-catalog';
+import {
+  searchUsdaFoods,
+  getUsdaFood,
+  nutritionFromUsdaCode,
+} from '@/lib/food-production/usda-catalog';
 import type { HandlerContext } from '@/types/api/handler';
 
 function asNutritionRef(p: Record<string, unknown>): ProductNutritionRef {
@@ -49,6 +54,8 @@ function asNutritionRef(p: Record<string, unknown>): ProductNutritionRef {
     productNama: p.nama != null ? String(p.nama) : undefined,
     satuan: p.satuan != null ? String(p.satuan) : undefined,
     tkpiCode: p.tkpiCode != null ? String(p.tkpiCode) : undefined,
+    usdaCode: p.usdaCode != null ? String(p.usdaCode) : undefined,
+    recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
     nutrition: (p.nutrition as NutritionFacts | undefined) || null,
   };
 }
@@ -61,7 +68,7 @@ async function loadProductsByIds(
   if (!productIds.length) return new Map();
   const products = await db.collection('products')
     .find({ ...tenantFilter, id: { $in: productIds } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1, tkpiCode: 1 })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, nutrition: 1, tkpiCode: 1, usdaCode: 1, recipeBaseGrams: 1 })
     .toArray();
   return new Map(products.map((p) => [String(p.id), asNutritionRef(p as Record<string, unknown>)]));
 }
@@ -82,7 +89,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     if (missingOnly) filter.nutrition = { $exists: false };
     const list = await db.collection('products')
       .find(withTenantFilter(scopeAuth, filter))
-      .project({ id: 1, kode: 1, nama: 1, satuan: 1, aktif: 1, itemRole: 1, nutrition: 1, tkpiCode: 1 })
+      .project({ id: 1, kode: 1, nama: 1, satuan: 1, aktif: 1, itemRole: 1, nutrition: 1, tkpiCode: 1, usdaCode: 1 })
       .sort({ nama: 1 })
       .limit(500)
       .toArray();
@@ -95,6 +102,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       aktif: p.aktif !== false,
       itemRole: p.itemRole,
       tkpiCode: p.tkpiCode || (p.nutrition as NutritionFacts | undefined)?.tkpiCode || null,
+      usdaCode: p.usdaCode || (p.nutrition as NutritionFacts | undefined)?.usdaCode || null,
       hasNutrition: Boolean(p.nutrition),
       nutrition: p.nutrition || null,
     }));
@@ -124,11 +132,14 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     const kode = String(url.searchParams.get('kode') || '').trim();
     if (kode) {
       const row = getTkpiFood(kode);
-      if (!row) return err('Kode TKPI tidak ditemukan', 404);
-      return ok({ item: row });
+      if (row) return ok({ item: row, source: 'TKPI' });
+      const usda = getUsdaFood(kode);
+      if (!usda) return err('Kode gizi tidak ditemukan', 404);
+      return ok({ item: usda, source: 'USDA' });
     }
     return ok({
       items: searchTkpiFoods(q, limit),
+      usdaItems: searchUsdaFoods(q, limit),
       akgProfileOptions: AKG_PROFILE_OPTIONS,
     });
   }
@@ -411,7 +422,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     const nutrition = { ...normalized, updatedAt: now };
     await db.collection('products').updateOne(
       withTenantFilter(scopeAuth, { id: productId }),
-      { $set: { nutrition, tkpiCode: facts.tkpiCode, updatedAt: now } },
+      { $set: { nutrition, tkpiCode: facts.tkpiCode, updatedAt: now }, $unset: { usdaCode: 1 } },
     );
     await writeAuditLog(db, {
       tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
@@ -422,6 +433,51 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       ...auditActor(auth),
     });
     return ok(clean({ productId, tkpiCode: facts.tkpiCode, nutrition }));
+  }
+
+  if (
+    path[0] === 'nutrition-profiles'
+    && path[1]
+    && path[2] === 'apply-usda'
+    && method === 'POST'
+  ) {
+    const deniedRole = requireRole(auth, [...FP_MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const bodyRecord = (body || {}) as Record<string, unknown>;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: bodyRecord, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const productId = path[1];
+    const usdaCode = String(bodyRecord.usdaCode || '').trim();
+    if (!usdaCode) return err('usdaCode wajib');
+
+    const product = await db.collection('products').findOne(
+      withTenantFilter(scopeAuth, { id: productId }),
+    );
+    if (!product) return err('Produk tidak ditemukan', 404);
+
+    const facts = nutritionFromUsdaCode(usdaCode, product.satuan != null ? String(product.satuan) : null);
+    if (!facts) return err('Kode USDA tidak ditemukan', 404);
+
+    const normalized = normalizeNutritionFacts(facts);
+    if ('error' in normalized) return err(normalized.error, 400);
+
+    const now = new Date();
+    const nutrition = { ...normalized, updatedAt: now };
+    await db.collection('products').updateOne(
+      withTenantFilter(scopeAuth, { id: productId }),
+      { $set: { nutrition, usdaCode: facts.usdaCode, updatedAt: now }, $unset: { tkpiCode: 1 } },
+    );
+    await writeAuditLog(db, {
+      tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
+      action: 'NUTRITION_APPLY_USDA',
+      entityType: 'product_nutrition',
+      entityId: productId,
+      summary: `Gizi ${String(product.kode || product.nama || productId)} dari USDA ${facts.usdaCode}`,
+      ...auditActor(auth),
+    });
+    return ok(clean({ productId, usdaCode: facts.usdaCode, nutrition }));
   }
 
   if (path[0] === 'nutrition-profiles' && path[1] && path[1] !== 'analyze' && path[1] !== 'tkpi' && path[1] !== 'analyze-draft' && method === 'PUT') {
