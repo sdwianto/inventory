@@ -48,10 +48,17 @@ function tokenizeProductNama(nama: string): string[] {
     .filter((t) => t.length > 2 && !NAME_STOP.has(t) && !/^[a-z]{0,3}\d{4,}$/.test(t));
 }
 
-/** Token pertama untuk dialog pilih TKPI (Jagung manis → jagung). */
+/** Awalan kategori dagang — bukan nama bahan gizi. */
+const PICKER_GENERIC_PREFIX = new Set(['rempah', 'bumbu']);
+
+/** Token pencarian dialog gizi (Jagung manis → jagung; Rempah Kayu Manis → kayu manis). */
 export function tkpiPickerQuery(nama: string): string {
   const tokens = tokenizeProductNama(nama);
-  if (tokens[0]) return tokens[0];
+  let start = 0;
+  while (start < tokens.length && PICKER_GENERIC_PREFIX.has(tokens[start])) start += 1;
+  const useful = start > 0 ? tokens.slice(start) : tokens;
+  if (start > 0 && useful.length >= 2) return useful.join(' ');
+  if (useful[0]) return useful[0];
   const first = String(nama || '').trim().toLowerCase().split(/\s+/).find((t) => t.length > 1);
   return first || '';
 }

@@ -719,6 +719,28 @@
       "bddPct": 100
     },
     {
+      "kode": "USDA-02010",
+      "ndb": "02010",
+      "fdcId": 171320,
+      "nama": "Spices, cinnamon, ground",
+      "namaId": "Kayu manis (rempah), bubuk",
+      "aliases": [
+        "kayu manis",
+        "kayumanis",
+        "cinnamon",
+        "cassia",
+        "rempah kayu manis"
+      ],
+      "kelompok": "Bumbu",
+      "energiKcal": 247,
+      "proteinG": 3.99,
+      "lemakG": 1.24,
+      "karbohidratG": 80.59,
+      "seratG": 53.1,
+      "natriumMg": 10,
+      "bddPct": 100
+    },
+    {
       "kode": "USDA-11972",
       "ndb": "11972",
       "fdcId": 168573,

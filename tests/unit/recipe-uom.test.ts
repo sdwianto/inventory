@@ -105,6 +105,28 @@ describe('recipe-uom — kemasan / count base', () => {
     if ('error' in r) return;
     expect(r.qtyBase).toBeCloseTo(0.5);
   });
+
+  it('Minyak Sunco Refil 2L + TKPI gramsPerUnit 100 → 500 ML = 0,25 PCS', () => {
+    const product = {
+      satuan: 'PCS',
+      nama: 'Minyak Sunco Refil 2L',
+      nutrition: { gramsPerUnit: 100 },
+    };
+    expect(kitchenSatuanOptionsForBase('PCS', {
+      nama: product.nama,
+      gramsPerUnit: 100,
+    })).toEqual(expect.arrayContaining(['PCS', 'ML', 'L']));
+    expect(defaultKitchenSatuan('PCS', {
+      nama: product.nama,
+      gramsPerUnit: 100,
+    })).toBe('ML');
+
+    const r = toBaseRecipeQty(500, 'ML', product);
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.qtyBase).toBeCloseTo(0.25);
+    expect(r.baseSatuan).toBe('PCS');
+  });
 });
 
 describe('recipe-uom — opsi & default dapur', () => {

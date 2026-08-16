@@ -94,6 +94,7 @@ const GAP_SPECS: GapSpec[] = [
   { id: 'processed-cheese', test: /prochiz/i, ndb: '01042', namaId: 'Keju olahan slice', aliases: ['prochiz', 'keju slice', 'processed cheese'], kelompok: 'Susu', via: 'usda_sr' },
   { id: 'salt', test: /\bgaram\b/i, ndb: '02047', namaId: 'Garam meja', aliases: ['garam', 'garam kapal', 'table salt'], kelompok: 'Bumbu', via: 'usda_sr' },
   { id: 'cardamom', test: /kapulaga|cardamom/i, ndb: '02006', namaId: 'Kapulaga', aliases: ['kapulaga', 'cardamom'], kelompok: 'Bumbu', via: 'usda_sr' },
+  { id: 'cinnamon', test: /kayu\s*manis|cinnamon|cassia/i, ndb: '02010', namaId: 'Kayu manis (rempah), bubuk', aliases: ['kayu manis', 'kayumanis', 'cinnamon', 'cassia', 'rempah kayu manis'], kelompok: 'Bumbu', via: 'usda_sr' },
   { id: 'lemongrass', test: /serai|lemongrass|lemon\s*grass/i, ndb: '11972', namaId: 'Serai, segar', aliases: ['serai', 'batang serai', 'lemongrass'], kelompok: 'Bumbu', via: 'usda_sr' },
   { id: 'coriander', test: /ketumbar|coriander/i, ndb: '02013', namaId: 'Ketumbar biji', aliases: ['ketumbar', 'coriander'], kelompok: 'Bumbu', via: 'usda_sr' },
   { id: 'turmeric', test: /kunyit|turmeric/i, ndb: '02043', namaId: 'Kunyit bubuk', aliases: ['kunyit', 'turmeric'], kelompok: 'Bumbu', via: 'usda_sr' },

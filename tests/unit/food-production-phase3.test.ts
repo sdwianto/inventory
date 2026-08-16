@@ -319,6 +319,7 @@ describe('food-production phase 3', () => {
     expect(resolveUsdaCodeByProductName('Ultra Full Cream 200ml')?.kode).toBe('USDA-01077');
     expect(resolveUsdaCodeByProductName('Saori Saus Tiram 1ltr')?.kode).toBe('USDA-06176');
     expect(resolveUsdaCodeByProductName('Mayonnese Plan Maestro 1kg')?.kode).toBe('USDA-04025');
+    expect(resolveUsdaCodeByProductName('Rempah Kayu Manis')?.kode).toBe('USDA-02010');
 
     expect(resolveUsdaCodeByProductName('Kencur')).toBeNull();
     expect(resolveUsdaCodeByProductName('Micin Ajinomoto 1kg')).toBeNull();
@@ -336,9 +337,20 @@ describe('food-production phase 3', () => {
     expect(suggestUsdaMatches('Bumbu Rahasia XYZ', 3)).toEqual([]);
   });
 
+  it('maps kayu manis (missing from TKPI) to USDA SR 02010', () => {
+    expect(suggestTkpiMatches('Rempah Kayu Manis', 3)).toEqual([]);
+    expect(searchUsdaFoods('kayu', 10).some((h) => h.kode === 'USDA-02010')).toBe(true);
+    expect(searchUsdaFoods('kayu manis', 5)[0]?.kode).toBe('USDA-02010');
+    expect(searchUsdaFoods('rempah', 10).some((h) => h.kode === 'USDA-02010')).toBe(true);
+    expect(searchUsdaFoods('manis', 20).some((h) => h.kode === 'USDA-02010')).toBe(true);
+    expect(suggestUsdaMatches('Rempah Kayu Manis', 3)[0]?.kode).toBe('USDA-02010');
+    expect(nutritionFromUsdaCode('USDA-02010', 'GR')?.energiKcal).toBe(247);
+  });
+
   it('searchTkpiFoods jagung returns many ranked variants for the recipe picker', () => {
     expect(tkpiPickerQuery('Jagung manis')).toBe('jagung');
     expect(tkpiPickerQuery('B175812 Jagung manis')).toBe('jagung');
+    expect(tkpiPickerQuery('Rempah Kayu Manis')).toBe('kayu manis');
     const hits = searchTkpiFoods('jagung', 80);
     expect(hits.length).toBeGreaterThan(5);
     expect(hits.some((h) => /jagung muda/i.test(h.nama))).toBe(true);

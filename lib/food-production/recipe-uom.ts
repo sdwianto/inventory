@@ -5,8 +5,8 @@
  * Tidak mengubah aturan integer product_uom pengadaan.
  *
  * Packaged / count base (SAK, BTL, IKAT, …): isi `products.recipeBaseGrams`
- * (1 base unit = N gram) atau `recipeBaseMl` / `nutrition.gramsPerUnit` agar
- * resep boleh memakai GR/ML. Jika field kosong, infer dari nama (1kg/150g/600ml)
+ * (1 base unit = N gram) atau `recipeBaseMl`. `nutrition.gramsPerUnit` hanya
+ * cadangan konversi GR — tidak memblokir infer ML dari nama (1kg/150g/600ml/2L)
  * kecuali SKU operasional (shouldSkipRecipeNameInfer).
  */
 
@@ -93,33 +93,68 @@ export type RecipeConversionProduct = {
   nutrition?: { gramsPerUnit?: number | null } | null;
 };
 
+export type RecipeBridgeGramsSource = 'master' | 'inferred' | 'nutrition' | 'none';
+export type RecipeBridgeMlSource = 'master' | 'inferred' | 'none';
+
 export type RecipeBridgeResolved = {
   recipeBaseGrams: number | null;
   recipeBaseMl: number | null;
   source: 'master' | 'inferred' | 'none';
+  gramsSource: RecipeBridgeGramsSource;
+  mlSource: RecipeBridgeMlSource;
 };
 
-/** Master field menang; jika kosong, infer dari nama (kecuali skip operasional). */
+function nutritionGramsOf(product: RecipeConversionProduct | RecipeKitchenOpts): number | null {
+  if ('nutrition' in product) {
+    const fromNutrition = positiveOrNull(product.nutrition?.gramsPerUnit);
+    if (fromNutrition != null) return fromNutrition;
+  }
+  if ('gramsPerUnit' in product) return positiveOrNull(product.gramsPerUnit);
+  return null;
+}
+
+/**
+ * Master per dimensi (recipeBaseGrams / recipeBaseMl). Dimensi kosong diisi infer nama
+ * kecuali skip operasional. nutrition.gramsPerUnit hanya cadangan konversi GR —
+ * tidak memblokir infer ML (mis. Minyak …2L + TKPI PCS).
+ */
 export function resolveRecipeBridge(product: RecipeConversionProduct | RecipeKitchenOpts): RecipeBridgeResolved {
-  const masterGrams = positiveOrNull(
+  let grams = positiveOrNull(
     'recipeBaseGrams' in product ? product.recipeBaseGrams : undefined,
-  ) ?? positiveOrNull(
-    'nutrition' in product ? product.nutrition?.gramsPerUnit : undefined,
-  ) ?? positiveOrNull(
-    'gramsPerUnit' in product ? product.gramsPerUnit : undefined,
   );
-  const masterMl = positiveOrNull(product.recipeBaseMl);
-  if (masterGrams != null || masterMl != null) {
-    return { recipeBaseGrams: masterGrams, recipeBaseMl: masterMl, source: 'master' };
+  let ml = positiveOrNull(product.recipeBaseMl);
+  let gramsSource: RecipeBridgeGramsSource = grams != null ? 'master' : 'none';
+  let mlSource: RecipeBridgeMlSource = ml != null ? 'master' : 'none';
+
+  const skipInfer = shouldSkipRecipeNameInfer(product.kode, product.nama);
+  if (!skipInfer && (grams == null || ml == null)) {
+    const inferred = parsePackNetFromNama(product.nama);
+    if (grams == null && inferred.grams != null) {
+      grams = inferred.grams;
+      gramsSource = 'inferred';
+    }
+    if (ml == null && inferred.ml != null) {
+      ml = inferred.ml;
+      mlSource = 'inferred';
+    }
   }
-  if (shouldSkipRecipeNameInfer(product.kode, product.nama)) {
-    return { recipeBaseGrams: null, recipeBaseMl: null, source: 'none' };
+
+  if (grams == null) {
+    const fromNutrition = nutritionGramsOf(product);
+    if (fromNutrition != null) {
+      grams = fromNutrition;
+      gramsSource = 'nutrition';
+    }
   }
-  const inferred = parsePackNetFromNama(product.nama);
-  if (inferred.grams != null || inferred.ml != null) {
-    return { recipeBaseGrams: inferred.grams, recipeBaseMl: inferred.ml, source: 'inferred' };
-  }
-  return { recipeBaseGrams: null, recipeBaseMl: null, source: 'none' };
+
+  const source: RecipeBridgeResolved['source'] =
+    gramsSource === 'master' || mlSource === 'master'
+      ? 'master'
+      : gramsSource === 'inferred' || mlSource === 'inferred'
+        ? 'inferred'
+        : 'none';
+
+  return { recipeBaseGrams: grams, recipeBaseMl: ml, source, gramsSource, mlSource };
 }
 
 export type RecipeBridgeFactorSource = 'master' | 'inferred' | 'none';
@@ -140,8 +175,9 @@ export function reviewRecipeBridge(product: RecipeConversionProduct): RecipeBrid
     inferredMl: inferred.ml,
     factorSource: resolved.source,
     proposedKitchenDefault: defaultKitchenSatuan(product.satuan, {
-      recipeBaseGrams: resolved.recipeBaseGrams,
-      recipeBaseMl: resolved.recipeBaseMl,
+      recipeBaseGrams: product.recipeBaseGrams,
+      recipeBaseMl: product.recipeBaseMl,
+      gramsPerUnit: product.nutrition?.gramsPerUnit,
       nama: product.nama,
       kode: product.kode,
     }),
@@ -191,6 +227,9 @@ export function defaultKitchenSatuan(
   if (family === 'VOLUME') return 'ML';
   const bridge = resolveRecipeBridge({ ...opts, satuan: base });
   if (family === 'COUNT') {
+    if (bridge.recipeBaseMl != null && (bridge.gramsSource === 'nutrition' || bridge.gramsSource === 'none')) {
+      return 'ML';
+    }
     if (bridge.recipeBaseGrams != null) return 'GR';
     if (bridge.recipeBaseMl != null) return 'ML';
   }

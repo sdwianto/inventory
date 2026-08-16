@@ -73,7 +73,12 @@ export function searchUsdaFoods(q: string, limit = 40): UsdaFoodRow[] {
   const cap = Math.min(100, Math.max(1, Number(limit) || 40));
   const all = loadUsdaFoods();
   if (!needle) return all.slice(0, cap);
-  const hits = all.filter((row) => haystack(row).includes(needle));
+  const tokens = needle.split(/\s+/).filter(Boolean);
+  const hits = all.filter((row) => {
+    const hay = haystack(row);
+    if (hay.includes(needle)) return true;
+    return tokens.length > 1 && tokens.every((t) => hay.includes(t));
+  });
   hits.sort((a, b) => {
     const an = (a.namaId || a.nama).toLowerCase();
     const bn = (b.namaId || b.nama).toLowerCase();

@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { getUser } from '@/lib/auth-client';
 import { Apple, RefreshCw, Search } from 'lucide-react';
+import { tkpiPickerQuery } from '@/lib/food-production/tkpi-catalog';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
@@ -133,6 +134,8 @@ export default function NutritionPage() {
       natriumMg: n?.natriumMg != null ? String(n.natriumMg) : '',
       gulaG: n?.gulaG != null ? String(n.gulaG) : '',
     });
+    const needle = tkpiPickerQuery(row.nama || '') || String(row.nama || '');
+    void searchTkpi(needle);
   }
 
   async function searchTkpi(q: string) {

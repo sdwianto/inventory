@@ -37,6 +37,11 @@ import {
   toBaseRecipeQty,
   type RecipeConversionProduct,
 } from '@/lib/food-production/recipe-uom';
+import {
+  collectRecipeProductIds,
+  mergeProductCache,
+  missingProductIds,
+} from '@/lib/food-production/recipe-product-cache';
 import { formatNumber } from '@/lib/format';
 
 function toProductOpt(p: Record<string, unknown>): ProductOpt {
@@ -65,6 +70,19 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     usdaNama,
   };
 }
+
+function productRecordFromJson(data: unknown): Record<string, unknown> | null {
+  if (!data || typeof data !== 'object') return null;
+  const o = data as Record<string, unknown>;
+  if (o.id) return o;
+  const nested = o.data || o.item;
+  if (nested && typeof nested === 'object' && (nested as { id?: unknown }).id) {
+    return nested as Record<string, unknown>;
+  }
+  return null;
+}
+
+const HYDRATE_PRODUCT_MAX = 80;
 
 function HighlightNeedle({ text, needle }: { text: string; needle: string }) {
   const n = needle.trim();
@@ -297,6 +315,11 @@ export default function FoodProductionRecipePage() {
   const [tkpiBusy, setTkpiBusy] = useState(false);
   const [tkpiSaving, setTkpiSaving] = useState(false);
   const applyingTkpi = useRef(new Set<string>());
+  const hydratingRef = useRef(new Set<string>());
+  const productsRef = useRef<ProductOpt[]>([]);
+  const linesRef = useRef<RecipeLineForm[]>(lines);
+  productsRef.current = products;
+  linesRef.current = lines;
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<{
     summary?: { recipes: number; ready: number; blocked: number; productsAvailable?: number };
@@ -320,6 +343,33 @@ export default function FoodProductionRecipePage() {
   } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  const hydrateMissingProducts = useCallback(async (needed: string[]) => {
+    const missing = missingProductIds(needed, productsRef.current)
+      .filter((id) => !hydratingRef.current.has(id))
+      .slice(0, HYDRATE_PRODUCT_MAX);
+    if (!missing.length) return;
+    for (const id of missing) hydratingRef.current.add(id);
+    try {
+      const fetched = await Promise.all(missing.map(async (id) => {
+        try {
+          const res = await fetch(`/api/products/${encodeURIComponent(id)}`, {
+            headers: { ...actingTenantHeaders() },
+          });
+          if (!res.ok) return null;
+          const raw = productRecordFromJson(await res.json());
+          return raw ? toProductOpt(raw) : null;
+        } catch {
+          return null;
+        }
+      }));
+      const ok = fetched.filter((p): p is ProductOpt => Boolean(p?.id));
+      if (!ok.length) return;
+      setProducts((prev) => mergeProductCache(prev, ok));
+    } finally {
+      for (const id of missing) hydratingRef.current.delete(id);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -334,7 +384,8 @@ export default function FoodProductionRecipePage() {
       const kData = await kRes.json();
       const eData = await eRes.json();
       if (!rRes.ok) throw new Error(rData?.error || 'Gagal memuat resep');
-      setRows(Array.isArray(rData) ? rData : []);
+      const recipeRows: RecipeRow[] = Array.isArray(rData) ? rData : [];
+      setRows(recipeRows);
       if (kRes.ok && kData?.kode) setNextKode(String(kData.kode));
       if (eRes.ok && Array.isArray(eData)) {
         setExceptions(eData.map((row: Record<string, unknown>) => ({
@@ -347,17 +398,28 @@ export default function FoodProductionRecipePage() {
       const list = Array.isArray(pData)
         ? pData
         : (Array.isArray(pData?.items) ? pData.items : (Array.isArray(pData?.data) ? pData.data : []));
-      setProducts(list.map((p: Record<string, unknown>) => toProductOpt(p)));
+      const loaded = list.map((p: Record<string, unknown>) => toProductOpt(p));
+      const needed = collectRecipeProductIds(linesRef.current, recipeRows);
+      setProducts((prev) => {
+        const keep = prev.filter((p) => needed.includes(p.id));
+        return mergeProductCache(keep, loaded);
+      });
+      void hydrateMissingProducts(needed);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat resep');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hydrateMissingProducts]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    void hydrateMissingProducts(collectRecipeProductIds(lines, editing ? [editing] : []));
+  }, [open, lines, editing, hydrateMissingProducts]);
 
   useEffect(() => {
     if (!open) return;
@@ -676,6 +738,7 @@ export default function FoodProductionRecipePage() {
     );
     setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
     setOpen(true);
+    void hydrateMissingProducts(collectRecipeProductIds(row.lines || [], [row]));
   }
 
   function applyFromExisting(row: RecipeRow) {
@@ -696,6 +759,7 @@ export default function FoodProductionRecipePage() {
     setGambarPhotos(row.gambarUrl ? [row.gambarUrl] : []);
     setLoadedFrom({ kode: row.kode, nama: row.nama });
     setNamaSuggestOpen(false);
+    void hydrateMissingProducts(collectRecipeProductIds(row.lines || [], [row]));
     toast.message(`Detail dimuat dari ${row.kode} — ubah nama untuk simpan sebagai resep baru`);
   }
 
