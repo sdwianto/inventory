@@ -1,7 +1,6 @@
 /**
- * Cadangan gizi USDA SR Legacy — dipakai hanya jika bahan tidak ada di TKPI 2019.
- * Sumber resmi sama dengan tabel Andrafarm (daftar-usda); disimpan lokal agar ERP tidak
- * scrape situs pihak ketiga (Cloudflare) dan tidak bergantung API USDA saat hitung AKG.
+ * Cadangan gizi USDA SR Legacy — subset gap-fill, bukan seluruh ~8790 baris Andrafarm.
+ * Dipakai hanya jika bahan tidak ada di TKPI 2019. Nilai dari USDA SR resmi (bukan scrape).
  */
 
 import type { NutritionFacts } from '@/lib/food-production/nutrition';
@@ -103,15 +102,18 @@ export function suggestUsdaMatches(nama: string, limit = 3): UsdaMatchSuggestion
 
   for (const row of loadUsdaFoods()) {
     const aliases = (row.aliases || []).map((a) => a.toLowerCase());
-    const hit = aliases.find((a) => aliasInNama(raw, a));
-    if (!hit) continue;
+    const hits = aliases.filter((a) => aliasInNama(raw, a));
+    if (!hits.length) continue;
+    hits.sort((a, b) => b.length - a.length);
+    const hit = hits[0];
+    const prefix = raw === hit || raw.startsWith(`${hit} `) || raw.startsWith(hit);
     out.push({
       kode: row.kode,
       nama: row.nama,
       namaId: row.namaId,
       kelompok: row.kelompok,
       energiKcal: row.energiKcal,
-      score: raw === hit || raw.startsWith(hit) ? 1000 : 800,
+      score: (prefix ? 1000 : 800) + hit.length,
       via: 'alias',
     });
     used.add(row.kode);

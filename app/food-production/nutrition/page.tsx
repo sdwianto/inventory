@@ -400,7 +400,9 @@ export default function NutritionPage() {
             <DialogTitle>Gizi — {edit?.nama}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 border rounded-md p-3 bg-muted/30">
-            <Label className="text-xs">Cari TKPI 2019, atau cadangan USDA bila tidak ada</Label>
+            <Label className="text-xs">
+              Cari TKPI 2019, atau cadangan USDA (sebagian, bukan 8790) bila tidak ada
+            </Label>
             <Input
               className="h-9"
               placeholder="nama / kode (min. 2 huruf)"
@@ -429,7 +431,9 @@ export default function NutritionPage() {
             )}
             {usdaHits.length > 0 && (
               <div className="space-y-1">
-                <p className="text-[11px] font-medium text-amber-900">Cadangan USDA SR</p>
+                <p className="text-[11px] font-medium text-amber-900">
+                  Cadangan USDA SR (sebagian, gap TKPI — bukan katalog penuh)
+                </p>
                 <ul className="max-h-36 overflow-y-auto text-sm divide-y border border-amber-200 rounded-md bg-amber-50/50">
                   {usdaHits.map((hit) => (
                     <li key={hit.kode} className="flex items-center justify-between gap-2 px-2 py-1.5">

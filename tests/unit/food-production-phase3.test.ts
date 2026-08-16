@@ -14,7 +14,7 @@ import {
   AKG_COMPLIANCE_MIN_PCT,
 } from '@/lib/food-production/nutrition';
 import { resolveTkpiCodeByProductName, suggestTkpiMatches, searchTkpiFoods, tkpiPickerQuery } from '@/lib/food-production/tkpi-catalog';
-import { resolveUsdaCodeByProductName, suggestUsdaMatches, searchUsdaFoods, nutritionFromUsdaCode } from '@/lib/food-production/usda-catalog';
+import { resolveUsdaCodeByProductName, suggestUsdaMatches, searchUsdaFoods, nutritionFromUsdaCode, loadUsdaFoods } from '@/lib/food-production/usda-catalog';
 import { DEFAULT_PCT_KECIL, computeQtyKecil } from '@/lib/food-production/recipe';
 import {
   analyzeRecipeStandardCost,
@@ -295,6 +295,45 @@ describe('food-production phase 3', () => {
     });
     expect(analyzed.missingProductIds).toHaveLength(0);
     expect(analyzed.perPorsi.energiKcal).toBeCloseTo(6, 1);
+  });
+
+  it('USDA cadangan is a TKPI gap subset, not the full Andrafarm table', () => {
+    const n = loadUsdaFoods().length;
+    expect(n).toBeGreaterThanOrEqual(15);
+    expect(n).toBeLessThan(100);
+    expect(suggestTkpiMatches('Brokoli', 3)).toEqual([]);
+    expect(resolveUsdaCodeByProductName('Brokoli')?.kode).toBe('USDA-11090');
+    expect(resolveUsdaCodeByProductName('Quinoa')?.kode).toBe('USDA-20137');
+    expect(resolveUsdaCodeByProductName('Cranberi')?.kode).toBe('USDA-09078');
+  });
+
+  it('maps TKPI-miss master names (typo/spelling) to USDA SR, not analog junk', () => {
+    expect(suggestTkpiMatches('Strawbery', 3)).toEqual([]);
+    expect(resolveUsdaCodeByProductName('Strawbery')?.kode).toBe('USDA-09316');
+    expect(resolveUsdaCodeByProductName('Klengkeng Super')?.kode).toBe('USDA-09172');
+    expect(nutritionFromUsdaCode('USDA-09172', 'GR')?.energiKcal).toBe(60);
+
+    expect(resolveUsdaCodeByProductName('Brokoli Putih (Brungkul)')?.kode).toBe('USDA-11135');
+    expect(resolveUsdaCodeByProductName('Pokcoy')?.kode).toBe('USDA-11116');
+    expect(resolveUsdaCodeByProductName('Cabe Merah Besar')?.kode).toBe('USDA-11819');
+    expect(resolveUsdaCodeByProductName('Ultra Full Cream 200ml')?.kode).toBe('USDA-01077');
+    expect(resolveUsdaCodeByProductName('Saori Saus Tiram 1ltr')?.kode).toBe('USDA-06176');
+    expect(resolveUsdaCodeByProductName('Mayonnese Plan Maestro 1kg')?.kode).toBe('USDA-04025');
+
+    expect(resolveUsdaCodeByProductName('Kencur')).toBeNull();
+    expect(resolveUsdaCodeByProductName('Micin Ajinomoto 1kg')).toBeNull();
+    expect(resolveUsdaCodeByProductName('Plastik Klip 15X15')).toBeNull();
+  });
+
+  it('leaves unknown ingredients missing when neither TKPI nor USDA matches', () => {
+    const resolved = resolveProductNutrition({
+      productId: 'xyz',
+      productNama: 'Bumbu Rahasia XYZ',
+      satuan: 'PCS',
+      nutrition: null,
+    });
+    expect(resolved.nutrition).toBeNull();
+    expect(suggestUsdaMatches('Bumbu Rahasia XYZ', 3)).toEqual([]);
   });
 
   it('searchTkpiFoods jagung returns many ranked variants for the recipe picker', () => {

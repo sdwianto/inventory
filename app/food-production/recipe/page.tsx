@@ -1429,8 +1429,9 @@ export default function FoodProductionRecipePage() {
             <DialogTitle>Pilih gizi — {tkpiPick?.nama}</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">
-            Utamakan TKPI 2019. Jika tidak ada, pakai cadangan USDA SR Legacy
-            (sumber yang sama dengan tabel Andrafarm). Tersimpan ke master produk.
+            Utamakan TKPI 2019 (~1148 bahan). Jika tidak ada, pakai cadangan USDA SR
+            (sebagian, hanya bahan di luar TKPI — bukan 8790 baris tabel Andrafarm).
+            Pilihan tersimpan ke master produk.
           </p>
           <div className="space-y-2 py-1">
             <Input
@@ -1446,7 +1447,7 @@ export default function FoodProductionRecipePage() {
             {tkpiBusy && <p className="text-[11px] text-muted-foreground">Mencari…</p>}
             {!tkpiBusy && tkpiHits.length === 0 && usdaHits.length === 0 && tkpiQ.trim().length >= 2 && (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                Tidak ada di TKPI 2019 maupun cadangan USDA.
+                Tidak ada di TKPI 2019 maupun cadangan USDA (sebagian).
               </p>
             )}
             {tkpiHits.length > 0 && (
@@ -1477,7 +1478,8 @@ export default function FoodProductionRecipePage() {
             {usdaHits.length > 0 && (
               <div className="space-y-1">
                 <p className="text-[11px] font-medium text-amber-900">
-                  Cadangan USDA {tkpiHits.length ? '(jika TKPI tidak cocok)' : '(tidak ada di TKPI 2019)'}
+                  Cadangan USDA (sebagian, gap TKPI)
+                  {tkpiHits.length ? ' — pakai jika TKPI tidak cocok' : ' — tidak ada di TKPI 2019'}
                 </p>
                 <ul className="max-h-48 overflow-y-auto text-sm divide-y border border-amber-200 rounded-md bg-amber-50/40">
                   {usdaHits.map((hit) => (
