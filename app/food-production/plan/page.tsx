@@ -51,12 +51,15 @@ import {
   kategoriPorsiListLabel,
   getRecipeBufferPct,
   isPlanEditable,
+  canEditPlanMaterials,
   materialOverrideKey,
   normalizeKategoriPorsiList,
   summarizePlanLines,
   mergeProductionPlanLines,
   totalTargetPorsi,
   consolidateBlockedReason,
+  cookDateFromPlanTanggal,
+  procureDateFromPlanTanggal,
   type KategoriPorsi,
   type PlanMaterialOverride,
   type ProductionPlanStatus,
@@ -289,6 +292,7 @@ function FoodProductionPlanPageContent() {
   const [stockFetchPending, setStockFetchPending] = useState<Record<string, boolean>>({});
   const [readinessById, setReadinessById] = useState<Record<string, MaterialReadiness>>({});
   const [procuringId, setProcuringId] = useState<string | null>(null);
+  const [refreshingProcureId, setRefreshingProcureId] = useState<string | null>(null);
   const [regeneratingMrpId, setRegeneratingMrpId] = useState<string | null>(null);
   /** Draft input qty kebutuhan: planId::recipeId::productId → string */
   const [qtyOverrideDraft, setQtyOverrideDraft] = useState<Record<string, string>>({});
@@ -850,6 +854,18 @@ function FoodProductionPlanPageContent() {
     setOpen(true);
   }
 
+  function canEditMaterialsForRow(row: PlanRow): boolean {
+    if (!canManage) return false;
+    const linkedPoStatus = readinessById[row.id]?.linkedPo?.status;
+    return canEditPlanMaterials(row.status, linkedPoStatus);
+  }
+
+  function poReviewUrl(poId: string, edit = false): string {
+    const q = new URLSearchParams({ highlight: poId });
+    if (edit) q.set('edit', '1');
+    return `/pembelian-po?${q.toString()}`;
+  }
+
   function openEdit(row: PlanRow) {
     if (!isPlanEditable(row.status)) {
       toast.error(`Status ${PLAN_STATUS_LABELS[row.status]} tidak dapat diubah`);
@@ -1247,6 +1263,10 @@ function FoodProductionPlanPageContent() {
       else if (input.excluded === true) toast.success('Item dicoret — tidak masuk MRP/PO');
       else if (input.excluded === false) toast.success('Coret dibatalkan — item aktif lagi');
       else toast.success('Qty kebutuhan disimpan (dipakai ke MRP/PO)');
+      const linkedSt = String(readinessById[row.id]?.linkedPo?.status || '').toUpperCase();
+      if (linkedSt === 'DRAFT' || linkedSt === 'REJECTED') {
+        toast.message('Draft PO perlu diperbarui agar baris belanja sesuai — gunakan Perbarui Draft PO');
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan');
     } finally {
@@ -1273,7 +1293,7 @@ function FoodProductionPlanPageContent() {
     const hasQtyOverride = qtyOv && Number(ov!.qty) !== Number(ing.qty);
     const displayQty = qtyOv ? Number(ov!.qty) : ing.qty;
     const draftKey = overrideDraftKey(row.id, recipeId, ing.productId);
-    const canEditQty = canManage && isPlanEditable(row.status);
+    const canEditQty = canEditMaterialsForRow(row);
     const draftVal = qtyOverrideDraft[draftKey];
     const saving = savingOverrideKey === draftKey;
 
@@ -1422,7 +1442,7 @@ function FoodProductionPlanPageContent() {
     const { row, recipeId, ing } = input;
     const ov = getPlanOverride(row, recipeId, ing.productId);
     const excluded = ov?.excluded === true;
-    const canEdit = canManage && isPlanEditable(row.status);
+    const canEdit = canEditMaterialsForRow(row);
     const draftKey = overrideDraftKey(row.id, recipeId, ing.productId);
     const saving = savingOverrideKey === draftKey;
 
@@ -1550,7 +1570,7 @@ function FoodProductionPlanPageContent() {
         if (ready && !ready.issueCompleted) {
           if (!ready.materialsReady) {
             throw new Error(
-              `Tidak bisa diproses — masih kurang ${ready.shortageCount || '?'} item. Buat PO ke Vendor dulu.`,
+              `Tidak bisa diproses — masih kurang ${ready.shortageCount || '?'} item. Buat Draft Belanja dulu.`,
             );
           }
           throw new Error(
@@ -1583,7 +1603,7 @@ function FoodProductionPlanPageContent() {
         if (ready?.materialsReady) {
           toast.message('Bahan lengkap — silakan Keluarkan Barang');
         } else if (ready && ready.shortageCount > 0) {
-          toast.message(`Ada ${ready.shortageCount} item kurang — buat PO ke Vendor`);
+          toast.message(`Ada ${ready.shortageCount} item kurang — buat Draft Belanja`);
         }
       }
     } catch (e) {
@@ -1659,13 +1679,20 @@ function FoodProductionPlanPageContent() {
       }
       await fetchReadiness(row.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Gagal hitung ulang MRP');
+      const msg = e instanceof Error ? e.message : 'Gagal hitung ulang MRP';
+      if (msg.includes('permintaan pembelian (PR) aktif')) {
+        toast.error(msg, {
+          description: 'Jika Draft PO dari rencana ini, gunakan Perbarui Draft PO.',
+        });
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setRegeneratingMrpId(null);
     }
   }
 
-  /** Kekurangan stok → satu API (explode sekali → MRP → PR → submit sync CreateSO). */
+  /** Kekurangan stok → explode → MRP → PR → Draft CPO (review wajib di PO ke Vendor). */
   async function procureShortage(row: PlanRow) {
     setProcuringId(row.id);
     try {
@@ -1673,7 +1700,7 @@ function FoodProductionPlanPageContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
         body: JSON.stringify({
-          tanggalKedatangan: row.tanggal,
+          tanggalKedatangan: procureDateFromPlanTanggal(row.tanggal),
           catatan: `Dari rencana ${row.noDokumen}`,
         }),
       });
@@ -1683,19 +1710,15 @@ function FoodProductionPlanPageContent() {
         linkedPo?: { id?: string; noPO?: string; status?: string };
         draftCpoId?: string;
         draftCpoNo?: string;
-        noPO?: string;
         poStatus?: string;
-        vendorSynced?: boolean;
-        vendorNoSO?: string;
-        vendorSyncError?: string;
-        submitError?: string;
         message?: string;
       };
-      if (!res.ok) throw new Error(data?.error || 'Gagal buat PO ke Vendor');
+      if (!res.ok) throw new Error(data?.error || 'Gagal buat draft belanja');
 
       if (data.linkedPo?.id) {
+        const st = String(data.linkedPo.status || '').toUpperCase();
         toast.message(data.message || `PO ${data.linkedPo.noPO || ''} sudah ada`);
-        router.push(`/pembelian-po?highlight=${data.linkedPo.id}`);
+        router.push(poReviewUrl(data.linkedPo.id, st === 'DRAFT'));
         return;
       }
       if (data.materialsReady) {
@@ -1707,32 +1730,68 @@ function FoodProductionPlanPageContent() {
       const cpoId = String(data.draftCpoId || '');
       if (!cpoId) throw new Error('Draft PO tidak terbentuk');
 
-      if (data.submitError) {
-        toast.message(
-          data.message
-            || `PO ${data.draftCpoNo || ''} dibuat (Draft). Buka PO ke Vendor untuk kirim — ${data.submitError}`,
-        );
-        router.push(`/pembelian-po?highlight=${cpoId}`);
+      toast.success(
+        data.message
+          || `Draft PO ${data.draftCpoNo || ''} — edit baris belanja sebelum kirim`,
+      );
+      void fetchReadiness(row.id);
+      router.push(poReviewUrl(cpoId, true));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal buat draft belanja');
+    } finally {
+      setProcuringId(null);
+    }
+  }
+
+  async function refreshProcureDraft(row: PlanRow) {
+    const okConfirm = await confirm({
+      title: 'Perbarui Draft PO?',
+      description:
+        `${row.noDokumen}: kebutuhan bahan dihitung ulang dari resep/acuan terkini. `
+        + 'Draft PO lama diganti draft baru — review ulang sebelum kirim ke vendor.',
+      confirmText: 'Perbarui',
+      variant: 'warning',
+    });
+    if (!okConfirm) return;
+
+    setRefreshingProcureId(row.id);
+    try {
+      const res = await fetch(`/api/production-plans/${row.id}/refresh-procure-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
+        body: JSON.stringify({
+          tanggalKedatangan: procureDateFromPlanTanggal(row.tanggal),
+          catatan: `Perbarui dari rencana ${row.noDokumen}`,
+        }),
+      });
+      const data = await res.json() as {
+        error?: string;
+        materialsReady?: boolean;
+        draftCpoId?: string;
+        draftCpoNo?: string;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(data?.error || 'Gagal perbarui draft belanja');
+
+      if (data.materialsReady) {
+        toast.success(data.message || 'Bahan lengkap — siap Ambil Bahan');
+        void fetchReadiness(row.id);
         return;
       }
 
-      if (data.vendorSynced) {
-        toast.success(
-          data.message
-            || `PO ${data.noPO || data.draftCpoNo || ''} → SO ${data.vendorNoSO || 'vendor'}`,
-        );
-      } else if (data.vendorSyncError) {
-        toast.error('PO dibuat, gagal kirim ke vendor', {
-          description: String(data.vendorSyncError),
-        });
-      } else {
-        toast.success(data.message || `PO ${data.noPO || data.draftCpoNo || ''} → ${data.poStatus || 'APPROVED'}`);
-      }
-      router.push(`/pembelian-po?highlight=${cpoId}`);
+      const cpoId = String(data.draftCpoId || '');
+      if (!cpoId) throw new Error('Draft PO tidak terbentuk');
+
+      toast.success(
+        data.message
+          || `Draft PO ${data.draftCpoNo || ''} diperbarui — review sebelum kirim`,
+      );
+      void fetchReadiness(row.id);
+      router.push(poReviewUrl(cpoId, true));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Gagal buat PO ke Vendor');
+      toast.error(e instanceof Error ? e.message : 'Gagal perbarui draft belanja');
     } finally {
-      setProcuringId(null);
+      setRefreshingProcureId(null);
     }
   }
 
@@ -1797,7 +1856,7 @@ function FoodProductionPlanPageContent() {
             Rencana Produksi
           </h1>
           <p className="text-sm text-slate-500">
-            Pilih tanggal → susun menu &amp; porsi · Disetujui + bahan lengkap → Ambil Bahan · Kekurangan → PO ke Vendor
+            Pilih tanggal menu (distribusi pagi) → susun porsi · Barang datang &amp; masak malam H-1 · Disetujui + bahan lengkap → Ambil Bahan · Kekurangan → Buat Draft Belanja → review PO → Ajukan/Kirim vendor
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
@@ -2038,7 +2097,9 @@ function FoodProductionPlanPageContent() {
                   {expanded && (
                     <div className="border-t bg-slate-50/50 px-3 py-3 space-y-3">
                       <div className="text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
-                        <span>Tanggal: <strong className="text-foreground">{row.tanggal}</strong></span>
+                        <span>Menu / distribusi: <strong className="text-foreground">{row.tanggal}</strong></span>
+                        <span>Masak malam: <strong className="text-foreground">{cookDateFromPlanTanggal(row.tanggal)}</strong></span>
+                        <span>Barang datang: <strong className="text-foreground">{procureDateFromPlanTanggal(row.tanggal)}</strong></span>
                         {kpList.length > 0 && (
                           <span>
                             Kategori:{' '}
@@ -2050,6 +2111,12 @@ function FoodProductionPlanPageContent() {
                         )}
                         {row.catatan && <span>Catatan: {row.catatan}</span>}
                       </div>
+
+                      {canEditMaterialsForRow(row) && row.status === 'APPROVED' && (
+                        <p className="text-[11px] text-amber-800 bg-amber-50/80 border border-amber-200/80 rounded px-2 py-1">
+                          Qty bahan bisa diubah sampai PO dikirim ke vendor. Setelah ubah, gunakan Perbarui Draft PO.
+                        </p>
+                      )}
 
                       {planAkgById[row.id] && (
                         <div className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-slate-800">
@@ -2597,6 +2664,9 @@ function FoodProductionPlanPageContent() {
                             const poReceived = ['RECEIVED', 'INVOICED', 'FULFILLED', 'PARTIAL'].includes(
                               String(ready.linkedPo?.status || '').toUpperCase(),
                             );
+                            const linkedPoStatus = String(ready.linkedPo?.status || '').toUpperCase();
+                            const linkedPoDraft = linkedPoStatus === 'DRAFT';
+                            const linkedPoRefreshable = linkedPoDraft || linkedPoStatus === 'REJECTED';
                             return (
                               <>
                                 <button
@@ -2614,20 +2684,52 @@ function FoodProductionPlanPageContent() {
                                 >
                                   Kurang {ready.shortageCount} item
                                 </button>
+                                {linkedPoDraft && (
+                                  <span className="text-xs text-amber-700 px-1 font-medium">
+                                    Draft PO menunggu review
+                                  </span>
+                                )}
                                 {poReceived && (
                                   <span className="text-xs text-amber-700 px-1">
                                     PO sudah diterima — cek qty/stok gudang produk
                                   </span>
                                 )}
                                 {ready.linkedPo?.id ? (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => router.push(`/pembelian-po?highlight=${ready.linkedPo!.id}`)}
-                                  >
-                                    <ShoppingBag className="h-4 w-4 mr-1" />
-                                    Lihat PO {ready.linkedPo.noPO || ''}
-                                  </Button>
+                                  <>
+                                    {linkedPoDraft ? (
+                                      <Button
+                                        variant="default"
+                                        size="sm"
+                                        onClick={() => router.push(poReviewUrl(ready.linkedPo!.id, true))}
+                                      >
+                                        <ShoppingBag className="h-4 w-4 mr-1" />
+                                        Edit Draft PO {ready.linkedPo.noPO || ''}
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => router.push(poReviewUrl(ready.linkedPo!.id))}
+                                      >
+                                        <ShoppingBag className="h-4 w-4 mr-1" />
+                                        Lihat PO {ready.linkedPo.noPO || ''}
+                                      </Button>
+                                    )}
+                                    {canManage && linkedPoRefreshable && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={refreshingProcureId === row.id}
+                                        onClick={() => void refreshProcureDraft(row)}
+                                      >
+                                        <RefreshCw className={cn(
+                                          'h-4 w-4 mr-1',
+                                          refreshingProcureId === row.id && 'animate-spin',
+                                        )} />
+                                        {refreshingProcureId === row.id ? 'Memperbarui…' : 'Perbarui Draft PO'}
+                                      </Button>
+                                    )}
+                                  </>
                                 ) : canManage ? (
                                   <Button
                                     variant="outline"
@@ -2636,7 +2738,7 @@ function FoodProductionPlanPageContent() {
                                     onClick={() => void procureShortage(row)}
                                   >
                                     <ShoppingBag className="h-4 w-4 mr-1" />
-                                    {procuringId === row.id ? 'Menyiapkan PO…' : 'PO ke Vendor'}
+                                    {procuringId === row.id ? 'Menyiapkan draft…' : 'Buat Draft Belanja'}
                                   </Button>
                                 ) : null}
                               </>
@@ -2907,12 +3009,19 @@ function FoodProductionPlanPageContent() {
           </DialogHeader>
           <div className="grid gap-3 py-2 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>Tanggal masak *</Label>
+              <Label>Tanggal menu / distribusi *</Label>
               <Input
                 type="date"
                 value={form.tanggal}
                 onChange={(e) => setForm((f) => ({ ...f, tanggal: e.target.value }))}
               />
+              {form.tanggal && (
+                <p className="text-[11px] text-muted-foreground">
+                  Masak malam {cookDateFromPlanTanggal(form.tanggal)}
+                  {' · '}barang datang {procureDateFromPlanTanggal(form.tanggal)}
+                  {' · '}distribusi pagi {form.tanggal}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Dapur *</Label>
@@ -3295,7 +3404,7 @@ function FoodProductionPlanPageContent() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground font-normal">
-              Dokumen kebutuhan bahan untuk tanggal masak terkait — pola Acuan Pengadaan.
+              Dokumen kebutuhan bahan untuk masak malam H-1 (barang datang sehari sebelum distribusi pagi).
               Gunakan Cetak / PDF lalu pilih &quot;Save as PDF&quot; di dialog printer.
             </p>
           </DialogHeader>

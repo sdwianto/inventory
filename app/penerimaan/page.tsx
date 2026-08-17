@@ -22,7 +22,7 @@ import { useInvalidateHutangBadges } from '@/lib/hooks/use-nav-badges';
 import { useGrnMutations } from '@/lib/hooks/use-grn-mutations';
 import { useBgJob, BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
 import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
-import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { OfflineQueuedError, fetchOrQueue } from '@/lib/offline-mutation-queue';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { fetchJson } from '@/lib/fetch-json';
 import LineUomSelect from '@/components/uom/LineUomSelect';
@@ -48,6 +48,20 @@ const STATUS_LABEL = {
 };
 
 const isUnresolvedGrn = (status: string) => status === 'UNKNOWN_PRODUCT' || status === 'NEEDS_MAPPING';
+
+const REJECT_STATUS_LABEL: Record<string, string> = {
+  PENDING: 'Menunggu tindak lanjut',
+  RTV_CREATED: 'RTV dibuat',
+  RESOLVED: 'Selesai',
+};
+
+/** GRN lama (diposting sebelum rejectStatus ada) tidak punya field ini — anggap PENDING juga. */
+const effectiveRejectStatus = (it: JsonObject) => str(it.rejectStatus, 'PENDING');
+
+const hasPendingRejectedItems = (row: JsonObject) => (
+  str(row.status) === 'POSTED'
+  && (asArray(row.items) as JsonObject[]).some((it) => num(it.qtyRejected) > 0 && effectiveRejectStatus(it) === 'PENDING')
+);
 
 function supplierLabel(row: JsonObject | null | undefined) {
   return str(row?.supplierName) || str(row?.vendorTenantName) || str(row?.vendorName) || '—';
@@ -147,6 +161,7 @@ export default function PenerimaanPage() {
   const [replayingInvoice, setReplayingInvoice] = useState('');
   const [pollInvoiceGrnId, setPollInvoiceGrnId] = useState<string | null>(null);
   const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
+  const [creatingRtvKey, setCreatingRtvKey] = useState('');
 
   const detailItems = useMemo(
     () => (detail ? asArray(detail.items) as JsonObject[] : []),
@@ -261,6 +276,37 @@ export default function PenerimaanPage() {
       toast.error(e instanceof Error ? e.message : String(e));
     }
     setLoadingDo('');
+  };
+
+  const createRtvFromReject = async (grnId: string, lineId: string, defaultReason: string) => {
+    const key = `${grnId}:${lineId}`;
+    setCreatingRtvKey(key);
+    try {
+      const res = await fetchOrQueue('/api/vendor-returns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'grn-reject', grnId, lineId, reason: defaultReason }),
+        offlineLabel: 'Buat RTV dari item ditolak',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal membuat RTV');
+      toast.success(`RTV ${data.noReturn} dibuat — lanjutkan post di halaman Retur Vendor`);
+      invalidateGrn();
+      reload();
+      const fresh = await queryClient.fetchQuery({
+        queryKey: queryKeys.goodsReceipts.detail(grnId),
+        queryFn: () => fetchJson<JsonObject>(`/api/goods-receipts/${grnId}`),
+        staleTime: 0,
+      });
+      setDoView(fresh);
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) {
+        toast.info('Buat RTV disimpan offline — akan disinkron saat online');
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setCreatingRtvKey('');
   };
 
   const doTotal = (g: JsonObject | null | undefined) => (asArray(g?.items) as JsonObject[]).reduce(
@@ -408,9 +454,19 @@ export default function PenerimaanPage() {
         {str(r.lokasi) || (rStatus === 'POSTED' ? '—' : '')}
       </td>
       <td className="px-3 py-2 text-center whitespace-nowrap">
-        <span className={`inline-block px-2 py-0.5 rounded text-xs ${STATUS_STYLE[rStatus as keyof typeof STATUS_STYLE] || 'bg-slate-100'}`}>
-          {STATUS_LABEL[rStatus as keyof typeof STATUS_LABEL] || rStatus}
-        </span>
+        <div className="flex flex-col items-center gap-1">
+          <span className={`inline-block px-2 py-0.5 rounded text-xs ${STATUS_STYLE[rStatus as keyof typeof STATUS_STYLE] || 'bg-slate-100'}`}>
+            {STATUS_LABEL[rStatus as keyof typeof STATUS_LABEL] || rStatus}
+          </span>
+          {hasPendingRejectedItems(r) && (
+            <span
+              className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800"
+              title="Ada item ditolak yang belum ditindaklanjuti — klik baris untuk buat RTV"
+            >
+              Item ditolak
+            </span>
+          )}
+        </div>
       </td>
       <td className="px-3 py-2 whitespace-nowrap">
         <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -472,6 +528,18 @@ export default function PenerimaanPage() {
             {' '}Sinkron katalog dari <Link href="/integrasi" className="underline font-medium">Integrasi</Link>
             {' '}atau daftarkan manual di{' '}
             <Link href="/produk" className="underline font-medium">Master Produk</Link>.
+          </div>
+        )}
+        {list.some(hasPendingRejectedItems) && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-900">
+            <strong>{list.filter(hasPendingRejectedItems).length} GRN</strong>
+            {' '}memiliki item ditolak yang belum ditindaklanjuti — lihat label{' '}
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800 align-middle">Item ditolak</span>
+            {' '}di kolom Status:{' '}
+            <strong>
+              {list.filter(hasPendingRejectedItems).map((r) => str(r.noGRN)).join(', ')}
+            </strong>
+            . Klik baris GRN untuk lihat detail dan buat RTV (retur ke vendor).
           </div>
         )}
         {error && (
@@ -637,7 +705,13 @@ export default function PenerimaanPage() {
                     step="any"
                     className="h-9"
                     value={str(rejectQtyMap[rowKey], '0')}
-                    onChange={(e) => setRejectQtyMap({ ...rejectQtyMap, [rowKey]: e.target.value })}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setRejectQtyMap({ ...rejectQtyMap, [rowKey]: raw });
+                      const rejected = Math.min(Math.max(parseFloat(raw) || 0, 0), maxQtyInCurrentUom || Infinity);
+                      const nextTerima = Math.max(0, Math.round((maxQtyInCurrentUom - rejected) * 1000) / 1000);
+                      setQtyMap({ ...qtyMap, [rowKey]: String(nextTerima) });
+                    }}
                   />
                 </div>
                 {rejectQty > 0 && (
@@ -793,14 +867,49 @@ export default function PenerimaanPage() {
             <div className="space-y-1.5">
               <p className="text-[11px] uppercase tracking-wide text-red-500">Item ditolak</p>
               <div className="space-y-1">
-                {(asArray(doView?.items) as JsonObject[]).filter((it) => num(it.qtyRejected) > 0).map((it, idx) => (
-                  <div key={itemRowKey(it, idx)} className="text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5">
-                    <span className="font-medium">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</span>
-                    {' · '}
-                    <span className="text-red-700">{formatNumber(num(it.qtyRejected))} {str(it.satuan) || 'unit'} ditolak</span>
-                    {str(it.rejectReason) ? <span className="text-slate-600"> — {str(it.rejectReason)}</span> : null}
-                  </div>
-                ))}
+                {(asArray(doView?.items) as JsonObject[]).filter((it) => num(it.qtyRejected) > 0).map((it, idx) => {
+                  const lineId = str(it.lineId);
+                  const rejectStatus = effectiveRejectStatus(it);
+                  const rtvKey = `${str(doView?.id)}:${lineId}`;
+                  return (
+                    <div
+                      key={itemRowKey(it, idx)}
+                      className="text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5 flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <div>
+                        <span className="font-medium">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</span>
+                        {' · '}
+                        <span className="text-red-700">{formatNumber(num(it.qtyRejected))} {str(it.satuan) || 'unit'} ditolak</span>
+                        {str(it.rejectReason) ? <span className="text-slate-600"> — {str(it.rejectReason)}</span> : null}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap ${
+                          rejectStatus === 'PENDING' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                        >
+                          {REJECT_STATUS_LABEL[rejectStatus] || rejectStatus}
+                        </span>
+                        {rejectStatus === 'PENDING' && lineId && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[11px] text-red-700 border-red-300 hover:bg-red-50"
+                            disabled={creatingRtvKey === rtvKey}
+                            onClick={() => createRtvFromReject(str(doView?.id), lineId, str(it.rejectReason) || 'Ditolak saat terima barang')}
+                          >
+                            {creatingRtvKey === rtvKey ? 'Membuat…' : 'Buat RTV'}
+                          </Button>
+                        )}
+                        {rejectStatus !== 'PENDING' && str(it.rejectNoReturn) && (
+                          <Link href="/retur-vendor" className="text-[11px] text-blue-700 underline whitespace-nowrap">
+                            {str(it.rejectNoReturn)}
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

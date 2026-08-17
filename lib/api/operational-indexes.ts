@@ -76,6 +76,7 @@ const INDEX_SPECS: IndexSpec[] = [
     partialFilterExpression: { vendorDeliveryId: { $type: 'string', $gt: '' } },
   },
   { collection: 'goods_receipts', index: { tenantId: 1, status: 1, 'items.vendorKode': 1 }, name: 'idx_grn_tenant_status_kode' },
+  { collection: 'goods_receipts', index: { tenantId: 1, status: 1, 'items.rejectStatus': 1 }, name: 'idx_grn_tenant_status_rejectstatus' },
   {
     collection: 'goods_receipts',
     index: { correlationId: 1 },

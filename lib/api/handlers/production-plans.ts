@@ -14,6 +14,7 @@ import {
   normalizeMaterialOverrides,
   upsertMaterialOverride,
   isPlanEditable,
+  canEditPlanMaterials,
   isIsoDate,
   normalizeKategoriPorsiList,
   totalTargetPorsi,
@@ -650,8 +651,22 @@ export async function handleProductionPlans({
       withTenantFilter(scopeAuth, { id }),
     ) as ProductionPlanDoc | null;
     if (!existing) return err('Rencana tidak ditemukan', 404);
-    if (!isPlanEditable(existing.status)) {
-      return err(`Qty kebutuhan hanya dapat diubah saat Draft/Diajukan (status: ${existing.status})`, 400);
+
+    const linkedPo = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, {
+        productionPlanId: id,
+        status: { $nin: ['CANCELLED'] },
+      }),
+      { sort: { createdAt: -1 }, projection: { status: 1 } },
+    );
+    const linkedPoStatus = linkedPo?.status ? String(linkedPo.status) : null;
+    if (!canEditPlanMaterials(existing.status, linkedPoStatus)) {
+      return err(
+        linkedPoStatus && !['DRAFT', 'REJECTED'].includes(linkedPoStatus.toUpperCase())
+          ? `Qty kebutuhan terkunci — PO sudah ${linkedPoStatus}`
+          : `Qty kebutuhan hanya dapat diubah saat Draft/Diajukan atau Disetujui (PO belum final)`,
+        400,
+      );
     }
 
     const clear = planBody.clear === true;
@@ -811,7 +826,7 @@ export async function handleProductionPlans({
         const shortageCount = Number(readiness.summary?.shortageCount || 0);
         if (shortageCount > 0) {
           return err(
-            `Tidak bisa mulai proses — masih kurang ${shortageCount} item bahan. Buat PO ke Vendor atau lengkapi stok dulu.`,
+            `Tidak bisa mulai proses — masih kurang ${shortageCount} item bahan. Buat Draft Belanja atau lengkapi stok dulu.`,
             400,
           );
         }
@@ -985,7 +1000,7 @@ export async function handleProductionPlans({
     });
   }
 
-  // POST /production-plans/:id/procure-shortage — satu request (explode sekali → MRP → PR → submit)
+  // POST /production-plans/:id/procure-shortage — explode → MRP → PR → Draft CPO (tanpa submit)
   if (path[0] === 'production-plans' && path[1] && path[2] === 'procure-shortage' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
@@ -995,6 +1010,27 @@ export async function handleProductionPlans({
 
     const { runProcureShortageFromPlan } = await import('@/lib/api/procure-shortage-run');
     const result = await runProcureShortageFromPlan(db, { auth, request, url }, {
+      productionPlanId: path[1],
+      scopeAuth,
+      tanggalKedatangan: planBody.tanggalKedatangan
+        ? String(planBody.tanggalKedatangan)
+        : undefined,
+      catatan: planBody.catatan ? String(planBody.catatan) : undefined,
+    });
+    if (!result.ok) return err(result.error, result.status || 400);
+    return ok(result);
+  }
+
+  // POST /production-plans/:id/refresh-procure-draft — supersede PR+CPO Draft, buat draft baru
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'refresh-procure-draft' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const { runRefreshProcureDraftFromPlan } = await import('@/lib/api/procure-shortage-run');
+    const result = await runRefreshProcureDraftFromPlan(db, { auth, request, url }, {
       productionPlanId: path[1],
       scopeAuth,
       tanggalKedatangan: planBody.tanggalKedatangan

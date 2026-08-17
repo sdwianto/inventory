@@ -31,11 +31,13 @@ export type VendorReturnDoc = {
   tenantId: string;
   noReturn: string;
   status: VendorReturnStatus;
+  /** Asal pembuatan RTV — `hutang` (default, dari tagihan vendor) atau `grn-reject` (dari item ditolak saat GRN). */
+  source?: 'hutang' | 'grn-reject';
   vendorTenantId: string;
   supplierName?: string | null;
   hutangId?: string | null;
   vendorInvoiceId?: string | null;
-  noInvoice: string;
+  noInvoice?: string;
   noGRN?: string | null;
   grnId?: string | null;
   noDO?: string | null;

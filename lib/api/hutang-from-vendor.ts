@@ -16,9 +16,49 @@ import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines } from
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
-import type { HutangDoc } from '@/types/documents';
-import type { VendorInvoicePayload } from '@/types/integration';
+import type { GrnDoc, HutangDoc } from '@/types/documents';
+import type { VendorInvoicePayload, VendorInvoiceLine } from '@/types/integration';
 import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor-match';
+import { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
+
+/**
+ * Cari GRN POSTED terkait invoice (by noDO, sama seperti validateInvoiceAgainstGrn) dan
+ * koreksi qty/total invoice SEBELUM disimpan — jangan biarkan hutang tercatat menagih qty
+ * yang GRN-nya menunjukkan ditolak/tidak diterima (lihat GRN2608000010, GRN2608000019).
+ * matchStatus tetap dihitung dari payload asli (informasional — histori apa yang ditagih
+ * vendor), tapi qty/total yang TERSIMPAN sudah correct dari awal, bukan cuma hasil koreksi
+ * manual belakangan lewat Sync Pending.
+ */
+export async function correctInvoiceItemsAgainstGrn(
+  db: Db,
+  tid: string,
+  payload: VendorInvoicePayload,
+): Promise<{ items: VendorInvoiceLine[]; total: number; corrected: boolean; grn: GrnDoc | null }> {
+  const rawItems = (payload.items || []) as VendorInvoiceLine[];
+  const rawTotal = parseInt(String(payload.total || payload.subTotal || 0), 10) || 0;
+  if (!payload.noDO) return { items: rawItems, total: rawTotal, corrected: false, grn: null };
+
+  const grnFilter: Record<string, unknown> = {
+    noDO: payload.noDO,
+    status: 'POSTED',
+    ...tenantIdMatchFilter(tid),
+  };
+  if (payload.vendorTenantId) grnFilter.vendorTenantId = payload.vendorTenantId;
+  const grns = await db.collection('goods_receipts').find(grnFilter).toArray() as GrnDoc[];
+  if (!grns.length) return { items: rawItems, total: rawTotal, corrected: false, grn: null };
+
+  const grnItems = grns.flatMap((g) => g.items || []);
+  const reconciled = reconcileHutangItemsFromGrn(rawItems as HutangItemLike[], grnItems);
+  if (reconciled.matchedCount === 0 || !reconciled.changed) {
+    return { items: rawItems, total: rawTotal, corrected: false, grn: grns[0] };
+  }
+  return {
+    items: reconciled.items as VendorInvoiceLine[],
+    total: reconciled.total,
+    corrected: true,
+    grn: grns[0],
+  };
+}
 
 export type HutangCreateOptions = {
   createdVia?: 'grn-posted' | 'invoice-posted-webhook' | 'invoice-posted-push';
@@ -300,6 +340,12 @@ async function syncExistingVendorHutangFromPayload(
 
   const match = await validateInvoiceAgainstGrn(db, tid, payload);
   const matchOk = match.ok === true;
+  // matchStatus tetap dihitung dari payload asli (histori apa yang ditagih vendor) —
+  // tapi qty/total yang benar-benar TERSIMPAN dikoreksi ke qtyReceived GRN dulu, supaya
+  // hutang tidak pernah menagih barang yang GRN-nya bilang ditolak/tidak diterima.
+  const invCorrection = await correctInvoiceItemsAgainstGrn(db, tid, payload);
+  const invoiceItems = invCorrection.items;
+  if (invCorrection.corrected) total = invCorrection.total;
   const varianceCtx = await loadPoVarianceContext(db, tid, payload, vendorTenantId);
   const varianceSoToInvoice = total - varianceCtx.soTotal;
   const now = new Date();
@@ -321,7 +367,7 @@ async function syncExistingVendorHutangFromPayload(
         salesOrderId: payload.salesOrderId || existing.salesOrderId || null,
         salesOrderTotal: parseInt(String(payload.salesOrderTotal || 0), 10) || existing.salesOrderTotal || null,
         salesOrderSubTotal: parseInt(String(payload.salesOrderSubTotal || 0), 10) || existing.salesOrderSubTotal || null,
-        subTotal: parseInt(String(payload.subTotal || total), 10),
+        subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
         ppn: parseInt(String(payload.ppn || 0), 10),
         total,
         terbayar: 0,
@@ -329,7 +375,7 @@ async function syncExistingVendorHutangFromPayload(
         status: 'PENDING_REVIEW',
         approvalStatus: 'PENDING_REVIEW',
         paymentTerms: payload.paymentTerms || existing.paymentTerms || 'KREDIT',
-        items: payload.items || existing.items || [],
+        items: invoiceItems.length ? invoiceItems : (existing.items || []),
         matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
         matchError: matchOk ? null : (match.error || null),
         matchCode: matchOk ? null : (match.code || null),
@@ -368,6 +414,7 @@ async function syncExistingVendorHutangFromPayload(
       noInvoice: payload.noInvoice,
       total,
       matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
+      correctedFromGrn: invCorrection.corrected,
     },
   });
 
@@ -460,6 +507,13 @@ export async function createHutangFromVendorInvoice(
   const match = await validateInvoiceAgainstGrn(db, tid, payload);
   const matchOk = match.ok === true;
 
+  // matchStatus di atas tetap dari payload asli (histori apa yang ditagih vendor) — tapi
+  // qty/total yang TERSIMPAN dikoreksi ke qtyReceived GRN dulu, supaya hutang tidak pernah
+  // menagih barang yang GRN-nya bilang ditolak/tidak diterima (boleh turun sampai 0).
+  const invCorrection = await correctInvoiceItemsAgainstGrn(db, tid, payload);
+  const invoiceItems = invCorrection.items;
+  if (invCorrection.corrected) total = invCorrection.total;
+
   const varianceCtx = await loadPoVarianceContext(db, tid, payload, vendorTenantId || null);
   const soTotal = varianceCtx.soTotal;
   const varianceSoToInvoice = total - soTotal;
@@ -499,7 +553,7 @@ export async function createHutangFromVendorInvoice(
     billToName: payload.pelangganName || payload.customerName || null,
     referenceType: 'VENDOR_INVOICE',
     referenceId: invoiceId,
-    subTotal: parseInt(String(payload.subTotal || total), 10),
+    subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
     ppn: parseInt(String(payload.ppn || 0), 10),
     total,
     terbayar: 0,
@@ -508,7 +562,7 @@ export async function createHutangFromVendorInvoice(
     status: 'PENDING_REVIEW',
     approvalStatus: 'PENDING_REVIEW',
     paymentTerms,
-    items: payload.items || [],
+    items: invoiceItems,
     matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
     matchError: matchOk ? null : (match.error || null),
     matchCode: matchOk ? null : (match.code || null),

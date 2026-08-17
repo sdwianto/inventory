@@ -19,6 +19,7 @@ import {
 } from '@/lib/food-production/material-requirement';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
@@ -327,7 +328,7 @@ export async function handleMaterialRequirements({
       noDokumen,
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
-      tanggal: plan.tanggal,
+      tanggal: cookDateFromPlanTanggal(plan.tanggal),
       kitchenId: plan.kitchenId,
       kitchenNama: plan.kitchenNama,
       warehouseKode: built.warehouseKode!,
@@ -426,7 +427,7 @@ export async function handleMaterialRequirements({
             lines: built.lines,
             summary: built.summary,
             warehouseKode: built.warehouseKode,
-            tanggal: plan.tanggal,
+            tanggal: cookDateFromPlanTanggal(plan.tanggal),
             kitchenId: plan.kitchenId,
             kitchenNama: plan.kitchenNama,
             productionPlanNo: plan.noDokumen,
@@ -496,7 +497,7 @@ export async function handleMaterialRequirements({
       noDokumen,
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
-      tanggal: plan.tanggal,
+      tanggal: cookDateFromPlanTanggal(plan.tanggal),
       kitchenId: plan.kitchenId,
       kitchenNama: plan.kitchenNama,
       warehouseKode: built.warehouseKode!,
@@ -588,7 +589,7 @@ export async function handleMaterialRequirements({
           lines: built.lines,
           summary: built.summary,
           warehouseKode: built.warehouseKode,
-          tanggal: plan.tanggal,
+          tanggal: cookDateFromPlanTanggal(plan.tanggal),
           kitchenId: plan.kitchenId,
           kitchenNama: plan.kitchenNama,
           productionPlanNo: plan.noDokumen,

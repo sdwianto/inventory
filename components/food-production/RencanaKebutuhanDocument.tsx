@@ -2,10 +2,15 @@
 
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format';
 import type { RencanaKebutuhanLine } from '@/lib/food-production/rencana-kebutuhan';
+import {
+  cookDateFromPlanTanggal,
+  procureDateFromPlanTanggal,
+} from '@/lib/food-production/production-plan';
 
 export const RENCANA_KEBUTUHAN_PRINT_ID = 'rencana-kebutuhan-a4-print';
 
 type Props = {
+  /** Tanggal menu / distribusi pagi (plan.tanggal). */
   tanggal: string;
   kitchenLabel?: string;
   planNos?: string[];
@@ -25,9 +30,11 @@ export default function RencanaKebutuhanDocument({
   printId,
   className = '',
 }: Props) {
-  const dateLabel = tanggal
-    ? formatDate(`${tanggal}T12:00:00`)
-    : '—';
+  const menuLabel = tanggal ? formatDate(`${tanggal}T12:00:00`) : '—';
+  const cookIso = tanggal ? cookDateFromPlanTanggal(tanggal) : '';
+  const cookLabel = cookIso ? formatDate(`${cookIso}T12:00:00`) : '—';
+  const arriveIso = tanggal ? procureDateFromPlanTanggal(tanggal) : '';
+  const arriveLabel = arriveIso ? formatDate(`${arriveIso}T12:00:00`) : '—';
   const skuCount = lines.length;
   const planCount = planNos.length;
 
@@ -44,7 +51,10 @@ export default function RencanaKebutuhanDocument({
               {kitchenLabel || tenantName || 'Food Production'}
             </div>
             <div className="text-sm text-slate-600 mt-0.5">
-              Tanggal masak: {dateLabel}
+              Tanggal masak: {cookLabel}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Barang datang: {arriveLabel} · Menu / distribusi pagi: {menuLabel}
             </div>
             {planNos.length > 0 && (
               <div className="text-xs text-slate-500 mt-1 font-mono">
@@ -76,8 +86,8 @@ export default function RencanaKebutuhanDocument({
           RINGKASAN KEBUTUHAN BARANG
         </h2>
         <p className="text-xs text-slate-600 mb-3">
-          Daftar bahan yang perlu dipenuhi dari gudang untuk produksi pada tanggal ini —
-          acuan pengadaan / pengambilan stok.
+          Daftar bahan yang perlu dipenuhi dari gudang untuk masak malam {cookLabel}
+          (barang datang {arriveLabel}) — acuan pengadaan / pengambilan stok sebelum distribusi pagi {menuLabel}.
         </p>
 
         <table className="w-full text-xs border-collapse mb-4 table-fixed">

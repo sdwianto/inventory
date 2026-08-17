@@ -6,6 +6,7 @@ import { resolveOperationalScope, tenantIdForWrite, withTenantFilter } from '@/l
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { nextDocNumber } from '@/lib/api/document-sequence';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
@@ -34,6 +35,10 @@ interface RtvBody extends Record<string, unknown> {
   photos?: unknown[];
   items?: unknown[];
   userName?: string;
+  /** `grn-reject` — buat RTV langsung dari baris item ditolak saat GRN, lihat createVendorReturnFromGrnReject. */
+  source?: string;
+  grnId?: string;
+  lineId?: string;
 }
 
 async function resolvePostedGrn(
@@ -92,6 +97,159 @@ async function persistPhotos(tenantId: string, raw: unknown[]): Promise<string[]
 function totalsFromItems(items: VendorReturnLine[]) {
   const subTotal = items.reduce((s, it) => s + (parseInt(String(it.jumlah || 0), 10) || 0), 0);
   return { subTotal, total: subTotal };
+}
+
+/**
+ * Buat RTV DRAFT langsung dari satu baris item ditolak pada GRN POSTED — tanpa hutang/invoice.
+ * Qty ditolak tidak pernah masuk stok/tertagih (dikecualikan saat posting GRN), jadi RTV ini
+ * murni catatan tindak lanjut fisik (mis. dikirim kembali ke vendor), bukan kredit finansial.
+ */
+async function createVendorReturnFromGrnReject(
+  db: HandlerContext['db'],
+  { tenantId, auth, rtvBody }: { tenantId: string; auth: HandlerContext['auth']; rtvBody: RtvBody },
+): Promise<NextResponse> {
+  const grnId = String(rtvBody.grnId || '').trim();
+  const lineId = String(rtvBody.lineId || '').trim();
+  if (!grnId || !lineId) return err('grnId dan lineId wajib untuk retur dari item ditolak', 400);
+
+  const grn = await db.collection('goods_receipts').findOne({
+    ...tenantIdMatchFilter(tenantId),
+    id: grnId,
+  });
+  if (!grn) return err('GRN tidak ditemukan', 404);
+  if (String(grn.status) !== 'POSTED') return err('GRN harus POSTED sebelum retur vendor', 400);
+
+  const items = (grn.items || []) as JsonObject[];
+  const item = items.find((it) => String(it.lineId) === lineId);
+  if (!item) return err('Baris item tidak ditemukan pada GRN ini', 404);
+
+  const qtyRejected = parseFloat(String(item.qtyRejected ?? 0)) || 0;
+  if (qtyRejected <= 0) return err('Tidak ada qty ditolak pada baris ini', 400);
+  if (String(item.rejectStatus || 'PENDING') !== 'PENDING') {
+    return err('Item ini sudah punya RTV atau sudah ditindaklanjuti', 400);
+  }
+
+  const localStokId = String(item.localStokId || '');
+  if (!localStokId) return err('Produk lokal tidak ditemukan pada baris ini', 400);
+  const gudangKode = String(item.lokasiKode || 'GKERING');
+  if (!isValidWarehouseKode(gudangKode)) return err(`Gudang tidak valid: ${gudangKode}`, 400);
+  const harga = parseInt(String(item.harga || item.hargaSatuan || 0), 10) || 0;
+
+  const reason = String(rtvBody.reason || item.rejectReason || '').trim();
+  if (!reason) return err('Alasan retur wajib diisi', 400);
+
+  let photos: string[] = [];
+  if (Array.isArray(rtvBody.photos) && rtvBody.photos.length) {
+    const stored = await persistPhotos(tenantId, rtvBody.photos);
+    if ('error' in stored) return err(stored.error, 400);
+    photos = stored;
+  }
+
+  const line: VendorReturnLine = {
+    lineId: uuidv4(),
+    grnLineId: lineId,
+    localStokId,
+    localKode: String(item.localKode || item.vendorKode || ''),
+    localNama: String(item.localNama || item.nama || item.vendorNama || ''),
+    vendorKode: item.vendorKode ? String(item.vendorKode) : undefined,
+    satuan: String(item.satuan || ''),
+    uomId: item.uomId ? String(item.uomId) : undefined,
+    qty: qtyRejected,
+    qtyBase: qtyRejected,
+    harga,
+    jumlah: Math.round(qtyRejected * harga),
+    gudangKode,
+    maxQty: qtyRejected,
+  };
+
+  const { subTotal, total } = totalsFromItems([line]);
+  const now = new Date();
+  const writeTid = tenantIdForWrite(auth, rtvBody) || tenantId;
+  const rtvId = uuidv4();
+
+  // Klaim GRN (rejectStatus masih PENDING) dan insert RTV harus atomik — kalau insert gagal
+  // (mis. tabrakan noReturn) setelah klaim sukses, baris GRN akan nyangkut RTV_CREATED
+  // padahal RTV-nya tidak pernah benar-benar ada. Pakai transaksi bila tersedia; fallback ke
+  // rollback manual di dev standalone Mongo (tanpa replica set → tanpa transaksi nyata).
+  let doc: VendorReturnDoc;
+  try {
+    doc = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+      const noReturn = await nextDocNumber(txDb, writeTid, 'RTV', 'RTV', session);
+
+      // GRN lama (diposting sebelum rejectStatus ada) tidak punya field ini sama sekali — anggap PENDING juga.
+      const claim = await txDb.collection('goods_receipts').updateOne(
+        {
+          id: grn.id,
+          items: {
+            $elemMatch: {
+              lineId,
+              $or: [{ rejectStatus: 'PENDING' }, { rejectStatus: { $exists: false } }],
+            },
+          },
+        },
+        {
+          $set: {
+            'items.$.rejectStatus': 'RTV_CREATED',
+            'items.$.rejectRtvId': rtvId,
+            'items.$.rejectNoReturn': noReturn,
+          },
+        },
+        txOpts(session),
+      );
+      if (claim.modifiedCount === 0) {
+        throw new Error('Item ini sudah punya RTV atau sudah ditindaklanjuti');
+      }
+
+      const builtDoc = stampTenantId(writeTid, {
+        id: rtvId,
+        tenantId: writeTid,
+        noReturn,
+        status: 'DRAFT',
+        source: 'grn-reject',
+        vendorTenantId: String(grn.vendorTenantId || ''),
+        supplierName: grn.supplierName ? String(grn.supplierName) : null,
+        hutangId: null,
+        vendorInvoiceId: grn.vendorInvoiceId ? String(grn.vendorInvoiceId) : null,
+        noInvoice: grn.noInvoice ? String(grn.noInvoice) : '',
+        noGRN: grn.noGRN ? String(grn.noGRN) : null,
+        grnId: String(grn.id),
+        noDO: grn.noDO ? String(grn.noDO) : null,
+        noPO: grn.noPO ? String(grn.noPO) : null,
+        noSO: grn.noSO ? String(grn.noSO) : null,
+        reason,
+        photos,
+        items: [line],
+        subTotal,
+        total,
+        cnSyncStatus: 'SKIPPED',
+        createdAt: now,
+        updatedAt: now,
+        createdBy: { userId: auth?.userId, userName: auth?.name || rtvBody.userName },
+      }) as VendorReturnDoc;
+
+      try {
+        await txDb.collection(VENDOR_RETURNS_COLLECTION).insertOne(builtDoc, txOpts(session));
+      } catch (insertErr) {
+        if (!session) {
+          await txDb.collection('goods_receipts').updateOne(
+            { id: grn.id, 'items.lineId': lineId, 'items.rejectRtvId': rtvId },
+            {
+              $set: { 'items.$.rejectStatus': 'PENDING' },
+              $unset: { 'items.$.rejectRtvId': '', 'items.$.rejectNoReturn': '' },
+            },
+          );
+        }
+        throw new Error('Gagal membuat nomor retur, coba lagi');
+      }
+
+      return builtDoc;
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return err(msg, 400);
+  }
+
+  return ok(clean({ ...doc } as JsonObject), 201);
 }
 
 async function loadPostedReturns(
@@ -325,8 +483,9 @@ export async function handleVendorReturns({
     });
     if ('error' in grn) return err(grn.error, 400);
 
+    const isGrnReject = doc.source === 'grn-reject';
     let items = doc.items || [];
-    if (Array.isArray(rtvBody.items)) {
+    if (Array.isArray(rtvBody.items) && !isGrnReject) {
       const hydrated = await hydrateDraftItems(db, tenantId, rtvBody.items, items);
       if ('error' in hydrated) return err(hydrated.error, 400);
       items = hydrated;
@@ -335,18 +494,20 @@ export async function handleVendorReturns({
     if (items.some((it) => (parseFloat(String(it.qty)) || 0) <= 0)) {
       return err('Semua baris retur harus qty > 0', 400);
     }
-    const identErr = vendorReturnSalesIdentityError(items);
-    if (identErr) return err(identErr, 400);
+    if (!isGrnReject) {
+      const identErr = vendorReturnSalesIdentityError(items);
+      if (identErr) return err(identErr, 400);
 
-    const hutang = await db.collection('hutang').findOne({
-      ...tenantIdMatchFilter(tenantId),
-      ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
-    });
-    if (!hutang) return err('Tagihan terkait tidak ditemukan', 400);
-    const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
-    const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
-    const qtyErr = assertReturnQtyWithinMax(items, returable);
-    if (qtyErr) return err(qtyErr, 400);
+      const hutang = await db.collection('hutang').findOne({
+        ...tenantIdMatchFilter(tenantId),
+        ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
+      });
+      if (!hutang) return err('Tagihan terkait tidak ditemukan', 400);
+      const posted = await loadPostedReturns(db, tenantId, doc.noInvoice || '', doc.hutangId);
+      const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
+      const qtyErr = assertReturnQtyWithinMax(items, returable);
+      if (qtyErr) return err(qtyErr, 400);
+    }
 
     if (Array.isArray(rtvBody.photos)) {
       const photos = await persistPhotos(tenantId, rtvBody.photos);
@@ -416,7 +577,7 @@ export async function handleVendorReturns({
         ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
       });
       if (hutang) {
-        const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
+        const posted = await loadPostedReturns(db, tenantId, doc.noInvoice || '', doc.hutangId);
         returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
       }
     }
@@ -426,9 +587,13 @@ export async function handleVendorReturns({
   if (route === '/vendor-returns' && method === 'POST') {
     const deniedRole = requireRole(auth, RTV_ROLES);
     if (deniedRole) return deniedRole;
-    const { denied, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
     if (denied) return denied;
     if (!tenantId) return err('Scope tidak valid', 400);
+
+    if (String(rtvBody.source || '') === 'grn-reject') {
+      return createVendorReturnFromGrnReject(db, { tenantId, auth: scopeAuth, rtvBody });
+    }
 
     const hutang = await loadHutangForReturn(db, tenantId, rtvBody);
     if (!hutang) return err('Tagihan tidak ditemukan. Isi hutangId atau noInvoice.', 400);
@@ -484,7 +649,7 @@ export async function handleVendorReturns({
 
     const { subTotal, total } = totalsFromItems(mapped.items);
     const now = new Date();
-    const writeTid = tenantIdForWrite(auth, rtvBody) || tenantId;
+    const writeTid = tenantIdForWrite(scopeAuth, rtvBody) || tenantId;
     const doc = stampTenantId(writeTid, {
       id: uuidv4(),
       tenantId: writeTid,
@@ -537,7 +702,9 @@ export async function handleVendorReturns({
       if ('error' in photos) return err(photos.error, 400);
       patch.photos = photos;
     }
-    if (Array.isArray(rtvBody.items)) {
+    // Baris retur dari item ditolak GRN adalah snapshot tetap (qty = qtyRejected) — abaikan
+    // items dari body (reason/photos tetap bisa diubah), jangan proses lewat hutang-bound validation.
+    if (Array.isArray(rtvBody.items) && doc.source !== 'grn-reject') {
       const hydrated = await hydrateDraftItems(db, tenantId, rtvBody.items, doc.items);
       if ('error' in hydrated) return err(hydrated.error, 400);
       const hutang = await db.collection('hutang').findOne({
@@ -545,7 +712,7 @@ export async function handleVendorReturns({
         ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
       });
       if (hutang) {
-        const posted = await loadPostedReturns(db, tenantId, doc.noInvoice, doc.hutangId);
+        const posted = await loadPostedReturns(db, tenantId, doc.noInvoice || '', doc.hutangId);
         const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
         const qtyErr = assertReturnQtyWithinMax(hydrated, returable);
         if (qtyErr) return err(qtyErr, 400);
@@ -571,7 +738,35 @@ export async function handleVendorReturns({
     ) as VendorReturnDoc | null;
     if (!doc) return err('Tidak ditemukan', 404);
     if (doc.status !== 'DRAFT') return err('Hanya DRAFT yang bisa dihapus', 400);
-    await db.collection(VENDOR_RETURNS_COLLECTION).deleteOne({ id: doc.id, status: 'DRAFT' });
+    // Sama seperti create: hapus RTV + kembalikan klaim GRN harus atomik, supaya kegagalan di
+    // salah satu tulisan tidak menyisakan baris GRN yang menunjuk RTV yang sudah tidak ada.
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const del = await txDb.collection(VENDOR_RETURNS_COLLECTION).deleteOne(
+          { id: doc.id, status: 'DRAFT' },
+          txOpts(session),
+        );
+        if (del.deletedCount === 0) {
+          throw new Error('RTV sudah tidak berstatus DRAFT — batal dihapus');
+        }
+        if (doc.source === 'grn-reject' && doc.grnId) {
+          const grnLineId = String(doc.items?.[0]?.grnLineId || '').trim();
+          if (grnLineId) {
+            await txDb.collection('goods_receipts').updateOne(
+              { id: doc.grnId, 'items.lineId': grnLineId, 'items.rejectRtvId': doc.id },
+              {
+                $set: { 'items.$.rejectStatus': 'PENDING' },
+                $unset: { 'items.$.rejectRtvId': '', 'items.$.rejectNoReturn': '' },
+              },
+              txOpts(session),
+            );
+          }
+        }
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(msg, 400);
+    }
     return ok({ deleted: true, id: doc.id });
   }
 

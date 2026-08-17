@@ -250,8 +250,9 @@ export default function ReturVendorPage() {
   };
 
   const isDraft = str(detail?.status) === 'DRAFT';
+  const isGrnReject = str(detail?.source) === 'grn-reject';
   const cnSync = str(detail?.cnSyncStatus);
-  const postedNeedsRetry = str(detail?.status) === 'POSTED'
+  const postedNeedsRetry = !isGrnReject && str(detail?.status) === 'POSTED'
     && ['FAILED', 'SYNCING', 'SKIPPED'].includes(cnSync);
   const postedFailed = postedNeedsRetry && cnSync === 'FAILED';
 
@@ -390,6 +391,11 @@ export default function ReturVendorPage() {
           </DialogHeader>
           {detail && (
             <div className="flex-1 overflow-auto space-y-3">
+              {isGrnReject && (
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  Retur dari item ditolak saat Terima Barang (GRN) — qty ini tidak pernah masuk stok/tertagih, jadi tanpa credit note vendor.
+                </div>
+              )}
               {postedNeedsRetry && (
                 <div className={`rounded border px-3 py-2 text-sm ${postedFailed ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                   Stok sudah keluar — faktur kredit belum terbentuk.
@@ -446,7 +452,7 @@ export default function ReturVendorPage() {
                         <td className="px-2 py-1.5 text-center text-xs">{str(it.satuan)}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatNumber(maxQty)}</td>
                         <td className="px-2 py-1.5 text-right">
-                          {isDraft ? (
+                          {isDraft && !isGrnReject ? (
                             <Input
                               type="number"
                               min={0}
@@ -459,7 +465,7 @@ export default function ReturVendorPage() {
                           ) : formatNumber(num(it.qty))}
                         </td>
                         <td className="px-2 py-1.5">
-                          {isDraft ? (
+                          {isDraft && !isGrnReject ? (
                             <select
                               className="h-8 border rounded px-1 text-xs"
                               value={str(it.gudangKode) || 'GKERING'}

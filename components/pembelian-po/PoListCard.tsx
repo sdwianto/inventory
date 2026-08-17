@@ -91,7 +91,10 @@ export default function PoListCard({
   const poItems = asArray(po.items) as JsonObject[];
   const vendorSubs = asArray(po.vendorSubmissions) as JsonObject[];
   const cancelledSoLines = asArray(po.cancelledSoLines) as JsonObject[];
+  const productionPlanId = str(po.productionPlanId);
+  const fromProductionPlan = Boolean(productionPlanId) && poStatus === 'DRAFT';
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
+  const hasRejectedQty = Boolean(po.hasRejectedQty) && ['RECEIVED', 'INVOICED'].includes(poStatus);
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
 
   const handleReject = () => {
@@ -133,6 +136,14 @@ export default function PoListCard({
               <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${PO_STATUS_STYLE[poStatus as keyof typeof PO_STATUS_STYLE] || PO_STATUS_STYLE.DRAFT}`}>
                 {isOptimistic ? 'MENYIMPAN' : poStatus}
               </span>
+              {hasRejectedQty && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-red-50 text-red-700 border-red-200"
+                  title="Termasuk qty ditolak saat GRN — cek tindak lanjut RTV di halaman Penerimaan"
+                >
+                  Termasuk item ditolak
+                </span>
+              )}
             </div>
             <div className="text-xs text-slate-500 mt-0.5">
               Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(str(po.tanggal))}
@@ -267,6 +278,11 @@ export default function PoListCard({
       </div>
       {expanded && (
         <div className="border-t bg-slate-50/50 px-3 py-2 text-sm">
+          {fromProductionPlan && (
+            <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Dari Rencana Produksi — review qty baris belanja sebelum kirim ke vendor.
+            </div>
+          )}
           <div className="flex justify-end mb-2 no-print">
             <Button type="button" size="sm" variant="outline" disabled={printing} onClick={handlePrint}>
               <Printer className="w-3 h-3 mr-1" />

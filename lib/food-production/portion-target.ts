@@ -18,7 +18,7 @@ export type PortionTargetMap = Record<KategoriPorsi, number>;
 export interface PortionTargetDoc {
   id: string;
   tenantId: string;
-  /** Serving / cook date YYYY-MM-DD. */
+  /** Hari menu / distribusi pagi YYYY-MM-DD (bukan tanggal masak). */
   tanggal: string;
   kitchenId: string;
   kitchenNama?: string;

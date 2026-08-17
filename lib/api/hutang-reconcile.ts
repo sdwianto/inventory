@@ -9,8 +9,11 @@ import {
 import { createHutangFromVendorInvoice } from '@/lib/api/hutang-from-vendor';
 import { enqueueJob, JOB_TYPES, scheduleJobProcessing } from '@/lib/api/bg-jobs';
 import { hutangMatchesGrnVendor, vendorScopedKey } from '@/lib/api/hutang-vendor-match';
+import { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
 import type { GrnDoc, HutangDoc, ReconcileOptions, SalesErrorRow, SalesReplayOptions } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
+
+export { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
 
 type HutangLookupMaps = {
   byId: Map<string, HutangDoc>;
@@ -123,12 +126,13 @@ async function normalizeVendorHutangDoc(
   return { ...hutang, ...patch };
 }
 
+
 async function resetVendorHutangToPendingReview(
   db: Db,
   hutang: HutangDoc,
-  { total = null }: { total?: number | null } = {},
+  { total = null, items = null }: { total?: number | null; items?: HutangItemLike[] | null } = {},
 ): Promise<void> {
-  const nextTotal = total != null && total > 0 ? total : Number(hutang.total || 0);
+  const nextTotal = total != null ? total : Number(hutang.total || 0);
   await db.collection('hutang').updateOne(
     { id: hutang.id },
     {
@@ -138,7 +142,8 @@ async function resetVendorHutangToPendingReview(
         status: 'PENDING_REVIEW',
         terbayar: 0,
         sisa: nextTotal,
-        ...(total != null && total > 0 ? { total: nextTotal } : {}),
+        ...(total != null ? { total: nextTotal } : {}),
+        ...(items ? { items } : {}),
         updatedAt: new Date(),
       },
       $unset: {
@@ -158,24 +163,43 @@ async function resetVendorHutangToPendingReview(
   );
 }
 
-async function fixHutangApprovalIfNeeded(
+export async function fixHutangApprovalIfNeeded(
   db: Db,
   hutang: HutangDoc,
   grn: GrnDoc | null = null,
 ): Promise<boolean> {
   const normalized = await normalizeVendorHutangDoc(db, String(grn?.tenantId || hutang.tenantId || ''), hutang, grn);
   const fromPostedGrn = !!grn;
-  const recv = grn ? parseInt(String(grn.receivedTotal || 0), 10) : 0;
-  const totalMismatch = recv > 0 && Math.abs(Number(normalized.total || 0) - recv) > 1;
+
+  // Utamakan koreksi per-baris (paling presisi, dan tidak bergantung pada grn.receivedTotal
+  // yang bisa basi/cache). Fallback ke grn.receivedTotal HANYA kalau tidak ada satu pun baris
+  // hutang yang bisa dicocokkan ke baris GRN (lineId hilang/beda) — baru di situ kita tidak
+  // punya ground truth per-baris sama sekali.
+  let correctedItems: HutangItemLike[] | null = null;
+  let correctedTotal: number | null = null;
+  if (grn) {
+    const reconciled = reconcileHutangItemsFromGrn((normalized.items || []) as HutangItemLike[], grn.items);
+    if (reconciled.matchedCount > 0) {
+      const totalMismatch = Math.abs(Number(normalized.total || 0) - reconciled.total) > 1;
+      if (reconciled.changed || totalMismatch) {
+        correctedItems = reconciled.changed ? reconciled.items : null;
+        correctedTotal = reconciled.total;
+      }
+    } else {
+      const recv = calcGrnReceivedTotal(grn);
+      if (Math.abs(Number(normalized.total || 0) - recv) > 1) correctedTotal = recv;
+    }
+  }
 
   if (!vendorInvoiceNeedsPendingReview(normalized, { fromPostedGrn })) {
-    if (fromPostedGrn && totalMismatch) {
+    if (correctedTotal != null) {
       await db.collection('hutang').updateOne(
         { id: normalized.id },
         {
           $set: {
-            total: recv,
-            sisa: Math.max(0, recv - Number(normalized.terbayar || 0)),
+            ...(correctedItems ? { items: correctedItems } : {}),
+            total: correctedTotal,
+            sisa: Math.max(0, correctedTotal - Number(normalized.terbayar || 0)),
             updatedAt: new Date(),
           },
         },
@@ -185,7 +209,7 @@ async function fixHutangApprovalIfNeeded(
     return false;
   }
 
-  await resetVendorHutangToPendingReview(db, normalized, { total: recv > 0 ? recv : null });
+  await resetVendorHutangToPendingReview(db, normalized, { total: correctedTotal, items: correctedItems });
   return true;
 }
 

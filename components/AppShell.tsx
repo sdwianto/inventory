@@ -375,8 +375,9 @@ export default function AppShell({ children }: AppShellProps) {
   const pmBadgeCount = showPmBadge
     ? (Number(badgeSource?.pmOverdue) || 0) + (Number(badgeSource?.pmDueSoon) || 0)
     : 0;
+  const grnNewPending = showGrnBadge ? (Number(badgeSource?.grnPending) || 0) : 0;
   const navBadges: Record<NavBadgeKey, number> = {
-    grnPending: showGrnBadge ? (Number(badgeSource?.grnPending) || 0) : 0,
+    grnPending: grnNewPending + (showGrnBadge ? (Number(badgeSource?.grnRejectedPending) || 0) : 0),
     hutangReview: showHutangBadge ? (Number(badgeSource?.hutangReview) || 0) : 0,
     wrPending: showWrBadge ? (Number(badgeSource?.wrPending) || 0) : 0,
     pmOverdue: pmBadgeCount,
@@ -384,7 +385,7 @@ export default function AppShell({ children }: AppShellProps) {
 
   useEffect(() => {
     if (!showGrnBadge) return;
-    const pending = navBadges.grnPending;
+    const pending = grnNewPending;
     const prev = prevGrnPendingRef.current;
     if (prev != null && pending > prev) {
       const delta = pending - prev;
@@ -400,7 +401,7 @@ export default function AppShell({ children }: AppShellProps) {
       );
     }
     prevGrnPendingRef.current = pending;
-  }, [navBadges.grnPending, showGrnBadge, pathname, router]);
+  }, [grnNewPending, showGrnBadge, pathname, router]);
 
   const debouncedOperationalRefresh = useMemo(
     () => debounce(() => invalidateOperationalCaches(queryClient), 300),

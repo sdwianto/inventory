@@ -348,6 +348,9 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
     const receiveStatus = rollupReceiveStatus(items);
     const keepInvoiced = String(po.status || '') === 'INVOICED';
     const status = keepInvoiced ? po.status : receiveStatus;
+    // Informasional saja — tidak memengaruhi rollup status, hanya penanda untuk UI bahwa
+    // status "selesai diterima" ini menyembunyikan kekurangan akibat item ditolak vendor.
+    const hasRejectedQty = items.some((it) => (Number(it.qtyRejected) || 0) > 0);
 
     const result = await db.collection('customer_purchase_orders').updateOne(
       qtySyncVersionFilter(String(po.id), ver, { appliedReceiveGrnIds: { $ne: grnId } }),
@@ -355,6 +358,7 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
         $set: {
           items,
           status,
+          hasRejectedQty,
           receivedAt: new Date(),
           updatedAt: new Date(),
           qtySyncVersion: ver + 1,

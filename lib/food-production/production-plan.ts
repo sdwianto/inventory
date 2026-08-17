@@ -98,7 +98,7 @@ export interface ProductionPlanDoc {
   id: string;
   tenantId: string;
   noDokumen: string;
-  /** Production / serving date (YYYY-MM-DD). */
+  /** Hari menu / distribusi pagi (YYYY-MM-DD). Masak malam H-1; barang datang H-1. */
   tanggal: string;
   kitchenId: string;
   kitchenNama?: string;
@@ -338,6 +338,43 @@ export function isIsoDate(value: unknown): boolean {
   return new Date(t).toISOString().slice(0, 10) === value;
 }
 
+/**
+ * Menu tanggal 18 didistribusi pagi 18 → masak malam 17, barang datang 17.
+ */
+export const PLAN_COOK_LEAD_DAYS = 1;
+
+export function shiftIsoDate(iso: string, days: number): string {
+  const key = String(iso || '').trim().slice(0, 10);
+  if (!isIsoDate(key) || !Number.isFinite(days)) return '';
+  const [y, m, d] = key.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
+}
+
+export function cookDateFromPlanTanggal(tanggal: string): string {
+  const key = String(tanggal || '').trim().slice(0, 10);
+  return shiftIsoDate(key, -PLAN_COOK_LEAD_DAYS) || key;
+}
+
+export function procureDateFromPlanTanggal(tanggal: string): string {
+  return cookDateFromPlanTanggal(tanggal);
+}
+
+/**
+ * Default kedatangan PO = H-1.
+ * Jika caller masih mengirim tanggal menu (sama dengan plan.tanggal), pakai H-1.
+ */
+export function resolveProcureArrivalDate(
+  planTanggal: string,
+  override?: string | null,
+): string {
+  const derived = procureDateFromPlanTanggal(planTanggal);
+  const raw = String(override || '').trim().slice(0, 10);
+  if (!raw || !isIsoDate(raw)) return derived;
+  if (raw === String(planTanggal || '').trim().slice(0, 10)) return derived;
+  return raw;
+}
+
 export function planLineDedupeKey(line: Pick<ProductionPlanLine, 'menuId' | 'recipeId'>): string {
   const recipeId = String(line.recipeId || '').trim();
   if (recipeId) return `recipe:${recipeId}`;
@@ -421,6 +458,18 @@ export function normalizePlanLines(raw: unknown): ProductionPlanLine[] | { error
 
 export function isPlanEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
+}
+
+/** Override qty/coret bahan: Draft/Diajukan, atau Disetujui selama PO belum final. */
+export function canEditPlanMaterials(
+  planStatus: string,
+  linkedPoStatus?: string | null,
+): boolean {
+  if (isPlanEditable(planStatus)) return true;
+  if (planStatus !== 'APPROVED') return false;
+  if (!linkedPoStatus) return true;
+  const st = String(linkedPoStatus).toUpperCase();
+  return st === 'DRAFT' || st === 'REJECTED';
 }
 
 /** Draft / Diajukan / Disetujui — boleh digabung selama belum ada stok keluar. */

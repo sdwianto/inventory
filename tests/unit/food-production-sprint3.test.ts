@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizePlanLines,
   isPlanEditable,
+  canEditPlanMaterials,
   isIsoDate,
   totalTargetPorsi,
   summarizePlanLines,
@@ -11,6 +12,10 @@ import {
   mergeRecipeBufferPct,
   assertConsolidatePlans,
   consolidateBlockedReason,
+  cookDateFromPlanTanggal,
+  procureDateFromPlanTanggal,
+  shiftIsoDate,
+  resolveProcureArrivalDate,
 } from '@/lib/food-production/production-plan';
 import { assertStatusTransition, FP_DOC_PREFIX, FP_DOC_TYPES } from '@/lib/food-production/document';
 
@@ -75,6 +80,18 @@ describe('food-production sprint 3 — production plan', () => {
     expect(isPlanEditable('APPROVED')).toBe(false);
     expect(isPlanEditable('COMPLETED')).toBe(false);
     expect(PLAN_STATUS_LABELS.APPROVED).toBe('Disetujui');
+  });
+
+  it('canEditPlanMaterials — matrix APPROVED + linked PO', () => {
+    expect(canEditPlanMaterials('DRAFT')).toBe(true);
+    expect(canEditPlanMaterials('SUBMITTED')).toBe(true);
+    expect(canEditPlanMaterials('APPROVED')).toBe(true);
+    expect(canEditPlanMaterials('APPROVED', null)).toBe(true);
+    expect(canEditPlanMaterials('APPROVED', 'DRAFT')).toBe(true);
+    expect(canEditPlanMaterials('APPROVED', 'REJECTED')).toBe(true);
+    expect(canEditPlanMaterials('APPROVED', 'APPROVED')).toBe(false);
+    expect(canEditPlanMaterials('APPROVED', 'SUBMITTED')).toBe(false);
+    expect(canEditPlanMaterials('PROCESSING')).toBe(false);
   });
 
   it('allows plan lifecycle transitions', () => {
@@ -145,5 +162,14 @@ describe('food-production sprint 3 — production plan', () => {
 
     expect(consolidateBlockedReason('APPROVED')).toBeNull();
     expect(consolidateBlockedReason('PROCESSING')).toMatch(/diproses/i);
+  });
+
+  it('shifts cook and procurement to H-1 of menu/distribution date', () => {
+    expect(cookDateFromPlanTanggal('2026-08-18')).toBe('2026-08-17');
+    expect(procureDateFromPlanTanggal('2026-08-18')).toBe('2026-08-17');
+    expect(shiftIsoDate('2026-08-01', -1)).toBe('2026-07-31');
+    expect(resolveProcureArrivalDate('2026-08-18')).toBe('2026-08-17');
+    expect(resolveProcureArrivalDate('2026-08-18', '2026-08-18')).toBe('2026-08-17');
+    expect(resolveProcureArrivalDate('2026-08-18', '2026-08-16')).toBe('2026-08-16');
   });
 });

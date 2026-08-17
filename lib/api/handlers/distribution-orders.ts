@@ -329,6 +329,14 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       productionResultNo = result.noDokumen;
       productionPlanId = result.productionPlanId;
       productionPlanNo = result.productionPlanNo;
+      if (result.productionPlanId) {
+        plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: result.productionPlanId }),
+        ) as ProductionPlanDoc | null;
+        if (plan) {
+          productionPlanNo = plan.noDokumen;
+        }
+      }
       const collapsed = collapseSourceToFoodTray(sourceItemsFromResult(result));
       if ('error' in collapsed) return err(collapsed.error, 400);
       sourceItems = collapsed;
@@ -655,7 +663,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       id: uuidv4(),
       tenantId,
       ...(noDokumen ? { noDokumen } : {}),
-      tanggal: String(distBody.tanggal || plan?.tanggal || result?.tanggal || '').trim()
+      tanggal: String(distBody.tanggal || plan?.tanggal || '').trim()
         || new Date().toISOString().slice(0, 10),
       kitchenId,
       kitchenNama,

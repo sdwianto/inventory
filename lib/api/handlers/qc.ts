@@ -27,6 +27,7 @@ import {
 } from '@/lib/food-production/qc';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import {
@@ -356,7 +357,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       productionPlanNo = plan.noDokumen;
       kitchenId = plan.kitchenId;
       kitchenNama = plan.kitchenNama;
-      tanggal = plan.tanggal;
+      tanggal = cookDateFromPlanTanggal(plan.tanggal);
     }
 
     // ADR-004 P0F — productionBatchId opsional (legacy / proposed hold tanpa batch).

@@ -151,8 +151,9 @@ export function useCustomerPoPage() {
       .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
   }, [searchParams]);
 
-  // Deep-link from Food Production Kebutuhan Beli (?highlight=<cpoId>)
+  // Deep-link from Food Production Kebutuhan Beli (?highlight=<cpoId>&edit=1)
   const highlightDone = useRef<string | null>(null);
+  const editOpenDone = useRef<string | null>(null);
   useEffect(() => {
     const highlightId = searchParams.get('highlight') || searchParams.get('poId');
     if (!highlightId) return;
@@ -372,6 +373,43 @@ export function useCustomerPoPage() {
       .filter(Boolean);
     void loadProductsByIds(itemIds);
   };
+
+  useEffect(() => {
+    const wantEdit = searchParams.get('edit') === '1';
+    const highlightId = searchParams.get('highlight') || searchParams.get('poId');
+    if (!wantEdit || !highlightId) return;
+    if (editOpenDone.current === highlightId) return;
+    if (listLoading) return;
+
+    let cancelled = false;
+
+    async function openDraftEdit() {
+      let po = (Array.isArray(list) ? list : []).find((p) => str(p.id) === highlightId);
+      if (!po) {
+        try {
+          po = await fetchJson<JsonObject>(`/api/customer-purchase-orders/${highlightId}`);
+          if (cancelled || !po?.id) return;
+          setList((prev) => {
+            const rows = Array.isArray(prev) ? prev : [];
+            if (rows.some((p) => str(p.id) === highlightId)) return rows;
+            return [po!, ...rows];
+          });
+        } catch {
+          return;
+        }
+      }
+      if (cancelled) return;
+      if (String(po.status || '').toUpperCase() !== 'DRAFT') {
+        editOpenDone.current = highlightId;
+        return;
+      }
+      openEdit(po);
+      editOpenDone.current = highlightId;
+    }
+
+    void openDraftEdit();
+    return () => { cancelled = true; };
+  }, [searchParams, list, listLoading, setList]);
 
   const canEditPo = (po: JsonObject) => {
     if (isPendingOptimisticPo(po)) return false;

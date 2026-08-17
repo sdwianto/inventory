@@ -11,7 +11,7 @@ import { applyVendorReturnStock } from '@/lib/api/vendor-return-stock';
 import { assertReturnQtyWithinMax, buildReturableLines } from '@/lib/api/vendor-return-returable';
 import { vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
-import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc } from '@/types/vendor-return';
+import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import { integrationCorrelationId } from '@/lib/api/integration-common';
 
 export async function postVendorReturn(
@@ -26,12 +26,14 @@ export async function postVendorReturn(
     body?: Record<string, unknown>;
   },
 ): Promise<Record<string, unknown> & { error?: string }> {
+  const isGrnReject = doc.source === 'grn-reject';
   const salesApiKey = await getSalesApiKeyForVendor(
     db,
     tenantId,
     doc.vendorTenantId ? String(doc.vendorTenantId) : undefined,
   );
-  const canSyncCn = !!(salesApiKey && (doc.vendorInvoiceId || doc.noInvoice));
+  // RTV dari item ditolak GRN tidak pernah tertagih (qtyRejected dikecualikan dari invoice) — tidak ada dasar CN.
+  const canSyncCn = !isGrnReject && !!(salesApiKey && (doc.vendorInvoiceId || doc.noInvoice));
   const priorStatus = String(doc.status || 'DRAFT');
 
   let txResult: { error?: string } | Record<string, never>;
@@ -48,39 +50,44 @@ export async function postVendorReturn(
       }
 
       try {
-      const identErr = vendorReturnSalesIdentityError(doc.items || []);
-      if (identErr) throw new Error(identErr);
+      if (!isGrnReject) {
+        const identErr = vendorReturnSalesIdentityError(doc.items || []);
+        if (identErr) throw new Error(identErr);
 
-      const hutang = await txDb.collection('hutang').findOne({
-        ...tenantIdMatchFilter(tenantId),
-        ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
-      }, txOpts(session));
-      if (!hutang) throw new Error('Tagihan terkait tidak ditemukan');
-      const posted = await txDb.collection(VENDOR_RETURNS_COLLECTION).find({
-        ...tenantIdMatchFilter(tenantId),
-        status: { $in: ['POSTED', 'POSTING'] },
-        $or: [
-          { noInvoice: doc.noInvoice },
-          ...(doc.hutangId ? [{ hutangId: doc.hutangId }] : []),
-        ],
-      }, txOpts(session)).toArray();
-      const qtyErr = assertReturnQtyWithinMax(
-        doc.items || [],
-        buildReturableLines(
-          hutang as import('@/lib/api/vendor-return-returable').HutangLike,
-          posted as import('@/lib/api/vendor-return-returable').PostedReturnLike[],
-          { excludeReturnId: doc.id },
-        ),
-      );
-      if (qtyErr) throw new Error(qtyErr);
+        const hutang = await txDb.collection('hutang').findOne({
+          ...tenantIdMatchFilter(tenantId),
+          ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
+        }, txOpts(session));
+        if (!hutang) throw new Error('Tagihan terkait tidak ditemukan');
+        const posted = await txDb.collection(VENDOR_RETURNS_COLLECTION).find({
+          ...tenantIdMatchFilter(tenantId),
+          status: { $in: ['POSTED', 'POSTING'] },
+          $or: [
+            { noInvoice: doc.noInvoice },
+            ...(doc.hutangId ? [{ hutangId: doc.hutangId }] : []),
+          ],
+        }, txOpts(session)).toArray();
+        const qtyErr = assertReturnQtyWithinMax(
+          doc.items || [],
+          buildReturableLines(
+            hutang as import('@/lib/api/vendor-return-returable').HutangLike,
+            posted as import('@/lib/api/vendor-return-returable').PostedReturnLike[],
+            { excludeReturnId: doc.id },
+          ),
+        );
+        if (qtyErr) throw new Error(qtyErr);
+      }
 
-      const stock = await applyVendorReturnStock(
-        txDb,
-        tenantId,
-        doc.noReturn,
-        doc.items || [],
-        session,
-      );
+      // Item ditolak GRN tidak pernah masuk stok (dikecualikan saat posting GRN) — tidak ada stok OUT untuk dikurangi.
+      const stock: { error?: string; items?: VendorReturnLine[] } = isGrnReject
+        ? { items: doc.items }
+        : await applyVendorReturnStock(
+          txDb,
+          tenantId,
+          doc.noReturn,
+          doc.items || [],
+          session,
+        );
       if (stock.error) throw new Error(stock.error);
 
       const cnPatch: Record<string, unknown> = {
@@ -152,7 +159,9 @@ export async function postVendorReturn(
     action: 'VENDOR_RETURN_POSTED',
     entityType: 'vendor_return',
     entityId: doc.id,
-    summary: `Post RTV ${doc.noReturn} invoice ${doc.noInvoice}`,
+    summary: isGrnReject
+      ? `Post RTV ${doc.noReturn} dari item ditolak GRN ${doc.noGRN || ''}`
+      : `Post RTV ${doc.noReturn} invoice ${doc.noInvoice}`,
     metadata: { noReturn: doc.noReturn, noInvoice: doc.noInvoice, total: doc.total },
     userId: posted.postedBy?.userId,
     userName: posted.postedBy?.userName,
@@ -208,6 +217,9 @@ export async function retryVendorReturnCn(
 ): Promise<Record<string, unknown>> {
   if (doc.status !== 'POSTED') {
     return { error: 'Hanya RTV POSTED yang bisa retry sync CN' };
+  }
+  if (doc.source === 'grn-reject') {
+    return { error: 'Retur dari item ditolak GRN tidak pernah tertagih — tidak ada credit note untuk disinkron' };
   }
   const sync = String(doc.cnSyncStatus || 'NONE');
   if (sync === 'DONE' && (doc.creditNoteId || doc.noCN)) {

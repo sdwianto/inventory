@@ -12,6 +12,7 @@ import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import { storeBase64Image } from '@/lib/api/media-storage';
+import { grnPendingRejectFilter } from '@/lib/api/grn-reject-status';
 import type { HandlerContext } from '@/types/api/handler';
 
 interface GrnPostBody extends Record<string, unknown> {
@@ -78,8 +79,19 @@ export async function handleGoodsReceipts({
     if (denied) return denied;
 
     const status = url.searchParams.get('status');
+    const rejectStatus = url.searchParams.get('rejectStatus');
 
     let filter: Record<string, unknown> = status ? { status } : {};
+    if (rejectStatus) {
+      filter = {
+        ...filter,
+        status: filter.status || 'POSTED',
+        // GRN lama tidak punya field rejectStatus sama sekali — anggap PENDING juga.
+        ...(rejectStatus === 'PENDING'
+          ? grnPendingRejectFilter()
+          : { items: { $elemMatch: { rejectStatus } } }),
+      };
+    }
 
     filter = withTenantFilter(scopeAuth, filter);
 

@@ -60,16 +60,36 @@ export async function applyGrnStockPosting(
     const qty = parseFloat(String(bodyLine?.qty ?? it.qtyOrdered ?? it.qtyReceived ?? 0)) || 0;
     const qtyRejected = parseFloat(String(bodyLine?.qtyRejected ?? 0)) || 0;
     const rejectReason = bodyLine?.rejectReason ? String(bodyLine.rejectReason) : undefined;
-    if (qty <= 0) {
-      if (qtyRejected > 0) rejectedOnlyLines.push({ it, qtyRejected, rejectReason });
-      continue;
-    }
-    const resolved = await resolveLineQtyBase(db, tid, String(it.localStokId), {
-      qty,
+    const uomCtx = {
       uomId: String(bodyLine?.uomId || it.uomId || ''),
       satuan: String(bodyLine?.satuan || it.satuan || ''),
-    }, uomsCache);
+    };
+
+    // Qty diterima + qty ditolak tidak boleh melebihi qty kirim — kalau tidak, barang yang
+    // sama bisa tercatat MASUK stok sekaligus DITOLAK (lihat GRN2608000010/Kelengkeng).
+    let qtyRejectedBase = 0;
+    if (qtyRejected > 0) {
+      const rejectedResolved = await resolveLineQtyBase(db, tid, String(it.localStokId), { qty: qtyRejected, ...uomCtx }, uomsCache);
+      if ('error' in rejectedResolved) return { error: rejectedResolved.error };
+      qtyRejectedBase = rejectedResolved.qtyBase;
+    }
+    const orderedBase = parseFloat(String(it.qtyBase ?? it.qtyOrdered ?? 0)) || 0;
+    const itemLabel = String(it.vendorKode || it.localNama || it.vendorNama || it.localKode || '');
+
+    if (qty <= 0) {
+      if (qtyRejected > 0) {
+        if (orderedBase > 0 && qtyRejectedBase > orderedBase + 1e-6) {
+          return { error: `Qty ditolak melebihi qty kirim untuk ${itemLabel}` };
+        }
+        rejectedOnlyLines.push({ it, qtyRejected, rejectReason });
+      }
+      continue;
+    }
+    const resolved = await resolveLineQtyBase(db, tid, String(it.localStokId), { qty, ...uomCtx }, uomsCache);
     if ('error' in resolved) return { error: resolved.error };
+    if (orderedBase > 0 && (resolved.qtyBase + qtyRejectedBase) > orderedBase + 1e-6) {
+      return { error: `Qty diterima + ditolak (melebihi qty kirim) untuk ${itemLabel}` };
+    }
     lineInputs.push({ it, qty: resolved.qty, qtyBase: resolved.qtyBase, resolved, lineIndex, qtyRejected, rejectReason });
   }
 
@@ -238,6 +258,7 @@ export async function applyGrnStockPosting(
       expiryDate,
       qtyRejected,
       ...(rejectReason ? { rejectReason } : {}),
+      ...(qtyRejected > 0 ? { rejectStatus: 'PENDING' } : {}),
     });
   }
 
@@ -388,6 +409,7 @@ export async function applyGrnStockPosting(
       qtyReceivedBase: 0,
       qtyRejected,
       ...(rejectReason ? { rejectReason } : {}),
+      ...(qtyRejected > 0 ? { rejectStatus: 'PENDING' } : {}),
     });
   }
 

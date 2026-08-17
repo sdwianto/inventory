@@ -36,6 +36,16 @@ export type HutangDoc = JsonObject & {
   approvedBy?: JsonObject;
 };
 
+export type GrnItemDoc = JsonObject & {
+  lineId?: string;
+  qtyRejected?: number;
+  rejectReason?: string;
+  /** Status tindak lanjut baris ditolak — kosong berarti tidak ada penolakan. */
+  rejectStatus?: 'PENDING' | 'RTV_CREATED' | 'RESOLVED';
+  rejectRtvId?: string | null;
+  rejectNoReturn?: string | null;
+};
+
 export type GrnDoc = JsonObject & {
   id?: string;
   tenantId?: string;
@@ -51,7 +61,7 @@ export type GrnDoc = JsonObject & {
   vendorTenantId?: string;
   receivedTotal?: number | string;
   postedAt?: Date | string;
-  items?: JsonObject[];
+  items?: GrnItemDoc[];
 };
 
 export interface SalesReplayOptions {

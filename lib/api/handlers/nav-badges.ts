@@ -6,6 +6,7 @@ import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-mast
 import { countScheduleDueStats, startOfDay } from '@/lib/api/maintenance-schedule-engine';
 import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
 import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
+import { grnPendingRejectFilter } from '@/lib/api/grn-reject-status';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleNavBadges({
@@ -24,10 +25,16 @@ export async function handleNavBadges({
   const today = startOfDay(new Date());
   const tenantFilter = withTenantFilter(scopeAuth, {});
 
-  const [grnPending, hutangReview, wrPending, pmStats] = await Promise.all([
+  const [grnPending, grnRejectedPending, hutangReview, wrPending, pmStats] = await Promise.all([
     db.collection('goods_receipts').countDocuments(
       withTenantFilter(scopeAuth, {
         status: { $in: ['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING'] },
+      }),
+    ),
+    db.collection('goods_receipts').countDocuments(
+      withTenantFilter(scopeAuth, {
+        status: 'POSTED',
+        ...grnPendingRejectFilter(),
       }),
     ),
     db.collection('hutang').countDocuments(
@@ -41,6 +48,7 @@ export async function handleNavBadges({
 
   return ok({
     grnPending,
+    grnRejectedPending,
     hutangReview,
     wrPending,
     pmOverdue: Number(pmStats?.overdue || 0),

@@ -32,6 +32,7 @@ import {
 } from '@/lib/food-production/material-requirement';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
@@ -343,7 +344,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if ('error' in readiness && readiness.error) return err(readiness.error, 400);
     if (Number(readiness.summary?.shortageCount || 0) > 0) {
       return err(
-        `Bahan belum lengkap (${readiness.summary?.shortageCount} item kurang). Buat/ajukan PO ke Vendor dulu dari Rencana Produksi.`,
+        `Bahan belum lengkap (${readiness.summary?.shortageCount} item kurang). Buat Draft Belanja dulu dari Rencana Produksi.`,
         400,
       );
     }
@@ -399,7 +400,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       productionPlanNo: plan.noDokumen,
       materialRequirementId: seeded.materialRequirementId,
       materialRequirementNo: seeded.materialRequirementNo,
-      tanggal: plan.tanggal,
+      tanggal: cookDateFromPlanTanggal(plan.tanggal),
       kitchenId: plan.kitchenId,
       kitchenNama: plan.kitchenNama,
       warehouseKode: seeded.warehouseKode,

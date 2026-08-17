@@ -1,6 +1,6 @@
 /**
- * Satu request: explode MRP sekali → APPROVED → PR + Draft CPO → submit vendor (P1 sync CreateSO).
- * Mengganti waterfall 7 HTTP dari UI "Menyiapkan PO…".
+ * Satu request: explode MRP sekali → APPROVED → PR + Draft CPO (tanpa submit vendor).
+ * Human gate: review/edit Draft PO di /pembelian-po, lalu Ajukan/Kirim.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -10,7 +10,6 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import { handlePurchaseRequirements } from '@/lib/api/handlers/purchase-requirements';
-import { handleCustomerPo } from '@/lib/api/handlers/customer-po';
 import {
   MATERIAL_REQUIREMENTS_COLLECTION,
   MRP_ELIGIBLE_PLAN_STATUSES,
@@ -18,8 +17,13 @@ import {
 } from '@/lib/food-production/material-requirement';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  cookDateFromPlanTanggal,
+  resolveProcureArrivalDate,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
+import {
+  PURCHASE_REQUIREMENTS_COLLECTION,
+} from '@/lib/food-production/purchase-requirement';
 import {
   FP_DOC_TYPES,
   appendDocHistory,
@@ -27,6 +31,8 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
+
+const REFRESHABLE_PO_STATUSES = new Set(['DRAFT', 'REJECTED']);
 
 export type ProcureShortageResult =
   | {
@@ -39,13 +45,8 @@ export type ProcureShortageResult =
       draftCpoId?: string;
       draftCpoNo?: string;
       poStatus?: string;
-      noPO?: string;
-      vendorSynced?: boolean;
-      vendorNoSO?: string;
-      vendorSyncError?: string;
-      vendorSyncJobId?: string;
-      submitError?: string;
       message?: string;
+      refreshed?: boolean;
     }
   | { ok: false; error: string; status?: number };
 
@@ -57,7 +58,86 @@ async function readJson(res: NextResponse): Promise<Record<string, unknown>> {
   }
 }
 
-export async function runProcureShortageFromPlan(
+async function findLinkedPo(
+  db: Db,
+  scopeAuth: NonNullable<HandlerContext['auth']>,
+  productionPlanId: string,
+) {
+  return db.collection('customer_purchase_orders').findOne(
+    withTenantFilter(scopeAuth, {
+      productionPlanId,
+      status: { $nin: ['CANCELLED'] },
+    }),
+    { sort: { createdAt: -1 }, projection: { id: 1, noPO: 1, status: 1 } },
+  );
+}
+
+async function cancelDraftCpo(
+  db: Db,
+  tenantId: string,
+  cpoId: string,
+  reason: string,
+  actor: { userId?: string; userName?: string },
+): Promise<void> {
+  const id = String(cpoId || '').trim();
+  if (!id) return;
+  const cpo = await db.collection('customer_purchase_orders').findOne({ id, tenantId });
+  if (!cpo || cpo.status !== 'DRAFT') return;
+  const now = new Date();
+  await db.collection('customer_purchase_orders').updateOne(
+    { id, tenantId },
+    {
+      $set: {
+        status: 'CANCELLED',
+        cancelledBy: { userId: actor.userId, name: actor.userName },
+        cancelledAt: now,
+        cancelReason: reason,
+        updatedAt: now,
+      },
+    },
+  );
+}
+
+async function cancelDraftPrsForPlan(
+  db: Db,
+  scopeAuth: NonNullable<HandlerContext['auth']>,
+  productionPlanId: string,
+  actor: { userId?: string; userName?: string },
+  reason: string,
+): Promise<void> {
+  const tenantId = tenantIdForWrite(scopeAuth, {});
+  const now = new Date();
+  const prs = await db.collection(PURCHASE_REQUIREMENTS_COLLECTION)
+    .find(withTenantFilter(scopeAuth, {
+      productionPlanId,
+      status: 'DRAFT',
+    }))
+    .toArray();
+  for (const pr of prs) {
+    await cancelDraftCpo(db, tenantId, String(pr.draftCpoId || ''), reason, actor);
+    await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id: String(pr.id) }),
+      { $set: { status: 'CANCELLED', updatedAt: now } },
+    );
+  }
+}
+
+async function cancelProcureMrpsForPlan(
+  db: Db,
+  scopeAuth: NonNullable<HandlerContext['auth']>,
+  productionPlanId: string,
+  now: Date,
+): Promise<void> {
+  await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
+    withTenantFilter(scopeAuth, {
+      productionPlanId,
+      status: { $in: ['DRAFT', 'APPROVED'] },
+    }),
+    { $set: { status: 'CANCELLED', updatedAt: now } },
+  );
+}
+
+async function runProcureShortageCore(
   db: Db,
   ctx: Pick<HandlerContext, 'auth' | 'request' | 'url'>,
   opts: {
@@ -65,43 +145,10 @@ export async function runProcureShortageFromPlan(
     scopeAuth: NonNullable<HandlerContext['auth']>;
     tanggalKedatangan?: string;
     catatan?: string;
+    refreshed?: boolean;
   },
+  plan: ProductionPlanDoc,
 ): Promise<ProcureShortageResult> {
-  const productionPlanId = String(opts.productionPlanId || '').trim();
-  if (!productionPlanId) return { ok: false, error: 'productionPlanId wajib', status: 400 };
-
-  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
-    withTenantFilter(opts.scopeAuth, { id: productionPlanId }),
-  ) as ProductionPlanDoc | null;
-  if (!plan) return { ok: false, error: 'Rencana produksi tidak ditemukan', status: 404 };
-  if (!MRP_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
-    return {
-      ok: false,
-      error: `Rencana status ${plan.status} belum siap untuk MRP (minimal Diajukan)`,
-      status: 400,
-    };
-  }
-
-  const linkedPo = await db.collection('customer_purchase_orders').findOne(
-    withTenantFilter(opts.scopeAuth, {
-      productionPlanId,
-      status: { $nin: ['CANCELLED'] },
-    }),
-    { sort: { createdAt: -1 }, projection: { id: 1, noPO: 1, status: 1 } },
-  );
-  if (linkedPo) {
-    return {
-      ok: true,
-      linkedPo: {
-        id: String(linkedPo.id),
-        noPO: linkedPo.noPO ? String(linkedPo.noPO) : undefined,
-        status: linkedPo.status ? String(linkedPo.status) : undefined,
-      },
-      message: `PO ${linkedPo.noPO || ''} sudah ada (${linkedPo.status})`,
-    };
-  }
-
-  // Satu explode untuk seluruh jalur (bukan readiness + MRP create terpisah).
   const built = await buildPlanMaterialExplosion(db, opts.scopeAuth, plan);
   if ('error' in built && built.error) {
     return { ok: false, error: String(built.error), status: 400 };
@@ -136,7 +183,9 @@ export async function runProcureShortageFromPlan(
     toStatus: 'SUBMITTED',
     userId: actor.userId,
     userName: actor.userName,
-    note: 'Otomatis dari Rencana Produksi (procure)',
+    note: opts.refreshed
+      ? 'Otomatis dari Rencana Produksi (perbarui draft belanja)'
+      : 'Otomatis dari Rencana Produksi (procure)',
   });
   history = appendDocHistory(history, {
     at: now,
@@ -144,12 +193,14 @@ export async function runProcureShortageFromPlan(
     toStatus: 'APPROVED',
     userId: actor.userId,
     userName: actor.userName,
-    note: 'Otomatis dari Rencana Produksi (procure)',
+    note: opts.refreshed
+      ? 'Otomatis dari Rencana Produksi (perbarui draft belanja)'
+      : 'Otomatis dari Rencana Produksi (procure)',
   });
 
   await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
     withTenantFilter(opts.scopeAuth, {
-      productionPlanId,
+      productionPlanId: opts.productionPlanId,
       status: 'DRAFT',
     }),
     { $set: { status: 'CANCELLED', updatedAt: now } },
@@ -161,7 +212,7 @@ export async function runProcureShortageFromPlan(
     noDokumen,
     productionPlanId: plan.id,
     productionPlanNo: plan.noDokumen,
-    tanggal: plan.tanggal,
+    tanggal: cookDateFromPlanTanggal(plan.tanggal),
     kitchenId: plan.kitchenId,
     kitchenNama: plan.kitchenNama,
     warehouseKode: built.warehouseKode!,
@@ -179,10 +230,12 @@ export async function runProcureShortageFromPlan(
   await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).insertOne(mrp);
   await writeAuditLog(db, {
     tenantId,
-    action: 'MRP_CREATE',
+    action: opts.refreshed ? 'PROCURE_DRAFT_REFRESH' : 'MRP_CREATE',
     entityType: 'material_requirement',
     entityId: mrp.id,
-    summary: `MRP ${mrp.noDokumen} APPROVED (procure) dari ${plan.noDokumen} (${shortageCount} kekurangan)`,
+    summary: opts.refreshed
+      ? `MRP ${mrp.noDokumen} APPROVED (refresh draft) dari ${plan.noDokumen} (${shortageCount} kekurangan)`
+      : `MRP ${mrp.noDokumen} APPROVED (procure) dari ${plan.noDokumen} (${shortageCount} kekurangan)`,
     ...actor,
   });
 
@@ -196,7 +249,7 @@ export async function runProcureShortageFromPlan(
     path: ['purchase-requirements'],
     body: {
       materialRequirementId: mrp.id,
-      tanggalKedatangan: opts.tanggalKedatangan || plan.tanggal,
+      tanggalKedatangan: resolveProcureArrivalDate(plan.tanggal, opts.tanggalKedatangan),
       catatan: opts.catatan || `Dari rencana ${plan.noDokumen}`,
     },
   });
@@ -216,47 +269,6 @@ export async function runProcureShortageFromPlan(
     return { ok: false, error: 'Draft PO tidak terbentuk', status: 500 };
   }
 
-  const submitRes = await handleCustomerPo({
-    db,
-    auth: ctx.auth,
-    request: ctx.request,
-    url: ctx.url,
-    method: 'POST',
-    route: `/customer-purchase-orders/${draftCpoId}/submit`,
-    path: ['customer-purchase-orders', draftCpoId, 'submit'],
-    body: {},
-  });
-  if (!submitRes) {
-    return {
-      ok: true,
-      mrpId: mrp.id,
-      mrpNo: mrp.noDokumen,
-      shortageCount,
-      draftCpoId,
-      draftCpoNo,
-      submitError: 'Submit handler tidak tersedia',
-      message: `PO ${draftCpoNo} dibuat (Draft) — buka PO ke Vendor untuk kirim`,
-    };
-  }
-  const submitData = await readJson(submitRes);
-  if (!submitRes.ok) {
-    return {
-      ok: true,
-      mrpId: mrp.id,
-      mrpNo: mrp.noDokumen,
-      shortageCount,
-      draftCpoId,
-      draftCpoNo,
-      submitError: String(submitData.error || 'perlu approval/submit'),
-      message: `PO ${draftCpoNo} dibuat (Draft). Buka PO ke Vendor untuk kirim`,
-    };
-  }
-
-  const vendorSynced = submitData.vendorSynced === true;
-  const vendorNoSO = submitData.vendorNoSO ? String(submitData.vendorNoSO) : undefined;
-  const vendorSyncError = submitData.vendorSyncError
-    ? String(submitData.vendorSyncError)
-    : undefined;
   return {
     ok: true,
     mrpId: mrp.id,
@@ -264,18 +276,108 @@ export async function runProcureShortageFromPlan(
     shortageCount,
     draftCpoId,
     draftCpoNo,
-    poStatus: String(submitData.status || 'APPROVED'),
-    noPO: String(submitData.noPO || draftCpoNo),
-    vendorSynced,
-    vendorNoSO,
-    vendorSyncError,
-    vendorSyncJobId: submitData.vendorSyncJobId
-      ? String(submitData.vendorSyncJobId)
-      : undefined,
-    message: vendorSynced
-      ? `PO ${submitData.noPO || draftCpoNo} → SO ${vendorNoSO || 'vendor'}`
-      : (vendorSyncError
-        ? `PO ${submitData.noPO || draftCpoNo} disetujui, gagal kirim vendor: ${vendorSyncError}`
-        : `PO ${submitData.noPO || draftCpoNo} → ${submitData.status || 'APPROVED'}`),
+    poStatus: 'DRAFT',
+    refreshed: opts.refreshed === true,
+    message: opts.refreshed
+      ? `Draft PO ${draftCpoNo} diperbarui — review & edit sebelum kirim ke vendor`
+      : `Draft PO ${draftCpoNo} siap — review & edit sebelum kirim ke vendor`,
   };
+}
+
+export async function runProcureShortageFromPlan(
+  db: Db,
+  ctx: Pick<HandlerContext, 'auth' | 'request' | 'url'>,
+  opts: {
+    productionPlanId: string;
+    scopeAuth: NonNullable<HandlerContext['auth']>;
+    tanggalKedatangan?: string;
+    catatan?: string;
+  },
+): Promise<ProcureShortageResult> {
+  const productionPlanId = String(opts.productionPlanId || '').trim();
+  if (!productionPlanId) return { ok: false, error: 'productionPlanId wajib', status: 400 };
+
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(opts.scopeAuth, { id: productionPlanId }),
+  ) as ProductionPlanDoc | null;
+  if (!plan) return { ok: false, error: 'Rencana produksi tidak ditemukan', status: 404 };
+  if (!MRP_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
+    return {
+      ok: false,
+      error: `Rencana status ${plan.status} belum siap untuk MRP (minimal Diajukan)`,
+      status: 400,
+    };
+  }
+
+  const linkedPo = await findLinkedPo(db, opts.scopeAuth, productionPlanId);
+  if (linkedPo) {
+    return {
+      ok: true,
+      linkedPo: {
+        id: String(linkedPo.id),
+        noPO: linkedPo.noPO ? String(linkedPo.noPO) : undefined,
+        status: linkedPo.status ? String(linkedPo.status) : undefined,
+      },
+      message: `PO ${linkedPo.noPO || ''} sudah ada (${linkedPo.status})`,
+    };
+  }
+
+  return runProcureShortageCore(db, ctx, { ...opts, productionPlanId }, plan);
+}
+
+export async function runRefreshProcureDraftFromPlan(
+  db: Db,
+  ctx: Pick<HandlerContext, 'auth' | 'request' | 'url'>,
+  opts: {
+    productionPlanId: string;
+    scopeAuth: NonNullable<HandlerContext['auth']>;
+    tanggalKedatangan?: string;
+    catatan?: string;
+  },
+): Promise<ProcureShortageResult> {
+  const productionPlanId = String(opts.productionPlanId || '').trim();
+  if (!productionPlanId) return { ok: false, error: 'productionPlanId wajib', status: 400 };
+
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(opts.scopeAuth, { id: productionPlanId }),
+  ) as ProductionPlanDoc | null;
+  if (!plan) return { ok: false, error: 'Rencana produksi tidak ditemukan', status: 404 };
+  if (!MRP_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
+    return {
+      ok: false,
+      error: `Rencana status ${plan.status} belum siap untuk MRP (minimal Diajukan)`,
+      status: 400,
+    };
+  }
+
+  const linkedPo = await findLinkedPo(db, opts.scopeAuth, productionPlanId);
+  if (!linkedPo) {
+    return { ok: false, error: 'Belum ada Draft PO — gunakan Buat Draft Belanja', status: 400 };
+  }
+
+  const poStatus = String(linkedPo.status || '').toUpperCase();
+  if (!REFRESHABLE_PO_STATUSES.has(poStatus)) {
+    return {
+      ok: false,
+      error: `PO ${linkedPo.noPO || ''} status ${poStatus} — tidak bisa diperbarui (hanya Draft/Rejected)`,
+      status: 400,
+    };
+  }
+
+  const actor = auditActor(ctx.auth);
+  const tenantId = tenantIdForWrite(opts.scopeAuth, {});
+  const supersedeReason = 'Digantikan draft belanja baru (perbarui dari rencana)';
+  const now = new Date();
+
+  if (poStatus === 'DRAFT') {
+    await cancelDraftCpo(db, tenantId, String(linkedPo.id), supersedeReason, actor);
+  }
+  await cancelDraftPrsForPlan(db, opts.scopeAuth, productionPlanId, actor, supersedeReason);
+  await cancelProcureMrpsForPlan(db, opts.scopeAuth, productionPlanId, now);
+
+  return runProcureShortageCore(db, ctx, {
+    ...opts,
+    productionPlanId,
+    refreshed: true,
+  }, plan);
 }

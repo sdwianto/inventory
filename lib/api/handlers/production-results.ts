@@ -37,6 +37,7 @@ import {
 } from '@/lib/food-production/material-issue';
 import {
   PRODUCTION_PLANS_COLLECTION,
+  cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
@@ -459,7 +460,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       productionPlanNo: plan.noDokumen,
       materialIssueId,
       materialIssueNo,
-      tanggal: plan.tanggal,
+      tanggal: cookDateFromPlanTanggal(plan.tanggal),
       kitchenId: plan.kitchenId,
       kitchenNama: plan.kitchenNama,
       warehouseKode: seeded.warehouseKode,

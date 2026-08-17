@@ -36,6 +36,7 @@ export function useInvalidateHutangBadges() {
 
 export interface NavBadgesData {
   grnPending?: number;
+  grnRejectedPending?: number;
   hutangReview?: number;
   wrPending?: number;
   pmOverdue?: number;
