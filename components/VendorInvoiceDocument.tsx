@@ -3,6 +3,7 @@
 import type { JsonObject } from '@/types/json';
 import { asArray, asObject, num, str } from '@/types/json';
 import { formatDate, formatDateTime, formatIDR } from '@/lib/format';
+import { DEFAULT_DELIVERY_BRAND, resolveBrandColor, darken, readableTextOn } from '@/lib/brand-color';
 
 const APPROVAL_LABELS = {
   PENDING_REVIEW: 'Menunggu review',
@@ -83,6 +84,10 @@ export default function VendorInvoiceDocument({
   const soT = num(cmp.soTotal ?? detail.soTotal ?? asObject(po.vendorSoSnapshot).total);
   const invT = num(cmp.invoiceTotal ?? detail.total);
   const showCustomerLogo = customer.showLogoOnInvoice !== false;
+  const brand = resolveBrandColor(vendor, DEFAULT_DELIVERY_BRAND);
+  const brandBorder = darken(brand, 0.12);
+  const brandAccent = darken(brand, 0.3);
+  const brandHeaderText = readableTextOn(brand);
 
   return (
     <article
@@ -90,7 +95,7 @@ export default function VendorInvoiceDocument({
       className={`vendor-invoice-document bg-white text-slate-900 ${className}`}
     >
       <div className="vendor-invoice-sheet">
-      <header className="vendor-invoice-header flex flex-wrap gap-3 justify-between items-start border-b-2 border-orange-500 pb-3 mb-3">
+      <header className="vendor-invoice-header flex flex-wrap gap-3 justify-between items-start border-b-2 pb-3 mb-3" style={{ borderColor: brand }}>
         <div className="flex gap-3 min-w-0">
           <BillingLogo logo={str(vendor.logoBase64)} alt="Logo vendor" />
           <div className="min-w-0 text-sm">
@@ -106,7 +111,7 @@ export default function VendorInvoiceDocument({
           </div>
         </div>
         <div className="text-right shrink min-w-0 max-w-[45%]">
-          <h1 className="text-base font-bold text-orange-600 uppercase tracking-wide">Faktur Tagihan</h1>
+          <h1 className="text-base font-bold uppercase tracking-wide" style={{ color: brandAccent }}>Faktur Tagihan</h1>
           <p className="text-lg font-bold font-mono text-slate-900 mt-0.5 break-all">{str(detail.noInvoice)}</p>
           <p className="text-xs text-slate-600 mt-1">{formatDateTime(str(detail.tanggal))}</p>
           <span className={`inline-block mt-2 px-2 py-0.5 rounded text-xs font-medium ${
@@ -191,15 +196,15 @@ export default function VendorInvoiceDocument({
           <col className="vi-col-jumlah" />
         </colgroup>
         <thead>
-          <tr className="bg-orange-500 text-white">
-            <th className="border border-orange-600 px-1.5 py-1 text-center">#</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-left">Kode</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-left">Nama Barang</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-center">Sat</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-right">Qty</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-right">Harga</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-right">Diskon</th>
-            <th className="border border-orange-600 px-1.5 py-1 text-right">Jumlah</th>
+          <tr style={{ backgroundColor: brand, color: brandHeaderText }}>
+            <th className="border px-1.5 py-1 text-center" style={{ borderColor: brandBorder }}>#</th>
+            <th className="border px-1.5 py-1 text-left" style={{ borderColor: brandBorder }}>Kode</th>
+            <th className="border px-1.5 py-1 text-left" style={{ borderColor: brandBorder }}>Nama Barang</th>
+            <th className="border px-1.5 py-1 text-center" style={{ borderColor: brandBorder }}>Sat</th>
+            <th className="border px-1.5 py-1 text-right" style={{ borderColor: brandBorder }}>Qty</th>
+            <th className="border px-1.5 py-1 text-right" style={{ borderColor: brandBorder }}>Harga</th>
+            <th className="border px-1.5 py-1 text-right" style={{ borderColor: brandBorder }}>Diskon</th>
+            <th className="border px-1.5 py-1 text-right" style={{ borderColor: brandBorder }}>Jumlah</th>
           </tr>
         </thead>
         <tbody>
@@ -323,7 +328,7 @@ export default function VendorInvoiceDocument({
           </div>
           <div className="flex justify-between font-bold text-base pt-2 border-t mt-2">
             <span>Total tagihan</span>
-            <span className="text-orange-600 tabular-nums">{formatIDR(num(totals.total ?? detail.total))}</span>
+            <span className="tabular-nums" style={{ color: brandAccent }}>{formatIDR(num(totals.total ?? detail.total))}</span>
           </div>
         </div>
       </section>

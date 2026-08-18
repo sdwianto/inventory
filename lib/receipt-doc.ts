@@ -14,6 +14,8 @@ export type StoreSettingsInput = {
   showLogoOnInvoice?: boolean;
   logoBase64?: string;
   logoUrl?: string;
+  /** Warna brand dokumen (hex #RRGGBB) — header tabel Faktur Tagihan vendor dsb. */
+  warnaBrand?: string;
 };
 
 type CartItemInput = {
@@ -94,6 +96,7 @@ export function sanitizeStoreSettings(s: StoreSettingsInput | null | undefined) 
     showLogoOnReceipt: s.showLogoOnReceipt !== false,
     logoBase64: s.logoBase64 || '',
     logoUrl: s.logoUrl || '',
+    warnaBrand: s.warnaBrand || '',
   };
 }
 

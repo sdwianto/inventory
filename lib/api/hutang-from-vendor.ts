@@ -136,6 +136,7 @@ async function resolveVendorBillingForHutang(
     companyNPWP: nestedObj.companyNPWP || payloadRec.vendorNPWP || '',
     logoBase64: nestedObj.logoBase64 || payloadRec.vendorLogoBase64 || '',
     logoUrl: nestedObj.logoUrl || payloadRec.vendorLogoUrl || '',
+    warnaBrand: nestedObj.warnaBrand || payloadRec.vendorWarnaBrand || '',
   });
   if (!billingSnap.companyName) billingSnap.companyName = displayName;
   return { vid, billingSnap, displayName };

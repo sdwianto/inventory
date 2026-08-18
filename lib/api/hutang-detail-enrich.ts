@@ -19,6 +19,8 @@ export type VendorBillingSnapshot = {
   logoUrl: string;
   logoBase64: string;
   showLogoOnInvoice?: boolean;
+  /** Warna brand dokumen vendor (hex #RRGGBB) — header tabel Faktur Tagihan. */
+  warnaBrand: string;
 };
 
 function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapshot {
@@ -30,6 +32,7 @@ function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapsh
     logoBase64: String(src.logoBase64 || src.vendorLogoBase64 || ''),
     logoUrl: String(src.logoUrl || src.vendorLogoUrl || ''),
     showLogoOnInvoice: src.showLogoOnInvoice !== false,
+    warnaBrand: String(src.warnaBrand || src.vendorWarnaBrand || ''),
   });
   return {
     vendorTenantId: src.vendorTenantId != null ? String(src.vendorTenantId) : null,
@@ -40,6 +43,7 @@ function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapsh
     logoBase64: String(picked?.logoBase64 || ''),
     logoUrl: String(picked?.logoUrl || ''),
     showLogoOnInvoice: src.showLogoOnInvoice !== false,
+    warnaBrand: String(picked?.warnaBrand || ''),
   };
 }
 
@@ -133,6 +137,7 @@ export async function loadVendorBillingProfile(
       companyNPWP: vt?.companyNPWP || '',
       logoBase64: vt?.logoUrl || vt?.logoBase64 || '',
       logoUrl: vt?.logoUrl || '',
+      warnaBrand: vt?.warnaBrand || '',
     }),
     vendorTenantId: vid,
   };
@@ -156,6 +161,7 @@ export async function loadVendorBillingProfile(
           companyNPWP: normalized.companyNPWP || profile.companyNPWP,
           logoUrl: normalized.logoUrl || '',
           logoBase64: '',
+          warnaBrand: normalized.warnaBrand || profile.warnaBrand || '',
           profileSyncedAt: new Date(),
           updatedAt: new Date(),
         },
@@ -281,6 +287,7 @@ export async function buildHutangDetailEnrichment(
         companyPhone: vendorBilling.companyPhone,
         companyNPWP: vendorBilling.companyNPWP,
         logoUrl: vendorBilling.logoUrl,
+        warnaBrand: vendorBilling.warnaBrand,
       });
       void db.collection('hutang').updateOne(
         { tenantId: tid, id: hutang.id },
@@ -320,5 +327,6 @@ export function vendorBillingFromPayload(payload: Record<string, unknown>, vendo
     companyNPWP: nested.companyNPWP || payload.vendorNPWP || '',
     logoBase64: nested.logoBase64 || payload.vendorLogoBase64 || '',
     logoUrl: nested.logoUrl || payload.vendorLogoUrl || '',
+    warnaBrand: nested.warnaBrand || payload.vendorWarnaBrand || '',
   });
 }
