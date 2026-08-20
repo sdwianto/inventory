@@ -31,7 +31,7 @@ import { useConfirm } from '@/components/ConfirmProvider';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { addDays, format } from 'date-fns';
 import {
-  CalendarDays, Plus, Pencil, RefreshCw, Trash2, History,
+  CalendarDays, Plus, Pencil, RefreshCw, Trash2, Undo2, History,
   ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, ShoppingBag,
   UtensilsCrossed, FileText, Printer, Combine,
@@ -1450,7 +1450,7 @@ function FoodProductionPlanPageContent() {
       return (
         <td className="p-2 w-8 align-top">
           {excluded ? (
-            <span className="block text-center text-[10px] text-slate-400" title="Dicoret">×</span>
+            <span className="block text-center text-[10px] text-slate-400" title="Dihapus dari rencana pembelian">×</span>
           ) : null}
         </td>
       );
@@ -1458,16 +1458,18 @@ function FoodProductionPlanPageContent() {
 
     return (
       <td className="p-2 w-8 align-top" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          className="mt-1 h-3.5 w-3.5 accent-slate-700 cursor-pointer"
-          checked={excluded}
+        <button
+          type="button"
+          className={cn(
+            'inline-flex h-6 w-6 items-center justify-center rounded hover:bg-slate-100 disabled:opacity-40',
+            excluded ? 'text-slate-500' : 'text-destructive',
+          )}
           disabled={saving}
           title={excluded
-            ? 'Hapus coret — ikut ke MRP/PO lagi'
-            : 'Coret item — tidak masuk MRP/PO'}
-          aria-label={excluded ? 'Batalkan coret item' : 'Coret item'}
-          onChange={(e) => {
+            ? 'Batalkan hapus — bahan ini ikut ke MRP/PO lagi'
+            : 'Hapus dari rencana pembelian — bahan resep hanya jadi acuan, bukan wajib diorder'}
+          aria-label={excluded ? 'Batalkan hapus bahan' : 'Hapus bahan dari rencana pembelian'}
+          onClick={() => {
             void saveMaterialOverride({
               row,
               recipeId,
@@ -1476,10 +1478,12 @@ function FoodProductionPlanPageContent() {
               productNama: ing.productNama,
               satuan: ing.satuan,
               computedQty: ing.qty,
-              excluded: e.target.checked,
+              excluded: !excluded,
             });
           }}
-        />
+        >
+          {excluded ? <Undo2 className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+        </button>
       </td>
     );
   }
@@ -2316,6 +2320,11 @@ function FoodProductionPlanPageContent() {
                                                   {ing.satuan ? ` ${ing.satuan}` : ''} di GBASAH
                                                 </span>
                                               )}
+                                              {!excluded && !stockLoading && stock && qtyKering <= 0 && qtyBasah <= 0 && (
+                                                <span className="inline-flex items-center rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-red-700 no-underline">
+                                                  Stok kosong
+                                                </span>
+                                              )}
                                             </div>
                                           </td>
                                           {renderIngredientQtyCell({
@@ -2549,6 +2558,11 @@ function FoodProductionPlanPageContent() {
                                                     <span className="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] leading-tight text-sky-800 tabular-nums no-underline">
                                                       Stok — {formatNumber(qtyBasah)}
                                                       {ing.satuan ? ` ${ing.satuan}` : ''} di GBASAH
+                                                    </span>
+                                                  )}
+                                                  {!excluded && !stockLoading && stock && qtyKering <= 0 && qtyBasah <= 0 && (
+                                                    <span className="inline-flex items-center rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-red-700 no-underline">
+                                                      Stok kosong
                                                     </span>
                                                   )}
                                                 </div>
