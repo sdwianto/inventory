@@ -81,6 +81,7 @@ export default function ProdukPage() {
     Object.fromEntries(WAREHOUSES.map((w) => [w.kode, true])) as Record<string, boolean>
   ));
   const [itemRoleFilter, setItemRoleFilter] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
   const selection = useListSelection((item: { id: string }) => item.id);
 
   const isMaster = user?.role === 'MASTER';
@@ -485,6 +486,7 @@ export default function ProdukPage() {
   };
 
   const filteredProducts = useMemo(() => products.filter((p) => {
+    if (!showInactive && p.aktif === false) return false;
     const g = str(p.gudangKode, 'GKERING');
     if (!gudangFilter[g]) return false;
     if (itemRoleFilter) {
@@ -492,7 +494,11 @@ export default function ProdukPage() {
       if (role !== itemRoleFilter) return false;
     }
     return true;
-  }), [products, gudangFilter, itemRoleFilter]);
+  }), [products, gudangFilter, itemRoleFilter, showInactive]);
+  const inactiveHiddenCount = useMemo(
+    () => (showInactive ? 0 : products.filter((p) => p.aktif === false).length),
+    [products, showInactive],
+  );
 
   const showAllGudang = WAREHOUSES.every((w) => gudangFilter[w.kode]);
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(str(p.id)));
@@ -644,7 +650,20 @@ export default function ProdukPage() {
             {isMaster && !filterTenantId && (
               <span className="text-xs text-slate-400 ml-1">(semua tenant)</span>
             )}
+            {inactiveHiddenCount > 0 && (
+              <span className="text-xs text-slate-400 ml-1">({inactiveHiddenCount} nonaktif disembunyikan)</span>
+            )}
           </div>
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none self-center text-sm text-slate-600">
+            <Checkbox
+              id="produk-show-inactive"
+              checked={showInactive}
+              onCheckedChange={(v) => setShowInactive(v === true)}
+            />
+            <Label htmlFor="produk-show-inactive" className="text-sm font-medium cursor-pointer">
+              Tampilkan nonaktif
+            </Label>
+          </label>
           <div className="ml-auto flex flex-wrap items-center gap-4 rounded-lg border bg-slate-50 px-3 py-2 self-center">
             {WAREHOUSES.map((w) => (
               <label
@@ -719,7 +738,7 @@ export default function ProdukPage() {
                   </td></tr>
                 )}
                 {filteredProducts.map((p) => (
-                  <tr key={str(p.id)} className={`border-t hover:bg-slate-50 ${selection.isSelected(str(p.id)) ? 'bg-orange-50/50' : ''} ${p.aktif === false ? 'opacity-50' : ''}`}>
+                  <tr key={str(p.id)} className={`border-t hover:bg-slate-50 ${selection.isSelected(str(p.id)) ? 'bg-orange-50/50' : ''}`}>
                     {canManageProducts && (
                       <td className="px-3 py-2">
                         <input
@@ -741,14 +760,6 @@ export default function ProdukPage() {
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">{str(p.barcode)}</td>
                     <td className="px-3 py-2 font-medium">
                       {str(p.nama)}
-                      {p.aktif === false && (
-                        <span
-                          className="ml-1.5 inline-flex items-center rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-slate-600 align-middle"
-                          title="Produk ini sudah dinonaktifkan — tidak muncul di transaksi/sync baru"
-                        >
-                          Nonaktif
-                        </span>
-                      )}
                       {isVendorSynced(p) && (
                         <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded align-middle">sales.app</span>
                       )}
