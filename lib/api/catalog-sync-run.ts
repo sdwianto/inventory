@@ -176,7 +176,8 @@ export async function runCatalogSync(
     updated: number;
     errors: JsonObject[];
     byVendor: Record<string, number>;
-  } = { created: 0, updated: 0, errors: [], byVendor: {} };
+    duplicateBarcodes: JsonObject[];
+  } = { created: 0, updated: 0, errors: [], byVendor: {}, duplicateBarcodes: [] };
 
   let cursor: string | undefined;
   let page = 0;
@@ -260,6 +261,7 @@ export async function runCatalogSync(
       results.created += batch.created;
       results.updated += batch.updated;
       results.errors.push(...batch.errors);
+      results.duplicateBarcodes.push(...batch.duplicateBarcodes);
       for (const [v, n] of Object.entries(batch.byVendor)) {
         results.byVendor[v] = (results.byVendor[v] || 0) + n;
       }

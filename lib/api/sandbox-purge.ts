@@ -21,7 +21,8 @@ export function normalizeSandboxPurgeProfile(raw: unknown): SandboxPurgeProfile 
 
 /**
  * Koleksi yang dihapus saat reset sandbox penuh.
- * Food Production: transaksi operasional + master simulasi (resep/menu/template/price book).
+ * Food Production: transaksi operasional + master simulasi (menu/template/price book).
+ * Master resep (`recipes`) TIDAK ikut direset — dianggap master data, bukan data simulasi.
  * Keamanan Pangan (kode: kitchen-assurance / ka_*): observation / case / follow-up + policy & monitoring.
  * Setup dapur (kitchens, service_points, armadas, temperature_thresholds, warehouse_bins) tetap.
  */
@@ -100,7 +101,6 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'portion_targets',
   // Food Production — master/simulasi (ikut di-reset)
   'menus',
-  'recipes',
   'supplier_price_book',
   'qc_templates',
   'haccp_templates',
@@ -151,6 +151,7 @@ export const SANDBOX_KEEP_HINT = [
   'armadas',
   'temperature_thresholds',
   'warehouse_bins',
+  'recipes',
   'assets',
   'users',
   'tenants',

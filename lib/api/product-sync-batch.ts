@@ -14,9 +14,10 @@ interface BatchUpsertResult {
   updated: number;
   errors: JsonObject[];
   byVendor: Record<string, number>;
+  duplicateBarcodes: JsonObject[];
 }
 
-type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string };
+type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string; barcode?: string; nama?: string };
 
 function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: string, now: Date) {
   const syncSet: Record<string, unknown> = {
@@ -76,13 +77,51 @@ function findExisting(
   return map.get(`id:${snap.id}:${vTenant}`) || map.get(`kode:${snap.kode}:${vTenant}`);
 }
 
+/**
+ * Peta barcode -> produk aktif dengan barcode itu, untuk deteksi duplikat SKU vendor
+ * (barcode sama tapi vendorStokId/kode beda — lihat findBarcodeDuplicate di product-sync.ts).
+ */
+async function loadBarcodeMap(
+  db: Db,
+  tid: string,
+  barcodes: string[],
+): Promise<Map<string, ExistingRow[]>> {
+  const uniq = [...new Set(barcodes.filter(Boolean))];
+  const map = new Map<string, ExistingRow[]>();
+  if (!uniq.length) return map;
+  const rows = (await db.collection('products').find({
+    tenantId: tid,
+    barcode: { $in: uniq },
+    aktif: { $ne: false },
+  }).project({ id: 1, kode: 1, nama: 1, barcode: 1, vendorStokId: 1 }).toArray()) as unknown as ExistingRow[];
+  for (const row of rows) {
+    const b = String(row.barcode || '');
+    if (!b) continue;
+    const arr = map.get(b) || [];
+    arr.push(row);
+    map.set(b, arr);
+  }
+  return map;
+}
+
+function findBarcodeDuplicate(
+  barcodeMap: Map<string, ExistingRow[]>,
+  barcode: string,
+  selfVendorStokId: string,
+  selfId?: string,
+): ExistingRow | undefined {
+  if (!barcode) return undefined;
+  const candidates = barcodeMap.get(barcode) || [];
+  return candidates.find((r) => r.vendorStokId !== selfVendorStokId && r.id !== selfId);
+}
+
 export async function bulkUpsertProductsFromVendor(
   db: Db,
   customerTenantId: string,
   products: JsonObject[],
 ): Promise<BatchUpsertResult> {
   const tid = customerTenantId || 'default';
-  const result: BatchUpsertResult = { created: 0, updated: 0, errors: [], byVendor: {} };
+  const result: BatchUpsertResult = { created: 0, updated: 0, errors: [], byVendor: {}, duplicateBarcodes: [] };
   const now = new Date();
 
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
@@ -116,6 +155,7 @@ export async function bulkUpsertProductsFromVendor(
       parsed.map((x) => String(x.snap.id)),
       parsed.map((x) => ({ vendorTenantId: x.vTenant, kode: String(x.snap.kode) })),
     );
+    const barcodeMap = await loadBarcodeMap(db, tid, parsed.map((x) => x.snap.barcode));
 
     const bulkOps: { updateOne: { filter: Record<string, unknown>; update: { $set: Record<string, unknown> } } }[] = [];
     const toCreate: { doc: Record<string, unknown>; gudangKode: string }[] = [];
@@ -125,6 +165,21 @@ export async function bulkUpsertProductsFromVendor(
       const syncSet = buildSyncSet(snap, vTenant, now);
       const existing = findExisting(existingMap, snap, vTenant);
       result.byVendor[vTenant] = (result.byVendor[vTenant] || 0) + 1;
+
+      const dup = findBarcodeDuplicate(barcodeMap, snap.barcode, snap.id, existing?.id);
+      syncSet.barcodeDuplicateWarning = !!dup;
+      syncSet.barcodeDuplicateOf = dup?.id ?? null;
+      if (dup) {
+        result.duplicateBarcodes.push({
+          barcode: snap.barcode,
+          kode: snap.kode,
+          nama: snap.nama,
+          vendorTenantId: vTenant,
+          existingId: dup.id,
+          existingKode: dup.kode,
+          existingNama: dup.nama,
+        });
+      }
 
       if (existing) {
         const classPatch = await applyInferredClassification(db, tid, existing, snap);
@@ -154,6 +209,11 @@ export async function bulkUpsertProductsFromVendor(
         });
         uomSyncQueue.push({ productId: id, raw, snap });
         result.created += 1;
+        if (snap.barcode) {
+          const arr = barcodeMap.get(snap.barcode) || [];
+          arr.push({ id, kode: snap.kode, nama: snap.nama, vendorStokId: snap.id });
+          barcodeMap.set(snap.barcode, arr);
+        }
       }
     }
 

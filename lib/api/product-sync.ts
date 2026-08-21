@@ -51,6 +51,28 @@ function parseVendorRecipeFactor(value: unknown): number | null {
   return n;
 }
 
+/**
+ * Cari produk aktif lain di tenant yang sama dengan barcode identik tapi item vendor berbeda
+ * (vendorStokId beda) — indikasi duplikat SKU dari sales.app (lihat catatan di findBarcodeDuplicate).
+ */
+export async function findBarcodeDuplicate(
+  db: Db,
+  tenantId: string,
+  barcode: string,
+  selfVendorStokId: string,
+  selfId?: string,
+) {
+  if (!barcode) return null;
+  const filter: Record<string, unknown> = {
+    tenantId,
+    barcode,
+    aktif: { $ne: false },
+    vendorStokId: { $ne: selfVendorStokId },
+  };
+  if (selfId) filter.id = { $ne: selfId };
+  return db.collection('products').findOne(filter, { projection: { id: 1, kode: 1, nama: 1, satuan: 1 } });
+}
+
 export async function upsertProductFromVendor(
   db: Db,
   customerTenantId: string,
@@ -80,7 +102,11 @@ export async function upsertProductFromVendor(
     });
   }
 
+  const barcodeDup = await findBarcodeDuplicate(db, tid, snap.barcode, snap.id, existing?.id ? String(existing.id) : undefined);
+
   const syncSet: Record<string, unknown> = {
+    barcodeDuplicateWarning: !!barcodeDup,
+    barcodeDuplicateOf: barcodeDup?.id ?? null,
     kode: snap.kode,
     barcode: snap.barcode,
     nama: snap.nama,
@@ -108,7 +134,13 @@ export async function upsertProductFromVendor(
     const classPatch = await applyInferredClassification(db, tid, existing, snap);
     await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch } });
     await syncVendorProductUoms(db, tid, existing.id, product, snap);
-    return { action: 'updated', id: existing.id, kode: snap.kode, vendorTenantId: vTenant };
+    return {
+      action: 'updated',
+      id: existing.id,
+      kode: snap.kode,
+      vendorTenantId: vTenant,
+      barcodeDuplicateOf: barcodeDup ? { id: barcodeDup.id, kode: barcodeDup.kode, nama: barcodeDup.nama } : null,
+    };
   }
 
   const classified = inferredClassificationPatch(snap);
@@ -133,7 +165,13 @@ export async function upsertProductFromVendor(
   await db.collection('products').insertOne(doc);
   await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
   await syncVendorProductUoms(db, tid, doc.id, product, snap);
-  return { action: 'created', id: doc.id, kode: snap.kode, vendorTenantId: vTenant };
+  return {
+    action: 'created',
+    id: doc.id,
+    kode: snap.kode,
+    vendorTenantId: vTenant,
+    barcodeDuplicateOf: barcodeDup ? { id: barcodeDup.id, kode: barcodeDup.kode, nama: barcodeDup.nama } : null,
+  };
 }
 
 /** ID satuan dasar di sales.app untuk produk legacy (tanpa baris product_uom). */

@@ -44,6 +44,9 @@ import { useProdukCatalog } from '@/hooks/useProdukCatalog';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
+import { useCatalogSyncJob } from '@/lib/hooks/use-catalog-sync-job';
+import { BG_JOB_TERMINAL_STATUSES, isBgJobSuccess } from '@/lib/hooks/use-bg-job';
+import { useOnceTerminalEffect } from '@/lib/hooks/use-once-terminal-effect';
 import { useMasterTenants } from '@/lib/hooks/use-master-tenants';
 import { useProdukMeta } from '@/lib/hooks/use-produk-meta';
 import { queryKeys } from '@/lib/query-keys';
@@ -505,6 +508,35 @@ export default function ProdukPage() {
     return { amount: beli, vendorRef: false };
   };
   const [syncing, setSyncing] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const { data: catalogJobData } = useCatalogSyncJob(activeJobId);
+  const catalogJobStatus = catalogJobData && activeJobId ? String(catalogJobData.status || '') : null;
+
+  const reportSyncResult = (data: JsonObject) => {
+    const total = num(data.total);
+    if (total === 0) {
+      toast.error('Katalog kosong — cek SALES_VENDOR_TENANT_ID di .env.local (produk sales.app mungkin di tenant lain)');
+      return;
+    }
+    toast.success(`Sync OK: ${num(data.created)} baru, ${num(data.updated)} diperbarui (${total} dari sales.app)`);
+    const dupList = Array.isArray(data.duplicateBarcodes) ? data.duplicateBarcodes : [];
+    if (dupList.length > 0) {
+      toast.warning(`${dupList.length} produk punya barcode yang sama dengan produk aktif lain — cek badge "Barcode duplikat" di tabel`);
+    }
+    window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
+    void load();
+  };
+
+  useOnceTerminalEffect(activeJobId, catalogJobData, catalogJobStatus, BG_JOB_TERMINAL_STATUSES, (status) => {
+    if (isBgJobSuccess(status)) {
+      reportSyncResult((catalogJobData?.result || {}) as JsonObject);
+    } else {
+      const errMsg = String(catalogJobData?.lastError || (catalogJobData?.result as JsonObject)?.error || 'Sync gagal');
+      toast.error(errMsg);
+    }
+    setActiveJobId(null);
+    setSyncing(false);
+  });
 
   const syncFromVendor = async () => {
     setSyncing(true);
@@ -514,16 +546,18 @@ export default function ProdukPage() {
         body: {},
         offlineLabel: 'Sync katalog dari sales.app',
       }) as JsonObject;
-      const total = num(data.total);
-      if (total === 0) throw new Error('Katalog kosong — cek SALES_VENDOR_TENANT_ID di .env.local (produk sales.app mungkin di tenant lain)');
-      toast.success(`Sync OK: ${num(data.created)} baru, ${num(data.updated)} diperbarui (${total} dari sales.app)`);
-      window.dispatchEvent(new CustomEvent('vendor-catalog-synced', { detail: data }));
-      void load();
+      if (data.jobId) {
+        toast.info('Sync katalog berjalan di background…');
+        setActiveJobId(String(data.jobId));
+        return;
+      }
+      reportSyncResult(data);
+      setSyncing(false);
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
       else toast.error(e instanceof Error ? e.message : String(e));
+      setSyncing(false);
     }
-    setSyncing(false);
   };
 
   return (
@@ -685,7 +719,7 @@ export default function ProdukPage() {
                   </td></tr>
                 )}
                 {filteredProducts.map((p) => (
-                  <tr key={str(p.id)} className={`border-t hover:bg-slate-50 ${selection.isSelected(str(p.id)) ? 'bg-orange-50/50' : ''}`}>
+                  <tr key={str(p.id)} className={`border-t hover:bg-slate-50 ${selection.isSelected(str(p.id)) ? 'bg-orange-50/50' : ''} ${p.aktif === false ? 'opacity-50' : ''}`}>
                     {canManageProducts && (
                       <td className="px-3 py-2">
                         <input
@@ -707,8 +741,24 @@ export default function ProdukPage() {
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">{str(p.barcode)}</td>
                     <td className="px-3 py-2 font-medium">
                       {str(p.nama)}
+                      {p.aktif === false && (
+                        <span
+                          className="ml-1.5 inline-flex items-center rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-slate-600 align-middle"
+                          title="Produk ini sudah dinonaktifkan — tidak muncul di transaksi/sync baru"
+                        >
+                          Nonaktif
+                        </span>
+                      )}
                       {isVendorSynced(p) && (
                         <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded align-middle">sales.app</span>
+                      )}
+                      {p.barcodeDuplicateWarning === true && (
+                        <span
+                          className="ml-1.5 inline-flex items-center rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-red-700 align-middle"
+                          title="Barcode ini juga dipakai produk aktif lain — kemungkinan duplikat dari sales.app"
+                        >
+                          Barcode duplikat
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs"><span className="px-2 py-0.5 bg-slate-100 rounded">{str(p.grup)}</span></td>
