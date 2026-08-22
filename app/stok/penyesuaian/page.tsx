@@ -208,10 +208,7 @@ export default function PenyesuaianPage() {
               <label className="text-xs text-slate-500">Keterangan</label>
               <Textarea value={keterangan} onChange={e => setKeterangan(e.target.value)} placeholder="Misal: Stock opname akhir bulan..." />
             </div>
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Daftar Item ({items.length})</div>
-              <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}><Plus className="w-4 h-4 mr-1" /> Tambah Produk</Button>
-            </div>
+            <div className="text-sm font-semibold">Daftar Item ({items.length})</div>
             <div className="border rounded">
               <table className="w-full text-sm">
                 <thead className="bg-slate-100 text-xs">
@@ -252,6 +249,7 @@ export default function PenyesuaianPage() {
                 </tbody>
               </table>
             </div>
+            <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}><Plus className="w-4 h-4 mr-1" /> Tambah Produk</Button>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowForm(false)}><X className="w-4 h-4 mr-1" /> Batal</Button>
