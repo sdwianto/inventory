@@ -10,7 +10,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatIDR, formatNumber } from '@/lib/format';
 import { productStockTitle } from '@/lib/uom/display';
-import { Boxes, Search, TrendingUp } from 'lucide-react';
+import {
+  Boxes, Search, TrendingUp, ArrowUp, ArrowDown, ArrowUpDown,
+} from 'lucide-react';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { queryKeys } from '@/lib/query-keys';
@@ -66,6 +68,7 @@ interface StockTrend {
 }
 
 type GudangFilter = Record<string, boolean>;
+type SortDir = 'asc' | 'desc' | null;
 
 interface SummaryCardProps {
   title: string;
@@ -98,6 +101,7 @@ export default function SaldoGudangPage() {
   const [gudangFilter, setGudangFilter] = useState<GudangFilter>(() => (
     Object.fromEntries(WAREHOUSES.map((w) => [w.kode, true]))
   ));
+  const [qtySortDir, setQtySortDir] = useState<SortDir>(null);
 
   const rowsUrl = `/api/stok/saldo?part=rows${q ? `&q=${encodeURIComponent(q)}` : ''}`;
   const trendUrl = `/api/stok/saldo?part=trend&trendMonths=${trendMonths}`;
@@ -143,11 +147,22 @@ export default function SaldoGudangPage() {
 
   const stockRows = useMemo(() => {
     const withStock = rows.filter((r) => (r.stokTotal || r.stokQty || 0) > 0);
-    return withStock.filter((r) => {
+    const filtered = withStock.filter((r) => {
       const g = r.gudangKode || 'GKERING';
       return !!gudangFilter[g];
     });
-  }, [rows, gudangFilter]);
+    if (!qtySortDir) return filtered;
+    const sorted = [...filtered].sort((a, b) => {
+      const qa = a.stokQty ?? a.stokTotal ?? 0;
+      const qb = b.stokQty ?? b.stokTotal ?? 0;
+      return qtySortDir === 'asc' ? qa - qb : qb - qa;
+    });
+    return sorted;
+  }, [rows, gudangFilter, qtySortDir]);
+
+  const toggleQtySort = () => {
+    setQtySortDir((prev) => (prev === null ? 'asc' : prev === 'asc' ? 'desc' : null));
+  };
 
   const filteredTotals = useMemo(() => {
     let qty = 0;
@@ -307,7 +322,19 @@ export default function SaldoGudangPage() {
                   )}
                   <th className="px-3 py-2 text-center">Satuan</th>
                   <th className="px-3 py-2 text-right">Harga Beli</th>
-                  <th className="px-3 py-2 text-right">Qty Stok</th>
+                  <th className="px-3 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={toggleQtySort}
+                      className="inline-flex items-center gap-1 hover:text-orange-600"
+                      title="Urutkan berdasarkan Qty Stok"
+                    >
+                      Qty Stok
+                      {qtySortDir === 'asc' && <ArrowUp className="w-3.5 h-3.5" />}
+                      {qtySortDir === 'desc' && <ArrowDown className="w-3.5 h-3.5" />}
+                      {qtySortDir === null && <ArrowUpDown className="w-3.5 h-3.5 opacity-50" />}
+                    </button>
+                  </th>
                   <th className="px-3 py-2 text-right">Nilai Stok</th>
                 </tr>
               </thead>
