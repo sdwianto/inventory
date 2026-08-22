@@ -113,6 +113,7 @@ const GAP_SPECS: GapSpec[] = [
   { id: 'oyster-sauce', test: /saus\s*tiram|saos\s*tiram|oyster\s*sauce/i, ndb: '06176', namaId: 'Saus tiram', aliases: ['saus tiram', 'saos tiram', 'oyster sauce'], kelompok: 'Bumbu', via: 'andrafarm_sr' },
   { id: 'creamer', test: /fiber\s*cream|krimer|creamer/i, ndb: '01069', namaId: 'Krimer bubuk', aliases: ['fiber cream', 'krimer', 'creamer'], kelompok: 'Susu', via: 'usda_sr' },
   { id: 'whipped', test: /whip+e?d\s*cream|whipped/i, ndb: '01054', namaId: 'Whipped cream', aliases: ['whipped cream', 'whiped cream', 'whip cream'], kelompok: 'Susu', via: 'usda_sr' },
+  { id: 'meatball', test: /\bbakso\b|\bbaso\b|\bpentol\b|meatball/i, ndb: '07972', namaId: 'Bakso, beku, gaya Italia', aliases: ['bakso', 'baso', 'pentol', 'bakso beku', 'meatball', 'meatballs'], kelompok: 'Daging', via: 'usda_sr' },
 ];
 
 const NUTRIENT_IDS: Record<string, keyof Pick<CatalogItem, 'energiKcal' | 'proteinG' | 'lemakG' | 'karbohidratG' | 'seratG' | 'natriumMg'>> = {

@@ -1100,6 +1100,29 @@
       "seratG": 0,
       "natriumMg": 8,
       "bddPct": 100
+    },
+    {
+      "kode": "USDA-07972",
+      "ndb": "07972",
+      "fdcId": 171638,
+      "nama": "Meatballs, frozen, Italian style",
+      "namaId": "Bakso, beku, gaya Italia",
+      "aliases": [
+        "bakso",
+        "baso",
+        "bakso beku",
+        "meatball",
+        "meatballs",
+        "pentol"
+      ],
+      "kelompok": "Daging",
+      "energiKcal": 286,
+      "proteinG": 14.4,
+      "lemakG": 22.21,
+      "karbohidratG": 8.06,
+      "seratG": 2.3,
+      "natriumMg": 666,
+      "bddPct": 100
     }
   ]
 }
