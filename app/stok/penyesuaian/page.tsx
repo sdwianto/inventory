@@ -270,10 +270,10 @@ export default function PenyesuaianPage() {
 
       {/* Detail */}
       <Dialog open={!!detail} onOpenChange={() => setDetail(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader><DialogTitle>Detail Penyesuaian {str(detail?.noPenyesuaian)}</DialogTitle></DialogHeader>
           {detail && (
-            <div className="space-y-3">
+            <div className="space-y-3 overflow-y-auto">
               <div className="bg-slate-50 rounded p-3 text-sm">
                 <div>Tanggal: {formatDateTime(str(detail.tanggal))}</div>
                 <div>Keterangan: {str(detail.keterangan) || '-'}</div>
