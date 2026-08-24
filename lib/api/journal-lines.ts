@@ -160,6 +160,16 @@ export function buildPaidExternalJournalLines({
   });
 }
 
+/** Balik debet/kredit tiap baris — untuk membatalkan jurnal auto yang sudah terlanjur posting. */
+export function reverseJournalDetails(details: JournalDetail[]): JournalDetail[] {
+  return details.map((d) => ({
+    ...d,
+    debet: d.kredit || 0,
+    kredit: d.debet || 0,
+    keterangan: `Void: ${d.keterangan}`,
+  }));
+}
+
 export function buildHutangPaymentJournalLines({
   noDoc,
   amount,

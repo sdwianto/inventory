@@ -56,6 +56,10 @@ export interface VendorInvoicePayload extends JsonObject {
 export interface ThreeWayMatchOptions {
   qtyTolerancePct?: number;
   priceTolerancePct?: number;
+  /** Baris invoice hutang lain (belum REJECTED) yang sudah menagih GRN yang sama — untuk deteksi duplikat. */
+  siblingInvoices?: { noInvoice?: string; items?: VendorInvoiceLine[] }[];
+  /** hutang.id yang sedang disinkron ulang — dikecualikan saat query sibling supaya tidak menandai dirinya sendiri. */
+  excludeHutangId?: string;
 }
 
 export interface ThreeWayMatchResult {

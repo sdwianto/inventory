@@ -376,7 +376,7 @@ async function syncExistingVendorHutangFromPayload(
     };
   }
 
-  const match = await validateInvoiceAgainstGrn(db, tid, payload);
+  const match = await validateInvoiceAgainstGrn(db, tid, payload, { excludeHutangId: existing.id });
   const matchOk = match.ok === true;
   // matchStatus tetap dihitung dari payload asli (histori apa yang ditagih vendor) —
   // tapi qty/total yang benar-benar TERSIMPAN dikoreksi ke qtyReceived GRN dulu, supaya
@@ -390,7 +390,10 @@ async function syncExistingVendorHutangFromPayload(
   const paymentTerms = payload.paymentTerms || String(existing.paymentTerms || '') || 'KREDIT';
   const existingTanggal = existing.tanggal as string | Date | undefined;
   const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
-  const settlement = resolveHutangSettlement(paymentTerms, total, payload.jatuhTempo, txnDate);
+  // Jangan auto-LUNAS-kan (TUNAI) invoice yang gagal 3-way match (mis. duplikat GRN yang
+  // sama) — bayar tunai otomatis sebelum direview manusia lebih berbahaya daripada cuma
+  // menunda ke PENDING_REVIEW. paymentTerms yang TERSIMPAN tetap apa adanya.
+  const settlement = resolveHutangSettlement(matchOk ? paymentTerms : 'KREDIT', total, payload.jatuhTempo, txnDate);
 
   await db.collection('hutang').updateOne(
     { id: existing.id },
@@ -572,7 +575,10 @@ export async function createHutangFromVendorInvoice(
 
   const now = new Date();
   const tanggal = payload.postedAt ? new Date(payload.postedAt) : now;
-  const settlement = resolveHutangSettlement(paymentTerms, total, payload.jatuhTempo, tanggal);
+  // Jangan auto-LUNAS-kan (TUNAI) invoice yang gagal 3-way match (mis. duplikat GRN yang
+  // sama) — bayar tunai otomatis sebelum direview manusia lebih berbahaya daripada cuma
+  // menunda ke PENDING_REVIEW. paymentTerms yang TERSIMPAN tetap apa adanya.
+  const settlement = resolveHutangSettlement(matchOk ? paymentTerms : 'KREDIT', total, payload.jatuhTempo, tanggal);
 
   const noHutang = await nextDocNumber(db, tid, 'HUTANG', 'HT');
 

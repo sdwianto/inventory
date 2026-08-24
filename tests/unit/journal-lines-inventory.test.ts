@@ -4,6 +4,7 @@ import {
   buildPenyesuaianJournalLines,
   buildVendorHutangJournalLines,
   buildHutangPaymentJournalLines,
+  reverseJournalDetails,
 } from '@/lib/api/journal-lines';
 
 describe('buildGrnAccrualJournalLines', () => {
@@ -59,5 +60,33 @@ describe('buildHutangPaymentJournalLines', () => {
       metode: 'TRANSFER',
     });
     expect(lines[1].rekeningKode).toBe('10110');
+  });
+});
+
+describe('reverseJournalDetails', () => {
+  it('swaps debet/kredit per line and keeps the journal balanced', () => {
+    const original = buildVendorHutangJournalLines({
+      noDoc: 'INV1',
+      subTotal: 100000,
+      ppn: 11000,
+      total: 111000,
+    });
+    const reversed = reverseJournalDetails(original);
+
+    const origDebet = original.reduce((s, l) => s + l.debet, 0);
+    const origKredit = original.reduce((s, l) => s + l.kredit, 0);
+    const revDebet = reversed.reduce((s, l) => s + l.debet, 0);
+    const revKredit = reversed.reduce((s, l) => s + l.kredit, 0);
+
+    expect(revDebet).toBe(origKredit);
+    expect(revKredit).toBe(origDebet);
+    expect(revDebet).toBe(revKredit);
+
+    reversed.forEach((line, i) => {
+      expect(line.debet).toBe(original[i].kredit);
+      expect(line.kredit).toBe(original[i].debet);
+      expect(line.rekeningKode).toBe(original[i].rekeningKode);
+      expect(line.keterangan).toBe(`Void: ${original[i].keterangan}`);
+    });
   });
 });

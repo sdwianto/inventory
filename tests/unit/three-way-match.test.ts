@@ -136,6 +136,55 @@ describe('three-way-match', () => {
     expect(matchInvoiceLinesAgainstGrn(grns, payload).ok).toBe(true);
   });
 
+  it('flags full duplicate: sibling invoice already claimed the entire GRN qty', () => {
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 10000,
+      items: [{ kode: 'SKU1', qty: 10 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload, {
+      siblingInvoices: [{ noInvoice: 'INV-OLD', items: [{ kode: 'SKU1', qty: 10 }] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('GRN_ALREADY_INVOICED');
+    expect(result.error).toMatch(/INV-OLD/);
+  });
+
+  it('allows a legitimate partial split across two invoices for the same GRN', () => {
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 6000,
+      items: [{ kode: 'SKU1', qty: 6 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload, {
+      siblingInvoices: [{ noInvoice: 'INV-OLD', items: [{ kode: 'SKU1', qty: 4 }] }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('over-claiming beyond the remaining split qty still fails as GRN_ALREADY_INVOICED', () => {
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 8000,
+      items: [{ kode: 'SKU1', qty: 8 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload, {
+      siblingInvoices: [{ noInvoice: 'INV-OLD', items: [{ kode: 'SKU1', qty: 4 }] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('GRN_ALREADY_INVOICED');
+  });
+
+  it('no siblings → behaves identically to before (regression guard)', () => {
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 20000,
+      items: [{ kode: 'SKU1', qty: 10 }, { kode: 'SKU2', qty: 5 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload, { siblingInvoices: [] });
+    expect(result.ok).toBe(true);
+  });
+
   it('matches by shared lineId across tenant boundaries', () => {
     const grns = [{
       items: [{
