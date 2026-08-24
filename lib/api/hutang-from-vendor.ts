@@ -12,7 +12,7 @@ import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines } from '@/lib/api/journal-lines';
+import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines, buildHutangPaymentJournalLines } from '@/lib/api/journal-lines';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
@@ -207,6 +207,13 @@ function hasLegitimateExternalPayment(hutang: HutangDoc) {
   return !!(hutang?.paidExternalBy?.userId);
 }
 
+/** Hutang TUNAI yang otomatis LUNAS saat dibuat (lihat resolveHutangSettlement) — legit, bukan artefak bogus. */
+function isTunaiAutoSettled(hutang: HutangDoc) {
+  const terms = String(hutang?.paymentTerms || '').toUpperCase();
+  if (terms !== 'TUNAI') return false;
+  return String(hutang?.approvalStatus || hutang?.status || '') === 'LUNAS';
+}
+
 /**
  * Tagihan vendor yang seharusnya menunggu review admin — termasuk artefak migrasi
  * (approvedBy.role SYSTEM) dan status lunas tanpa jejak pembayaran nyata.
@@ -220,6 +227,7 @@ export function vendorInvoiceNeedsPendingReview(
   { fromPostedGrn = false }: { fromPostedGrn?: boolean } = {},
 ) {
   if (!isVendorInvoiceHutang(hutang)) return false;
+  if (isTunaiAutoSettled(hutang)) return false;
   const approval = String(hutang?.approvalStatus || hutang?.status || '');
   if (approval === 'PENDING_REVIEW' || approval === 'REJECTED') return false;
   if (fromPostedGrn) {
@@ -274,6 +282,35 @@ async function findExistingVendorHutang(
     return { ...global, tenantId: normalizeTenantId(tid) };
   }
   return global;
+}
+
+export type HutangSettlementFields = {
+  terbayar: number;
+  sisa: number;
+  status: string;
+  approvalStatus: string;
+  jatuhTempo: Date;
+};
+
+/**
+ * TUNAI = lunas otomatis saat dibuat/disinkron (jatuhTempo = tanggal transaksi, bukan +30 hari).
+ * KREDIT/lainnya = pending review, jatuhTempo dari payload (sudah dihitung sales.app dari TOP
+ * pelanggan); fallback +30 hari hanya untuk data darurat yang benar-benar tidak mengirimkannya.
+ */
+export function resolveHutangSettlement(
+  paymentTerms: string | undefined,
+  total: number,
+  payloadJatuhTempo: string | Date | null | undefined,
+  txnDate: Date,
+): HutangSettlementFields {
+  const terms = String(paymentTerms || 'KREDIT').toUpperCase();
+  if (terms === 'TUNAI') {
+    return { terbayar: total, sisa: 0, status: 'LUNAS', approvalStatus: 'LUNAS', jatuhTempo: txnDate };
+  }
+  const jatuhTempo = payloadJatuhTempo
+    ? new Date(payloadJatuhTempo)
+    : new Date(txnDate.getTime() + 30 * 86400000);
+  return { terbayar: 0, sisa: total, status: 'PENDING_REVIEW', approvalStatus: 'PENDING_REVIEW', jatuhTempo };
 }
 
 async function syncExistingVendorHutangFromPayload(
@@ -350,6 +387,10 @@ async function syncExistingVendorHutangFromPayload(
   const varianceCtx = await loadPoVarianceContext(db, tid, payload, vendorTenantId);
   const varianceSoToInvoice = total - varianceCtx.soTotal;
   const now = new Date();
+  const paymentTerms = payload.paymentTerms || String(existing.paymentTerms || '') || 'KREDIT';
+  const existingTanggal = existing.tanggal as string | Date | undefined;
+  const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
+  const settlement = resolveHutangSettlement(paymentTerms, total, payload.jatuhTempo, txnDate);
 
   await db.collection('hutang').updateOne(
     { id: existing.id },
@@ -371,11 +412,12 @@ async function syncExistingVendorHutangFromPayload(
         subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
         ppn: parseInt(String(payload.ppn || 0), 10),
         total,
-        terbayar: 0,
-        sisa: total,
-        status: 'PENDING_REVIEW',
-        approvalStatus: 'PENDING_REVIEW',
-        paymentTerms: payload.paymentTerms || existing.paymentTerms || 'KREDIT',
+        terbayar: settlement.terbayar,
+        sisa: settlement.sisa,
+        status: settlement.status,
+        approvalStatus: settlement.approvalStatus,
+        paymentTerms,
+        ...(settlement.status === 'LUNAS' ? { jatuhTempo: settlement.jatuhTempo } : {}),
         items: invoiceItems.length ? invoiceItems : (existing.items || []),
         matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
         matchError: matchOk ? null : (match.error || null),
@@ -529,7 +571,8 @@ export async function createHutangFromVendorInvoice(
   const sup = await ensureVendorSupplier(db, tid, vid, displayName);
 
   const now = new Date();
-  const jatuhTempo = payload.jatuhTempo ? new Date(payload.jatuhTempo) : new Date(now.getTime() + 30 * 86400000);
+  const tanggal = payload.postedAt ? new Date(payload.postedAt) : now;
+  const settlement = resolveHutangSettlement(paymentTerms, total, payload.jatuhTempo, tanggal);
 
   const noHutang = await nextDocNumber(db, tid, 'HUTANG', 'HT');
 
@@ -546,7 +589,7 @@ export async function createHutangFromVendorInvoice(
     salesOrderId: payload.salesOrderId || null,
     salesOrderTotal: parseInt(String(payload.salesOrderTotal || 0), 10) || null,
     salesOrderSubTotal: parseInt(String(payload.salesOrderSubTotal || 0), 10) || null,
-    tanggal: payload.postedAt ? new Date(payload.postedAt) : now,
+    tanggal,
     supplierId: sup.id,
     supplierName: sup.nama,
     vendorTenantId: vendorTenantId || null,
@@ -557,11 +600,11 @@ export async function createHutangFromVendorInvoice(
     subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
     ppn: parseInt(String(payload.ppn || 0), 10),
     total,
-    terbayar: 0,
-    sisa: total,
-    jatuhTempo,
-    status: 'PENDING_REVIEW',
-    approvalStatus: 'PENDING_REVIEW',
+    terbayar: settlement.terbayar,
+    sisa: settlement.sisa,
+    jatuhTempo: settlement.jatuhTempo,
+    status: settlement.status,
+    approvalStatus: settlement.approvalStatus,
     paymentTerms,
     items: invoiceItems,
     matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
@@ -615,6 +658,24 @@ export async function createHutangFromVendorInvoice(
       }),
       tenantId: tid,
     }, session);
+
+    if (settlement.status === 'LUNAS') {
+      // TUNAI: netralkan accrual AUTO_HUTANG_VENDOR di atas — Debit Hutang Usaha / Kredit Kas,
+      // supaya GL balance sesuai status dokumen yang langsung LUNAS (bukan cuma label kosong).
+      await createJournalIfNotExists(txDb, {
+        tanggal: hutang.tanggal,
+        keterangan: `Pelunasan tunai ${payload.noInvoice || noHutang}`,
+        sourceType: 'AUTO_PELUNASAN_TUNAI',
+        sourceId: hutang.id,
+        userName: payload.userName || 'System',
+        details: buildHutangPaymentJournalLines({
+          noDoc: payload.noInvoice || noHutang,
+          amount: totalAmt,
+          metode: 'TUNAI',
+        }),
+        tenantId: tid,
+      }, session);
+    }
 
     if (payload.noDO) {
       const grnFilter: Record<string, unknown> = {
