@@ -11,6 +11,7 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import {
   MATERIAL_REQUIREMENTS_COLLECTION,
   explodeMaterialRequirements,
+  applyLinkedPoTargets,
   isMrpEditable,
   decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
@@ -20,8 +21,10 @@ import {
 import {
   PRODUCTION_PLANS_COLLECTION,
   cookDateFromPlanTanggal,
+  isPoAppliedStatus,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
+import { buildPoOrderedReceivedMap, type CpoLine } from '@/lib/api/cpo-status-sync';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION, applyFullPortionExceptions, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
@@ -72,13 +75,43 @@ function projectMrp(doc: Record<string, unknown> | null) {
   return clean(doc);
 }
 
-/** Exported for plan material-readiness / procure orchestration. */
+/**
+ * Exported for plan material-readiness / procure orchestration.
+ * `useLinkedPoAsTarget`: begitu PO plan ini sudah diberlakukan (bukan lagi
+ * DRAFT/REJECTED), baris yang punya entri di PO itu memakai acuan
+ * qty-diterima-vs-dipesan PO, bukan resep-vs-stok — lihat
+ * applyLinkedPoTargets() di material-requirement.ts. SENGAJA default false:
+ * alur "Buat Draft Belanja" (procure-shortage-run.ts) wajib tetap murni
+ * resep-vs-stok supaya PO yang under-order tetap terdeteksi butuh susulan.
+ */
 export async function buildPlanMaterialExplosion(
   db: HandlerContext['db'],
   scopeAuth: Parameters<typeof withTenantFilter>[0],
   plan: ProductionPlanDoc,
+  opts: { useLinkedPoAsTarget?: boolean } = {},
 ) {
-  return buildExplosion(db, scopeAuth, plan);
+  const built = await buildExplosion(db, scopeAuth, plan);
+  if ('error' in built) return built;
+  if (!opts.useLinkedPoAsTarget) return built;
+
+  const linkedPo = await db.collection('customer_purchase_orders').findOne(
+    withTenantFilter(scopeAuth, {
+      productionPlanId: plan.id,
+      status: { $nin: ['CANCELLED'] },
+    }),
+    { sort: { createdAt: -1 }, projection: { id: 1, status: 1, items: 1 } },
+  ) as { status?: string; items?: CpoLine[] } | null;
+  if (!linkedPo || !isPoAppliedStatus(linkedPo.status)) return built;
+
+  const poItemsByProductId = buildPoOrderedReceivedMap(linkedPo.items || []);
+  if (!poItemsByProductId.size) return built;
+
+  const overridden = applyLinkedPoTargets(built.lines, poItemsByProductId);
+  return {
+    ...built,
+    lines: overridden.lines,
+    summary: { ...built.summary, ...overridden.summary },
+  };
 }
 
 async function buildExplosion(

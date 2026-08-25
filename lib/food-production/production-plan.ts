@@ -460,6 +460,13 @@ export function isPlanEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
 }
 
+/** PO "diberlakukan" — sudah dikirim ke vendor, bukan lagi draft/ditolak internal. */
+export function isPoAppliedStatus(status?: string | null): boolean {
+  if (!status) return false;
+  const st = String(status).toUpperCase();
+  return st !== 'DRAFT' && st !== 'REJECTED';
+}
+
 /** Override qty/coret bahan: Draft/Diajukan, atau Disetujui selama PO belum final. */
 export function canEditPlanMaterials(
   planStatus: string,
@@ -468,8 +475,7 @@ export function canEditPlanMaterials(
   if (isPlanEditable(planStatus)) return true;
   if (planStatus !== 'APPROVED') return false;
   if (!linkedPoStatus) return true;
-  const st = String(linkedPoStatus).toUpperCase();
-  return st === 'DRAFT' || st === 'REJECTED';
+  return !isPoAppliedStatus(linkedPoStatus);
 }
 
 /** Draft / Diajukan / Disetujui — boleh digabung selama belum ada stok keluar. */

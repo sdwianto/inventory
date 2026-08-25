@@ -339,8 +339,10 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses)`, 400);
     }
 
-    // Gate bisnis: ambil bahan hanya jika stok gudang sudah lengkap (tanpa kekurangan).
-    const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan);
+    // Gate bisnis: ambil bahan hanya jika stok gudang sudah lengkap (tanpa kekurangan) —
+    // atau, kalau plan ini punya PO yang sudah diberlakukan, begitu PO itu sudah diterima
+    // penuh (lihat useLinkedPoAsTarget di buildPlanMaterialExplosion).
+    const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in readiness && readiness.error) return err(readiness.error, 400);
     if (Number(readiness.summary?.shortageCount || 0) > 0) {
       return err(

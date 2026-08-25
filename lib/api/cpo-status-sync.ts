@@ -6,11 +6,13 @@ import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLik
 import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
 
-type CpoLine = JsonObject & {
+export type CpoLine = JsonObject & {
+  localStokId?: string;
   qty?: number | string;
   qtyShipped?: number;
   qtyReceived?: number;
   qtyRejected?: number;
+  cancelled?: boolean;
 };
 
 type CpoDoc = JsonObject & {
@@ -40,11 +42,35 @@ function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
   return null;
 }
 
-function lineQtyTarget(line: CpoLine): number {
+export function lineQtyTarget(line: CpoLine): number {
   if (line.cancelled) return 0;
   const qty = parseFloat(String(line.qty)) || 0;
   const rejected = parseFloat(String(line.qtyRejected)) || 0;
   return Math.max(0, qty - rejected);
+}
+
+/**
+ * qtyOrdered/qtyReceived per produk, dari baris PO yang MASIH aktif memasok
+ * (bukan dibatalkan — mis. "Tidak ada di SO sales.app"). Baris dibatalkan
+ * TIDAK dimasukkan sama sekali ke map, supaya caller (acuan kesiapan
+ * produksi) jatuh balik ke resep-vs-stok untuk produk itu, bukan menganggap
+ * kebutuhannya nol — PO dibatalkan berarti PO tidak lagi memasok, bukan
+ * berarti bahan itu sudah tidak dibutuhkan.
+ */
+export function buildPoOrderedReceivedMap(
+  items: CpoLine[],
+): Map<string, { qtyOrdered: number; qtyReceived: number }> {
+  const map = new Map<string, { qtyOrdered: number; qtyReceived: number }>();
+  for (const item of items || []) {
+    if (!item.localStokId || item.cancelled) continue;
+    const qtyOrdered = lineQtyTarget(item);
+    if (qtyOrdered <= 0) continue;
+    map.set(String(item.localStokId), {
+      qtyOrdered,
+      qtyReceived: Number(item.qtyReceived) || 0,
+    });
+  }
+  return map;
 }
 
 function rollupShipStatus(items: CpoLine[]) {

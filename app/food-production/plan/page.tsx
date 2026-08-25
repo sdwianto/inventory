@@ -195,6 +195,9 @@ interface MaterialReadiness {
     qtyNet?: number;
     satuan?: string;
     stockWarehouseKode?: string;
+    sourceOfTruth?: 'PO';
+    poQtyOrdered?: number;
+    poQtyReceived?: number;
   }>;
   loading?: boolean;
   error?: string;
@@ -3357,6 +3360,11 @@ function FoodProductionPlanPageContent() {
                     </td>
                     <td className="p-2 text-xs font-mono">
                       {line.stockWarehouseKode || '—'}
+                      {line.sourceOfTruth === 'PO' && (
+                        <div className="font-sans text-muted-foreground">
+                          PO: {formatNumber(line.poQtyReceived ?? 0)}/{formatNumber(line.poQtyOrdered ?? 0)} diterima
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

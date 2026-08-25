@@ -128,6 +128,10 @@ export interface MaterialRequirementLine {
   qtyNet: number;
   shortage: boolean;
   sources: MrpSourceRef[];
+  /** Diisi 'PO' saat shortage/qtyNet baris ini ditimpa acuan PO (lihat applyLinkedPoTargets). */
+  sourceOfTruth?: 'PO';
+  poQtyOrdered?: number;
+  poQtyReceived?: number;
 }
 
 export interface MaterialRequirementDoc {
@@ -447,6 +451,41 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
   };
 
   return { ok: true, lines, summary };
+}
+
+/**
+ * Timpa acuan kesiapan baris yang punya PO aktif untuk plan ini: begitu PO
+ * diberlakukan, "kurang" tidak lagi diputuskan dari resep-vs-stok tapi dari
+ * qty-diterima-vs-dipesan PO (dikurangi reject) — lihat isPoAppliedStatus()
+ * di production-plan.ts. Resep tetap dipakai untuk MENENTUKAN nilai
+ * pengadaan (qtyGross tidak diubah di sini); ini cuma menimpa gate
+ * shortage/qtyNet untuk baris yang sudah punya acuan PO nyata. Baris tanpa
+ * entri PO dibiarkan apa adanya (tetap resep-vs-stok).
+ */
+export function applyLinkedPoTargets(
+  lines: MaterialRequirementLine[],
+  poItemsByProductId: Map<string, { qtyOrdered: number; qtyReceived: number }>,
+): { lines: MaterialRequirementLine[]; summary: { shortageCount: number; qtyNetTotal: number } } {
+  const overridden = lines.map((line) => {
+    const po = poItemsByProductId.get(line.productId);
+    if (!po) return line;
+    const poShortfall = roundQty(Math.max(0, po.qtyOrdered - po.qtyReceived));
+    return {
+      ...line,
+      qtyNet: poShortfall,
+      shortage: poShortfall > 0,
+      sourceOfTruth: 'PO' as const,
+      poQtyOrdered: po.qtyOrdered,
+      poQtyReceived: po.qtyReceived,
+    };
+  });
+  return {
+    lines: overridden,
+    summary: {
+      shortageCount: overridden.filter((l) => l.shortage).length,
+      qtyNetTotal: roundQty(overridden.reduce((s, l) => s + l.qtyNet, 0)),
+    },
+  };
 }
 
 export const MRP_STATUS_LABELS: Record<MaterialRequirementStatus, string> = {

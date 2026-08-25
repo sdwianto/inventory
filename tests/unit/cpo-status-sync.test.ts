@@ -1,5 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import { syncCpoFromVendorEvent, syncCpoOnGrnPosted } from '@/lib/api/cpo-status-sync';
+import { syncCpoFromVendorEvent, syncCpoOnGrnPosted, buildPoOrderedReceivedMap } from '@/lib/api/cpo-status-sync';
+
+describe('buildPoOrderedReceivedMap', () => {
+  it('excludes cancelled lines entirely — does not report them as target 0', () => {
+    // Regression: a cancelled line ("Tidak ada di SO sales.app") must NOT make the
+    // production-readiness override treat that ingredient's need as satisfied/zero —
+    // real case caught in production: Ayam Fillet Bersih line cancelled, qty 155,
+    // qtyReceived 0; readiness must keep falling back to recipe-vs-stock for it.
+    const map = buildPoOrderedReceivedMap([
+      { localStokId: 'chicken', qty: 155, qtyReceived: 0, cancelled: true },
+      { localStokId: 'onion', qty: 5, qtyReceived: 5, cancelled: false },
+    ]);
+    expect(map.has('chicken')).toBe(false);
+    expect(map.get('onion')).toEqual({ qtyOrdered: 5, qtyReceived: 5 });
+  });
+
+  it('excludes lines whose ordered target resolves to 0 (no cancelled flag needed)', () => {
+    const map = buildPoOrderedReceivedMap([
+      { localStokId: 'p1', qty: 10, qtyRejected: 10 },
+    ]);
+    expect(map.has('p1')).toBe(false);
+  });
+
+  it('skips lines without localStokId', () => {
+    const map = buildPoOrderedReceivedMap([{ qty: 10, qtyReceived: 10 }]);
+    expect(map.size).toBe(0);
+  });
+
+  it('includes a normal fully-received line', () => {
+    const map = buildPoOrderedReceivedMap([
+      { localStokId: 'p1', qty: 9, qtyReceived: 9, qtyRejected: 0 },
+    ]);
+    expect(map.get('p1')).toEqual({ qtyOrdered: 9, qtyReceived: 9 });
+  });
+});
 
 function versionMatches(filter: Record<string, unknown>, current: Record<string, unknown>): boolean {
   const ver = Number(current.qtySyncVersion) || 0;

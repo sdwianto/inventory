@@ -821,7 +821,7 @@ export async function handleProductionPlans({
         withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
       );
       if (!completedIssue) {
-        const readiness = await buildPlanMaterialExplosion(db, scopeAuth, existing);
+        const readiness = await buildPlanMaterialExplosion(db, scopeAuth, existing, { useLinkedPoAsTarget: true });
         if ('error' in readiness && readiness.error) return err(readiness.error, 400);
         const shortageCount = Number(readiness.summary?.shortageCount || 0);
         if (shortageCount > 0) {
@@ -909,7 +909,7 @@ export async function handleProductionPlans({
     ) as ProductionPlanDoc | null;
     if (!plan) return err('Rencana tidak ditemukan', 404);
 
-    const built = await buildPlanMaterialExplosion(db, scopeAuth, plan);
+    const built = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in built && built.error) return err(built.error, 400);
 
     const shortageCount = Number(built.summary?.shortageCount || 0);
@@ -962,6 +962,9 @@ export async function handleProductionPlans({
         qtyNet: l.qtyNet,
         satuan: l.satuan,
         stockWarehouseKode: (l as { stockWarehouseKode?: string }).stockWarehouseKode,
+        sourceOfTruth: l.sourceOfTruth,
+        poQtyOrdered: l.poQtyOrdered,
+        poQtyReceived: l.poQtyReceived,
       }));
 
     return ok({
