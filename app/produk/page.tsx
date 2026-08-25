@@ -499,6 +499,18 @@ export default function ProdukPage() {
     () => (showInactive ? 0 : products.filter((p) => p.aktif === false).length),
     [products, showInactive],
   );
+  // Best-effort: hitung dari produk yang sudah termuat di halaman ini saja (bukan agregasi server-side
+  // penuh) — untuk katalog besar dengan banyak halaman, angka ini bisa under-count vendor yang belum
+  // ter-load. Cukup untuk indikator "produk ini juga tersedia dari vendor lain", bukan angka final.
+  const masterVendorCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of products) {
+      const mid = str(p.masterProductId);
+      if (!mid) continue;
+      counts.set(mid, (counts.get(mid) || 0) + 1);
+    }
+    return counts;
+  }, [products]);
 
   const showAllGudang = WAREHOUSES.every((w) => gudangFilter[w.kode]);
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selection.isSelected(str(p.id)));
@@ -769,6 +781,14 @@ export default function ProdukPage() {
                           title="Barcode ini juga dipakai produk aktif lain — kemungkinan duplikat dari sales.app"
                         >
                           Barcode duplikat
+                        </span>
+                      )}
+                      {str(p.masterProductId) && (masterVendorCounts.get(str(p.masterProductId)) || 0) > 1 && (
+                        <span
+                          className="ml-1.5 inline-flex items-center rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-emerald-700 align-middle"
+                          title="Produk yang sama juga tersedia dari vendor lain — bandingkan di kolom Nama/Harga baris terkait"
+                        >
+                          {masterVendorCounts.get(str(p.masterProductId))} vendor
                         </span>
                       )}
                     </td>

@@ -17,9 +17,9 @@ interface BatchUpsertResult {
   duplicateBarcodes: JsonObject[];
 }
 
-type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string; barcode?: string; nama?: string };
+type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string; barcode?: string; nama?: string; masterProductId?: string | null };
 
-function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: string, now: Date) {
+export function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: string, now: Date) {
   const syncSet: Record<string, unknown> = {
     kode: snap.kode,
     barcode: snap.barcode,
@@ -38,6 +38,7 @@ function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: s
     hargaSpesial: snap.hargaSpesial,
     hargaEcer: snap.hargaEcer,
     syncSource: 'sales.app',
+    masterProductId: snap.masterProductId,
     updatedAt: now,
   };
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
@@ -93,7 +94,7 @@ async function loadBarcodeMap(
     tenantId: tid,
     barcode: { $in: uniq },
     aktif: { $ne: false },
-  }).project({ id: 1, kode: 1, nama: 1, barcode: 1, vendorStokId: 1 }).toArray()) as unknown as ExistingRow[];
+  }).project({ id: 1, kode: 1, nama: 1, barcode: 1, vendorStokId: 1, masterProductId: 1 }).toArray()) as unknown as ExistingRow[];
   for (const row of rows) {
     const b = String(row.barcode || '');
     if (!b) continue;
@@ -167,8 +168,13 @@ export async function bulkUpsertProductsFromVendor(
       result.byVendor[vTenant] = (result.byVendor[vTenant] || 0) + 1;
 
       const dup = findBarcodeDuplicate(barcodeMap, snap.barcode, snap.id, existing?.id);
-      syncSet.barcodeDuplicateWarning = !!dup;
+      // Sama seperti upsertProductFromVendor (jalur webhook single-item, product-sync.ts) — redam
+      // peringatan duplikat barcode kalau dua produk memang sudah dikonfirmasi Master Product yang
+      // sama (barang sama dari vendor berbeda, bukan anomali data).
+      const confirmedSameMaster = !!snap.masterProductId && !!dup && dup.masterProductId === snap.masterProductId;
+      syncSet.barcodeDuplicateWarning = !!dup && !confirmedSameMaster;
       syncSet.barcodeDuplicateOf = dup?.id ?? null;
+      syncSet.barcodeDuplicateConfirmedSameMaster = confirmedSameMaster;
       if (dup) {
         result.duplicateBarcodes.push({
           barcode: snap.barcode,
@@ -211,7 +217,7 @@ export async function bulkUpsertProductsFromVendor(
         result.created += 1;
         if (snap.barcode) {
           const arr = barcodeMap.get(snap.barcode) || [];
-          arr.push({ id, kode: snap.kode, nama: snap.nama, vendorStokId: snap.id });
+          arr.push({ id, kode: snap.kode, nama: snap.nama, vendorStokId: snap.id, masterProductId: snap.masterProductId });
           barcodeMap.set(snap.barcode, arr);
         }
       }

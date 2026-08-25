@@ -36,6 +36,9 @@ export function vendorProductSnapshot(product: Record<string, unknown>) {
     aktif: product.aktif !== false,
     vendorTenantId: product.vendorTenantId != null ? String(product.vendorTenantId) : (product.tenantId != null ? String(product.tenantId) : null),
     vendorTenantName: product.vendorTenantName != null ? String(product.vendorTenantName) : null,
+    // Identitas Master Product lintas tenant — sales.app satu-satunya sumber kebenaran, selalu
+    // dikirim (termasuk null saat unlink), jadi di sini selalu di-mirror apa adanya, tanpa guard.
+    masterProductId: product.masterProductId != null ? String(product.masterProductId) : null,
     recipeBaseGrams: recipeGrams,
     recipeBaseMl: recipeMl,
     hasRecipeBaseGrams: Object.prototype.hasOwnProperty.call(product, 'recipeBaseGrams'),
@@ -70,7 +73,7 @@ export async function findBarcodeDuplicate(
     vendorStokId: { $ne: selfVendorStokId },
   };
   if (selfId) filter.id = { $ne: selfId };
-  return db.collection('products').findOne(filter, { projection: { id: 1, kode: 1, nama: 1, satuan: 1 } });
+  return db.collection('products').findOne(filter, { projection: { id: 1, kode: 1, nama: 1, satuan: 1, masterProductId: 1 } });
 }
 
 export async function upsertProductFromVendor(
@@ -103,10 +106,16 @@ export async function upsertProductFromVendor(
   }
 
   const barcodeDup = await findBarcodeDuplicate(db, tid, snap.barcode, snap.id, existing?.id ? String(existing.id) : undefined);
+  // Kalau kedua produk memang sudah dikonfirmasi Master Product yang sama (identitas resmi dari
+  // sales.app), barcode kembar itu wajar (barang sama dari vendor berbeda) — bukan anomali data.
+  const confirmedSameMaster = !!snap.masterProductId
+    && !!barcodeDup
+    && (barcodeDup as { masterProductId?: string | null }).masterProductId === snap.masterProductId;
 
   const syncSet: Record<string, unknown> = {
-    barcodeDuplicateWarning: !!barcodeDup,
+    barcodeDuplicateWarning: !!barcodeDup && !confirmedSameMaster,
     barcodeDuplicateOf: barcodeDup?.id ?? null,
+    barcodeDuplicateConfirmedSameMaster: confirmedSameMaster,
     kode: snap.kode,
     barcode: snap.barcode,
     nama: snap.nama,
@@ -125,6 +134,7 @@ export async function upsertProductFromVendor(
     hargaSpesial: snap.hargaSpesial,
     hargaEcer: snap.hargaEcer,
     syncSource: 'sales.app',
+    masterProductId: snap.masterProductId,
     updatedAt: now,
   };
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;

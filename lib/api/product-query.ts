@@ -147,6 +147,12 @@ export const PRODUCT_LIST_PROJECTION = {
   vendorStokId: 1,
   vendorTenantId: 1,
   vendorTenantName: 1,
+  // masterProductId dipakai badge "N vendor" (Fase 2). barcodeDuplicate* sudah dipersist sejak
+  // lama tapi belum pernah diproyeksikan ke list ini — badge "Barcode duplikat" di app/produk/page.tsx
+  // karena itu tidak pernah tampil; ditambahkan sekalian di sini karena satu jalur data yang sama.
+  masterProductId: 1,
+  barcodeDuplicateWarning: 1,
+  barcodeDuplicateConfirmedSameMaster: 1,
 } as const;
 
 export const TRANSACTION_LIST_PROJECTION = {

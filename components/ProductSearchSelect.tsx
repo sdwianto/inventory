@@ -117,6 +117,17 @@ export default function ProductSearchSelect({
     return items.find((p) => str(p.id) === value) || null;
   }, [resolved, items, value]);
 
+  // Best-effort — dihitung dari 50 hasil pencarian saat ini saja, bukan agregasi server-side penuh.
+  const masterVendorCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of items) {
+      const mid = str(p.masterProductId);
+      if (!mid) continue;
+      counts.set(mid, (counts.get(mid) || 0) + 1);
+    }
+    return counts;
+  }, [items]);
+
   return (
     <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
@@ -178,6 +189,9 @@ export default function ProductSearchSelect({
                       <span className="font-mono">{str(p.kode)}</span>
                       {str(p.satuan) && <span>· {str(p.satuan)}</span>}
                       {vendorDisplayName(p) && <span>· {vendorDisplayName(p)}</span>}
+                      {str(p.masterProductId) && (masterVendorCounts.get(str(p.masterProductId)) || 0) > 1 && (
+                        <span className="text-emerald-700">· {masterVendorCounts.get(str(p.masterProductId))} vendor tersedia</span>
+                      )}
                       <ProductStockReminder product={p} className="contents" />
                     </div>
                   </div>

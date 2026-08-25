@@ -58,6 +58,9 @@ import { isItemRole, normalizeItemRole, type ItemRole } from '@/lib/food-product
 
 const VENDOR_LOCKED_FIELDS = [
   'kode', 'nama', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId', 'baseUomId',
+  // Identitas Master Product — sales.app satu-satunya sumber kebenaran, admin lokal tidak boleh
+  // mengubahnya manual (harus selalu lewat sync ulang dari vendor).
+  'masterProductId',
 ];
 
 const VENDOR_PRICE_FIELDS = ['hargaEcer', 'hargaGrosir', 'hargaSpesial'];

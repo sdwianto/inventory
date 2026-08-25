@@ -132,6 +132,36 @@ export function planProductUomDocs(
   return uoms.map((u) => buildUomDoc(tenantId, productId, u, now));
 }
 
+/**
+ * insertMany yang toleran terhadap duplicate-key barcode di product_uom. Sejak Fase 2 (Master
+ * Product lintas tenant), dua produk vendor yang berbeda memang boleh secara sah berbagi barcode
+ * fisik yang sama (barang sama, vendor beda) — tapi index `uniq_product_uom_tenant_barcode` tetap
+ * dipertahankan (perlu untuk resolusi scan-barcode yang tidak ambigu di satu tenant). Penulisan
+ * LOKAL oleh admin tetap divalidasi lebih dulu & ditolak lewat assertBarcodesUnique (lihat
+ * prepareProductUomsForWrite) sehingga jalur ini seharusnya tidak pernah kena di sana. Sync vendor
+ * (upsertProductFromVendor/bulkUpsertProductsFromVendor) TIDAK melalui validasi itu — barcode
+ * kembar yang sudah dikonfirmasi wajar (masterProductId sama) tidak boleh menggagalkan seluruh
+ * sync. Baris yang kolisi cukup dilewati; produk & masterProductId tetap ter-sync, hanya baris
+ * product_uom untuk barcode itu yang tidak tercipta — tampilan tetap aman lewat fallback
+ * syntheticBaseUomFromProduct (lihat listProductUomsByProductIds).
+ */
+async function insertUomDocsTolerant(
+  db: Db,
+  docs: ProductUom[],
+  opts: { ordered: boolean; session?: import('mongodb').ClientSession },
+): Promise<void> {
+  if (!docs.length) return;
+  try {
+    await db.collection(PRODUCT_UOM_COLLECTION).insertMany(docs, opts);
+  } catch (e: unknown) {
+    const err = e as { code?: number; writeErrors?: Array<{ code?: number }> };
+    const isDuplicateKeyOnly = err.code === 11000
+      || (Array.isArray(err.writeErrors) && err.writeErrors.length > 0 && err.writeErrors.every((w) => w.code === 11000));
+    if (!isDuplicateKeyOnly) throw e;
+    console.warn(`product_uom: sebagian dari ${docs.length} dokumen ditolak karena barcode duplikat (kemungkinan produk vendor berbeda berbagi barcode fisik yang sama).`);
+  }
+}
+
 export async function insertProductUoms(
   db: Db,
   tenantId: string,
@@ -141,12 +171,7 @@ export async function insertProductUoms(
 ): Promise<ProductUom[]> {
   await ensureProductUomIndexes(db);
   const docs = planProductUomDocs(tenantId, productId, uoms);
-  if (docs.length) {
-    await db.collection(PRODUCT_UOM_COLLECTION).insertMany(docs, {
-      ordered: true,
-      ...(session ? { session } : {}),
-    });
-  }
+  await insertUomDocsTolerant(db, docs, { ordered: true, ...(session ? { session } : {}) });
   return docs;
 }
 
@@ -315,10 +340,7 @@ export async function bulkReplaceProductUoms(
 
   if (allDocs.length) {
     for (let i = 0; i < allDocs.length; i += BULK_UOM_INSERT_CHUNK) {
-      await db.collection(PRODUCT_UOM_COLLECTION).insertMany(
-        allDocs.slice(i, i + BULK_UOM_INSERT_CHUNK),
-        { ordered: false },
-      );
+      await insertUomDocsTolerant(db, allDocs.slice(i, i + BULK_UOM_INSERT_CHUNK), { ordered: false });
     }
   }
 
