@@ -196,34 +196,46 @@ export function ModeOperasional() {
   };
 
   const addItem = async (p: JsonObject) => {
+    // addItem menunggu fetchDefaultProductUom (network) sebelum menulis state — kalau dua
+    // produk diklik berdekatan, setForm({ ...form, ... }) yang menutup atas `form` lama bisa
+    // saling menimpa/menghapus perubahan satu sama lain begitu keduanya resolve belakangan.
+    // Pakai functional update supaya SELALU menulis di atas state TERBARU, bukan snapshot
+    // yang direkam sebelum await.
     const id = str(p.id);
     const defaultUom = await fetchDefaultProductUom(id);
     const uomId = defaultUom?.id || '';
-    if (form.items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
+    let duplicate = false;
+    setForm((prev) => {
+      if (prev.items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
+        duplicate = true;
+        return prev;
+      }
+      return {
+        ...prev,
+        items: [...prev.items, {
+          stokId: p.id,
+          kode: p.kode,
+          nama: p.nama,
+          uomId,
+          satuan: defaultUom?.satuan || p.satuan,
+          qty: 1,
+          stokAvail: qtyAtLokasi(p, prev.lokasiKode),
+          stokByWarehouse: p.stokByWarehouse,
+        }],
+      };
+    });
+    if (duplicate) {
       toast.error('Produk sudah ada');
       return;
     }
-    setForm({
-      ...form,
-      items: [...form.items, {
-        stokId: p.id,
-        kode: p.kode,
-        nama: p.nama,
-        uomId,
-        satuan: defaultUom?.satuan || p.satuan,
-        qty: 1,
-        stokAvail: qtyAtLokasi(p, form.lokasiKode),
-        stokByWarehouse: p.stokByWarehouse,
-      }],
-    });
     setPickerOpen(false);
   };
 
   const updateItemUom = (i: number, uom: ProductUom) => {
-    setForm({
-      ...form,
-      items: form.items.map((it, idx) => idx === i ? { ...it, uomId: uom.id, satuan: uom.satuan } : it),
-    });
+    setForm((prev) => ({
+      ...prev,
+      items: prev.items.map((it, idx) => idx === i ? { ...it, uomId: uom.id, satuan: uom.satuan } : it),
+    }));
   };
 
   const save = async (submit = false) => {
@@ -360,7 +372,7 @@ export function ModeOperasional() {
                 <Label>Gudang asal *</Label>
                 <Select
                   value={form.lokasiKode}
-                  onValueChange={(v) => setForm({ ...form, lokasiKode: v, items: [] })}
+                  onValueChange={(v) => setForm((prev) => ({ ...prev, lokasiKode: v, items: [] }))}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -374,7 +386,7 @@ export function ModeOperasional() {
                 <Label>Keperluan operasional *</Label>
                 <Input
                   value={form.keperluan}
-                  onChange={(e) => setForm({ ...form, keperluan: e.target.value })}
+                  onChange={(e) => setForm((prev) => ({ ...prev, keperluan: e.target.value }))}
                   placeholder="Contoh: Masak menu harian tanggal ..."
                 />
               </div>
@@ -384,7 +396,7 @@ export function ModeOperasional() {
               <Textarea
                 rows={2}
                 value={form.keterangan}
-                onChange={(e) => setForm({ ...form, keterangan: e.target.value })}
+                onChange={(e) => setForm((prev) => ({ ...prev, keterangan: e.target.value }))}
               />
             </div>
             <div className="flex items-center justify-between">
@@ -397,7 +409,7 @@ export function ModeOperasional() {
               {form.items.map((it, i) => (
                 <div key={`${str(it.stokId)}-${str(it.uomId)}`} className="flex items-center gap-2 border rounded p-2 text-sm">
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{str(it.nama)}</div>
+                    <div className="font-medium truncate">{str(it.nama) || str(it.kode) || 'Produk'}</div>
                     <div className="text-xs text-slate-500">
                       {str(it.kode)} · tersedia: {formatNumber(num(it.stokAvail))} base
                     </div>
@@ -409,9 +421,11 @@ export function ModeOperasional() {
                     className="w-24"
                     value={num(it.qty)}
                     onChange={(e) => {
-                      const items = [...form.items];
-                      items[i] = { ...it, qty: parseFloat(e.target.value) || 0 };
-                      setForm({ ...form, items });
+                      const qty = parseFloat(e.target.value) || 0;
+                      setForm((prev) => ({
+                        ...prev,
+                        items: prev.items.map((x, idx) => idx === i ? { ...x, qty } : x),
+                      }));
                     }}
                   />
                   <LineUomSelect
@@ -419,7 +433,12 @@ export function ModeOperasional() {
                     uomId={str(it.uomId)}
                     onChange={(uom) => updateItemUom(i, uom)}
                   />
-                  <Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setForm((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }))}
+                  >
                     Hapus
                   </Button>
                 </div>
@@ -454,7 +473,7 @@ export function ModeOperasional() {
                   className="w-full text-left border rounded p-2 text-sm hover:bg-slate-50 disabled:opacity-40"
                   onClick={() => addItem(p)}
                 >
-                  <div className="font-medium">{str(p.nama)}</div>
+                  <div className="font-medium">{str(p.nama) || str(p.kode) || 'Produk'}</div>
                   <div className="text-xs text-slate-500">{str(p.kode)} · stok: {formatNumber(avail)} {str(p.satuan)}</div>
                 </button>
               );
