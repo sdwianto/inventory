@@ -499,9 +499,9 @@ export default function ProdukPage() {
     () => (showInactive ? 0 : products.filter((p) => p.aktif === false).length),
     [products, showInactive],
   );
-  // Best-effort: hitung dari produk yang sudah termuat di halaman ini saja (bukan agregasi server-side
-  // penuh) — untuk katalog besar dengan banyak halaman, angka ini bisa under-count vendor yang belum
-  // ter-load. Cukup untuk indikator "produk ini juga tersedia dari vendor lain", bukan angka final.
+  // Best-effort: dihitung dari produk yang sudah termuat di halaman ini saja (bukan agregasi
+  // server-side penuh) — untuk katalog besar dengan banyak halaman, ini bisa under-count vendor
+  // yang belum ter-load. Cukup untuk indikator "produk ini juga tersedia dari vendor lain".
   const masterVendorCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of products) {
@@ -510,6 +510,17 @@ export default function ProdukPage() {
       counts.set(mid, (counts.get(mid) || 0) + 1);
     }
     return counts;
+  }, [products]);
+  const masterVendorNames = useMemo(() => {
+    const names = new Map<string, Set<string>>();
+    for (const p of products) {
+      const mid = str(p.masterProductId);
+      const vendorName = str(p.vendorTenantName).trim();
+      if (!mid || !vendorName) continue;
+      if (!names.has(mid)) names.set(mid, new Set());
+      names.get(mid)!.add(vendorName);
+    }
+    return names;
   }, [products]);
 
   const showAllGudang = WAREHOUSES.every((w) => gudangFilter[w.kode]);
@@ -734,9 +745,9 @@ export default function ProdukPage() {
                   <th className="px-3 py-2 text-left">Grup</th>
                   <th className="px-3 py-2 text-left">Peran</th>
                   <th className="px-3 py-2 text-left">Gudang</th>
+                  <th className="px-3 py-2 text-right">Stok</th>
                   <th className="px-3 py-2 text-center">Sat</th>
                   <th className="px-3 py-2 text-right">Harga Beli</th>
-                  <th className="px-3 py-2 text-right">Stok</th>
                   {canManageProducts && <th className="px-3 py-2 text-center w-24">Aksi</th>}
                 </tr>
               </thead>
@@ -772,9 +783,6 @@ export default function ProdukPage() {
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">{str(p.barcode)}</td>
                     <td className="px-3 py-2 font-medium">
                       {str(p.nama)}
-                      {isVendorSynced(p) && (
-                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded align-middle">sales.app</span>
-                      )}
                       {p.barcodeDuplicateWarning === true && (
                         <span
                           className="ml-1.5 inline-flex items-center rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-red-700 align-middle"
@@ -783,14 +791,29 @@ export default function ProdukPage() {
                           Barcode duplikat
                         </span>
                       )}
-                      {str(p.masterProductId) && (masterVendorCounts.get(str(p.masterProductId)) || 0) > 1 && (
-                        <span
-                          className="ml-1.5 inline-flex items-center rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-emerald-700 align-middle"
-                          title="Produk yang sama juga tersedia dari vendor lain — bandingkan di kolom Nama/Harga baris terkait"
-                        >
-                          {masterVendorCounts.get(str(p.masterProductId))} vendor
-                        </span>
-                      )}
+                      {str(p.masterProductId) && (masterVendorCounts.get(str(p.masterProductId)) || 0) > 1 && (() => {
+                        // Tiap baris = 1 dokumen produk = 1 vendor. Badge harus tunjukkan vendor
+                        // BARIS INI saja (p.vendorTenantName) — BUKAN gabungan semua vendor dalam
+                        // grup masterProductId, supaya tidak terlihat seolah satu baris berasal
+                        // dari banyak tenant sekaligus.
+                        const ownVendor = str(p.vendorTenantName).trim();
+                        const otherVendors = [...(masterVendorNames.get(str(p.masterProductId)) || [])]
+                          .filter((n) => n !== ownVendor);
+                        const label = ownVendor || `${masterVendorCounts.get(str(p.masterProductId))} vendor`;
+                        const title = ownVendor
+                          ? (otherVendors.length
+                            ? `Baris ini dari vendor ${ownVendor} — produk yang sama juga ada dari: ${otherVendors.join(', ')} (baris lain, bandingkan Harga/Stok)`
+                            : `Baris ini dari vendor ${ownVendor}`)
+                          : 'Produk yang sama juga tersedia dari vendor lain — bandingkan di kolom Nama/Harga baris terkait';
+                        return (
+                          <span
+                            className="ml-1.5 inline-flex items-center rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-emerald-700 align-middle"
+                            title={title}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-xs"><span className="px-2 py-0.5 bg-slate-100 rounded">{str(p.grup)}</span></td>
                     <td className="px-3 py-2 text-xs">
@@ -807,6 +830,26 @@ export default function ProdukPage() {
                             : 'bg-amber-50 text-amber-800'
                       }`}>
                         {warehouseName(str(p.gudangKode, 'GKERING'))}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <span
+                        className={`font-semibold ${num(p.stokGudangQty ?? p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}
+                        title={productStockTitle({
+                          stok: num(p.stok),
+                          stokDisplay: str(p.stokDisplay) || undefined,
+                          gudangKode: str(p.gudangKode, 'GKERING'),
+                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
+                          stokGudangQty: num(p.stokGudangQty),
+                        })}
+                      >
+                        {productStockLabel({
+                          stok: num(p.stok),
+                          stokDisplay: str(p.stokDisplay) || undefined,
+                          gudangKode: str(p.gudangKode, 'GKERING'),
+                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
+                          stokGudangQty: num(p.stokGudangQty),
+                        })}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-center text-xs">
@@ -830,27 +873,6 @@ export default function ProdukPage() {
                           </span>
                         ) : formatIDR(amount);
                       })()}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <span
-                        className={`font-semibold ${num(p.stokGudangQty ?? p.stok) <= num(p.minStok) ? 'text-red-600' : ''}`}
-                        title={productStockTitle({
-                          stok: num(p.stok),
-                          stokDisplay: str(p.stokDisplay) || undefined,
-                          gudangKode: str(p.gudangKode, 'GKERING'),
-                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
-                          stokGudangQty: num(p.stokGudangQty),
-                        })}
-                      >
-                        {productStockLabel({
-                          stok: num(p.stok),
-                          stokDisplay: str(p.stokDisplay) || undefined,
-                          satuan: str(p.satuan),
-                          gudangKode: str(p.gudangKode, 'GKERING'),
-                          stokByWarehouse: asObject(p.stokByWarehouse) as Record<string, number | string>,
-                          stokGudangQty: num(p.stokGudangQty),
-                        })}
-                      </span>
                     </td>
                     {canManageProducts && (
                       <td className="px-3 py-2">
