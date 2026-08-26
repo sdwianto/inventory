@@ -12,7 +12,7 @@ import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines, buildHutangPaymentJournalLines } from '@/lib/api/journal-lines';
+import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines } from '@/lib/api/journal-lines';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
@@ -207,13 +207,6 @@ function hasLegitimateExternalPayment(hutang: HutangDoc) {
   return !!(hutang?.paidExternalBy?.userId);
 }
 
-/** Hutang TUNAI yang otomatis LUNAS saat dibuat (lihat resolveHutangSettlement) — legit, bukan artefak bogus. */
-function isTunaiAutoSettled(hutang: HutangDoc) {
-  const terms = String(hutang?.paymentTerms || '').toUpperCase();
-  if (terms !== 'TUNAI') return false;
-  return String(hutang?.approvalStatus || hutang?.status || '') === 'LUNAS';
-}
-
 /**
  * Tagihan vendor yang seharusnya menunggu review admin — termasuk artefak migrasi
  * (approvedBy.role SYSTEM) dan status lunas tanpa jejak pembayaran nyata.
@@ -227,7 +220,6 @@ export function vendorInvoiceNeedsPendingReview(
   { fromPostedGrn = false }: { fromPostedGrn?: boolean } = {},
 ) {
   if (!isVendorInvoiceHutang(hutang)) return false;
-  if (isTunaiAutoSettled(hutang)) return false;
   const approval = String(hutang?.approvalStatus || hutang?.status || '');
   if (approval === 'PENDING_REVIEW' || approval === 'REJECTED') return false;
   if (fromPostedGrn) {
@@ -293,20 +285,16 @@ export type HutangSettlementFields = {
 };
 
 /**
- * TUNAI = lunas otomatis saat dibuat/disinkron (jatuhTempo = tanggal transaksi, bukan +30 hari).
- * KREDIT/lainnya = pending review, jatuhTempo dari payload (sudah dihitung sales.app dari TOP
- * pelanggan); fallback +30 hari hanya untuk data darurat yang benar-benar tidak mengirimkannya.
+ * Semua invoice vendor (apa pun paymentTerms-nya) selalu PENDING_REVIEW saat
+ * dibuat/disinkron — admin wajib review & approve manual sebelum lunas. jatuhTempo
+ * dari payload (sudah dihitung sales.app dari TOP pelanggan); fallback +30 hari
+ * hanya untuk data darurat yang benar-benar tidak mengirimkannya.
  */
 export function resolveHutangSettlement(
-  paymentTerms: string | undefined,
   total: number,
   payloadJatuhTempo: string | Date | null | undefined,
   txnDate: Date,
 ): HutangSettlementFields {
-  const terms = String(paymentTerms || 'KREDIT').toUpperCase();
-  if (terms === 'TUNAI') {
-    return { terbayar: total, sisa: 0, status: 'LUNAS', approvalStatus: 'LUNAS', jatuhTempo: txnDate };
-  }
   const jatuhTempo = payloadJatuhTempo
     ? new Date(payloadJatuhTempo)
     : new Date(txnDate.getTime() + 30 * 86400000);
@@ -390,10 +378,7 @@ async function syncExistingVendorHutangFromPayload(
   const paymentTerms = payload.paymentTerms || String(existing.paymentTerms || '') || 'KREDIT';
   const existingTanggal = existing.tanggal as string | Date | undefined;
   const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
-  // Jangan auto-LUNAS-kan (TUNAI) invoice yang gagal 3-way match (mis. duplikat GRN yang
-  // sama) — bayar tunai otomatis sebelum direview manusia lebih berbahaya daripada cuma
-  // menunda ke PENDING_REVIEW. paymentTerms yang TERSIMPAN tetap apa adanya.
-  const settlement = resolveHutangSettlement(matchOk ? paymentTerms : 'KREDIT', total, payload.jatuhTempo, txnDate);
+  const settlement = resolveHutangSettlement(total, payload.jatuhTempo, txnDate);
 
   await db.collection('hutang').updateOne(
     { id: existing.id },
@@ -420,7 +405,6 @@ async function syncExistingVendorHutangFromPayload(
         status: settlement.status,
         approvalStatus: settlement.approvalStatus,
         paymentTerms,
-        ...(settlement.status === 'LUNAS' ? { jatuhTempo: settlement.jatuhTempo } : {}),
         items: invoiceItems.length ? invoiceItems : (existing.items || []),
         matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
         matchError: matchOk ? null : (match.error || null),
@@ -575,10 +559,7 @@ export async function createHutangFromVendorInvoice(
 
   const now = new Date();
   const tanggal = payload.postedAt ? new Date(payload.postedAt) : now;
-  // Jangan auto-LUNAS-kan (TUNAI) invoice yang gagal 3-way match (mis. duplikat GRN yang
-  // sama) — bayar tunai otomatis sebelum direview manusia lebih berbahaya daripada cuma
-  // menunda ke PENDING_REVIEW. paymentTerms yang TERSIMPAN tetap apa adanya.
-  const settlement = resolveHutangSettlement(matchOk ? paymentTerms : 'KREDIT', total, payload.jatuhTempo, tanggal);
+  const settlement = resolveHutangSettlement(total, payload.jatuhTempo, tanggal);
 
   const noHutang = await nextDocNumber(db, tid, 'HUTANG', 'HT');
 
@@ -664,24 +645,6 @@ export async function createHutangFromVendorInvoice(
       }),
       tenantId: tid,
     }, session);
-
-    if (settlement.status === 'LUNAS') {
-      // TUNAI: netralkan accrual AUTO_HUTANG_VENDOR di atas — Debit Hutang Usaha / Kredit Kas,
-      // supaya GL balance sesuai status dokumen yang langsung LUNAS (bukan cuma label kosong).
-      await createJournalIfNotExists(txDb, {
-        tanggal: hutang.tanggal,
-        keterangan: `Pelunasan tunai ${payload.noInvoice || noHutang}`,
-        sourceType: 'AUTO_PELUNASAN_TUNAI',
-        sourceId: hutang.id,
-        userName: payload.userName || 'System',
-        details: buildHutangPaymentJournalLines({
-          noDoc: payload.noInvoice || noHutang,
-          amount: totalAmt,
-          metode: 'TUNAI',
-        }),
-        tenantId: tid,
-      }, session);
-    }
 
     if (payload.noDO) {
       const grnFilter: Record<string, unknown> = {
