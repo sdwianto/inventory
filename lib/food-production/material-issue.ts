@@ -59,6 +59,24 @@ export interface MaterialIssueDoc {
   updatedAt: Date;
   createdBy?: string;
   createdByName?: string;
+  /**
+   * Terisi kalau Issue ini dibuat saat bahan belum lengkap (blokir lunak —
+   * admin sadar memilih lanjut + wajib isi alasan). Operasional lapangan
+   * tidak selalu butuh semua bahan resep 100% terpenuhi.
+   */
+  shortageOverride?: {
+    by?: { userId?: string; userName?: string };
+    at: Date;
+    reason: string;
+    shortageCount: number;
+    shortageLines: Array<{
+      productId: string;
+      productKode?: string;
+      productNama?: string;
+      qtyNet?: number;
+      satuan?: string;
+    }>;
+  };
 }
 
 export const ISSUE_ELIGIBLE_PLAN_STATUSES = new Set(['APPROVED', 'PROCESSING']);

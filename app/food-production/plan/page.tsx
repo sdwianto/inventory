@@ -2758,6 +2758,17 @@ function FoodProductionPlanPageContent() {
                                     {procuringId === row.id ? 'Menyiapkan draft…' : 'Buat Draft Belanja'}
                                   </Button>
                                 ) : null}
+                                {canManage && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    title="Operasional lapangan tidak selalu perlu bahan 100% lengkap — butuh konfirmasi + alasan"
+                                    onClick={() => router.push(`/stok/pengeluaran?mode=produksi&productionPlanId=${row.id}`)}
+                                  >
+                                    <ArrowUpFromLine className="h-4 w-4 mr-1" />
+                                    Proses meski belum lengkap
+                                  </Button>
+                                )}
                               </>
                             );
                           }

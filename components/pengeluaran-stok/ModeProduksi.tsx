@@ -8,6 +8,8 @@ import KitchenScopeBar from '@/components/KitchenScopeBar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
@@ -105,6 +107,13 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
   const [planId, setPlanId] = useState('');
   const [mrpId, setMrpId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [planReadiness, setPlanReadiness] = useState<{
+    shortageCount: number;
+    shortageLines: Array<{ productKode?: string; productNama?: string; qtyNet?: number; satuan?: string }>;
+  } | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [overrideShortage, setOverrideShortage] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
   const [editLines, setEditLines] = useState<IssueLine[]>([]);
   const [filterTanggal, setFilterTanggal] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -153,6 +162,41 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     if (fromMrp) setMrpId(fromMrp);
   }, [initialPlanId, searchParams]);
 
+  // Bahan boleh belum 100% lengkap (blokir lunak) — cek kekurangan begitu plan dipilih,
+  // supaya admin bisa lihat & konfirmasi + alasan sebelum submit, bukan gagal di server.
+  useEffect(() => {
+    setOverrideShortage(false);
+    setOverrideReason('');
+    if (!planId) {
+      setPlanReadiness(null);
+      return;
+    }
+    let cancelled = false;
+    setReadinessLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/production-plans/${planId}/material-readiness`, {
+          headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setPlanReadiness(null);
+          return;
+        }
+        setPlanReadiness({
+          shortageCount: Number(data.shortageCount || 0),
+          shortageLines: Array.isArray(data.shortageLines) ? data.shortageLines : [],
+        });
+      } catch {
+        if (!cancelled) setPlanReadiness(null);
+      } finally {
+        if (!cancelled) setReadinessLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [planId]);
+
   async function openDetail(row: IssueRow) {
     const res = await fetch(`/api/material-issues/${row.id}`, { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } });
     const data = await res.json();
@@ -170,12 +214,21 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
       toast.error('Pilih rencana produksi');
       return;
     }
+    const shortageCount = planReadiness?.shortageCount || 0;
+    if (shortageCount > 0 && (!overrideShortage || !overrideReason.trim())) {
+      toast.error('Centang "Proses meski belum lengkap" dan isi alasan dulu');
+      return;
+    }
     setSaving(true);
     try {
       const url = '/api/material-issues';
       const body = JSON.stringify({
         productionPlanId: planId,
         ...(mrpId ? { materialRequirementId: mrpId } : {}),
+        ...(shortageCount > 0 ? {
+          overrideShortage: true,
+          overrideShortageNote: overrideReason.trim(),
+        } : {}),
       });
       const res = await fetch(url, {
         method: 'POST',
@@ -487,10 +540,56 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                 Dari MRP terpilih (seed qtyGross).
               </p>
             )}
+            {readinessLoading && (
+              <p className="text-xs text-muted-foreground">Cek kelengkapan bahan…</p>
+            )}
+            {planReadiness && planReadiness.shortageCount > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2 space-y-2">
+                <p className="text-xs text-amber-800 font-medium">
+                  Bahan belum lengkap — {planReadiness.shortageCount} item kurang
+                </p>
+                {planReadiness.shortageLines.length > 0 && (
+                  <ul className="text-xs text-amber-700 list-disc list-inside">
+                    {planReadiness.shortageLines.slice(0, 5).map((l, i) => (
+                      <li key={i}>
+                        {l.productNama || l.productKode} — kurang {l.qtyNet ?? 0} {l.satuan || ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <Checkbox
+                    checked={overrideShortage}
+                    onCheckedChange={(v) => setOverrideShortage(v === true)}
+                  />
+                  Proses meski bahan belum lengkap
+                </label>
+                {overrideShortage && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">Alasan (wajib — tercatat di riwayat)</Label>
+                    <Textarea
+                      value={overrideReason}
+                      onChange={(e) => setOverrideReason(e.target.value)}
+                      rows={2}
+                      className="text-xs"
+                      placeholder="Mis. bahan pengganti dipakai, sisa dilengkapi susulan, dll."
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpenCreate(false)}>Batal</Button>
-            <Button onClick={() => void createIssue()} disabled={saving || !planId}>
+            <Button
+              onClick={() => void createIssue()}
+              disabled={
+                saving
+                || !planId
+                || Boolean(planReadiness && planReadiness.shortageCount > 0
+                  && (!overrideShortage || !overrideReason.trim()))
+              }
+            >
               {saving ? 'Memproses…' : 'Buat'}
             </Button>
           </DialogFooter>

@@ -60,6 +60,8 @@ interface IssueBody extends Record<string, unknown> {
   catatan?: string;
   status?: string;
   note?: string;
+  overrideShortage?: boolean;
+  overrideShortageNote?: string;
 }
 
 function actorFields(auth: HandlerContext['auth']) {
@@ -339,18 +341,21 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses)`, 400);
     }
 
-    // Gate bisnis: ambil bahan hanya jika stok gudang sudah lengkap (tanpa kekurangan) —
-    // atau, kalau plan ini punya PO yang sudah diberlakukan, begitu PO itu sudah diterima
-    // penuh (lihat useLinkedPoAsTarget di buildPlanMaterialExplosion).
+    // Gate bisnis: idealnya bahan sudah lengkap (resep-vs-stok, atau PO-vs-diterima
+    // begitu PO diberlakukan — lihat useLinkedPoAsTarget di buildPlanMaterialExplosion).
+    // Tapi operasional lapangan tidak selalu bisa 100% lengkap — blokir LUNAK: boleh
+    // lanjut kalau admin sadar memilih override + isi alasan (tercatat di riwayat & audit).
     const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in readiness && readiness.error) return err(readiness.error, 400);
-    if (Number(readiness.summary?.shortageCount || 0) > 0) {
+    const shortageCount = Number(readiness.summary?.shortageCount || 0);
+    const overrideShortage = issueBody.overrideShortage === true;
+    const overrideShortageNote = String(issueBody.overrideShortageNote || '').trim();
+    if (shortageCount > 0 && (!overrideShortage || !overrideShortageNote)) {
       return err(
-        `Bahan belum lengkap (${readiness.summary?.shortageCount} item kurang). Buat Draft Belanja dulu dari Rencana Produksi.`,
+        `Bahan belum lengkap (${shortageCount} item kurang). Buat Draft Belanja dulu, atau proses dengan konfirmasi + alasan.`,
         400,
       );
     }
-
     const open = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, {
         productionPlanId,
@@ -384,6 +389,19 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if (productErr) return err(productErr, 400);
     const now = new Date();
     const actor = actorFields(auth);
+    const shortageOverride = shortageCount > 0 ? {
+      by: { userId: actor.userId, userName: actor.userName },
+      at: now,
+      reason: overrideShortageNote,
+      shortageCount,
+      shortageLines: (readiness.lines || []).filter((l) => l.shortage).slice(0, 20).map((l) => ({
+        productId: l.productId,
+        productKode: l.productKode,
+        productNama: l.productNama,
+        qtyNet: l.qtyNet,
+        satuan: l.satuan,
+      })),
+    } : undefined;
     const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_ISSUE);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
@@ -391,7 +409,9 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       toStatus: 'DRAFT',
       userId: actor.userId,
       userName: actor.userName,
-      note: `Dari rencana ${plan.noDokumen}`,
+      note: shortageOverride
+        ? `Dari rencana ${plan.noDokumen} — diproses meski kurang ${shortageCount} item: "${overrideShortageNote}"`
+        : `Dari rencana ${plan.noDokumen}`,
     });
 
     const doc: MaterialIssueDoc = {
@@ -415,6 +435,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       updatedAt: now,
       createdBy: actor.userId,
       createdByName: actor.userName,
+      ...(shortageOverride ? { shortageOverride } : {}),
     };
 
     try {
@@ -432,6 +453,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       entityType: 'material_issue',
       entityId: doc.id,
       summary: `Issue ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} item)`,
+      ...(shortageOverride ? { metadata: { shortageOverride: true, shortageCount, reason: overrideShortageNote } } : {}),
       ...auditActor(auth),
     });
     return ok(project(doc as unknown as Record<string, unknown>));
