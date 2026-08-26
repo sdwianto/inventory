@@ -276,7 +276,6 @@ export default function AppShell({ children }: AppShellProps) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
   const [tenantLogo, setTenantLogo] = useState('');
-  const [lokasiLabel, setLokasiLabel] = useState('');
   const [scopeTenantLabel, setScopeTenantLabel] = useState('');
 
   const {
@@ -303,7 +302,9 @@ export default function AppShell({ children }: AppShellProps) {
     if (!user) return;
     queueMicrotask(() => {
       setScopeTenantLabel(wsTenantLabel || '');
-      setLokasiLabel(applyWorkspaceLokasi(scopeId, lokasiList) || '');
+      // Keep lokasi aktif hydrated for pages that still use it; do not display in header
+      // (misleading on multi-warehouse screens like Pengeluaran Stok).
+      applyWorkspaceLokasi(scopeId, lokasiList);
       if (branding) {
         if (branding.logoUrl) setTenantLogo(branding.logoUrl);
         else if (branding.logoBase64) setTenantLogo(branding.logoBase64);
@@ -664,16 +665,9 @@ export default function AppShell({ children }: AppShellProps) {
               {user.role === 'MASTER' && !scopeTenantLabel ? (
                 <span className="text-amber-700 text-xs sm:text-sm">Pilih tenant operasional di sidebar</span>
               ) : (
-                <>
-                  {scopeTenantLabel && (
-                    <span className="font-medium text-slate-800">{scopeTenantLabel}</span>
-                  )}
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-400">Lokasi:</span>
-                  <span className="font-medium text-slate-800">
-                    {lokasiLabel || '— pilih di Kasir / Pembelian —'}
-                  </span>
-                </>
+                scopeTenantLabel ? (
+                  <span className="font-medium text-slate-800">{scopeTenantLabel}</span>
+                ) : null
               )}
             </div>
           </div>

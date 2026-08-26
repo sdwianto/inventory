@@ -2,20 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Building2, MapPin } from 'lucide-react';
+import { Building2 } from 'lucide-react';
 import { getUser } from '@/lib/auth-client';
 import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { fetchTenantSettings } from '@/lib/tenant-client';
-import { getLokasiAktif, loadLokasiForTenant } from '@/lib/lokasi-client';
 
 interface OperationalScopeBarProps {
   className?: string;
 }
 
-/** Banner tenant + lokasi gudang aktif — sinkron dengan header AppShell. */
+/** Banner tenant operasional (lokasi gudang tidak ditampilkan — dipilih per transaksi). */
 export default function OperationalScopeBar({ className = '' }: OperationalScopeBarProps) {
   const [tenantLabel, setTenantLabel] = useState('');
-  const [lokasiLabel, setLokasiLabel] = useState('');
 
   useEffect(() => {
     const refresh = async () => {
@@ -25,41 +23,26 @@ export default function OperationalScopeBar({ className = '' }: OperationalScope
       const scopeId = isMaster ? getActingTenantId() : (u.tenantId || 'default');
       if (isMaster && !scopeId) {
         setTenantLabel('');
-        setLokasiLabel('');
         return;
       }
       const settings = await fetchTenantSettings(scopeId, { bustCache: false }).catch(() => null);
       setTenantLabel(settings?.companyName || settings?.tenantName || u.tenantName || scopeId);
-      const lok = await loadLokasiForTenant(scopeId, {
-        actingTenantId: isMaster ? scopeId : undefined,
-        isMaster,
-      });
-      setLokasiLabel(lok.lokasiAktif || getLokasiAktif(scopeId) || '');
     };
     refresh();
     window.addEventListener('erp-scope-change', refresh);
     return () => window.removeEventListener('erp-scope-change', refresh);
   }, []);
 
-  if (!tenantLabel && !lokasiLabel) return null;
+  if (!tenantLabel) return null;
 
   return (
     <Card className={`bg-orange-50 border-orange-200 min-w-0 max-w-full ${className}`}>
       <CardContent className="p-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm min-w-0">
-        {tenantLabel ? (
-          <span className="flex items-center gap-1.5 min-w-0 max-w-full">
-            <Building2 className="w-4 h-4 text-orange-600 shrink-0" />
-            <span className="text-slate-500 shrink-0">Tenant:</span>
-            <span className="font-semibold text-slate-800 truncate">{tenantLabel}</span>
-          </span>
-        ) : null}
-        {lokasiLabel ? (
-          <span className="flex items-center gap-1.5 min-w-0 max-w-full">
-            <MapPin className="w-4 h-4 text-orange-600 shrink-0" />
-            <span className="text-slate-500 shrink-0">Lokasi:</span>
-            <span className="font-semibold text-slate-800 truncate">{lokasiLabel}</span>
-          </span>
-        ) : null}
+        <span className="flex items-center gap-1.5 min-w-0 max-w-full">
+          <Building2 className="w-4 h-4 text-orange-600 shrink-0" />
+          <span className="text-slate-500 shrink-0">Tenant:</span>
+          <span className="font-semibold text-slate-800 truncate">{tenantLabel}</span>
+        </span>
       </CardContent>
     </Card>
   );

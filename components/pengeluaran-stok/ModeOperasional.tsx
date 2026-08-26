@@ -3,6 +3,7 @@
 import { str, num, asArray, asObject, type JsonObject } from '@/types/json';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import dynamic from 'next/dynamic';
 
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -12,20 +13,23 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { formatDateTime, formatNumber } from '@/lib/format';
+import { formatDate, formatDateTime, formatNumber } from '@/lib/format';
 import { useSessionUser } from '@/lib/hooks/use-session-user';
 import { fetchJson } from '@/lib/fetch-json';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
-import { WAREHOUSES } from '@/lib/warehouses-client';
-import { ArrowUpFromLine, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
+import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
+import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
+import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
 import { lineUomKey } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
+
+const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 
 const STATUS_STYLE: Record<string, string> = {
   DRAFT: 'bg-slate-100 text-slate-700',
@@ -37,6 +41,14 @@ const STATUS_STYLE: Record<string, string> = {
 
 const CAN_CREATE = ['GUDANG', 'ADMIN', 'MASTER'];
 const CAN_APPROVE = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+
+const INVOICE_STATUS_STYLE: Record<string, string> = {
+  SUDAH: 'bg-green-100 text-green-800',
+  BELUM: 'bg-amber-100 text-amber-800',
+  'N/A': 'bg-slate-100 text-slate-600',
+};
+
+const PANDUAN_WH_ALL = 'ALL';
 
 function qtyAtLokasi(p: JsonObject, lokasiKode: string): number {
   const byWh = asObject(p.stokByWarehouse);
@@ -69,6 +81,9 @@ export function ModeOperasional() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
   const [detail, setDetail] = useState<JsonObject | null>(null);
+  const [showPanduan, setShowPanduan] = useState(false);
+  /** Default: semua gudang — tidak mengikuti lokasi aktif header. */
+  const [panduanWarehouseKode, setPanduanWarehouseKode] = useState(PANDUAN_WH_ALL);
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
 
@@ -96,6 +111,30 @@ export function ModeOperasional() {
     { enabled: showForm || pickerOpen },
   );
 
+  const panduanWhParam = panduanWarehouseKode === PANDUAN_WH_ALL ? '' : panduanWarehouseKode;
+  const panduanUrl = panduanWhParam
+    ? `/api/stok/panduan-release?warehouseKode=${encodeURIComponent(panduanWhParam)}`
+    : '/api/stok/panduan-release';
+
+  const {
+    data: panduanData,
+    isFetching: panduanLoading,
+    refetch: refetchPanduan,
+  } = useApiQuery<JsonObject>(
+    queryKeys.panduanRelease.list({ warehouseKode: panduanWhParam || undefined }),
+    panduanUrl,
+    {
+      enabled: showPanduan,
+      staleTime: 0,
+      refetchOnMount: 'always',
+    },
+  );
+
+  const panduanRows = useMemo(
+    () => asArray(asObject(panduanData).rows) as JsonObject[],
+    [panduanData],
+  );
+
   const list = Array.isArray(listData) ? listData : [];
   const products = useMemo(
     () => asArray(asObject(saldoData).rows) as JsonObject[],
@@ -105,10 +144,10 @@ export function ModeOperasional() {
   const saveMutation = useApiMutation<
     typeof form & { submit?: boolean },
     JsonObject
-  >([queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all]);
+  >([queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all, queryKeys.panduanRelease.all]);
 
   const actionMutation = useApiMutation<JsonObject, JsonObject>(
-    [queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all],
+    [queryKeys.inventoryReleases.all, queryKeys.stokSaldo.all, queryKeys.panduanRelease.all],
   );
 
   useEffect(() => {
@@ -137,6 +176,57 @@ export function ModeOperasional() {
   const canCreate = CAN_CREATE.includes(str(user?.role));
   const canApprove = CAN_APPROVE.includes(str(user?.role));
   const isAdminApprover = ['ADMIN', 'MASTER'].includes(str(user?.role));
+
+  const panduanWarehouseLabel = panduanWhParam
+    ? `${warehouseName(panduanWhParam)} (${panduanWhParam})`
+    : 'Semua gudang';
+
+  const exportPanduan = async (format: ListExportFormat) => {
+    try {
+      if (!panduanRows.length) throw new Error('Tidak ada data untuk diekspor');
+      const stamp = new Date().toISOString().slice(0, 10);
+      const whPart = panduanWhParam ? `-${panduanWhParam}` : '-semua';
+      await runListExport(format, {
+        baseName: `panduan-release${whPart}-${stamp}`,
+        title: `Panduan Release — ${panduanWarehouseLabel}`,
+        columns: [
+          { key: 'productKode', label: 'Kode' },
+          { key: 'productNama', label: 'Item' },
+          {
+            key: 'soh',
+            label: 'SOH',
+            value: (r: JsonObject) => `${formatNumber(num(r.soh))} ${str(r.satuan)}`.trim(),
+          },
+          { key: 'asal', label: 'Asal' },
+          {
+            key: 'tanggalTerima',
+            label: 'Tgl Terima',
+            value: (r: JsonObject) => formatDate(str(r.tanggalTerima)) || '—',
+          },
+          {
+            key: 'invoiceStatus',
+            label: 'Status Invoice',
+            value: (r: JsonObject) => {
+              const status = str(r.invoiceStatus) || 'BELUM';
+              const inv = str(r.noInvoice);
+              return inv ? `${status} (${inv})` : status;
+            },
+          },
+          {
+            key: 'warehouseNama',
+            label: 'Gudang',
+            value: (r: JsonObject) => str(r.warehouseNama) || str(r.warehouseKode) || '—',
+          },
+          { key: 'noGRN', label: 'No. GRN' },
+          { key: 'lotNo', label: 'Lot' },
+        ],
+        rows: panduanRows,
+      });
+      toast.success(`${panduanRows.length} baris diekspor`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const renderPendingActions = (r: JsonObject) => {
     if (str(r.status) !== 'PENDING_APPROVAL' || !canApprove) return null;
@@ -300,11 +390,22 @@ export function ModeOperasional() {
               Staff gudang mengajukan pengeluaran barang operasional → Supervisor menyetujui & release stok.
             </p>
           </div>
-          {canCreate && (
-            <Button onClick={() => setShowForm(true)} className="bg-orange-500 hover:bg-orange-600">
-              <Plus className="w-4 h-4 mr-1" /> Buat Release
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowPanduan(true);
+                void refetchPanduan();
+              }}
+            >
+              <BookOpen className="w-4 h-4 mr-1" /> Panduan Release
             </Button>
-          )}
+            {canCreate && (
+              <Button onClick={() => setShowForm(true)} className="bg-orange-500 hover:bg-orange-600">
+                <Plus className="w-4 h-4 mr-1" /> Buat Release
+              </Button>
+            )}
+          </div>
         </div>
         <OperationalScopeBar />
 
@@ -544,6 +645,108 @@ export function ModeOperasional() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetail(null)}>Tutup</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showPanduan} onOpenChange={setShowPanduan}>
+        <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Panduan Release</DialogTitle>
+            <p className="text-sm text-slate-500">
+              SOH per lot (asal PO/RPN + invoice) dan sisa stok tanpa lot — filter gudang di bawah.
+            </p>
+          </DialogHeader>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1.5 min-w-[220px]">
+              <Label>Gudang</Label>
+              <Select value={panduanWarehouseKode} onValueChange={setPanduanWarehouseKode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih gudang" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={PANDUAN_WH_ALL}>Semua gudang</SelectItem>
+                  {WAREHOUSES.map((w) => (
+                    <SelectItem key={w.kode} value={w.kode}>
+                      {w.nama} ({w.kode})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-slate-500 pb-2">
+              Menampilkan: <span className="font-medium text-slate-700">{panduanWarehouseLabel}</span>
+            </p>
+          </div>
+          <div className="overflow-y-auto flex-1 border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-100 text-xs uppercase text-slate-600 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left">Item</th>
+                  <th className="px-3 py-2 text-right">SOH</th>
+                  <th className="px-3 py-2 text-left">Asal</th>
+                  <th className="px-3 py-2 text-left">Tgl Terima</th>
+                  <th className="px-3 py-2 text-center">Status Invoice</th>
+                  <th className="px-3 py-2 text-left">Gudang</th>
+                </tr>
+              </thead>
+              <tbody>
+                {panduanLoading && !panduanRows.length && (
+                  <tr>
+                    <td colSpan={6} className="text-center py-10 text-slate-400">Memuat…</td>
+                  </tr>
+                )}
+                {!panduanLoading && !panduanRows.length && (
+                  <tr>
+                    <td colSpan={6} className="text-center py-10 text-slate-400">
+                      Tidak ada SOH untuk filter gudang ini
+                    </td>
+                  </tr>
+                )}
+                {panduanRows.map((r, idx) => {
+                  const invStatus = str(r.invoiceStatus) || 'BELUM';
+                  const rowKey = str(r.lotId) || `untracked-${str(r.productId)}-${str(r.warehouseKode)}-${idx}`;
+                  return (
+                    <tr key={rowKey} className="border-t align-top">
+                      <td className="px-3 py-2">
+                        <div className="font-medium">{str(r.productNama) || '—'}</div>
+                        <div className="text-[11px] font-mono text-slate-500">{str(r.productKode)}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                        {formatNumber(num(r.soh))}
+                        {str(r.satuan) ? (
+                          <span className="text-slate-500 text-xs ml-1">{str(r.satuan)}</span>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-xs max-w-[240px]">
+                        <div>{str(r.asal) || '—'}</div>
+                        {str(r.noGRN) ? (
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">{str(r.noGRN)}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-xs whitespace-nowrap">
+                        {formatDate(str(r.tanggalTerima)) || '—'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span className={`px-2 py-0.5 rounded text-xs ${INVOICE_STATUS_STYLE[invStatus] || ''}`}>
+                          {invStatus}
+                        </span>
+                        {str(r.noInvoice) ? (
+                          <div className="text-[11px] font-mono text-slate-500 mt-0.5">{str(r.noInvoice)}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {str(r.warehouseNama) || str(r.warehouseKode) || '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <ListExportMenu onExport={exportPanduan} disabled={panduanLoading || panduanRows.length === 0} />
+            <Button variant="outline" onClick={() => setShowPanduan(false)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

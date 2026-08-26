@@ -25,6 +25,7 @@ import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
+import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
@@ -307,6 +308,15 @@ export async function handleInventoryReleases({
           skippedNoBatches: boolean;
           allocations: FefoAllocation[];
         }> = [];
+        const ingredientLotLines: Array<{
+          stokId: string;
+          warehouseKode: string;
+          needQty: number;
+          allocated: number;
+          shortfall: number;
+          skippedNoLots: boolean;
+          allocations: FefoAllocation[];
+        }> = [];
 
         for (const it of releaseLines) {
           await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
@@ -367,6 +377,30 @@ export async function handleInventoryReleases({
             allocations: fefo.allocations,
           });
 
+          // W2-6: FEFO consume ingredient lots (raw/ops stock) so Panduan Release SOH stays in sync.
+          const lotFefo = await consumeIngredientLotsFefo(
+            txDb,
+            {
+              tenantId,
+              stokId: it.stokId,
+              warehouseKode: lokasiKode,
+              needQty: it.qtyBase,
+              asOf: now,
+              issueId: doc.id,
+              noDokumen: doc.noRelease,
+            },
+            session,
+          );
+          ingredientLotLines.push({
+            stokId: it.stokId,
+            warehouseKode: lokasiKode,
+            needQty: lotFefo.needQty,
+            allocated: lotFefo.allocated,
+            shortfall: lotFefo.shortfall,
+            skippedNoLots: lotFefo.skippedNoLots,
+            allocations: lotFefo.allocations,
+          });
+
           await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
             id: uuidv4(),
             stokId: it.stokId,
@@ -382,12 +416,19 @@ export async function handleInventoryReleases({
             satuan: it.satuan,
             hargaSatuan: it.hargaBeli || 0,
             fefoAllocations: fefo.allocations,
+            ingredientLotAllocations: lotFefo.allocations,
           }), session ? { session } : {});
         }
 
         await txDb.collection('inventory_releases').updateOne(
           { id: doc.id },
-          { $set: { fefoConsume: fefoLines, updatedAt: now } },
+          {
+            $set: {
+              fefoConsume: fefoLines,
+              ingredientLotConsume: ingredientLotLines,
+              updatedAt: now,
+            },
+          },
           session ? { session } : {},
         );
       });

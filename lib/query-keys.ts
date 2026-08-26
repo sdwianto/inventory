@@ -64,6 +64,11 @@ export const queryKeys = {
     report: (params: { q?: string; trendMonths?: string } = {}) =>
       ['stok-saldo', 'report', params] as const,
   },
+  panduanRelease: {
+    all: ['panduan-release'] as const,
+    list: (params: { warehouseKode?: string } = {}) =>
+      ['panduan-release', 'list', params] as const,
+  },
   stokKartu: {
     all: ['stok-kartu'] as const,
     detail: (params: { productId: string; from?: string; to?: string }) =>
