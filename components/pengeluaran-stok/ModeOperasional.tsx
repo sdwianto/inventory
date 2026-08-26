@@ -68,6 +68,7 @@ export function ModeOperasional() {
   const wrPrefillDone = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
+  const [detail, setDetail] = useState<JsonObject | null>(null);
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
 
@@ -316,7 +317,11 @@ export function ModeOperasional() {
               {list.map((r) => {
                 const createdBy = asObject(r.createdBy);
                 return (
-                <tr key={str(r.id)} className="border-t">
+                <tr
+                  key={str(r.id)}
+                  className="border-t cursor-pointer hover:bg-slate-50"
+                  onClick={() => setDetail(r)}
+                >
                   <td className="px-3 py-2 font-mono text-xs">{str(r.noRelease)}</td>
                   <td className="px-3 py-2 text-xs">{formatDateTime(str(r.tanggal))}</td>
                   <td className="px-3 py-2 text-xs">{str(r.lokasiNama) || str(r.lokasiKode)}</td>
@@ -326,7 +331,7 @@ export function ModeOperasional() {
                     <span className={`px-2 py-0.5 rounded text-xs ${STATUS_STYLE[str(r.status)] || ''}`}>{str(r.status)}</span>
                   </td>
                   <td className="px-3 py-2 text-xs">{str(createdBy.userName) || '—'}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-center gap-1.5 flex-nowrap">
                       {str(r.status) === 'DRAFT' && canCreate && str(createdBy.userId) === str(user?.id) && (
                         <Button size="sm" variant="outline" className="h-8 whitespace-nowrap" onClick={() => action(str(r.id), 'submit')}>
@@ -455,6 +460,72 @@ export function ModeOperasional() {
               );
             })}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {str(detail?.noRelease)}{' '}
+              <span className={`ml-1 px-2 py-0.5 rounded text-xs align-middle ${STATUS_STYLE[str(detail?.status)] || ''}`}>
+                {str(detail?.status)}
+              </span>
+            </DialogTitle>
+          </DialogHeader>
+          {detail && (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                <div>Tanggal: <span className="text-slate-900">{formatDateTime(str(detail.tanggal))}</span></div>
+                <div>Gudang: <span className="text-slate-900">{str(detail.lokasiNama) || str(detail.lokasiKode)}</span></div>
+                <div className="col-span-2">Keperluan: <span className="text-slate-900">{str(detail.keperluan)}</span></div>
+                {!!str(detail.keterangan) && (
+                  <div className="col-span-2">Catatan: <span className="text-slate-900">{str(detail.keterangan)}</span></div>
+                )}
+                <div>Dibuat oleh: <span className="text-slate-900">{str(asObject(detail.createdBy).userName) || '—'}</span></div>
+                {str(detail.status) === 'POSTED' && (
+                  <div>Disetujui oleh: <span className="text-slate-900">{str(asObject(detail.approvedBy).userName) || '—'}</span></div>
+                )}
+                {str(detail.status) === 'REJECTED' && (
+                  <>
+                    <div>Ditolak oleh: <span className="text-slate-900">{str(asObject(detail.rejectedBy).userName) || '—'}</span></div>
+                    <div className="col-span-2">Alasan: <span className="text-slate-900">{str(detail.rejectReason) || '—'}</span></div>
+                  </>
+                )}
+              </div>
+              <div className="rounded-md border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100 text-xs uppercase text-slate-600">
+                    <tr>
+                      <th className="text-left px-3 py-2">Kode</th>
+                      <th className="text-left px-3 py-2">Nama</th>
+                      <th className="text-right px-3 py-2">Qty</th>
+                      <th className="text-left px-3 py-2">Satuan</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {asArray(detail.items).map((it, i) => {
+                      const line = asObject(it);
+                      return (
+                        <tr key={i} className="border-t">
+                          <td className="px-3 py-2 font-mono text-xs">{str(line.kode)}</td>
+                          <td className="px-3 py-2">{str(line.nama)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{formatNumber(num(line.qty))}</td>
+                          <td className="px-3 py-2">{str(line.satuan)}</td>
+                        </tr>
+                      );
+                    })}
+                    {!asArray(detail.items).length && (
+                      <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-400">Tidak ada item</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetail(null)}>Tutup</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
