@@ -222,6 +222,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     '/dashboard',
     '/food-production/service-point',
     '/food-production/distribution',
+    '/maintenance/permintaan',
   ],
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/retur-vendor', '/produk',
     ...FP_OPS_ROUTES,

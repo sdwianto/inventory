@@ -3,7 +3,7 @@ import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { prefetchRouteData } from '@/lib/prefetch-route';
 
 const ROLE_HOME_ROUTES: Record<string, string[]> = {
-  DRIVER: ['/food-production/distribution', '/food-production/service-point', '/dashboard'],
+  DRIVER: ['/food-production/distribution', '/food-production/service-point', '/maintenance/permintaan', '/dashboard'],
   GUDANG: ['/penerimaan', '/pembelian-po', '/dashboard', '/food-production/kitchen'],
   SUPERVISOR: ['/penerimaan', '/maintenance/permintaan', '/dashboard', '/food-production/plan'],
   ADMIN: ['/penerimaan', '/hutang', '/integrasi', '/dashboard', '/food-production/plan'],
@@ -72,6 +72,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     '/dashboard',
     '/food-production/service-point',
     '/food-production/distribution',
+    '/maintenance/permintaan',
   ],
   GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_OPS_ROUTES,

@@ -11,8 +11,8 @@ export const PM_REPORT_ROLES = ['SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as con
 export const ASSET_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
 export const ASSET_VIEW_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
 
-export const WR_CREATE_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
-export const WR_SUBMIT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
+export const WR_CREATE_ROLES = ['DRIVER', 'GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
+export const WR_SUBMIT_ROLES = ['DRIVER', 'GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
 export const WR_APPROVE_ROLES = ['ADMIN', 'OWNER', 'MASTER'] as const;
 export const WR_PROGRESS_ROLES = ['SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'] as const;
 
