@@ -26,8 +26,17 @@ import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send } from 'lu
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
-import { lineUomKey } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
+import {
+  appendReleaseFormItem,
+  backfillReleaseItemLabels,
+  buildReleaseFormItem,
+  catalogFromSaldoRows,
+  patchReleaseFormItemUom,
+  qtyAtLokasi,
+  resolveReleaseItemDisplay,
+  type ReleaseFormItem,
+} from '@/lib/pengeluaran-stok/release-form-items';
 
 const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 
@@ -50,13 +59,6 @@ const INVOICE_STATUS_STYLE: Record<string, string> = {
 
 const PANDUAN_WH_ALL = 'ALL';
 
-function qtyAtLokasi(p: JsonObject, lokasiKode: string): number {
-  const byWh = asObject(p.stokByWarehouse);
-  const kode = lokasiKode.trim().toUpperCase();
-  if (kode && kode in byWh) return num(byWh[kode]);
-  return num(p.stokQty ?? p.stokTotal);
-}
-
 export function ModeOperasional() {
   const user = useSessionUser();
   const [showForm, setShowForm] = useState(false);
@@ -67,7 +69,7 @@ export function ModeOperasional() {
     keterangan: string;
     maintenanceRequestId: string;
     assetId: string;
-    items: JsonObject[];
+    items: ReleaseFormItem[];
   }>({
     lokasiKode: 'GKERING',
     keperluan: '',
@@ -85,7 +87,7 @@ export function ModeOperasional() {
   /** Default: semua gudang — tidak mengikuti lokasi aktif header. */
   const [panduanWarehouseKode, setPanduanWarehouseKode] = useState(PANDUAN_WH_ALL);
 
-  usePrimeLineItemUoms(showForm, form.items.map((it) => str(it.stokId)));
+  usePrimeLineItemUoms(showForm, form.items.map((it) => it.stokId));
 
   useEffect(() => {
     if (!form.lokasiKode || form.items.length === 0) return;
@@ -140,6 +142,23 @@ export function ModeOperasional() {
     () => asArray(asObject(saldoData).rows) as JsonObject[],
     [saldoData],
   );
+  const productById = useMemo(() => catalogFromSaldoRows(products), [products]);
+
+  /** Backfill nama/kode kosong dari katalog saldo — jaring pengaman terakhir. */
+  const itemsNeedingLabel = form.items
+    .filter((it) => !it.nama.trim() && productById.has(it.stokId))
+    .map((it) => it.stokId)
+    .join('|');
+
+  useEffect(() => {
+    if (!itemsNeedingLabel) return;
+    queueMicrotask(() => {
+      setForm((prev) => {
+        const result = backfillReleaseItemLabels(prev.items, productById);
+        return result.changed ? { ...prev, items: result.items } : prev;
+      });
+    });
+  }, [itemsNeedingLabel, productById]);
 
   const saveMutation = useApiMutation<
     typeof form & { submit?: boolean },
@@ -286,45 +305,54 @@ export function ModeOperasional() {
   };
 
   const addItem = async (p: JsonObject) => {
-    // addItem menunggu fetchDefaultProductUom (network) sebelum menulis state — kalau dua
-    // produk diklik berdekatan, setForm({ ...form, ... }) yang menutup atas `form` lama bisa
-    // saling menimpa/menghapus perubahan satu sama lain begitu keduanya resolve belakangan.
-    // Pakai functional update supaya SELALU menulis di atas state TERBARU, bukan snapshot
-    // yang direkam sebelum await.
-    const id = str(p.id);
-    const defaultUom = await fetchDefaultProductUom(id);
-    const uomId = defaultUom?.id || '';
+    // Optimistic: tulis nama/kode SEBELUM await UOM — detail langsung tampil,
+    // tidak tergantung network / referensi row React Query setelah await.
+    const clientKey = `ck-${str(p.id)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const pending = buildReleaseFormItem({
+      product: p,
+      lokasiKode: form.lokasiKode,
+      uomId: '',
+      clientKey,
+    });
+    if (!pending) {
+      toast.error('Produk tidak valid');
+      return;
+    }
+
     let duplicate = false;
     setForm((prev) => {
-      if (prev.items.find((it) => lineUomKey(str(it.stokId), str(it.uomId)) === lineUomKey(id, uomId))) {
-        duplicate = true;
-        return prev;
-      }
-      return {
-        ...prev,
-        items: [...prev.items, {
-          stokId: p.id,
-          kode: p.kode,
-          nama: p.nama,
-          uomId,
-          satuan: defaultUom?.satuan || p.satuan,
-          qty: 1,
-          stokAvail: qtyAtLokasi(p, prev.lokasiKode),
-          stokByWarehouse: p.stokByWarehouse,
-        }],
-      };
+      const result = appendReleaseFormItem(prev.items, {
+        ...pending,
+        stokAvail: qtyAtLokasi(pending, prev.lokasiKode),
+      });
+      duplicate = result.duplicate;
+      return result.duplicate ? prev : { ...prev, items: result.items };
     });
     if (duplicate) {
       toast.error('Produk sudah ada');
       return;
     }
     setPickerOpen(false);
+
+    const defaultUom = await fetchDefaultProductUom(pending.stokId);
+    let uomDuplicate = false;
+    setForm((prev) => {
+      const result = patchReleaseFormItemUom(prev.items, clientKey, {
+        id: str(defaultUom?.id),
+        satuan: str(defaultUom?.satuan) || pending.satuan,
+      });
+      uomDuplicate = result.duplicate;
+      return { ...prev, items: result.items };
+    });
+    if (uomDuplicate) toast.error('Produk sudah ada');
   };
 
   const updateItemUom = (i: number, uom: ProductUom) => {
     setForm((prev) => ({
       ...prev,
-      items: prev.items.map((it, idx) => idx === i ? { ...it, uomId: uom.id, satuan: uom.satuan } : it),
+      items: prev.items.map((it, idx) => (
+        idx === i ? { ...it, uomId: uom.id, satuan: uom.satuan } : it
+      )),
     }));
   };
 
@@ -333,9 +361,10 @@ export function ModeOperasional() {
     if (!form.items.length) { toast.error('Tambah minimal 1 item'); return; }
     setSaving(true);
     try {
+      const items = form.items.map(({ clientKey: _ck, ...rest }) => rest);
       await saveMutation.mutateAsync({
         url: '/api/inventory-releases',
-        body: { ...form, submit },
+        body: { ...form, items, submit },
       });
       toast.success(submit ? 'Pengajuan release dikirim ke supervisor' : 'Draft release disimpan');
       setShowForm(false);
@@ -507,43 +536,61 @@ export function ModeOperasional() {
               </Button>
             </div>
             <div className="space-y-2">
-              {form.items.map((it, i) => (
-                <div key={`${str(it.stokId)}-${str(it.uomId)}`} className="flex items-center gap-2 border rounded p-2 text-sm">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{str(it.nama) || str(it.kode) || 'Produk'}</div>
-                    <div className="text-xs text-slate-500">
-                      {str(it.kode)} · tersedia: {formatNumber(num(it.stokAvail))} base
+              {form.items.map((it, i) => {
+                const display = resolveReleaseItemDisplay(it, productById, form.lokasiKode);
+                return (
+                  <div
+                    key={it.clientKey || `${it.stokId}-${it.uomId}-${i}`}
+                    className="flex flex-col gap-2 border rounded-md p-2.5 text-sm sm:flex-row sm:items-start"
+                  >
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="font-medium leading-snug break-words" title={display.nama}>
+                        {display.nama}
+                      </div>
+                      <div className="text-xs text-slate-500 break-words">
+                        {display.kode ? `${display.kode} · ` : ''}
+                        tersedia: {formatNumber(display.stokAvail)} base
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Input
+                        type="number"
+                        min={0}
+                        max={display.stokAvail}
+                        className="w-24 shrink-0"
+                        value={it.qty}
+                        onChange={(e) => {
+                          const qty = parseFloat(e.target.value) || 0;
+                          setForm((prev) => ({
+                            ...prev,
+                            items: prev.items.map((x, idx) => (idx === i ? { ...x, qty } : x)),
+                          }));
+                        }}
+                      />
+                      <div className="w-28 shrink-0">
+                        <LineUomSelect
+                          stokId={it.stokId}
+                          uomId={it.uomId}
+                          className="w-full"
+                          onChange={(uom) => updateItemUom(i, uom)}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0"
+                        onClick={() => setForm((prev) => ({
+                          ...prev,
+                          items: prev.items.filter((_, idx) => idx !== i),
+                        }))}
+                      >
+                        Hapus
+                      </Button>
                     </div>
                   </div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={num(it.stokAvail)}
-                    className="w-24"
-                    value={num(it.qty)}
-                    onChange={(e) => {
-                      const qty = parseFloat(e.target.value) || 0;
-                      setForm((prev) => ({
-                        ...prev,
-                        items: prev.items.map((x, idx) => idx === i ? { ...x, qty } : x),
-                      }));
-                    }}
-                  />
-                  <LineUomSelect
-                    stokId={str(it.stokId)}
-                    uomId={str(it.uomId)}
-                    onChange={(uom) => updateItemUom(i, uom)}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setForm((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }))}
-                  >
-                    Hapus
-                  </Button>
-                </div>
-              ))}
+                );
+              })}
               {!form.items.length && (
                 <p className="text-sm text-slate-400 text-center py-4">Belum ada item</p>
               )}
@@ -566,6 +613,7 @@ export function ModeOperasional() {
           <div className="overflow-y-auto flex-1 space-y-1">
             {filteredProducts.map((p) => {
               const avail = qtyAtLokasi(p, form.lokasiKode);
+              const label = str(p.nama).trim() || str(p.kode).trim() || 'Produk';
               return (
                 <button
                   key={str(p.id)}
@@ -574,8 +622,12 @@ export function ModeOperasional() {
                   className="w-full text-left border rounded p-2 text-sm hover:bg-slate-50 disabled:opacity-40"
                   onClick={() => addItem(p)}
                 >
-                  <div className="font-medium">{str(p.nama) || str(p.kode) || 'Produk'}</div>
-                  <div className="text-xs text-slate-500">{str(p.kode)} · stok: {formatNumber(avail)} {str(p.satuan)}</div>
+                  <div className="font-medium break-words">{label}</div>
+                  <div className="text-xs text-slate-500">
+                    {str(p.kode) ? <span className="font-mono">{str(p.kode)}</span> : null}
+                    {str(p.kode) ? ' · ' : ''}
+                    stok: {formatNumber(avail)} {str(p.satuan)}
+                  </div>
                 </button>
               );
             })}
@@ -628,8 +680,8 @@ export function ModeOperasional() {
                       const line = asObject(it);
                       return (
                         <tr key={i} className="border-t">
-                          <td className="px-3 py-2 font-mono text-xs">{str(line.kode)}</td>
-                          <td className="px-3 py-2">{str(line.nama)}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{str(line.kode) || '—'}</td>
+                          <td className="px-3 py-2">{str(line.nama).trim() || str(line.kode) || '—'}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatNumber(num(line.qty))}</td>
                           <td className="px-3 py-2">{str(line.satuan)}</td>
                         </tr>
