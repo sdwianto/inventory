@@ -83,12 +83,15 @@ export default function MaintenanceAsetPage() {
     }
     setSaving(true);
     try {
-      const payload = {
+      const payload: JsonObject = {
         ...form,
         nilaiPerolehan: num(form.nilaiPerolehan),
         tanggalBeli: str(form.tanggalBeli) || null,
         fotoBase64: str(form.fotoBase64) || null,
       };
+      if (!editing && !str(form.kode).trim()) {
+        delete payload.kode;
+      }
       const url = editing ? `/api/assets/${str(editing.id)}` : '/api/assets';
       await mutate({
         url,

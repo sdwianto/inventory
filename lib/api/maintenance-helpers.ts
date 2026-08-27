@@ -1,6 +1,7 @@
 import type { Db } from 'mongodb';
 import type { AuthContext } from '@/types/auth';
 import type { AssetDoc, AssetStatus, MaintenancePriority } from '@/types/maintenance';
+import { nextDocNumber } from '@/lib/api/document-sequence';
 import { ASSET_STATUS_LABELS, BLOCKING_WR_STATUSES, MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 
 const VALID_ASSET_STATUS = new Set<string>(Object.keys(ASSET_STATUS_LABELS));
@@ -54,6 +55,31 @@ export async function loadAssetForTenant(
   assetId: string,
 ): Promise<AssetDoc | null> {
   return db.collection('assets').findOne({ tenantId, id: assetId }) as Promise<AssetDoc | null>;
+}
+
+const ASSET_KODE_MAX_RETRIES = 20;
+
+/** Manual kode or auto AST sequence — pastikan unik per tenant (handle sequence drift / double submit). */
+export async function resolveAssetKode(
+  db: Db,
+  tenantId: string,
+  requestedKode?: string | null,
+): Promise<{ kode: string } | { error: string }> {
+  const tid = tenantId || 'default';
+  const manual = String(requestedKode || '').trim();
+  if (manual) {
+    const existing = await db.collection('assets').findOne({ tenantId: tid, kode: manual });
+    if (existing) return { error: `Kode aset ${manual} sudah ada di tenant ini` };
+    return { kode: manual };
+  }
+
+  for (let attempt = 0; attempt < ASSET_KODE_MAX_RETRIES; attempt += 1) {
+    const kode = await nextDocNumber(db, tid, 'AST', 'AST');
+    const existing = await db.collection('assets').findOne({ tenantId: tid, kode });
+    if (!existing) return { kode };
+  }
+
+  return { error: 'Gagal mengalokasikan kode aset unik — coba lagi atau isi kode manual' };
 }
 
 export async function assertAssetHasNoOpenRequests(

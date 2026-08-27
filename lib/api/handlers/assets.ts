@@ -9,12 +9,12 @@ import {
 } from '@/lib/api/tenant-master';
 import { assertMasterAccess } from '@/lib/api/tenant-validate';
 import { requireRole } from '@/lib/api/require-auth';
-import { nextDocNumber } from '@/lib/api/document-sequence';
 import {
   actorSnapshot,
   assertAssetHasNoOpenRequests,
   buildAssetSearchFilter,
   normalizeAssetStatus,
+  resolveAssetKode,
 } from '@/lib/api/maintenance-helpers';
 import { ASSET_MANAGE_ROLES, ASSETS_COLLECTION } from '@/lib/maintenance/constants';
 import { validateBase64Image, validateBase64Images } from '@/lib/api/image-base64';
@@ -85,11 +85,9 @@ export async function handleAssets({
     if (!assetBody.nama?.trim()) return err('Nama aset wajib diisi');
 
     const tenantId = tenantIdForWrite(scopeAuth, assetBody);
-    const kode = assetBody.kode?.trim()
-      || await nextDocNumber(db, tenantId, 'AST', 'AST');
-
-    const existing = await db.collection(ASSETS_COLLECTION).findOne({ tenantId, kode });
-    if (existing) return err('Kode aset sudah ada di tenant ini');
+    const kodeResult = await resolveAssetKode(db, tenantId, assetBody.kode);
+    if ('error' in kodeResult) return err(kodeResult.error, 400);
+    const kode = kodeResult.kode;
 
     let fotoBase64: string | null = null;
     let fotoUrl: string | undefined;
