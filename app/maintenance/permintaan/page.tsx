@@ -16,7 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDateTime } from '@/lib/format';
@@ -80,7 +80,8 @@ function MaintenancePermintaanPageContent() {
     limit: 100,
     queryKey: queryKeys.maintenance.requests.cursor(statusFilter),
   });
-  const { data: assets = [] } = useAssets({ enabled: showForm || list.length > 0 });
+  // Always load assets — jangan tunggu list WR (di HP tombol Buat terlihat disabled selamanya).
+  const { data: assets = [], isLoading: assetsLoading, isFetching: assetsFetching } = useAssets();
 
   const canCreate = WR_CREATE_ROLES.includes(String(user?.role || '') as typeof WR_CREATE_ROLES[number])
     || user?.role === 'MASTER';
@@ -98,6 +99,14 @@ function MaintenancePermintaanPageContent() {
   const activeAssets = assets.filter((a) => str(a.status) !== 'DISPOSED');
 
   const openNew = () => {
+    if (assetsLoading || assetsFetching) {
+      toast.message('Memuat daftar aset…');
+      return;
+    }
+    if (!activeAssets.length) {
+      toast.error('Belum ada aset. Tambahkan di menu Register Aset terlebih dahulu.');
+      return;
+    }
     setEditing(null);
     setForm({
       ...EMPTY_WR,
@@ -191,13 +200,15 @@ function MaintenancePermintaanPageContent() {
     const id = str(row.id);
     const isOwner = str(asObject(row.createdBy).userId) === str(user?.id);
 
+    const touchBtn = 'min-h-11 h-11 touch-manipulation flex-1 sm:flex-none sm:h-8 sm:min-h-8';
+
     if (status === 'DRAFT' && canCreate && isOwner) {
       return (
         <>
-          <Button size="sm" variant="outline" className="h-8" onClick={() => openEdit(row)}>
+          <Button type="button" size="sm" variant="outline" className={touchBtn} disabled={mutating} onClick={() => void openEdit(row)}>
             Edit
           </Button>
-          <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700" onClick={() => void action(id, 'request-approval')}>
+          <Button type="button" size="sm" className={`${touchBtn} bg-blue-600 hover:bg-blue-700`} disabled={mutating} onClick={() => void action(id, 'request-approval')}>
             <Send className="w-3.5 h-3.5 mr-1" /> Ajukan
           </Button>
         </>
@@ -207,13 +218,15 @@ function MaintenancePermintaanPageContent() {
     if (status === 'PENDING_APPROVAL' && canApprove) {
       return (
         <>
-          <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700" onClick={() => void action(id, 'approve')}>
+          <Button type="button" size="sm" className={`${touchBtn} bg-green-600 hover:bg-green-700`} disabled={mutating} onClick={() => void action(id, 'approve')}>
             <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Setujui
           </Button>
           <Button
+            type="button"
             size="sm"
             variant="outline"
-            className="h-8 text-red-700 border-red-200"
+            className={`${touchBtn} text-red-700 border-red-200`}
+            disabled={mutating}
             onClick={() => void action(id, 'reject', { reason: 'Ditolak admin' })}
           >
             <XCircle className="w-3.5 h-3.5 mr-1" /> Tolak
@@ -224,7 +237,7 @@ function MaintenancePermintaanPageContent() {
 
     if (status === 'APPROVED' && canProgress) {
       return (
-        <Button size="sm" className="h-8" onClick={() => void action(id, 'start')}>
+        <Button type="button" size="sm" className={touchBtn} disabled={mutating} onClick={() => void action(id, 'start')}>
           <Play className="w-3.5 h-3.5 mr-1" /> Mulai Kerja
         </Button>
       );
@@ -233,8 +246,10 @@ function MaintenancePermintaanPageContent() {
     if (status === 'IN_PROGRESS' && canProgress) {
       return (
         <Button
+          type="button"
           size="sm"
-          className="h-8 bg-indigo-600 hover:bg-indigo-700"
+          className={`${touchBtn} bg-indigo-600 hover:bg-indigo-700`}
+          disabled={mutating}
           onClick={() => {
             setExpandedId(id);
             setCompleteNote('');
@@ -247,7 +262,7 @@ function MaintenancePermintaanPageContent() {
 
     if (status === 'COMPLETED' && canApprove) {
       return (
-        <Button size="sm" className="h-8" onClick={() => void action(id, 'close')}>
+        <Button type="button" size="sm" className={touchBtn} disabled={mutating} onClick={() => void action(id, 'close')}>
           <Lock className="w-3.5 h-3.5 mr-1" /> Tutup
         </Button>
       );
@@ -339,23 +354,27 @@ function MaintenancePermintaanPageContent() {
   return (
     <div className="p-4 md:p-6 space-y-4">
         <OperationalScopeBar />
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Wrench className="w-6 h-6" /> Permintaan Maintenance
+              <Wrench className="w-6 h-6 shrink-0" /> Permintaan Maintenance
             </h1>
             <p className="text-sm text-slate-500">
               Laporkan kerusakan aset → approval admin → siap ditindaklanjuti (PO / jasa / spare part).
             </p>
           </div>
           {canCreate && (
-            <Button onClick={openNew} className="bg-orange-500 hover:bg-orange-600" disabled={!activeAssets.length}>
+            <Button
+              type="button"
+              onClick={openNew}
+              className="bg-orange-500 hover:bg-orange-600 w-full sm:w-auto min-h-11 h-11 touch-manipulation sm:h-9 sm:min-h-9"
+            >
               <Plus className="w-4 h-4 mr-1" /> Buat Permintaan
             </Button>
           )}
         </div>
 
-        {!activeAssets.length && (
+        {!activeAssets.length && !assetsLoading && (
           <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             Belum ada aset terdaftar. Tambahkan aset di menu Register Aset terlebih dahulu.
           </p>
@@ -398,8 +417,8 @@ function MaintenancePermintaanPageContent() {
             const isOpen = expandedId === str(row.id);
             return (
               <div key={str(row.id)} className="rounded-lg border bg-white p-4 space-y-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="space-y-1">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1 min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs text-slate-500">{str(row.noWR)}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${WR_STATUS_STYLE[status]}`}>
@@ -427,7 +446,9 @@ function MaintenancePermintaanPageContent() {
                       Dibuat {formatDateTime(str(row.createdAt))} · {str(asObject(row.createdBy).userName, '—')}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">{renderActions(row)}</div>
+                  <div className="flex flex-wrap gap-2 w-full sm:w-auto shrink-0 relative z-10">
+                    {renderActions(row)}
+                  </div>
                 </div>
 
                 {isOpen && (
@@ -501,15 +522,18 @@ function MaintenancePermintaanPageContent() {
         </div>
 
         <Dialog open={showForm} onOpenChange={setShowForm}>
-          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-lg max-h-[min(90dvh,90vh)] overflow-y-auto p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
             <DialogHeader>
               <DialogTitle>{editing ? 'Edit Permintaan' : 'Permintaan Maintenance Baru'}</DialogTitle>
+              <DialogDescription>
+                Isi aset, judul, dan deskripsi kerusakan. Simpan sebagai draft lalu ajukan ke admin.
+              </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2">
               <div>
                 <Label>Aset *</Label>
                 <Select value={str(form.assetId)} onValueChange={(v) => setForm({ ...form, assetId: v })}>
-                  <SelectTrigger><SelectValue placeholder="Pilih aset" /></SelectTrigger>
+                  <SelectTrigger className="min-h-11 touch-manipulation"><SelectValue placeholder="Pilih aset" /></SelectTrigger>
                   <SelectContent>
                     {activeAssets.map((a) => (
                       <SelectItem key={str(a.id)} value={str(a.id)}>
@@ -522,7 +546,7 @@ function MaintenancePermintaanPageContent() {
               <div>
                 <Label>Prioritas</Label>
                 <Select value={str(form.priority, 'MEDIUM')} onValueChange={(v) => setForm({ ...form, priority: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="min-h-11 touch-manipulation"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {Object.entries(WR_PRIORITY_LABELS).map(([k, label]) => (
                       <SelectItem key={k} value={k}>{label}</SelectItem>
@@ -532,7 +556,7 @@ function MaintenancePermintaanPageContent() {
               </div>
               <div>
                 <Label>Judul *</Label>
-                <Input value={str(form.judul)} onChange={(e) => setForm({ ...form, judul: e.target.value })} />
+                <Input className="min-h-11" value={str(form.judul)} onChange={(e) => setForm({ ...form, judul: e.target.value })} />
               </div>
               <div>
                 <Label>Deskripsi masalah</Label>
@@ -551,9 +575,9 @@ function MaintenancePermintaanPageContent() {
                 maxPhotos={5}
               />
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
-              <Button onClick={() => void save()} disabled={saving || mutating}>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" className="min-h-11 touch-manipulation" onClick={() => setShowForm(false)}>Batal</Button>
+              <Button type="button" className="min-h-11 touch-manipulation" onClick={() => void save()} disabled={saving || mutating}>
                 {saving || mutating ? 'Menyimpan...' : editing ? 'Simpan' : 'Simpan Draft'}
               </Button>
             </DialogFooter>
