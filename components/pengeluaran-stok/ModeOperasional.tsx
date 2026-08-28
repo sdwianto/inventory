@@ -22,7 +22,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
-import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send } from 'lucide-react';
+import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send, Pencil } from 'lucide-react';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
@@ -31,9 +31,12 @@ import {
   appendReleaseFormItem,
   backfillReleaseItemLabels,
   buildReleaseFormItem,
+  canUserEditRejectedRelease,
   catalogFromSaldoRows,
+  EMPTY_RELEASE_FORM,
   patchReleaseFormItemUom,
   qtyAtLokasi,
+  releaseDocToFormState,
   resolveReleaseItemDisplay,
   type ReleaseFormItem,
 } from '@/lib/pengeluaran-stok/release-form-items';
@@ -63,6 +66,9 @@ export function ModeOperasional() {
   const user = useSessionUser();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingReleaseId, setEditingReleaseId] = useState<string | null>(null);
+  const [editingNoRelease, setEditingNoRelease] = useState('');
+  const [editingRejectReason, setEditingRejectReason] = useState('');
   const [form, setForm] = useState<{
     lokasiKode: string;
     keperluan: string;
@@ -70,14 +76,7 @@ export function ModeOperasional() {
     maintenanceRequestId: string;
     assetId: string;
     items: ReleaseFormItem[];
-  }>({
-    lokasiKode: 'GKERING',
-    keperluan: '',
-    keterangan: '',
-    maintenanceRequestId: '',
-    assetId: '',
-    items: [],
-  });
+  }>(EMPTY_RELEASE_FORM);
   const searchParams = useSearchParams();
   const wrPrefillDone = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -195,6 +194,48 @@ export function ModeOperasional() {
   const canCreate = CAN_CREATE.includes(str(user?.role));
   const canApprove = CAN_APPROVE.includes(str(user?.role));
   const isAdminApprover = ['ADMIN', 'MASTER'].includes(str(user?.role));
+
+  const closeReleaseForm = () => {
+    setShowForm(false);
+    setEditingReleaseId(null);
+    setEditingNoRelease('');
+    setEditingRejectReason('');
+    setForm(EMPTY_RELEASE_FORM);
+  };
+
+  const openCreateForm = () => {
+    setEditingReleaseId(null);
+    setEditingNoRelease('');
+    setEditingRejectReason('');
+    setForm(EMPTY_RELEASE_FORM);
+    setShowForm(true);
+  };
+
+  const openEditForm = async (release: JsonObject) => {
+    const id = str(release.id);
+    if (!id) {
+      toast.error('Release tidak valid');
+      return;
+    }
+    try {
+      const full = await fetchJson<JsonObject>(`/api/inventory-releases/${id}`);
+      if (str(full.status) !== 'REJECTED') {
+        toast.error('Hanya release ditolak yang bisa diperbaiki');
+        return;
+      }
+      if (!canUserEditRejectedRelease(full, user)) {
+        toast.error('Anda tidak punya akses edit release ini');
+        return;
+      }
+      setEditingReleaseId(id);
+      setEditingNoRelease(str(full.noRelease));
+      setEditingRejectReason(str(full.rejectReason));
+      setForm(releaseDocToFormState(full));
+      setShowForm(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat release');
+    }
+  };
 
   const panduanWarehouseLabel = panduanWhParam
     ? `${warehouseName(panduanWhParam)} (${panduanWhParam})`
@@ -362,20 +403,26 @@ export function ModeOperasional() {
     setSaving(true);
     try {
       const items = form.items.map(({ clientKey: _ck, ...rest }) => rest);
-      await saveMutation.mutateAsync({
-        url: '/api/inventory-releases',
-        body: { ...form, items, submit },
-      });
-      toast.success(submit ? 'Pengajuan release dikirim ke supervisor' : 'Draft release disimpan');
-      setShowForm(false);
-      setForm({
-        lokasiKode: 'GKERING',
-        keperluan: '',
-        keterangan: '',
-        maintenanceRequestId: '',
-        assetId: '',
-        items: [],
-      });
+      const body = { ...form, items, submit };
+      if (editingReleaseId) {
+        await saveMutation.mutateAsync({
+          url: `/api/inventory-releases/${editingReleaseId}`,
+          method: 'PATCH',
+          body,
+        });
+        toast.success(
+          submit
+            ? `Release ${editingNoRelease || ''} diperbaiki dan diajukan ulang`.trim()
+            : `Perubahan release ${editingNoRelease || ''} disimpan sebagai draft`.trim(),
+        );
+      } else {
+        await saveMutation.mutateAsync({
+          url: '/api/inventory-releases',
+          body,
+        });
+        toast.success(submit ? 'Pengajuan release dikirim ke supervisor' : 'Draft release disimpan');
+      }
+      closeReleaseForm();
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
       else toast.error(e instanceof Error ? e.message : String(e));
@@ -430,7 +477,7 @@ export function ModeOperasional() {
               <BookOpen className="w-4 h-4 mr-1" /> Panduan Release
             </Button>
             {canCreate && (
-              <Button onClick={() => setShowForm(true)} className="bg-orange-500 hover:bg-orange-600">
+              <Button onClick={openCreateForm} className="bg-orange-500 hover:bg-orange-600">
                 <Plus className="w-4 h-4 mr-1" /> Buat Release
               </Button>
             )}
@@ -475,6 +522,17 @@ export function ModeOperasional() {
                   <td className="px-3 py-2 text-xs">{str(createdBy.userName) || '—'}</td>
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                      {canUserEditRejectedRelease(r, user) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 whitespace-nowrap"
+                          onClick={() => { void openEditForm(r); }}
+                        >
+                          <Pencil className="w-3.5 h-3.5 mr-1" />
+                          Edit
+                        </Button>
+                      )}
                       {str(r.status) === 'DRAFT' && canCreate && str(createdBy.userId) === str(user?.id) && (
                         <Button size="sm" variant="outline" className="h-8 whitespace-nowrap" onClick={() => action(str(r.id), 'submit')}>
                           <Send className="w-3.5 h-3.5 mr-1" /> Ajukan
@@ -491,18 +549,31 @@ export function ModeOperasional() {
         </div>
       </div>
 
-      <Dialog open={showForm} onOpenChange={setShowForm}>
+      <Dialog open={showForm} onOpenChange={(open) => { if (!open) closeReleaseForm(); else setShowForm(true); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Buat Release Inventory</DialogTitle>
+            <DialogTitle>
+              {editingReleaseId
+                ? `Perbaiki Release${editingNoRelease ? ` — ${editingNoRelease}` : ''}`
+                : 'Buat Release Inventory'}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 overflow-y-auto flex-1 py-2">
+            {editingRejectReason && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <span className="font-medium">Alasan ditolak:</span> {editingRejectReason}
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Gudang asal *</Label>
                 <Select
                   value={form.lokasiKode}
-                  onValueChange={(v) => setForm((prev) => ({ ...prev, lokasiKode: v, items: [] }))}
+                  onValueChange={(v) => setForm((prev) => ({
+                    ...prev,
+                    lokasiKode: v,
+                    items: editingReleaseId ? prev.items : [],
+                  }))}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -597,10 +668,12 @@ export function ModeOperasional() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowForm(false)}>Batal</Button>
-            <Button variant="outline" disabled={saving} onClick={() => save(false)}>Simpan Draft</Button>
+            <Button variant="outline" onClick={closeReleaseForm}>Batal</Button>
+            <Button variant="outline" disabled={saving} onClick={() => save(false)}>
+              {editingReleaseId ? 'Simpan Perbaikan' : 'Simpan Draft'}
+            </Button>
             <Button disabled={saving} className="bg-orange-500 hover:bg-orange-600" onClick={() => save(true)}>
-              Ajukan ke Supervisor
+              {editingReleaseId ? 'Ajukan Ulang ke Supervisor' : 'Ajukan ke Supervisor'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -695,7 +768,19 @@ export function ModeOperasional() {
               </div>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:justify-between">
+            {detail && canUserEditRejectedRelease(detail, user) ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void openEditForm(detail);
+                  setDetail(null);
+                }}
+              >
+                <Pencil className="w-4 h-4 mr-1" />
+                Perbaiki Release
+              </Button>
+            ) : <span />}
             <Button variant="outline" onClick={() => setDetail(null)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>

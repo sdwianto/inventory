@@ -1,4 +1,4 @@
-import { asObject, num, str, type JsonObject } from '@/types/json';
+import { asArray, asObject, num, str, type JsonObject } from '@/types/json';
 import { lineUomKey } from '@/lib/uom/line-ui';
 
 export type ReleaseFormItem = {
@@ -179,4 +179,60 @@ export function catalogFromSaldoRows(rows: JsonObject[]): Map<string, JsonObject
     if (id) map.set(id, p);
   }
   return map;
+}
+
+export type ReleaseFormState = {
+  lokasiKode: string;
+  keperluan: string;
+  keterangan: string;
+  maintenanceRequestId: string;
+  assetId: string;
+  items: ReleaseFormItem[];
+};
+
+export const EMPTY_RELEASE_FORM: ReleaseFormState = {
+  lokasiKode: 'GKERING',
+  keperluan: '',
+  keterangan: '',
+  maintenanceRequestId: '',
+  assetId: '',
+  items: [],
+};
+
+/** Muat dokumen release (REJECTED/DRAFT) ke state form edit. */
+export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
+  const lokasiKode = str(release.lokasiKode) || 'GKERING';
+  return {
+    lokasiKode,
+    keperluan: str(release.keperluan),
+    keterangan: str(release.keterangan),
+    maintenanceRequestId: str(release.maintenanceRequestId),
+    assetId: str(release.assetId),
+    items: asArray(release.items).map((raw) => {
+      const line = asObject(raw);
+      return {
+        stokId: str(line.stokId),
+        kode: str(line.kode),
+        nama: str(line.nama),
+        uomId: str(line.uomId),
+        satuan: str(line.satuan),
+        qty: num(line.qtyEntered ?? line.qty, 1),
+        stokAvail: 0,
+        stokByWarehouse: {},
+      };
+    }),
+  };
+}
+
+/** Tombol edit: release ditolak, user punya hak buat, dan pembuat atau admin. */
+export function canUserEditRejectedRelease(
+  release: JsonObject,
+  user: { id?: string; role?: string } | null | undefined,
+): boolean {
+  if (str(release.status) !== 'REJECTED') return false;
+  const role = str(user?.role);
+  if (!['GUDANG', 'ADMIN', 'MASTER'].includes(role)) return false;
+  if (role === 'ADMIN' || role === 'MASTER') return true;
+  const createdBy = asObject(release.createdBy);
+  return str(createdBy.userId) === str(user?.id);
 }

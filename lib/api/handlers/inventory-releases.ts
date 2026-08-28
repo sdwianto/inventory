@@ -35,6 +35,8 @@ interface ReleaseItemInput {
   stokId?: string;
   kode?: string;
   qty?: number | string;
+  uomId?: string;
+  satuan?: string;
 }
 
 interface ReleaseBody extends Record<string, unknown> {
@@ -90,6 +92,66 @@ async function loadRelease(
   ) as Promise<InventoryReleaseDoc | null>;
 }
 
+function canEditReleaseDoc(auth: AuthContext, doc: InventoryReleaseDoc): boolean {
+  if (doc.status !== 'REJECTED' && doc.status !== 'DRAFT') return false;
+  if (auth.isMaster || auth.role === 'ADMIN') return true;
+  return doc.createdBy?.userId === auth.userId;
+}
+
+async function buildReleaseLineItems(
+  db: Db,
+  scopeAuth: AuthContext,
+  tenantId: string,
+  lokasiKode: string,
+  items: ReleaseItemInput[],
+  uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>(),
+): Promise<{ lineItems: ReleaseLineItem[] } | { error: string; status?: number }> {
+  if (!items.length) return { error: 'Minimal 1 item', status: 400 };
+  const lineItems: ReleaseLineItem[] = [];
+  for (const it of items) {
+    const prod = await findMasterDoc(db, 'products', scopeAuth, { id: it.stokId });
+    if (!prod) return { error: `Produk tidak ditemukan: ${it.kode || it.stokId}`, status: 404 };
+    const prodRow = prod as {
+      id?: string;
+      kode?: string;
+      nama?: string;
+      satuan?: string;
+      hargaBeli?: number | string;
+      gudangKode?: string | null;
+    };
+    if (!prodRow.id) return { error: `Produk tidak ditemukan: ${it.kode || it.stokId}`, status: 404 };
+    const whErr = assertProductWarehouse(prodRow, lokasiKode);
+    if (whErr) return { error: whErr.error, status: 400 };
+    const resolved = await resolveLineQtyBase(db, tenantId, prodRow.id, {
+      qty: it.qty,
+      uomId: it.uomId,
+      satuan: it.satuan,
+    }, uomsCache);
+    if ('error' in resolved) return { error: resolved.error, status: 400 };
+    const qtyBase = resolved.qtyBase;
+    if (qtyBase <= 0) return { error: `Qty tidak valid: ${prodRow.nama}`, status: 400 };
+    const avail = parseFloat(String(await getQtyStokLokasi(db, tenantId, prodRow.id, lokasiKode))) || 0;
+    if (avail < qtyBase) {
+      return {
+        error: `Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`,
+        status: 400,
+      };
+    }
+    lineItems.push({
+      stokId: prodRow.id,
+      kode: String(prodRow.kode || ''),
+      nama: String(prodRow.nama || ''),
+      satuan: resolved.satuan || String(prodRow.satuan || ''),
+      qty: resolved.qty,
+      qtyBase,
+      qtyEntered: resolved.qty,
+      uomId: resolved.uomId,
+      hargaBeli: parseInt(String(prodRow.hargaBeli || 0), 10),
+    });
+  }
+  return { lineItems };
+}
+
 export async function handleInventoryReleases({
   db,
   route,
@@ -126,7 +188,7 @@ export async function handleInventoryReleases({
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
     if (denied) return denied;
-    if (!auth) return err('Unauthorized', 401);
+    if (!auth || !scopeAuth) return err('Unauthorized', 401);
     const items = releaseBody.items || [];
     if (!items.length) return err('Minimal 1 item');
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
@@ -134,46 +196,9 @@ export async function handleInventoryReleases({
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi);
     if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
 
-    const lineItems: ReleaseLineItem[] = [];
-    const uomsCacheCreate = new Map<string, import('@/lib/uom/types').ProductUom[]>();
-    for (const it of items) {
-      const prod = await findMasterDoc(db, 'products', scopeAuth, { id: it.stokId });
-      if (!prod) return err(`Produk tidak ditemukan: ${it.kode || it.stokId}`, 404);
-      const prodRow = prod as {
-        id?: string;
-        kode?: string;
-        nama?: string;
-        satuan?: string;
-        hargaBeli?: number | string;
-        gudangKode?: string | null;
-      };
-      if (!prodRow.id) return err(`Produk tidak ditemukan: ${it.kode || it.stokId}`, 404);
-      const whErr = assertProductWarehouse(prodRow, lokasiKode);
-      if (whErr) return err(whErr.error, 400);
-      const resolved = await resolveLineQtyBase(db, tenantId, prodRow.id, {
-        qty: it.qty,
-        uomId: (it as { uomId?: string }).uomId,
-        satuan: (it as { satuan?: string }).satuan,
-      }, uomsCacheCreate);
-      if ('error' in resolved) return err(resolved.error, 400);
-      const qtyBase = resolved.qtyBase;
-      if (qtyBase <= 0) return err(`Qty tidak valid: ${prodRow.nama}`, 400);
-      const avail = parseFloat(String(await getQtyStokLokasi(db, tenantId, prodRow.id, lokasiKode))) || 0;
-      if (avail < qtyBase) {
-        return err(`Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`, 400);
-      }
-      lineItems.push({
-        stokId: prodRow.id,
-        kode: String(prodRow.kode || ''),
-        nama: String(prodRow.nama || ''),
-        satuan: resolved.satuan || String(prodRow.satuan || ''),
-        qty: resolved.qty,
-        qtyBase,
-        qtyEntered: resolved.qty,
-        uomId: resolved.uomId,
-        hargaBeli: parseInt(String(prodRow.hargaBeli || 0), 10),
-      });
-    }
+    const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, items);
+    if ('error' in built) return err(built.error, built.status || 400);
+    const lineItems = built.lineItems;
 
     const now = new Date();
     const submitNow = releaseBody.submit === true;
@@ -209,6 +234,70 @@ export async function handleInventoryReleases({
     }
 
     return ok(clean(doc));
+  }
+
+  if (path[0] === 'inventory-releases' && path.length === 2 && method === 'PATCH') {
+    const deniedRole = requireRole(auth, RELEASE_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
+    if (denied) return denied;
+    if (!auth || !scopeAuth) return err('Unauthorized', 401);
+
+    const doc = await loadRelease(db, scopeAuth, path[1]);
+    if (!doc) return err('Tidak ditemukan', 404);
+    if (!canEditReleaseDoc(auth, doc)) {
+      return err('Release tidak bisa diedit pada status ini', 403);
+    }
+
+    const items = releaseBody.items || [];
+    if (!items.length) return err('Minimal 1 item');
+    if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
+
+    const tenantId = doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody);
+    const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi || doc.lokasiKode);
+    if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
+
+    const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, items);
+    if ('error' in built) return err(built.error, built.status || 400);
+
+    const submitNow = releaseBody.submit === true;
+    if (submitNow) {
+      const locked = await guardPosting(db, scopeAuth, releaseBody, String(doc.tanggal || doc.createdAt || ''));
+      if (locked) return locked;
+    }
+
+    const now = new Date();
+    const nextStatus = submitNow ? 'PENDING_APPROVAL' : 'DRAFT';
+    const wrId = String(releaseBody.maintenanceRequestId || '').trim() || doc.maintenanceRequestId || null;
+    const assetId = String(releaseBody.assetId || '').trim() || doc.assetId || null;
+    const patch: Record<string, unknown> = {
+      status: nextStatus,
+      lokasiKode,
+      lokasiNama: warehouseLabel(lokasiKode),
+      keperluan: String(releaseBody.keperluan).trim(),
+      keterangan: releaseBody.keterangan || '',
+      maintenanceRequestId: wrId,
+      assetId,
+      items: built.lineItems,
+      submittedAt: submitNow ? now : null,
+      updatedAt: now,
+    };
+
+    const unset: Record<string, string> = {};
+    if (doc.status === 'REJECTED') {
+      unset.rejectedBy = '';
+      unset.rejectedAt = '';
+      unset.rejectReason = '';
+    }
+
+    await db.collection('inventory_releases').updateOne(
+      { id: doc.id },
+      {
+        $set: patch,
+        ...(Object.keys(unset).length ? { $unset: unset } : {}),
+      },
+    );
+    return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
   if (path[0] === 'inventory-releases' && path[2] === 'submit' && method === 'POST') {

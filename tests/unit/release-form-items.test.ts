@@ -6,6 +6,8 @@ import {
   catalogFromSaldoRows,
   patchReleaseFormItemUom,
   qtyAtLokasi,
+  releaseDocToFormState,
+  canUserEditRejectedRelease,
   resolveReleaseItemDisplay,
   snapshotProductLabels,
   type ReleaseFormItem,
@@ -170,5 +172,55 @@ describe('qtyAtLokasi', () => {
   it('reads warehouse bucket', () => {
     expect(qtyAtLokasi(product, 'GKERING')).toBe(88);
     expect(qtyAtLokasi(product, 'GBASAH')).toBe(0);
+  });
+});
+
+describe('releaseDocToFormState', () => {
+  it('maps rejected release doc into editable form state', () => {
+    const form = releaseDocToFormState({
+      id: 'rel-1',
+      noRelease: 'RL2608000011',
+      status: 'REJECTED',
+      lokasiKode: 'GKERING',
+      keperluan: 'AYAM KREMES',
+      keterangan: 'catatan',
+      items: [{
+        stokId: 'prod-1',
+        kode: 'B335256-01',
+        nama: 'Bawang Merah Kupas',
+        uomId: 'u1',
+        satuan: 'KG',
+        qty: 2,
+        qtyEntered: 2,
+      }],
+    });
+    expect(form.lokasiKode).toBe('GKERING');
+    expect(form.keperluan).toBe('AYAM KREMES');
+    expect(form.items).toHaveLength(1);
+    expect(form.items[0].nama).toBe('Bawang Merah Kupas');
+    expect(form.items[0].qty).toBe(2);
+  });
+});
+
+describe('canUserEditRejectedRelease', () => {
+  const rejected = {
+    status: 'REJECTED',
+    createdBy: { userId: 'u-gudang', userName: 'Team Dapur' },
+  };
+
+  it('allows creator with GUDANG role', () => {
+    expect(canUserEditRejectedRelease(rejected, { id: 'u-gudang', role: 'GUDANG' })).toBe(true);
+  });
+
+  it('allows ADMIN regardless of creator', () => {
+    expect(canUserEditRejectedRelease(rejected, { id: 'other', role: 'ADMIN' })).toBe(true);
+  });
+
+  it('denies non-creator GUDANG', () => {
+    expect(canUserEditRejectedRelease(rejected, { id: 'other', role: 'GUDANG' })).toBe(false);
+  });
+
+  it('denies non-rejected status', () => {
+    expect(canUserEditRejectedRelease({ ...rejected, status: 'POSTED' }, { id: 'u-gudang', role: 'GUDANG' })).toBe(false);
   });
 });
