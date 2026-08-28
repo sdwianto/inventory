@@ -216,12 +216,17 @@ export async function handleProducts({
     const includeUom = url.searchParams.get('includeUom') === '1';
     const enrichUom = url.searchParams.get('enrichUom') === '1';
     const withUom = await enrichProductList(db, tid, enriched, includeUom, enrichUom);
-    const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1';
-    if (withWarehouseStock && enriched.length > 0) {
+    const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1' || !!q;
+    if (withWarehouseStock && withUom.length > 0) {
       const stokMap = await getStokByWarehouseBatch(db, tid, withUom.map((p) => p.id));
       for (const p of withUom) {
         const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
-        (p as ProductDoc & { stokByWarehouse?: Record<string, number> }).stokByWarehouse = byWh;
+        const whDoc = p as ProductDoc & { stokByWarehouse?: Record<string, number>; gudangKode?: string };
+        whDoc.stokByWarehouse = byWh;
+        // Tampilan picker: qty gudang home (stok_lokasi), bukan master.stok yang bisa stale.
+        const home = resolveProductGudangKode(p as Record<string, unknown>);
+        const whQty = Number(byWh[home]) || 0;
+        whDoc.stokGudangQty = whQty;
       }
     }
     const cleaned = withUom.map(clean);

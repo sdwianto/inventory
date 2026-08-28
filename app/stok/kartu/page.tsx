@@ -275,7 +275,7 @@ export default function KartuStokPage() {
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader><DialogTitle>Pilih Produk</DialogTitle></DialogHeader>
-          <ProductPickerSearch open={showPicker} onSelect={pick} />
+          <ProductPickerSearch open={showPicker} withWarehouseStock onSelect={pick} />
         </DialogContent>
       </Dialog>
     </>
