@@ -58,6 +58,7 @@ export type AuditAction =
   | 'ISSUE_STATUS'
   | 'ISSUE_COMPLETE'
   | 'ISSUE_CANCEL'
+  | 'ISSUE_RECONCILE'
   | 'RESULT_CREATE'
   | 'RESULT_STATUS'
   | 'RESULT_COMPLETE'

@@ -60,6 +60,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'procurement_expenses', index: { tenantId: 1, tanggal: -1 }, name: 'idx_proc_exp_tenant_tanggal' },
   { collection: 'inventory_releases', index: { tenantId: 1, tanggal: -1 }, name: 'idx_inv_release_tenant_tanggal' },
   { collection: 'inventory_releases', index: { tenantId: 1, noRelease: 1 }, name: 'uniq_inv_release_tenant_no', unique: true },
+  { collection: 'inventory_releases', index: { tenantId: 1, productionPlanId: 1, status: 1 }, name: 'idx_inv_release_tenant_plan_status' },
   { collection: 'api_keys', index: { keyHash: 1 }, name: 'uniq_api_key_hash', unique: true },
   { collection: 'webhook_subscriptions', index: { tenantId: 1, event: 1 }, name: 'idx_webhook_tenant_event' },
   { collection: 'document_sequences', index: { tenantId: 1, docType: 1 }, name: 'uniq_doc_sequence', unique: true },

@@ -18,6 +18,10 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import {
+  loadOperationalReleaseLinesForPlan,
+  mergeConsumptionLinesForCost,
+} from '@/lib/food-production/material-issue-reconcile';
+import {
   MATERIAL_ISSUES_COLLECTION,
   type MaterialIssueDoc,
 } from '@/lib/food-production/material-issue';
@@ -129,11 +133,15 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         { sort: { createdAt: -1 } },
       ) as ProductionResultDoc | null;
       const issueProductIds = (issue?.lines || []).map((l) => l.productId);
-      const productsById = await loadProducts(db, scopeAuth, [...new Set([...productIds, ...issueProductIds])]);
+      const rlLines = await loadOperationalReleaseLinesForPlan(db, scopeAuth, plan.id);
+      const mergedLines = mergeConsumptionLinesForCost(issue?.lines || [], rlLines);
+      const productsById = await loadProducts(db, scopeAuth, [
+        ...new Set([...productIds, ...issueProductIds, ...rlLines.map((l) => l.productId)]),
+      ]);
       return ok(analyzeActualCost({
         planId: plan.id,
         planNo: plan.noDokumen,
-        issueLines: issue?.lines || [],
+        issueLines: mergedLines,
         resultLines: result?.lines || [],
         productsById,
         standard: standard.standard,

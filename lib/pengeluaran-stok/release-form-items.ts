@@ -187,6 +187,7 @@ export type ReleaseFormState = {
   keterangan: string;
   maintenanceRequestId: string;
   assetId: string;
+  productionPlanId: string;
   items: ReleaseFormItem[];
 };
 
@@ -196,6 +197,7 @@ export const EMPTY_RELEASE_FORM: ReleaseFormState = {
   keterangan: '',
   maintenanceRequestId: '',
   assetId: '',
+  productionPlanId: '',
   items: [],
 };
 
@@ -208,6 +210,7 @@ export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
     keterangan: str(release.keterangan),
     maintenanceRequestId: str(release.maintenanceRequestId),
     assetId: str(release.assetId),
+    productionPlanId: str(release.productionPlanId),
     items: asArray(release.items).map((raw) => {
       const line = asObject(raw);
       return {

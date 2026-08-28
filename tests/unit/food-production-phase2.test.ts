@@ -72,8 +72,13 @@ describe('food-production phase 2 — Issue + Result', () => {
       { productId: 'a', qtyPlanned: 1, qtyIssued: 2, productNama: 'A' },
     ]);
     expect(Array.isArray(ok)).toBe(true);
+    const zeroOk = normalizeIssueLines([
+      { productId: 'a', qtyPlanned: 5, qtyIssued: 0, productNama: 'A' },
+    ]);
+    expect(Array.isArray(zeroOk)).toBe(true);
+    if (Array.isArray(zeroOk)) expect(zeroOk[0].qtyIssued).toBe(0);
     const bad = normalizeIssueLines([
-      { productId: 'a', qtyPlanned: 1, qtyIssued: 0 },
+      { productId: 'a', qtyPlanned: 1, qtyIssued: -1 },
     ]);
     expect('error' in (bad as object)).toBe(true);
   });

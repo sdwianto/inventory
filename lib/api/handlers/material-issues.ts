@@ -19,6 +19,7 @@ import {
   ISSUE_OPEN_STATUSES,
   ISSUE_STATUS_TRANSITIONS,
   isIssueEditable,
+  isIssueReconcilable,
   buildIssueLinesFromMrp,
   summarizeIssueLines,
   normalizeIssueLines,
@@ -35,6 +36,10 @@ import {
   cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
+import {
+  aggregatePlanMaterialConsumption,
+  applyConsumptionToRequirementLines,
+} from '@/lib/food-production/material-issue-reconcile';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
@@ -48,6 +53,11 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import {
+  buildIssueReconciliation,
+  applyReconciliationToLines,
+  seedNetIssueLines,
+} from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
@@ -62,6 +72,9 @@ interface IssueBody extends Record<string, unknown> {
   note?: string;
   overrideShortage?: boolean;
   overrideShortageNote?: string;
+  reason?: string;
+  closureOnly?: boolean;
+  closureReason?: string;
 }
 
 function actorFields(auth: HandlerContext['auth']) {
@@ -347,7 +360,9 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     // lanjut kalau admin sadar memilih override + isi alasan (tercatat di riwayat & audit).
     const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in readiness && readiness.error) return err(readiness.error, 400);
-    const shortageCount = Number(readiness.summary?.shortageCount || 0);
+    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, plan.id);
+    const netReadiness = applyConsumptionToRequirementLines(readiness.lines || [], consumption);
+    const shortageCount = netReadiness.summary.shortageCount;
     const overrideShortage = issueBody.overrideShortage === true;
     const overrideShortageNote = String(issueBody.overrideShortageNote || '').trim();
     if (shortageCount > 0 && (!overrideShortage || !overrideShortageNote)) {
@@ -377,14 +392,15 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     );
     if ('error' in seeded) return err(seeded.error, 400);
 
+    const tenantId = tenantIdForWrite(scopeAuth, issueBody);
     let lines = seeded.lines;
+    lines = await seedNetIssueLines(db, scopeAuth, plan.id, tenantId, lines);
     if (issueBody.lines != null) {
       const normalized = normalizeIssueLines(issueBody.lines);
       if ('error' in normalized) return err(normalized.error, 400);
       lines = normalized;
     }
 
-    const tenantId = tenantIdForWrite(scopeAuth, issueBody);
     const productErr = await assertIssueProductsActive(db, tenantId, lines);
     if (productErr) return err(productErr, 400);
     const now = new Date();
@@ -394,7 +410,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       at: now,
       reason: overrideShortageNote,
       shortageCount,
-      shortageLines: (readiness.lines || []).filter((l) => l.shortage).slice(0, 20).map((l) => ({
+      shortageLines: netReadiness.lines.filter((l) => l.shortage).slice(0, 20).map((l) => ({
         productId: l.productId,
         productKode: l.productKode,
         productNama: l.productNama,
@@ -520,6 +536,108 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     return ok(project(saved as Record<string, unknown>));
   }
 
+  if (path[0] === 'material-issues' && path[1] && path[2] === 'reconciliation' && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const existing = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as MaterialIssueDoc | null;
+    if (!existing) return err('Pengambilan bahan tidak ditemukan', 404);
+    const lines = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      existing.lines || [],
+      existing.warehouseKode,
+    );
+    const reconciliation = await buildIssueReconciliation(db, scopeAuth, {
+      ...existing,
+      lines,
+    });
+    return ok(reconciliation);
+  }
+
+  if (path[0] === 'material-issues' && path[1] && path[2] === 'reconcile' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: issueBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const existing = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as MaterialIssueDoc | null;
+    if (!existing) return err('Pengambilan bahan tidak ditemukan', 404);
+    if (!isIssueReconcilable(existing.status)) {
+      return err(`Status ${existing.status} tidak dapat disinkronkan`, 400);
+    }
+
+    const needsReason = existing.status === 'APPROVED' || existing.status === 'PROCESSING';
+    const reason = String(issueBody.reason || issueBody.note || '').trim();
+    if (needsReason && !reason) {
+      return err('Alasan wajib untuk menyesuaikan PBL yang sudah disetujui', 400);
+    }
+
+    const enriched = await enrichIssueLineWarehouses(
+      db,
+      scopeAuth,
+      existing.lines || [],
+      existing.warehouseKode,
+    );
+    const reconciliation = await buildIssueReconciliation(db, scopeAuth, {
+      ...existing,
+      lines: enriched,
+    });
+    const lines = applyReconciliationToLines(enriched, reconciliation);
+    const productErr = await assertIssueProductsActive(db, existing.tenantId, lines);
+    if (productErr) return err(productErr, 400);
+
+    const actor = actorFields(auth);
+    const now = new Date();
+    const history = appendDocHistory(existing.history, {
+      at: now,
+      fromStatus: existing.status,
+      toStatus: existing.status,
+      userId: actor.userId,
+      userName: actor.userName,
+      note: reason
+        ? `Sinkron stok & release operasional: ${reason}`
+        : `Sinkron stok & release operasional (${reconciliation.summary.suggestedQtyIssuedTotal} qty keluar)`,
+    });
+
+    await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id }),
+      {
+        $set: {
+          lines,
+          summary: summarizeIssueLines(lines),
+          history,
+          updatedAt: now,
+        },
+      },
+    );
+
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'ISSUE_RECONCILE',
+      entityType: 'material_issue',
+      entityId: id,
+      summary: `Issue ${existing.noDokumen} disinkronkan — ${reconciliation.summary.suggestedQtyIssuedTotal} qty keluar`,
+      metadata: {
+        mismatchCount: reconciliation.summary.mismatchCount,
+        suggestedQtyIssuedTotal: reconciliation.summary.suggestedQtyIssuedTotal,
+        reason: reason || undefined,
+      },
+      ...auditActor(auth),
+    });
+
+    const saved = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
+    return ok(project(saved as Record<string, unknown>));
+  }
+
   if (path[0] === 'material-issues' && path[1] && path[2] === 'status' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
     if (deniedRole) return deniedRole;
@@ -548,6 +666,38 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       if (existing.stockPostedAt) return err('Stok sudah diposting', 400);
       const productErr = await assertIssueProductsActive(db, existing.tenantId, existing.lines);
       if (productErr) return err(productErr, 400);
+
+      const enrichedForGate = await enrichIssueLineWarehouses(
+        db,
+        scopeAuth,
+        existing.lines || [],
+        existing.warehouseKode,
+      );
+      const summaryPre = summarizeIssueLines(enrichedForGate);
+      const closureReason = String(
+        issueBody.closureReason || issueBody.note || '',
+      ).trim();
+      const isClosureOnly = summaryPre.qtyIssuedTotal === 0;
+      if (isClosureOnly) {
+        if (issueBody.closureOnly !== true || !closureReason) {
+          return err(
+            'Penutupan administratif (semua qty keluar = 0) wajib closureOnly + alasan — bahan sudah keluar via RL',
+            400,
+          );
+        }
+      } else {
+        const reconciliation = await buildIssueReconciliation(db, scopeAuth, {
+          ...existing,
+          lines: enrichedForGate,
+        });
+        if (reconciliation.summary.mismatchCount > 0) {
+          return err(
+            `${reconciliation.summary.mismatchCount} baris tidak sesuai stok/sisa — sinkron dari release operasional dulu`,
+            400,
+          );
+        }
+      }
+
       const locked = await guardPosting(
         db,
         scopeAuth,
@@ -587,7 +737,9 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             toStatus: 'COMPLETED',
             userId: actor.userId,
             userName: actor.userName,
-            note: String(issueBody.note || '').trim() || 'Stok keluar diposting · FEFO lots',
+            note: isClosureOnly
+              ? `Penutupan administratif — ${closureReason}`
+              : (String(issueBody.note || '').trim() || 'Stok keluar diposting · FEFO lots'),
           });
           await txDb.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
             withTenantFilter(scopeAuth, { id }),
@@ -598,6 +750,13 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
                 stockPostedAt: now,
                 fefoConsume: posted.fefoConsume,
                 updatedAt: now,
+                ...(isClosureOnly ? {
+                  closureOnly: {
+                    by: { userId: actor.userId, userName: actor.userName },
+                    at: now,
+                    reason: closureReason,
+                  },
+                } : {}),
               },
             },
             txOpts(session),

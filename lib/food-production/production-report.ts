@@ -40,6 +40,13 @@ export interface ProductionReportInput {
   hasOpenIssue: boolean;
   hasCompletedResult: boolean;
   hasOpenResult: boolean;
+  consumption?: {
+    qtyFromRl: number;
+    qtyFromPbl: number;
+    qtyTotal: number;
+    rlCount: number;
+    pblCompletedCount: number;
+  } | null;
 }
 
 export interface ProductionReport {
@@ -66,6 +73,13 @@ export interface ProductionReport {
     qtyIssuedTotal: number;
     yieldPct: number | null;
   };
+  consumption: {
+    qtyFromRl: number;
+    qtyFromPbl: number;
+    qtyTotal: number;
+    rlCount: number;
+    pblCompletedCount: number;
+  } | null;
 }
 
 export function cookingPhaseOf(input: {
@@ -142,5 +156,6 @@ export function buildProductionReport(input: ProductionReportInput): ProductionR
       qtyIssuedTotal,
       yieldPct,
     },
+    consumption: input.consumption ?? null,
   };
 }

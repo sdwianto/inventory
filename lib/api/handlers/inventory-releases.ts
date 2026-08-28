@@ -30,6 +30,9 @@ import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
+import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
+import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
+import { looksLikeProductionKeperluan } from '@/lib/food-production/material-issue-reconcile';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -50,6 +53,7 @@ interface ReleaseBody extends Record<string, unknown> {
   reason?: string;
   maintenanceRequestId?: string;
   assetId?: string;
+  productionPlanId?: string;
 }
 
 interface ReleaseLineItem {
@@ -80,6 +84,8 @@ interface InventoryReleaseDoc extends Record<string, unknown> {
   keperluan?: string;
   items?: ReleaseLineItem[];
   createdBy?: ReleaseUserRef;
+  productionPlanId?: string;
+  productionPlanNo?: string;
 }
 
 async function loadRelease(
@@ -152,6 +158,27 @@ async function buildReleaseLineItems(
   return { lineItems };
 }
 
+async function resolveProductionPlanLink(
+  db: Db,
+  scopeAuth: AuthContext,
+  productionPlanId?: string,
+): Promise<{ productionPlanId?: string; productionPlanNo?: string } | { error: string }> {
+  const planId = String(productionPlanId || '').trim();
+  if (!planId) return {};
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { id: planId }),
+    { projection: { id: 1, noDokumen: 1, status: 1 } },
+  ) as { id?: string; noDokumen?: string; status?: string } | null;
+  if (!plan) return { error: 'Rencana produksi tidak ditemukan' };
+  if (!ISSUE_ELIGIBLE_PLAN_STATUSES.has(String(plan.status || ''))) {
+    return { error: `Rencana ${plan.noDokumen || planId} belum siap (wajib Disetujui/Diproses)` };
+  }
+  return {
+    productionPlanId: String(plan.id),
+    productionPlanNo: String(plan.noDokumen || ''),
+  };
+}
+
 export async function handleInventoryReleases({
   db,
   route,
@@ -192,6 +219,14 @@ export async function handleInventoryReleases({
     const items = releaseBody.items || [];
     if (!items.length) return err('Minimal 1 item');
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
+    const keperluan = String(releaseBody.keperluan).trim();
+    const planIdRaw = String(releaseBody.productionPlanId || '').trim();
+    if (looksLikeProductionKeperluan(keperluan) && !planIdRaw) {
+      return err(
+        'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL)',
+        400,
+      );
+    }
     const tenantId = tenantIdForWrite(scopeAuth, releaseBody);
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi);
     if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
@@ -199,6 +234,9 @@ export async function handleInventoryReleases({
     const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, items);
     if ('error' in built) return err(built.error, built.status || 400);
     const lineItems = built.lineItems;
+
+    const planLink = await resolveProductionPlanLink(db, scopeAuth, releaseBody.productionPlanId);
+    if ('error' in planLink) return err(planLink.error, 400);
 
     const now = new Date();
     const submitNow = releaseBody.submit === true;
@@ -214,6 +252,10 @@ export async function handleInventoryReleases({
       keterangan: releaseBody.keterangan || '',
       maintenanceRequestId: releaseBody.maintenanceRequestId || null,
       assetId: releaseBody.assetId || null,
+      ...(planLink.productionPlanId ? {
+        productionPlanId: planLink.productionPlanId,
+        productionPlanNo: planLink.productionPlanNo,
+      } : {}),
       items: lineItems,
       createdBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
       submittedAt: submitNow ? now : null,
@@ -252,6 +294,16 @@ export async function handleInventoryReleases({
     const items = releaseBody.items || [];
     if (!items.length) return err('Minimal 1 item');
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
+    const keperluan = String(releaseBody.keperluan).trim();
+    const planIdRaw = releaseBody.productionPlanId !== undefined
+      ? String(releaseBody.productionPlanId || '').trim()
+      : String(doc.productionPlanId || '').trim();
+    if (looksLikeProductionKeperluan(keperluan) && !planIdRaw) {
+      return err(
+        'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL)',
+        400,
+      );
+    }
 
     const tenantId = doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody);
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi || doc.lokasiKode);
@@ -259,6 +311,11 @@ export async function handleInventoryReleases({
 
     const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, items);
     if ('error' in built) return err(built.error, built.status || 400);
+
+    const planLink = releaseBody.productionPlanId !== undefined
+      ? await resolveProductionPlanLink(db, scopeAuth, releaseBody.productionPlanId)
+      : {};
+    if ('error' in planLink) return err(planLink.error, 400);
 
     const submitNow = releaseBody.submit === true;
     if (submitNow) {
@@ -282,6 +339,16 @@ export async function handleInventoryReleases({
       submittedAt: submitNow ? now : null,
       updatedAt: now,
     };
+
+    if (releaseBody.productionPlanId !== undefined) {
+      if (planLink.productionPlanId) {
+        patch.productionPlanId = planLink.productionPlanId;
+        patch.productionPlanNo = planLink.productionPlanNo;
+      } else {
+        patch.productionPlanId = null;
+        patch.productionPlanNo = null;
+      }
+    }
 
     const unset: Record<string, string> = {};
     if (doc.status === 'REJECTED') {

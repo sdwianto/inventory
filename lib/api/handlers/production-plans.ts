@@ -61,6 +61,11 @@ import {
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
+import {
+  aggregatePlanMaterialConsumption,
+  applyConsumptionToRequirementLines,
+  loadPlanConsumptionSummary,
+} from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
@@ -912,7 +917,9 @@ export async function handleProductionPlans({
     const built = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in built && built.error) return err(built.error, 400);
 
-    const shortageCount = Number(built.summary?.shortageCount || 0);
+    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, id);
+    const netLines = applyConsumptionToRequirementLines(built.lines || [], consumption);
+    const shortageCount = netLines.summary.shortageCount;
     const stockReady = shortageCount === 0;
     // After stock is issued, on-hand drops — still treat as ready once PBL COMPLETED.
     const [linkedPo, completedIssue, openIssue, completedResult, openResult] = await Promise.all([
@@ -950,7 +957,7 @@ export async function handleProductionPlans({
     const issueCompleted = Boolean(completedIssue);
     const materialsReady = stockReady || issueCompleted;
     const resultCompleted = Boolean(completedResult);
-    const shortageLines = (built.lines || [])
+    const shortageLines = netLines.lines
       .filter((l) => l.shortage)
       .slice(0, 20)
       .map((l) => ({
@@ -967,6 +974,8 @@ export async function handleProductionPlans({
         poQtyReceived: l.poQtyReceived,
       }));
 
+    const consumptionSummary = await loadPlanConsumptionSummary(db, scopeAuth, id);
+
     return ok({
       productionPlanId: id,
       productionPlanNo: plan.noDokumen,
@@ -975,6 +984,7 @@ export async function handleProductionPlans({
       lineCount: Number(built.summary?.lineCount || 0),
       warehouseKode: built.warehouseKode,
       shortageLines: issueCompleted ? [] : shortageLines,
+      consumption: consumptionSummary,
       issueCompleted,
       completedIssueNo: completedIssue ? String(completedIssue.noDokumen || '') : null,
       resultCompleted,

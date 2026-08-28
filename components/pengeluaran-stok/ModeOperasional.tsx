@@ -39,7 +39,9 @@ import {
   releaseDocToFormState,
   resolveReleaseItemDisplay,
   type ReleaseFormItem,
+  type ReleaseFormState,
 } from '@/lib/pengeluaran-stok/release-form-items';
+import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 
 const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 
@@ -69,14 +71,7 @@ export function ModeOperasional() {
   const [editingReleaseId, setEditingReleaseId] = useState<string | null>(null);
   const [editingNoRelease, setEditingNoRelease] = useState('');
   const [editingRejectReason, setEditingRejectReason] = useState('');
-  const [form, setForm] = useState<{
-    lokasiKode: string;
-    keperluan: string;
-    keterangan: string;
-    maintenanceRequestId: string;
-    assetId: string;
-    items: ReleaseFormItem[];
-  }>(EMPTY_RELEASE_FORM);
+  const [form, setForm] = useState<ReleaseFormState>(EMPTY_RELEASE_FORM);
   const searchParams = useSearchParams();
   const wrPrefillDone = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -105,6 +100,23 @@ export function ModeOperasional() {
     queryKeys.inventoryReleases.list,
     '/api/inventory-releases',
   );
+
+  const { data: productionPlansData = [] } = useApiQuery<JsonObject[]>(
+    ['food-production', 'production-plans', 'release-link'],
+    '/api/production-plans',
+    { enabled: showForm },
+  );
+
+  const productionPlans = useMemo(
+    () => (Array.isArray(productionPlansData) ? productionPlansData : [])
+      .filter((p) => ISSUE_ELIGIBLE_PLAN_STATUSES.has(str(p.status))),
+    [productionPlansData],
+  );
+
+  const looksLikeProductionKeperluan = useMemo(() => {
+    const k = form.keperluan.trim().toLowerCase();
+    return /produksi|masak|menu|dapur|porsi|bahan/.test(k);
+  }, [form.keperluan]);
 
   const { data: saldoData } = useApiQuery<JsonObject>(
     queryKeys.stokSaldo.list,
@@ -584,13 +596,37 @@ export function ModeOperasional() {
                 </Select>
               </div>
               <div>
-                <Label>Keperluan operasional *</Label>
-                <Input
-                  value={form.keperluan}
-                  onChange={(e) => setForm((prev) => ({ ...prev, keperluan: e.target.value }))}
-                  placeholder="Contoh: Masak menu harian tanggal ..."
-                />
+                <Label>Rencana produksi (opsional)</Label>
+                <select
+                  className="w-full h-10 border rounded-md px-2 text-sm bg-white"
+                  value={form.productionPlanId}
+                  onChange={(e) => setForm((prev) => ({ ...prev, productionPlanId: e.target.value }))}
+                >
+                  <option value="">— Tidak terkait rencana —</option>
+                  {productionPlans.map((p) => (
+                    <option key={str(p.id)} value={str(p.id)}>
+                      {str(p.noDokumen)} · {str(p.tanggal)} · {str(p.kitchenNama) || 'Dapur'}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Wajib jika bahan untuk produksi — agar PBL bisa sinkron otomatis.
+                </p>
               </div>
+            </div>
+            {looksLikeProductionKeperluan && !form.productionPlanId && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Keperluan terlihat untuk produksi — pertimbangkan pilih Rencana Produksi
+                atau gunakan Mode Produksi (PBL) sebagai jalur resmi.
+              </div>
+            )}
+            <div>
+              <Label>Keperluan operasional *</Label>
+              <Input
+                value={form.keperluan}
+                onChange={(e) => setForm((prev) => ({ ...prev, keperluan: e.target.value }))}
+                placeholder="Contoh: Maintenance AC, sampel QC, dll."
+              />
             </div>
             <div>
               <Label>Catatan</Label>
@@ -724,6 +760,12 @@ export function ModeOperasional() {
                 <div>Tanggal: <span className="text-slate-900">{formatDateTime(str(detail.tanggal))}</span></div>
                 <div>Gudang: <span className="text-slate-900">{str(detail.lokasiNama) || str(detail.lokasiKode)}</span></div>
                 <div className="col-span-2">Keperluan: <span className="text-slate-900">{str(detail.keperluan)}</span></div>
+                {str(detail.productionPlanNo) && (
+                  <div className="col-span-2">
+                    Rencana produksi:{' '}
+                    <span className="font-mono text-slate-900">{str(detail.productionPlanNo)}</span>
+                  </div>
+                )}
                 {!!str(detail.keterangan) && (
                   <div className="col-span-2">Catatan: <span className="text-slate-900">{str(detail.keterangan)}</span></div>
                 )}

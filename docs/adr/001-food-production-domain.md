@@ -380,6 +380,15 @@ Phase 2 kitchen loop tertutup. Phase 3 Management & Intelligence (Sprint 8–12 
 - COMPLETE re-check produk aktif + gate Issue **di dalam** transaksi (TOCTOU).
 - Cooking = fold ke plan PROCESSING; Report = agregat read-only (bukan dokumen mutasi).
 
+**Consumption paths & reconciliation (PBL vs RL):**
+
+- **PBL** (`material_issues`, `FP_ISSUE`) = jalur resmi pengambilan bahan produksi per rencana.
+- **RL** (`inventory_releases`, `RELEASE`) = jalur operasional umum; boleh link `productionPlanId` untuk bahan produksi urgent.
+- Reconcile: `GET/POST /material-issues/:id/reconciliation|reconcile` — kurangi `qtyIssued` dari RL+PBL selesai + stok gudang; post skip qty 0.
+- Material-readiness & create PBL: `qtyNet` memperhitungkan konsumsi plan yang sudah terjadi.
+- Actual cost: PBL completed + RL linked (`mergeConsumptionLinesForCost`).
+- Migrasi historis: `scripts/migrate-rl-production-plan-link.ts --pbl PBLxxxx [--dry-run]`.
+
 ### Sprint 8–12 / Phase 3 deliverables (code)
 
 | Area | Path |

@@ -26,6 +26,7 @@ import {
   ISSUE_UI_STATUS_NEXT,
   ISSUE_UI_STATUS_NEXT_LABEL,
   isIssueEditable,
+  isIssueReconcilable,
   type MaterialIssueStatus,
 } from '@/lib/food-production/material-issue';
 import {
@@ -53,6 +54,23 @@ interface PlanOpt {
   tanggal: string;
   kitchenNama?: string;
   status: string;
+}
+
+interface ReconcileLineView {
+  productId: string;
+  qtyPlanned: number;
+  qtyAlreadyIssuedOperational: number;
+  qtyAlreadyIssuedPbl: number;
+  qtyAlreadyIssued: number;
+  qtyRemaining: number;
+  qtyOnHand: number;
+  suggestedQtyIssued: number;
+  mismatch: boolean;
+}
+
+interface IssueReconciliation {
+  lines: ReconcileLineView[];
+  summary: { mismatchCount: number; suggestedQtyIssuedTotal: number };
 }
 
 interface IssueLine {
@@ -119,6 +137,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
   const [filterStatus, setFilterStatus] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRow, setHistoryRow] = useState<IssueRow | null>(null);
+  const [reconciliation, setReconciliation] = useState<IssueReconciliation | null>(null);
+  const [reconcileLoading, setReconcileLoading] = useState(false);
+  const [adjustReason, setAdjustReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -197,6 +218,25 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     return () => { cancelled = true; };
   }, [planId]);
 
+  async function loadReconciliation(issueId: string) {
+    setReconcileLoading(true);
+    try {
+      const res = await fetch(`/api/material-issues/${issueId}/reconciliation`, {
+        headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setReconciliation(null);
+        return;
+      }
+      setReconciliation(data as IssueReconciliation);
+    } catch {
+      setReconciliation(null);
+    } finally {
+      setReconcileLoading(false);
+    }
+  }
+
   async function openDetail(row: IssueRow) {
     const res = await fetch(`/api/material-issues/${row.id}`, { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } });
     const data = await res.json();
@@ -207,6 +247,47 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     }
     setDetail(data as IssueRow);
     setEditLines(Array.isArray(data.lines) ? data.lines : []);
+    void loadReconciliation(row.id);
+  }
+
+  async function syncFromOperational(reason?: string) {
+    if (!detail) return;
+    const needsReason = detail.status === 'APPROVED' || detail.status === 'PROCESSING';
+    if (needsReason && !reason?.trim()) {
+      toast.error('Isi alasan penyesuaian dulu');
+      return;
+    }
+    setSaving(true);
+    try {
+      const url = `/api/material-issues/${detail.id}/reconcile`;
+      const body = JSON.stringify({ reason: reason?.trim() || undefined });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...actingTenantHeaders(),
+          ...actingKitchenHeaders(),
+          ...mutationIdempotencyHeaders(url, 'POST', body),
+        },
+        body,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal sinkron');
+      toast.success('Qty disinkronkan dari stok & release operasional');
+      setDetail(data as IssueRow);
+      setEditLines(Array.isArray(data.lines) ? data.lines : []);
+      setAdjustReason('');
+      await loadReconciliation(detail.id);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal sinkron');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function reconcileForProduct(productId: string): ReconcileLineView | undefined {
+    return reconciliation?.lines.find((l) => l.productId === productId);
   }
 
   async function createIssue() {
@@ -284,9 +365,13 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     }
   }
 
-  async function postStatus(rowId: string, status: MaterialIssueStatus) {
+  async function postStatus(
+    rowId: string,
+    status: MaterialIssueStatus,
+    extra: Record<string, unknown> = {},
+  ) {
     const url = `/api/material-issues/${rowId}/status`;
-    const body = JSON.stringify({ status });
+    const body = JSON.stringify({ status, ...extra });
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -304,6 +389,55 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
 
   /** Setujui / Keluarkan Stok: dialog konfirmasi → post stok → toast → Rencana Produksi. */
   async function approveAndReleaseStock(row: IssueRow) {
+    const lines = detail?.id === row.id ? editLines : (row.lines || []);
+    const qtyTotal = lines.reduce((s, l) => s + (Number(l.qtyIssued) || 0), 0);
+    const isClosure = qtyTotal === 0;
+
+    if (!isClosure && reconciliation && reconciliation.summary.mismatchCount > 0) {
+      toast.error('Sinkron dari stok & release operasional dulu — ada baris tidak sesuai');
+      return;
+    }
+
+    if (isClosure) {
+      const reason = adjustReason.trim()
+        || window.prompt(
+          'Penutupan administratif — bahan sudah keluar via RL. Alasan (wajib):',
+        )?.trim();
+      if (!reason) {
+        toast.error('Alasan penutupan administratif wajib diisi');
+        return;
+      }
+      const okConfirm = await confirm({
+        title: 'Tutup PBL administratif?',
+        description: `${row.noDokumen} — semua qty keluar = 0. Tidak ada stok yang diposting ulang.`,
+        confirmText: 'Tutup PBL',
+      });
+      if (!okConfirm) return;
+
+      setSaving(true);
+      try {
+        let current = row;
+        if (current.status === 'DRAFT') current = await postStatus(current.id, 'SUBMITTED');
+        if (current.status === 'SUBMITTED') current = await postStatus(current.id, 'APPROVED');
+        if (current.status === 'APPROVED' || current.status === 'PROCESSING') {
+          current = await postStatus(current.id, 'COMPLETED', {
+            closureOnly: true,
+            closureReason: reason,
+          });
+        }
+        toast.success('PBL ditutup (penutupan administratif)');
+        setDetail(null);
+        await load();
+        router.push('/food-production/plan');
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Gagal menutup PBL');
+        await load();
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     const okConfirm = await confirm({
       title: 'Keluarkan Stok?',
       description: `${row.noDokumen} akan mengurangi stok gudang produk sesuai baris item. Tidak bisa dibatalkan.`,
@@ -596,8 +730,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <Dialog open={!!detail} onOpenChange={(o) => { if (!o) { setDetail(null); setReconciliation(null); } }}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {detail?.noDokumen} — {detail ? ISSUE_STATUS_LABELS[detail.status] : ''}
@@ -613,6 +747,15 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                 {detail.materialRequirementNo ? ` · MRP ${detail.materialRequirementNo}` : ''}
                 {' · '}{detail.tanggal} · {detail.kitchenNama}
               </div>
+              {reconcileLoading && (
+                <p className="text-xs text-muted-foreground">Memuat data stok & release operasional…</p>
+              )}
+              {reconciliation && reconciliation.summary.mismatchCount > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+                  {reconciliation.summary.mismatchCount} baris tidak sesuai stok/sisa —
+                  gunakan Sinkron sebelum keluarkan stok.
+                </div>
+              )}
               <div className="rounded-md border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/40">
@@ -620,13 +763,19 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                       <th className="text-left p-2">Produk</th>
                       <th className="text-left p-2">Gudang</th>
                       <th className="text-right p-2">Rencana</th>
+                      <th className="text-right p-2">Sudah keluar</th>
+                      <th className="text-right p-2">Sisa</th>
+                      <th className="text-right p-2">Stok</th>
                       <th className="text-right p-2">Keluar</th>
                       <th className="text-left p-2">Satuan</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(isIssueEditable(detail.status) ? editLines : detail.lines || []).map((l, idx) => (
-                      <tr key={l.productId} className="border-t">
+                    {(isIssueEditable(detail.status) ? editLines : detail.lines || []).map((l, idx) => {
+                      const rec = reconcileForProduct(l.productId);
+                      const rowClass = rec?.mismatch ? 'bg-amber-50/60' : '';
+                      return (
+                      <tr key={l.productId} className={`border-t ${rowClass}`}>
                         <td className="p-2">
                           <div>{l.productNama || l.productKode}</div>
                           <div className="text-[11px] font-mono text-muted-foreground">{l.productKode}</div>
@@ -640,6 +789,17 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                           ) : '—'}
                         </td>
                         <td className="p-2 text-right">{l.qtyPlanned}</td>
+                        <td className="p-2 text-right text-muted-foreground">
+                          {rec?.qtyAlreadyIssued ?? '—'}
+                          {rec && (rec.qtyAlreadyIssuedOperational > 0 || rec.qtyAlreadyIssuedPbl > 0) && (
+                            <div className="text-[10px] text-muted-foreground">
+                              RL {rec.qtyAlreadyIssuedOperational}
+                              {rec.qtyAlreadyIssuedPbl > 0 ? ` · PBL ${rec.qtyAlreadyIssuedPbl}` : ''}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-2 text-right">{rec?.qtyRemaining ?? '—'}</td>
+                        <td className="p-2 text-right">{rec?.qtyOnHand ?? '—'}</td>
                         <td className="p-2 text-right">
                           {isIssueEditable(detail.status) && canManage ? (
                             <Input
@@ -686,11 +846,32 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                         </td>
                         <td className="p-2">{l.satuan || '—'}</td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                 </table>
               </div>
               <div className="flex flex-wrap items-center gap-2 pt-1">
+                {canManage && isIssueReconcilable(detail.status) && (
+                  <>
+                    {(detail.status === 'APPROVED' || detail.status === 'PROCESSING') && (
+                      <Input
+                        className="h-8 max-w-xs text-xs"
+                        placeholder="Alasan penyesuaian (wajib jika sudah disetujui)"
+                        value={adjustReason}
+                        onChange={(e) => setAdjustReason(e.target.value)}
+                      />
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={saving || reconcileLoading}
+                      onClick={() => void syncFromOperational(adjustReason)}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1" />
+                      Sinkron dari stok & release operasional
+                    </Button>
+                  </>
+                )}
                 {canManage && isIssueEditable(detail.status) && (
                   <Button
                     size="sm"

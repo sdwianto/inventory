@@ -167,9 +167,35 @@ function ProductionReportPageContent() {
               <p className="text-xs text-muted-foreground">{detail.cooking.note}</p>
               <div className="grid grid-cols-2 gap-2">
                 <div className="border rounded p-2">
-                  <div className="text-[11px] text-muted-foreground">Qty keluar (PBL)</div>
+                  <div className="text-[11px] text-muted-foreground">Qty keluar (PBL doc)</div>
                   <div className="font-medium">{detail.summary.qtyIssuedTotal}</div>
                 </div>
+                {detail.consumption && (
+                  <>
+                    <div className="border rounded p-2">
+                      <div className="text-[11px] text-muted-foreground">Konsumsi RL (linked)</div>
+                      <div className="font-medium">
+                        {detail.consumption.qtyFromRl}
+                        <span className="text-[11px] text-muted-foreground ml-1">
+                          ({detail.consumption.rlCount} RL)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="border rounded p-2">
+                      <div className="text-[11px] text-muted-foreground">Konsumsi PBL selesai</div>
+                      <div className="font-medium">
+                        {detail.consumption.qtyFromPbl}
+                        <span className="text-[11px] text-muted-foreground ml-1">
+                          ({detail.consumption.pblCompletedCount} PBL)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="border rounded p-2 col-span-2">
+                      <div className="text-[11px] text-muted-foreground">Total konsumsi bahan (RL + PBL)</div>
+                      <div className="font-medium">{detail.consumption.qtyTotal}</div>
+                    </div>
+                  </>
+                )}
                 <div className="border rounded p-2">
                   <div className="text-[11px] text-muted-foreground">Actual porsi</div>
                   <div className="font-medium">{detail.summary.actualPorsi}</div>

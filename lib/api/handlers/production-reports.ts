@@ -17,6 +17,7 @@ import {
   type ProductionResultDoc,
 } from '@/lib/food-production/production-result';
 import type { HandlerContext } from '@/types/api/handler';
+import { loadPlanConsumptionSummary, type PlanConsumptionSummary } from '@/lib/food-production/material-issue-reconcile';
 
 function pickIssue(docs: MaterialIssueDoc[]): MaterialIssueDoc | null {
   if (!docs.length) return null;
@@ -40,6 +41,7 @@ function reportFromDocs(
   plan: ProductionPlanDoc,
   issues: MaterialIssueDoc[],
   results: ProductionResultDoc[],
+  consumption?: PlanConsumptionSummary | null,
 ): ProductionReport {
   const completedIssue = issues.find((i) => i.status === 'COMPLETED') || null;
   const openIssue = issues.find((i) => (ISSUE_OPEN_STATUSES as readonly string[]).includes(i.status)) || null;
@@ -88,6 +90,7 @@ function reportFromDocs(
     hasOpenIssue: Boolean(openIssue),
     hasCompletedResult: Boolean(completedResult),
     hasOpenResult: Boolean(openResult),
+    consumption: consumption ?? null,
   });
 }
 
@@ -140,11 +143,15 @@ export async function handleProductionReports(ctx: HandlerContext): Promise<Next
       resultsByPlan.set(r.productionPlanId, list);
     }
 
-    const reports = plans.map((plan) => reportFromDocs(
-      plan,
-      issuesByPlan.get(plan.id) || [],
-      resultsByPlan.get(plan.id) || [],
-    ));
+    const reports = await Promise.all(plans.map(async (plan) => {
+      const consumption = await loadPlanConsumptionSummary(db, scopeAuth, plan.id);
+      return reportFromDocs(
+        plan,
+        issuesByPlan.get(plan.id) || [],
+        resultsByPlan.get(plan.id) || [],
+        consumption,
+      );
+    }));
     return ok(reports.map((r) => clean(r as unknown as Record<string, unknown>)));
   }
 
@@ -167,10 +174,13 @@ export async function handleProductionReports(ctx: HandlerContext): Promise<Next
         .toArray(),
     ]);
 
+    const consumption = await loadPlanConsumptionSummary(db, scopeAuth, plan.id);
+
     return ok(clean(reportFromDocs(
       plan,
       issueRows as unknown as MaterialIssueDoc[],
       resultRows as unknown as ProductionResultDoc[],
+      consumption,
     ) as unknown as Record<string, unknown>));
   }
 

@@ -77,6 +77,12 @@ export interface MaterialIssueDoc {
       satuan?: string;
     }>;
   };
+  /** Penutupan administratif: semua qtyIssued=0, bahan sudah keluar via RL. */
+  closureOnly?: {
+    by?: { userId?: string; userName?: string };
+    at: Date;
+    reason: string;
+  };
 }
 
 export const ISSUE_ELIGIBLE_PLAN_STATUSES = new Set(['APPROVED', 'PROCESSING']);
@@ -85,6 +91,11 @@ export const ISSUE_OPEN_STATUSES = FP_OPEN_DOC_STATUSES;
 
 export function isIssueEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
+}
+
+/** Dapat sinkron qty dari stok & release operasional sebelum post stok. */
+export function isIssueReconcilable(status: string): boolean {
+  return status === 'DRAFT' || status === 'SUBMITTED' || status === 'APPROVED' || status === 'PROCESSING';
 }
 
 export function buildIssueLinesFromMrp(
@@ -139,8 +150,8 @@ export function normalizeIssueLines(raw: unknown): MaterialIssueLine[] | { error
     if (!Number.isFinite(qtyPlanned) || qtyPlanned < 0) {
       return { error: `Baris ${i + 1}: qtyPlanned tidak valid` };
     }
-    if (!Number.isFinite(qtyIssued) || qtyIssued <= 0) {
-      return { error: `Baris ${i + 1}: qtyIssued harus > 0` };
+    if (!Number.isFinite(qtyIssued) || qtyIssued < 0) {
+      return { error: `Baris ${i + 1}: qtyIssued tidak valid` };
     }
     if (seen.has(productId)) return { error: `Produk duplikat pada baris ${i + 1}` };
     seen.add(productId);
