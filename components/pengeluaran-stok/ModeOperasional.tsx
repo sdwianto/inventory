@@ -42,7 +42,7 @@ import {
   type ReleaseFormState,
 } from '@/lib/pengeluaran-stok/release-form-items';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
-import { looksLikeProductionKeperluan } from '@/lib/food-production/material-issue-reconcile';
+import { looksLikeProductionKeperluan } from '@/lib/food-production/production-keperluan';
 
 const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 

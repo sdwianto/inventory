@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyConsumptionToRequirementLines,
-  applyReconciliationToLines,
-  mergeConsumptionLinesForCost,
   looksLikeProductionKeperluan,
   isExcludedOperationalKeperluan,
   planDayWindowWib,
+} from '@/lib/food-production/production-keperluan';
+import {
+  applyConsumptionToRequirementLines,
+  applyReconciliationToLines,
+  mergeConsumptionLinesForCost,
 } from '@/lib/food-production/material-issue-reconcile';
 import type { MaterialIssueLine } from '@/lib/food-production/material-issue';
 import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
