@@ -1,6 +1,7 @@
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { ensureVendorSupplier } from '@/lib/api/vendor-supplier';
+import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import {
   SUPPLIER_PRICE_BOOK_COLLECTION,
   normalizeHargaBeliBook,
@@ -102,8 +103,9 @@ async function resolveProduct(
   const grnLine = kode ? grnByKode.get(kode) : null;
   const localId = pickLocalProductId(line, grnLine);
   if (localId) {
-    const p = await db.collection('products').findOne({ tenantId: tid, id: localId });
-    if (p) {
+    const liveMap = await loadLiveProductMap(db, tid, [localId]);
+    const p = liveMap.get(localId);
+    if (p && isCatalogProductActive(p)) {
       return {
         id: String(p.id),
         kode: p.kode != null ? String(p.kode) : undefined,
@@ -113,7 +115,7 @@ async function resolveProduct(
     }
   }
   if (!kode) return null;
-  const filter: Record<string, unknown> = { tenantId: tid, kode };
+  const filter: Record<string, unknown> = { tenantId: tid, kode, aktif: { $ne: false } };
   if (vendorTenantId) {
     const withVendor = await db.collection('products').findOne({ ...filter, vendorTenantId });
     if (withVendor) {

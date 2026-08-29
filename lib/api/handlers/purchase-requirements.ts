@@ -14,6 +14,7 @@ import { guardPosting } from '@/lib/api/period-lock';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
@@ -272,16 +273,21 @@ async function mapCpoItemsFromProducts(
     ? await db.collection('products').find({ tenantId, id: { $in: localIds } }).toArray()
     : [];
   const prodById = new Map(productRows.map((p) => [String(p.id), p]));
-  const uomsByProduct = await listProductUomsByProductIds(db, tenantId, localIds);
+  const liveMap = await loadLiveProductMap(db, tenantId, localIds);
+  const liveIds = [...new Set(
+    localIds.map((id) => String(liveMap.get(id)?.id || id)),
+  )];
+  const uomsByProduct = await listProductUomsByProductIds(db, tenantId, liveIds);
 
   const warnings: string[] = [];
   for (const it of rawItems) {
-    const prod = prodById.get(String(it.localStokId));
-    if (!prod) {
+    const orig = prodById.get(String(it.localStokId));
+    if (!orig) {
       return { error: `Produk ${it.kode || it.localStokId} tidak ditemukan di katalog` };
     }
-    if (prod.aktif === false) {
-      const label = String(prod.nama || prod.kode || it.localStokId);
+    const prod = liveMap.get(String(it.localStokId)) || orig;
+    if (!isCatalogProductActive(prod)) {
+      const label = String(prod.nama || prod.kode || orig.nama || it.localStokId);
       return {
         error: `Produk "${label}" tidak aktif — aktifkan / Sync Katalog sebelum buat Draft CPO`,
       };
@@ -294,9 +300,11 @@ async function mapCpoItemsFromProducts(
   }
 
   const mapped = rawItems.map((it) => {
-    const prod = prodById.get(String(it.localStokId))!;
+    const orig = prodById.get(String(it.localStokId))!;
+    const prod = (liveMap.get(String(it.localStokId)) || orig) as typeof orig;
+    const liveId = String(prod.id || it.localStokId);
     const hargaBeli = parseInt(String(prod.hargaBeli || 0), 10) || 0;
-    const uoms = uomsByProduct.get(String(it.localStokId)) || [];
+    const uoms = uomsByProduct.get(liveId) || [];
     const satuanWant = String(it.satuan || prod.satuan || '').trim().toLowerCase();
     const matchedUom = satuanWant
       ? uoms.find((u) => String(u.satuan || '').trim().toLowerCase() === satuanWant)
@@ -308,7 +316,7 @@ async function mapCpoItemsFromProducts(
     }
     return computeLineEstimasi({
       lineId: uuidv4(),
-      localStokId: it.localStokId,
+      localStokId: liveId,
       vendorStokId: prod.vendorStokId != null ? String(prod.vendorStokId) : undefined,
       vendorTenantId: prod.vendorTenantId != null ? String(prod.vendorTenantId) : undefined,
       vendorKode: prod.kode != null ? String(prod.kode) : it.kode,

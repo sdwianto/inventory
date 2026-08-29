@@ -19,6 +19,8 @@ export async function loadStoreSnapshot(db: Db, tenantId: string, tenantNameFall
     logoBase64: s?.logoBase64 || '',
     logoUrl: s?.logoUrl || '',
     ppnPercent: s?.ppnPercent ?? 11,
+    warnaBrand: s?.warnaBrand || '',
+    invoiceReportId: s?.invoiceReportId || '',
   };
   const normalized = sanitizeStoreSettings(raw) || raw;
   return {

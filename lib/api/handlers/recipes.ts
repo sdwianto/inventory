@@ -26,6 +26,7 @@ import {
   type RecipeImportProduct,
 } from '@/lib/food-production/recipe-import';
 import { isFinishedGoodRole, isIngredientRole, normalizeItemRole } from '@/lib/food-production/item-role';
+import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import {
   convertRecipeLineQtys,
   defaultKitchenSatuan,
@@ -123,12 +124,18 @@ async function enrichFinishedGood(
   tenantFilter: Record<string, unknown>,
   productId: string,
 ): Promise<{ kode?: string; nama?: string } | { error: string }> {
-  const prod = await db.collection('products').findOne({
+  const found = await db.collection('products').findOne({
     ...tenantFilter,
     id: productId,
-  }) as { kode?: string; nama?: string; itemRole?: string; aktif?: boolean } | null;
-  if (!prod) return { error: 'Produk barang jadi tidak ditemukan' };
-  if (prod.aktif === false) return { error: 'Produk barang jadi nonaktif' };
+  }) as { id?: string; kode?: string; nama?: string; itemRole?: string; aktif?: boolean; masterProductId?: string | null } | null;
+  if (!found) return { error: 'Produk barang jadi tidak ditemukan' };
+  const liveMap = await attachLiveCatalogProducts(
+    db,
+    String(tenantFilter.tenantId || ''),
+    [found],
+  );
+  const prod = liveMap.get(productId) || found;
+  if (!isCatalogProductActive(prod)) return { error: 'Produk barang jadi nonaktif' };
   if (!isFinishedGoodRole(prod.itemRole)) {
     const role = normalizeItemRole(prod.itemRole);
     return {
@@ -157,14 +164,21 @@ async function enrichLines(
       recipeBaseGrams: 1,
       recipeBaseMl: 1,
       nutrition: 1,
+      vendorTenantId: 1,
+      masterProductId: 1,
+      cutoverToKode: 1,
     })
     .toArray();
-  const byId = new Map(products.map((p) => [String(p.id), p]));
+  const liveMap = await attachLiveCatalogProducts(
+    db,
+    String(tenantFilter.tenantId || ''),
+    products,
+  );
   const out: RecipeLine[] = [];
   for (const line of lines) {
-    const p = byId.get(line.productId);
+    const p = liveMap.get(line.productId) || products.find((row) => String(row.id) === line.productId);
     if (!p) return { error: `Bahan ${line.productId} tidak ditemukan` };
-    if (p.aktif === false) {
+    if (!isCatalogProductActive(p)) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
     }
     if (!isIngredientRole(p.itemRole)) {
@@ -223,8 +237,9 @@ async function enrichLines(
 
     out.push({
       ...line,
-      productKode: line.productKode || (p.kode != null ? String(p.kode) : undefined),
-      productNama: line.productNama || (p.nama != null ? String(p.nama) : undefined),
+      productId: String(p.id || line.productId),
+      productKode: p.kode != null ? String(p.kode) : line.productKode,
+      productNama: p.nama != null ? String(p.nama) : line.productNama,
       satuan: converted.satuan || kitchen || undefined,
       qtyBaseBesar: converted.qtyBaseBesar,
       qtyBaseKecil: converted.qtyBaseKecil,
@@ -506,11 +521,26 @@ export async function handleRecipes({
       .toArray();
 
     const exceptionKeys = await loadRecipePortionExceptionSet(db, withTenantFilter(scopeAuth, {}));
+    const tenantId = tenantIdForWrite(scopeAuth, {});
+    const productIds = [...new Set(
+      list.flatMap((doc) => ((doc as unknown as RecipeDoc).lines || []).map((l) => l.productId)),
+    )];
+    const liveMap = await loadLiveProductMap(db, tenantId, productIds);
     return ok(list.map((doc) => {
       const recipe = doc as unknown as RecipeDoc;
+      const lines = applyFullPortionExceptions(recipe.lines, exceptionKeys).map((line) => {
+        const live = liveMap.get(line.productId);
+        if (!live?.id || live.id === line.productId) return line;
+        return {
+          ...line,
+          productId: String(live.id),
+          productKode: live.kode != null ? String(live.kode) : line.productKode,
+          productNama: live.nama != null ? String(live.nama) : line.productNama,
+        };
+      });
       return clean({
         ...recipe,
-        lines: applyFullPortionExceptions(recipe.lines, exceptionKeys),
+        lines,
       } as unknown as Record<string, unknown>);
     }));
   }

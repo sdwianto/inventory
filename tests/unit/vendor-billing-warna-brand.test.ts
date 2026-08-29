@@ -33,3 +33,30 @@ describe('vendorBillingFromPayload — warnaBrand', () => {
     expect(billing.warnaBrand).toBe('');
   });
 });
+
+describe('vendorBillingFromPayload — invoiceReportId', () => {
+  it('mengambil invoiceReportId dari vendor.invoiceReportId', () => {
+    const billing = vendorBillingFromPayload({
+      vendorTenantId: 'zulmy',
+      vendor: { companyName: 'UD Dawam', invoiceReportId: 'inv-10' },
+    }, 'zulmy');
+    expect(billing.invoiceReportId).toBe('inv-10');
+  });
+
+  it('fallback ke vendorInvoiceReportId top-level', () => {
+    const billing = vendorBillingFromPayload({
+      vendorTenantId: 'zulmy',
+      vendorCompanyName: 'UD Dawam',
+      vendorInvoiceReportId: 'inv-08',
+    }, 'zulmy');
+    expect(billing.invoiceReportId).toBe('inv-08');
+  });
+
+  it('kosong kalau vendor belum pilih model', () => {
+    const billing = vendorBillingFromPayload({
+      vendorTenantId: 'zulmy',
+      vendorCompanyName: 'UD Dawam',
+    }, 'zulmy');
+    expect(billing.invoiceReportId).toBe('');
+  });
+});

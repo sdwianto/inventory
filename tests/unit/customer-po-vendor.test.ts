@@ -401,7 +401,7 @@ describe('enrichPoItemsForVendor', () => {
     }
   });
 
-  it('rejects inactive synced product', async () => {
+  it('rejects inactive synced product when no live sibling exists', async () => {
     const inactiveDb = {
       collection: (name: string) => ({
         find: () => ({
@@ -434,6 +434,57 @@ describe('enrichPoItemsForVendor', () => {
     if ('error' in result) {
       expect(result.error).toMatch(/tidak aktif/i);
       expect(result.error).toMatch(/Edit PO|Sync Katalog/i);
+    }
+  });
+
+  it('remaps inactive localStokId to the live sibling with the same kode', async () => {
+    const siblingDb = {
+      collection: (name: string) => ({
+        find: () => ({
+          toArray: async () => {
+            if (name === 'products') {
+              return [
+                {
+                  id: 'lp-old',
+                  tenantId: 'sppg',
+                  kode: 'B667077',
+                  nama: 'Daging Ayam Potongan 10',
+                  vendorStokId: 'vp-old',
+                  vendorTenantId: 'uddawam',
+                  syncSource: 'sales.app',
+                  aktif: false,
+                },
+                {
+                  id: 'lp-live',
+                  tenantId: 'sppg',
+                  kode: 'B667077',
+                  nama: 'Daging Ayam Potongan 10',
+                  vendorStokId: 'vp-live',
+                  vendorTenantId: 'zulmy',
+                  masterProductId: 'mp-ayam',
+                  syncSource: 'sales.app',
+                  aktif: true,
+                  vendorBaseUomId: 'uom-kg',
+                },
+              ];
+            }
+            return [];
+          },
+        }),
+      }),
+    };
+
+    const result = await enrichPoItemsForVendor(siblingDb as never, 'sppg', [{
+      localStokId: 'lp-old',
+      qty: 2,
+      nama: 'Daging Ayam Potongan 10',
+    }]);
+
+    expect('error' in result).toBe(false);
+    if ('items' in result) {
+      expect(result.items?.[0]?.vendorStokId).toBe('vp-live');
+      expect(result.items?.[0]?.vendorTenantId).toBe('zulmy');
+      expect(result.items?.[0]?.kode).toBe('B667077');
     }
   });
 });

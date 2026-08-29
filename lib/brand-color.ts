@@ -42,10 +42,16 @@ export function readableTextRgbOn(rgb: [number, number, number]): [number, numbe
   return luminance > 0.6 ? [31, 41, 55] : [255, 255, 255];
 }
 
+/** Normalisasi hex brand ke `#rrggbb` — CSS `borderColor`/`backgroundColor` butuh `#`. */
+export function canonicalBrandHex(raw?: string | null): string | null {
+  const rgb = hexToRgb(raw);
+  return rgb ? rgbToHex(rgb) : null;
+}
+
 /** Warna brand tenant dari tenant settings, atau fallback default lama bila belum diset/tidak valid. */
 export function resolveBrandColor(settings: unknown, fallback: string): string {
   const raw = (settings as { warnaBrand?: string } | null | undefined)?.warnaBrand;
-  return hexToRgb(raw) ? (raw as string) : fallback;
+  return canonicalBrandHex(raw) || fallback;
 }
 
 /** Sama seperti resolveBrandColor tapi sebagai RGB array (dipakai jsPDF: setTextColor/setDrawColor/fillColor). */

@@ -42,6 +42,7 @@ import {
 } from '@/lib/food-production/purchase-requirement';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -164,14 +165,30 @@ async function buildExplosion(
   }
   const recipesById = new Map(recipes.map((r) => [r.id, r]));
 
-  const productIds = [...new Set(
+  const originalProductIds = [...new Set(
     recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)),
   )];
   const tid = tenantIdForWrite(scopeAuth, {});
+  const liveMap = await loadLiveProductMap(db, tid, originalProductIds);
+  for (const recipe of recipes) {
+    for (const line of recipe.lines || []) {
+      const live = liveMap.get(line.productId);
+      if (!live?.id || live.id === line.productId) continue;
+      line.productId = String(live.id);
+      if (live.kode) line.productKode = String(live.kode);
+      if (live.nama) line.productNama = String(live.nama);
+      if (live.satuan) line.satuan = String(live.satuan);
+    }
+  }
+
+  const productIds = [...new Set(
+    recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)),
+  )];
+  const stockIds = [...new Set([...originalProductIds, ...productIds])];
 
   // Enrich names + resolve each SKU's warehouse (buah/basah → GBASAH, not kitchen GKERING)
   const products = await db.collection('products')
-    .find({ ...tenantFilter, id: { $in: productIds } })
+    .find({ ...tenantFilter, id: { $in: stockIds } })
     .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, grup: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
@@ -192,7 +209,7 @@ async function buildExplosion(
     }
   }
 
-  const stockMap = await getStokByWarehouseBatch(db, tid, productIds);
+  const stockMap = await getStokByWarehouseBatch(db, tid, stockIds);
   const onHandByProduct = new Map<string, number>();
   const stockWarehouseByProduct = new Map<string, string>();
   for (const pid of productIds) {
@@ -202,6 +219,14 @@ async function buildExplosion(
     const byWh = stockMap.get(pid) || {};
     onHandByProduct.set(pid, Number(byWh[stockWh] || 0));
     stockWarehouseByProduct.set(pid, stockWh);
+  }
+  for (const origId of originalProductIds) {
+    const liveId = String(liveMap.get(origId)?.id || origId);
+    if (liveId === origId) continue;
+    const origProd = productById.get(origId) as { gudangKode?: string } | undefined;
+    const origWh = resolveProductGudangKode(origProd);
+    const origQty = Number((stockMap.get(origId) || {})[origWh] || 0);
+    onHandByProduct.set(liveId, (onHandByProduct.get(liveId) || 0) + origQty);
   }
 
   // Acuan porsi tanggal/dapur — pecah kebutuhan besar vs kecil secara akurat

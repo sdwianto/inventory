@@ -3,6 +3,7 @@ import type { Db } from 'mongodb';
 
 import type { JsonObject } from '@/types/json';
 import { findProductUomsByIds, listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import type { ProductUom } from '@/lib/uom/types';
 
 type ProductDoc = JsonObject & {
@@ -219,14 +220,17 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       .filter(Boolean)
       .map(String),
   )];
-  const uomsByProduct = await listProductUomsByProductIds(db, tid, productIds);
+  const liveMap = await loadLiveProductMap(db, tid, productIds);
+  const liveIds = [...new Set(productIds.map((id) => String(liveMap.get(id)?.id || id)))];
+  const uomsByProduct = await listProductUomsByProductIds(db, tid, liveIds);
 
   const enriched: JsonObject[] = [];
 
   for (const it of items || []) {
-    const prod = resolveProduct(it, maps);
+    const resolved = resolveProduct(it, maps);
+    const prod = (resolved?.id ? liveMap.get(String(resolved.id)) : null) || resolved;
 
-    if (prod && prod.aktif === false) {
+    if (prod && !isCatalogProductActive(prod)) {
       const label = String(prod.nama || prod.kode || it.nama || it.kode || '?');
       const kode = String(prod.kode || it.kode || it.vendorKode || '');
       return {

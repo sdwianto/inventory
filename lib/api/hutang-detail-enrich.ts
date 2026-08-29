@@ -21,6 +21,7 @@ export type VendorBillingSnapshot = {
   showLogoOnInvoice?: boolean;
   /** Warna brand dokumen vendor (hex #RRGGBB) — header tabel Faktur Tagihan. */
   warnaBrand: string;
+  invoiceReportId?: string;
 };
 
 function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapshot {
@@ -33,6 +34,7 @@ function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapsh
     logoUrl: String(src.logoUrl || src.vendorLogoUrl || ''),
     showLogoOnInvoice: src.showLogoOnInvoice !== false,
     warnaBrand: String(src.warnaBrand || src.vendorWarnaBrand || ''),
+    invoiceReportId: String(src.invoiceReportId || src.vendorInvoiceReportId || ''),
   });
   return {
     vendorTenantId: src.vendorTenantId != null ? String(src.vendorTenantId) : null,
@@ -42,8 +44,9 @@ function pickStoreFields(src: Record<string, unknown> = {}): VendorBillingSnapsh
     companyNPWP: String(picked?.companyNPWP || ''),
     logoBase64: String(picked?.logoBase64 || ''),
     logoUrl: String(picked?.logoUrl || ''),
-    showLogoOnInvoice: src.showLogoOnInvoice !== false,
+    showLogoOnInvoice: picked?.showLogoOnInvoice !== false,
     warnaBrand: String(picked?.warnaBrand || ''),
+    invoiceReportId: String(picked?.invoiceReportId || src.invoiceReportId || src.vendorInvoiceReportId || ''),
   };
 }
 
@@ -138,6 +141,8 @@ export async function loadVendorBillingProfile(
       logoBase64: vt?.logoUrl || vt?.logoBase64 || '',
       logoUrl: vt?.logoUrl || '',
       warnaBrand: vt?.warnaBrand || '',
+      invoiceReportId: vt?.invoiceReportId || '',
+      showLogoOnInvoice: vt?.showLogoOnInvoice !== false,
     }),
     vendorTenantId: vid,
   };
@@ -162,6 +167,8 @@ export async function loadVendorBillingProfile(
           logoUrl: normalized.logoUrl || '',
           logoBase64: '',
           warnaBrand: normalized.warnaBrand || profile.warnaBrand || '',
+          invoiceReportId: normalized.invoiceReportId || profile.invoiceReportId || '',
+          showLogoOnInvoice: normalized.showLogoOnInvoice !== false,
           profileSyncedAt: new Date(),
           updatedAt: new Date(),
         },
@@ -258,11 +265,20 @@ export async function buildHutangDetailEnrichment(
   let vendorBilling;
   const snapLogo = logoUrlFromSettings(snap);
   if (snap?.companyName && !forceRefresh) {
+    let invoiceReportId = snap.invoiceReportId || '';
+    if (!invoiceReportId && vendorTenantId) {
+      const vt = await db.collection('vendor_tenants').findOne(
+        { tenantId: tid, vendorTenantId: vendorTenantId },
+        { projection: { invoiceReportId: 1 } },
+      );
+      invoiceReportId = String(vt?.invoiceReportId || '');
+    }
     vendorBilling = {
       ...snap,
       logoBase64: snapLogo,
       logoUrl: snap?.logoUrl || snapLogo,
       vendorTenantId,
+      invoiceReportId,
       source: 'snapshot',
     };
   } else {
@@ -276,6 +292,7 @@ export async function buildHutangDetailEnrichment(
       companyNPWP: snap?.companyNPWP || loaded.companyNPWP,
       logoUrl: snap?.logoUrl || loaded.logoUrl || mergedLogo,
       logoBase64: mergedLogo,
+      invoiceReportId: loaded.invoiceReportId || snap?.invoiceReportId || '',
       source: snap?.companyName ? 'snapshot+enrich' : loaded.source,
     };
 
@@ -288,6 +305,8 @@ export async function buildHutangDetailEnrichment(
         companyNPWP: vendorBilling.companyNPWP,
         logoUrl: vendorBilling.logoUrl,
         warnaBrand: vendorBilling.warnaBrand,
+        invoiceReportId: vendorBilling.invoiceReportId,
+        showLogoOnInvoice: vendorBilling.showLogoOnInvoice !== false,
       });
       void db.collection('hutang').updateOne(
         { tenantId: tid, id: hutang.id },
@@ -328,5 +347,7 @@ export function vendorBillingFromPayload(payload: Record<string, unknown>, vendo
     logoBase64: nested.logoBase64 || payload.vendorLogoBase64 || '',
     logoUrl: nested.logoUrl || payload.vendorLogoUrl || '',
     warnaBrand: nested.warnaBrand || payload.vendorWarnaBrand || '',
+    invoiceReportId: nested.invoiceReportId || payload.vendorInvoiceReportId || '',
+    showLogoOnInvoice: nested.showLogoOnInvoice !== false,
   });
 }

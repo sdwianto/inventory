@@ -38,6 +38,7 @@ export interface VendorInvoicePayload extends JsonObject {
   vendorLogoBase64?: string;
   /** Warna brand dokumen vendor (hex #RRGGBB) — header tabel Faktur Tagihan. */
   vendorWarnaBrand?: string;
+  vendorInvoiceReportId?: string;
   vendor?: {
     companyName?: string;
     companyAddress?: string;
@@ -45,6 +46,8 @@ export interface VendorInvoicePayload extends JsonObject {
     companyNPWP?: string;
     logoBase64?: string;
     warnaBrand?: string;
+    invoiceReportId?: string;
+    showLogoOnInvoice?: boolean;
   };
   pelangganName?: string;
   customerName?: string;

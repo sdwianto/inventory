@@ -137,8 +137,16 @@ async function resolveVendorBillingForHutang(
     logoBase64: nestedObj.logoBase64 || payloadRec.vendorLogoBase64 || '',
     logoUrl: nestedObj.logoUrl || payloadRec.vendorLogoUrl || '',
     warnaBrand: nestedObj.warnaBrand || payloadRec.vendorWarnaBrand || '',
+    invoiceReportId: nestedObj.invoiceReportId || payloadRec.vendorInvoiceReportId || '',
+    showLogoOnInvoice: nestedObj.showLogoOnInvoice !== false,
   });
   if (!billingSnap.companyName) billingSnap.companyName = displayName;
+  if (vid && billingSnap.invoiceReportId) {
+    await db.collection('vendor_tenants').updateOne(
+      { tenantId: tid, vendorTenantId: vid },
+      { $set: { invoiceReportId: billingSnap.invoiceReportId, showLogoOnInvoice: billingSnap.showLogoOnInvoice !== false, updatedAt: new Date() } },
+    );
+  }
   return { vid, billingSnap, displayName };
 }
 

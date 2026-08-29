@@ -43,6 +43,7 @@ import {
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import {
   FP_DOC_TYPES,
   FP_DEFAULT_TRANSITIONS,
@@ -219,10 +220,12 @@ async function assertIssueProductsActive(
     .project({ id: 1, nama: 1, kode: 1, aktif: 1 })
     .toArray();
   const byId = new Map(products.map((p) => [String(p.id), p]));
+  const liveMap = await loadLiveProductMap(db, tenantId, ids);
   for (const id of ids) {
     const p = byId.get(id);
     if (!p) return `Produk ${id} tidak ditemukan`;
-    if (p.aktif === false) {
+    const live = liveMap.get(id) || p;
+    if (!isCatalogProductActive(live)) {
       return `Produk "${String(p.nama || p.kode || id)}" tidak aktif`;
     }
   }

@@ -53,6 +53,7 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import {
   DEFAULT_FOOD_SAFETY_STATUS,
   PRODUCTION_BATCHES_COLLECTION,
@@ -150,11 +151,26 @@ async function seedResultLines(
       .toArray()
     : [];
   const prodById = new Map(products.map((p) => [String(p.id), p]));
+  const fgLiveMap = await loadLiveProductMap(
+    db,
+    tenantIdForWrite(scopeAuth, {}),
+    fgIds.map(String),
+  );
   for (const r of recipes) {
-    const p = prodById.get(String(r.finishedGoodProductId));
+    const origFg = String(r.finishedGoodProductId || '');
+    const liveFg = origFg ? fgLiveMap.get(origFg) : undefined;
+    if (liveFg?.id && liveFg.id !== origFg) {
+      r.finishedGoodProductId = String(liveFg.id);
+      if (liveFg.kode) r.finishedGoodKode = String(liveFg.kode);
+      if (liveFg.nama) r.finishedGoodNama = String(liveFg.nama);
+    }
+    const p = prodById.get(String(r.finishedGoodProductId)) || (liveFg as typeof products[number] | undefined);
     if (!p) continue;
     if (!r.finishedGoodKode && p.kode != null) r.finishedGoodKode = String(p.kode);
     if (!r.finishedGoodNama && p.nama != null) r.finishedGoodNama = String(p.nama);
+  }
+  for (const live of fgLiveMap.values()) {
+    if (live?.id) prodById.set(String(live.id), live as typeof products[number]);
   }
 
   const built = buildResultLinesFromPlan({
@@ -168,14 +184,16 @@ async function seedResultLines(
   for (const line of built.lines) {
     const fgId = String(line.finishedGoodProductId || '').trim();
     if (!fgId) continue;
-    const p = prodById.get(fgId);
+    const live = fgLiveMap.get(fgId);
+    const p = prodById.get(fgId) || live;
     if (!p) return { error: `Finished good ${fgId} tidak ditemukan` };
-    if (p.aktif === false) {
+    if (!isCatalogProductActive(p)) {
       return {
         error: `Finished good "${String(p.nama || p.kode || fgId)}" tidak aktif`,
       };
     }
     if (p.satuan) line.satuan = String(p.satuan);
+    if (live?.id && live.id !== fgId) line.finishedGoodProductId = String(live.id);
   }
 
   return { lines: built.lines, warehouseKode, warnings: built.warnings };
@@ -195,10 +213,12 @@ async function assertResultProductsActive(
     .project({ id: 1, nama: 1, kode: 1, aktif: 1 })
     .toArray();
   const byId = new Map(products.map((p) => [String(p.id), p]));
+  const liveMap = await loadLiveProductMap(db, tenantId, ids);
   for (const id of ids) {
     const p = byId.get(id);
     if (!p) return `Finished good ${id} tidak ditemukan`;
-    if (p.aktif === false) {
+    const live = liveMap.get(id) || p;
+    if (!isCatalogProductActive(live)) {
       return `Finished good "${String(p.nama || p.kode || id)}" tidak aktif`;
     }
   }

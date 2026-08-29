@@ -66,5 +66,20 @@ export async function resolveProductByKode(
     }
   }
 
+  if (kode) {
+    const anyActive = await db.collection('products').findOne({
+      tenantId: tid,
+      kode,
+      aktif: { $ne: false },
+    });
+    if (anyActive) {
+      return {
+        localStokId: anyActive.id,
+        localKode: anyActive.kode,
+        localNama: anyActive.nama,
+      };
+    }
+  }
+
   return { localStokId: null, localKode: null, localNama: null };
 }
