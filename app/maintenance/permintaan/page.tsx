@@ -41,12 +41,43 @@ import {
 } from '@/lib/maintenance/constants';
 import {
   Wrench, Plus, Send, CheckCircle2, XCircle, Play, Flag, Lock, RefreshCw, ImageIcon,
-  ShoppingBag, ArrowUpFromLine, HardHat,
+  ShoppingBag, ArrowUpFromLine, HardHat, ChevronRight,
 } from 'lucide-react';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
+import PhotoLightbox from '@/components/maintenance/PhotoLightbox';
 import ServiceOrderDialog from '@/components/maintenance/ServiceOrderDialog';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+
+function stopCardClick(e: { stopPropagation(): void }) {
+  e.stopPropagation();
+}
+
+function renderWrTimeline(row: JsonObject) {
+  const events: Array<{ label: string; at?: string; by?: string }> = [
+    { label: 'Dibuat', at: str(row.createdAt), by: str(asObject(row.createdBy).userName) },
+    { label: 'Diajukan', at: str(row.requestedAt), by: str(asObject(row.requestedBy).userName) },
+    { label: 'Disetujui', at: str(row.approvedAt), by: str(asObject(row.approvedBy).userName) },
+    { label: 'Ditolak', at: str(row.rejectedAt), by: str(asObject(row.rejectedBy).userName) },
+    { label: 'Mulai kerja', at: str(row.startedAt) },
+    { label: 'Selesai', at: str(row.completedAt) },
+    { label: 'Ditutup', at: str(row.closedAt) },
+  ].filter((ev) => ev.at);
+
+  if (!events.length) return null;
+
+  return (
+    <div className="rounded-lg border bg-slate-50 px-3 py-2 space-y-1">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Riwayat</p>
+      {events.map((ev) => (
+        <p key={ev.label} className="text-sm text-slate-700">
+          {ev.label}: <span className="text-slate-900">{formatDateTime(ev.at!)}</span>
+          {ev.by ? <span className="text-slate-500"> · {ev.by}</span> : null}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 function MaintenancePermintaanPageContent() {
   const router = useRouter();
@@ -63,6 +94,8 @@ function MaintenancePermintaanPageContent() {
   const [completeNote, setCompleteNote] = useState('');
   const [photosCache, setPhotosCache] = useState<Record<string, string[]>>({});
   const [serviceWr, setServiceWr] = useState<JsonObject | null>(null);
+  const [detailWr, setDetailWr] = useState<JsonObject | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const wrUrl = useMemo(
     () => (statusFilter ? `/api/maintenance-requests?status=${encodeURIComponent(statusFilter)}` : '/api/maintenance-requests'),
@@ -95,6 +128,60 @@ function MaintenancePermintaanPageContent() {
     window.addEventListener('erp-maintenance-change', onMaintenanceChange);
     return () => window.removeEventListener('erp-maintenance-change', onMaintenanceChange);
   }, [reload]);
+
+  const closeDetail = () => {
+    setDetailWr(null);
+    const params = new URLSearchParams(searchParams.toString());
+    if (!params.has('id')) return;
+    params.delete('id');
+    const qs = params.toString();
+    router.replace(qs ? `/maintenance/permintaan?${qs}` : '/maintenance/permintaan', { scroll: false });
+  };
+
+  const openDetail = async (row: JsonObject) => {
+    const id = str(row.id);
+    setDetailWr(row);
+    setDetailLoading(true);
+    try {
+      const full = await fetchMaintenanceRequestDetail(queryClient, id);
+      setDetailWr(full);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('id', id);
+      router.replace(`/maintenance/permintaan?${params.toString()}`, { scroll: false });
+      if (asArray(full.photos).length) {
+        setPhotosCache((prev) => ({ ...prev, [id]: asArray(full.photos).map(String) }));
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat detail permintaan');
+      setDetailWr(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (!id || detailWr?.id === id) return;
+    let cancelled = false;
+    setDetailLoading(true);
+    void fetchMaintenanceRequestDetail(queryClient, id)
+      .then((full) => {
+        if (cancelled) return;
+        setDetailWr(full);
+        if (asArray(full.photos).length) {
+          setPhotosCache((prev) => ({ ...prev, [id]: asArray(full.photos).map(String) }));
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        toast.error(e instanceof Error ? e.message : 'Gagal memuat detail permintaan');
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- buka detail dari URL sekali saat id berubah
+  }, [searchParams.get('id'), queryClient]);
 
   const activeAssets = assets.filter((a) => str(a.status) !== 'DISPOSED');
 
@@ -190,6 +277,14 @@ function MaintenancePermintaanPageContent() {
       };
       toast.success(labels[actionType] || 'Berhasil');
       void reload();
+      if (detailWr?.id === id) {
+        try {
+          const full = await fetchMaintenanceRequestDetail(queryClient, id);
+          setDetailWr(full);
+        } catch {
+          /* list reload sudah cukup */
+        }
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal');
     }
@@ -282,7 +377,7 @@ function MaintenancePermintaanPageContent() {
     if (showLinks) {
       const label = RESOLUTION_TYPE_LABELS[resolutionType] || resolutionType;
       return (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm space-y-1">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm space-y-1" onClick={stopCardClick} onKeyDown={stopCardClick}>
           <p className="font-medium text-slate-700">Penyelesaian: {label}</p>
           {str(row.linkedPoNo) && (
             <p>
@@ -319,7 +414,7 @@ function MaintenancePermintaanPageContent() {
     }
 
     return (
-      <div className="rounded-lg border border-orange-200 bg-orange-50/50 px-3 py-3 space-y-2">
+      <div className="rounded-lg border border-orange-200 bg-orange-50/50 px-3 py-3 space-y-2" onClick={stopCardClick} onKeyDown={stopCardClick}>
         <p className="text-sm font-medium text-slate-700">Tindaklanjut maintenance</p>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -416,7 +511,19 @@ function MaintenancePermintaanPageContent() {
             const priority = str(row.priority, 'MEDIUM') as MaintenancePriority;
             const isOpen = expandedId === str(row.id);
             return (
-              <div key={str(row.id)} className="rounded-lg border bg-white p-4 space-y-3">
+              <div
+                key={str(row.id)}
+                role="button"
+                tabIndex={0}
+                className="rounded-lg border bg-white p-4 space-y-3 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                onClick={() => void openDetail(row)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    void openDetail(row);
+                  }
+                }}
+              >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="space-y-1 min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -434,25 +541,32 @@ function MaintenancePermintaanPageContent() {
                         </span>
                       )}
                     </div>
-                    <h3 className="font-semibold text-base">{str(row.judul)}</h3>
+                    <h3 className="font-semibold text-base flex items-center gap-1.5">
+                      {str(row.judul)}
+                      <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                    </h3>
                     <p className="text-sm text-slate-600">
                       Aset: <strong>{str(row.assetKode)}</strong> — {str(row.assetNama)}
                       {str(row.assetLokasi) ? ` · ${str(row.assetLokasi)}` : ''}
                     </p>
                     {str(row.deskripsi) && (
-                      <p className="text-sm text-slate-500">{str(row.deskripsi)}</p>
+                      <p className="text-sm text-slate-500 line-clamp-2">{str(row.deskripsi)}</p>
                     )}
                     <p className="text-xs text-slate-400">
                       Dibuat {formatDateTime(str(row.createdAt))} · {str(asObject(row.createdBy).userName, '—')}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2 w-full sm:w-auto shrink-0 relative z-10">
+                  <div
+                    className="flex flex-wrap gap-2 w-full sm:w-auto shrink-0 relative z-10"
+                    onClick={stopCardClick}
+                    onKeyDown={stopCardClick}
+                  >
                     {renderActions(row)}
                   </div>
                 </div>
 
                 {isOpen && (
-                  <div className="border-t pt-3 space-y-2">
+                  <div className="border-t pt-3 space-y-2" onClick={stopCardClick} onKeyDown={stopCardClick}>
                     <Label>Catatan penyelesaian</Label>
                     <Textarea value={completeNote} onChange={(e) => setCompleteNote(e.target.value)} rows={2} />
                     <div className="flex gap-2">
@@ -480,7 +594,7 @@ function MaintenancePermintaanPageContent() {
                 )}
                 {renderResolution(row)}
                 {num(row.photoCount) > 0 && (
-                  <div className="space-y-2">
+                  <div className="space-y-2" onClick={stopCardClick} onKeyDown={stopCardClick}>
                     <Button
                       type="button"
                       variant="outline"
@@ -492,20 +606,7 @@ function MaintenancePermintaanPageContent() {
                       Lihat {num(row.photoCount)} foto
                     </Button>
                     {photosCache[str(row.id)]?.length ? (
-                      <div className="flex flex-wrap gap-2">
-                        {photosCache[str(row.id)].map((src, i) => (
-                          <a
-                            key={`${str(row.id)}-photo-${i}`}
-                            href={src}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 hover:ring-orange-400"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={src} alt={`Foto ${i + 1}`} className="w-full h-full object-cover" />
-                          </a>
-                        ))}
-                      </div>
+                      <PhotoLightbox photos={photosCache[str(row.id)]} thumbSize="sm" />
                     ) : null}
                   </div>
                 )}
@@ -592,6 +693,104 @@ function MaintenancePermintaanPageContent() {
             void reload();
           }}
         />
+
+        <Dialog open={!!detailWr} onOpenChange={(open) => { if (!open) closeDetail(); }}>
+          <DialogContent className="max-w-2xl max-h-[min(90dvh,90vh)] overflow-y-auto p-4 sm:p-6">
+            {detailWr && (() => {
+              const dStatus = str(detailWr.status, 'DRAFT') as MaintenanceRequestStatus;
+              const dPriority = str(detailWr.priority, 'MEDIUM') as MaintenancePriority;
+              const dId = str(detailWr.id);
+              const dPhotos = photosCache[dId]?.length
+                ? photosCache[dId]
+                : asArray(detailWr.photos).map(String);
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex flex-wrap items-center gap-2 pr-6">
+                      <span className="font-mono text-sm">{str(detailWr.noWR)}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${WR_STATUS_STYLE[dStatus]}`}>
+                        {WR_STATUS_LABELS[dStatus]}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${WR_PRIORITY_STYLE[dPriority]}`}>
+                        {WR_PRIORITY_LABELS[dPriority]}
+                      </span>
+                    </DialogTitle>
+                    <DialogDescription className="sr-only">Detail permintaan maintenance</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-4 text-sm">
+                    {detailLoading && (
+                      <p className="text-xs text-slate-500">Memuat detail…</p>
+                    )}
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">{str(detailWr.judul)}</h3>
+                      <p className="mt-1 text-slate-600">
+                        Aset: <strong>{str(detailWr.assetKode)}</strong> — {str(detailWr.assetNama)}
+                        {str(detailWr.assetLokasi) ? ` · ${str(detailWr.assetLokasi)}` : ''}
+                      </p>
+                    </div>
+
+                    {str(detailWr.deskripsi) && (
+                      <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Deskripsi</p>
+                        <p className="mt-1 text-slate-800 whitespace-pre-wrap">{str(detailWr.deskripsi)}</p>
+                      </div>
+                    )}
+
+                    {renderWrTimeline(detailWr)}
+
+                    {str(detailWr.rejectReason) && dStatus === 'REJECTED' && (
+                      <p className="text-sm text-red-600 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                        Alasan ditolak: {str(detailWr.rejectReason)}
+                      </p>
+                    )}
+                    {str(detailWr.catatanPenyelesaian) && (
+                      <p className="text-sm text-green-700 bg-green-50 rounded-lg border border-green-200 px-3 py-2">
+                        Penyelesaian: {str(detailWr.catatanPenyelesaian)}
+                      </p>
+                    )}
+
+                    {renderResolution(detailWr)}
+
+                    {expandedId === dId && (
+                      <div className="rounded-lg border bg-slate-50 px-3 py-3 space-y-2">
+                        <Label>Catatan penyelesaian</Label>
+                        <Textarea value={completeNote} onChange={(e) => setCompleteNote(e.target.value)} rows={2} />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              void action(dId, 'complete', { catatanPenyelesaian: completeNote });
+                              setExpandedId(null);
+                            }}
+                          >
+                            Konfirmasi Selesai
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setExpandedId(null)}>Batal</Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {dPhotos.length > 0 && (
+                      <PhotoLightbox
+                        photos={dPhotos}
+                        label={`Foto (${dPhotos.length})`}
+                      />
+                    )}
+
+                    <div className="flex flex-wrap gap-2 pt-1 border-t">
+                      {renderActions(detailWr)}
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={closeDetail}>Tutup</Button>
+                  </DialogFooter>
+                </>
+              );
+            })()}
+          </DialogContent>
+        </Dialog>
       </div>
   );
 }
