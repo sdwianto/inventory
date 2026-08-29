@@ -14,7 +14,7 @@ import { guardPosting } from '@/lib/api/period-lock';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
-import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
+import { isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
@@ -285,7 +285,8 @@ async function mapCpoItemsFromProducts(
     if (!orig) {
       return { error: `Produk ${it.kode || it.localStokId} tidak ditemukan di katalog` };
     }
-    const prod = liveMap.get(String(it.localStokId)) || orig;
+    const prod: LiveCatalogProduct = liveMap.get(String(it.localStokId))
+      || (orig as LiveCatalogProduct);
     if (!isCatalogProductActive(prod)) {
       const label = String(prod.nama || prod.kode || orig.nama || it.localStokId);
       return {

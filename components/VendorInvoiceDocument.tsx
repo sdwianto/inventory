@@ -514,6 +514,7 @@ export default function VendorInvoiceDocument({
         </div>
       </section>
       ) : (
+      <>
       <section className="vendor-invoice-footer-grid grid sm:grid-cols-2 gap-3">
         <div className="border rounded-lg p-3 bg-slate-50">
           <p className="font-medium text-sm mb-2">Perbandingan harga</p>
@@ -632,6 +633,7 @@ export default function VendorInvoiceDocument({
           </div>
         ))}
       </section>
+      </>
       )}
       {tokens.extras.complaintNote && (
         <p className="text-center text-[9px] text-slate-600 mt-3 leading-snug">

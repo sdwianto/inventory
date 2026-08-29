@@ -18,6 +18,10 @@ export type LiveCatalogProduct = {
   itemRole?: string;
   hargaBeli?: number;
   vendorBaseUomId?: string;
+  syncSource?: string;
+  recipeBaseGrams?: number;
+  recipeBaseMl?: number;
+  nutrition?: { gramsPerUnit?: number };
 };
 
 export function isCatalogProductActive(p: LiveCatalogProduct | null | undefined): boolean {

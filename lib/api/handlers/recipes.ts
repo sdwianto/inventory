@@ -26,7 +26,7 @@ import {
   type RecipeImportProduct,
 } from '@/lib/food-production/recipe-import';
 import { isFinishedGoodRole, isIngredientRole, normalizeItemRole } from '@/lib/food-production/item-role';
-import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
+import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
 import {
   convertRecipeLineQtys,
   defaultKitchenSatuan,
@@ -168,7 +168,7 @@ async function enrichLines(
       masterProductId: 1,
       cutoverToKode: 1,
     })
-    .toArray();
+    .toArray() as LiveCatalogProduct[];
   const liveMap = await attachLiveCatalogProducts(
     db,
     String(tenantFilter.tenantId || ''),
@@ -176,7 +176,8 @@ async function enrichLines(
   );
   const out: RecipeLine[] = [];
   for (const line of lines) {
-    const p = liveMap.get(line.productId) || products.find((row) => String(row.id) === line.productId);
+    const p: LiveCatalogProduct | undefined = liveMap.get(line.productId)
+      || products.find((row) => String(row.id) === line.productId);
     if (!p) return { error: `Bahan ${line.productId} tidak ditemukan` };
     if (!isCatalogProductActive(p)) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
