@@ -14,17 +14,284 @@ import {
 import { withTenantFilter } from '@/lib/api/tenant-master';
 import type { AuthContext } from '@/types/auth';
 import { getQtyStokLokasiBatch } from '@/lib/api/stok-lokasi';
+import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
+import {
+  PRODUCTION_PLANS_COLLECTION,
+  collectPlanLineRefs,
+  type ProductionPlanDoc,
+} from '@/lib/food-production/production-plan';
+import { MATERIAL_REQUIREMENTS_COLLECTION } from '@/lib/food-production/material-requirement';
+import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
+import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 
 export const INVENTORY_RELEASES_COLLECTION = 'inventory_releases';
 
 /** RL statuses where stock has been posted out. */
 export const RL_POSTED_STATUSES = ['POSTED'] as const;
 
-const PRODUCTION_KEPERLUAN_RE = /produksi|masak|menu|dapur|porsi|bahan/i;
+const PRODUCTION_KEPERLUAN_RE = /produksi|masak|menu|dapur|porsi|bahan|ayam|ikan|siomay|kremes|katsu|rolade|nasi|sayur|telur|tempe|tahu|sapi|udang|bumbu/i;
+
+/** Keperluan yang bukan konsumsi bahan produksi — skip infer/link wajib. */
+export function isExcludedOperationalKeperluan(keperluan: string): boolean {
+  const k = String(keperluan || '').trim();
+  if (!k) return false;
+  return /cuci|opname|maintenance|janitor|service\s*ac|perbaikan|stok\s*opname/i.test(k);
+}
 
 /** Keperluan RL terlihat untuk bahan produksi — wajib link rencana (server gate). */
 export function looksLikeProductionKeperluan(keperluan: string): boolean {
-  return PRODUCTION_KEPERLUAN_RE.test(String(keperluan || '').trim());
+  const k = String(keperluan || '').trim();
+  if (!k || isExcludedOperationalKeperluan(k)) return false;
+  return PRODUCTION_KEPERLUAN_RE.test(k);
+}
+
+export interface PlanOverlapMatch {
+  productionPlanId: string;
+  productionPlanNo: string;
+  planStatus: string;
+  overlapQty: number;
+  overlapProductCount: number;
+}
+
+/** Rentang hari rencana (UTC+7) untuk cocokkan tanggal RL. */
+export function planDayWindowWib(planTanggal: string): { start: Date; end: Date } {
+  const t = String(planTanggal || '').slice(0, 10);
+  return {
+    start: new Date(`${t}T00:00:00.000+07:00`),
+    end: new Date(`${t}T23:59:59.999+07:00`),
+  };
+}
+
+async function loadPlanRecipeProductIds(
+  db: Db,
+  scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
+  productionPlanId: string,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const mrp = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { productionPlanId }),
+    { sort: { createdAt: -1 }, projection: { lines: 1 } },
+  ) as { lines?: Array<{ productId?: string }> } | null;
+  for (const line of mrp?.lines || []) {
+    const pid = String(line.productId || '').trim();
+    if (pid) ids.add(pid);
+  }
+  if (ids.size) return ids;
+
+  const issues = await db.collection(MATERIAL_ISSUES_COLLECTION)
+    .find(withTenantFilter(scopeAuth, { productionPlanId }), { projection: { lines: 1 } })
+    .toArray();
+  for (const issue of issues) {
+    for (const line of (issue.lines || []) as Array<{ productId?: string }>) {
+      const pid = String(line.productId || '').trim();
+      if (pid) ids.add(pid);
+    }
+  }
+  if (ids.size) return ids;
+
+  // Belum ada MRP/PBL — ambil productId dari BOM resep/menu pada baris rencana.
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { id: productionPlanId }),
+    { projection: { lines: 1 } },
+  ) as Pick<ProductionPlanDoc, 'lines'> | null;
+  if (!plan?.lines?.length) return ids;
+
+  const { menuIds, recipeIds } = collectPlanLineRefs(plan.lines);
+  const recipeIdSet = new Set(recipeIds);
+  if (menuIds.length) {
+    const menus = await db.collection(MENUS_COLLECTION)
+      .find(withTenantFilter(scopeAuth, { id: { $in: menuIds } }))
+      .project({ items: 1 })
+      .toArray() as Array<{ items?: Array<{ recipeId?: string }> }>;
+    for (const menu of menus) {
+      for (const item of menu.items || []) {
+        const rid = String(item.recipeId || '').trim();
+        if (rid) recipeIdSet.add(rid);
+      }
+    }
+  }
+  if (!recipeIdSet.size) return ids;
+
+  const recipes = await db.collection(RECIPES_COLLECTION)
+    .find(withTenantFilter(scopeAuth, { id: { $in: [...recipeIdSet] } }))
+    .project({ lines: 1 })
+    .toArray() as Array<{ lines?: Array<{ productId?: string }> }>;
+  for (const recipe of recipes) {
+    for (const line of recipe.lines || []) {
+      const pid = String(line.productId || '').trim();
+      if (pid) ids.add(pid);
+    }
+  }
+  return ids;
+}
+
+/** Cari rencana eligible yang produk resepnya overlap dengan item release (hari & dapur sama). */
+export async function findProductionPlanOverlapsForRelease(
+  db: Db,
+  scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
+  opts: {
+    productIds: string[];
+    /** Optional qty per productId untuk ranking overlap yang lebih akurat. */
+    productQtyById?: Record<string, number>;
+    releaseDate?: Date;
+    kitchenId?: string;
+  },
+): Promise<PlanOverlapMatch[]> {
+  const releaseProductIds = new Set(opts.productIds.map((id) => String(id || '').trim()).filter(Boolean));
+  if (!releaseProductIds.size) return [];
+
+  const releaseDate = opts.releaseDate || new Date();
+  const kitchenId = String(opts.kitchenId || '').trim();
+
+  const planFilter: Record<string, unknown> = {
+    status: { $in: [...ISSUE_ELIGIBLE_PLAN_STATUSES, 'COMPLETED'] },
+  };
+  if (kitchenId) planFilter.kitchenId = kitchenId;
+
+  const plans = await db.collection(PRODUCTION_PLANS_COLLECTION)
+    .find(withTenantFilter(scopeAuth, planFilter))
+    .project({ id: 1, noDokumen: 1, tanggal: 1, status: 1 })
+    .toArray() as Array<{ id?: string; noDokumen?: string; tanggal?: string; status?: string }>;
+
+  const matches: PlanOverlapMatch[] = [];
+  for (const plan of plans) {
+    const planId = String(plan.id || '').trim();
+    const planTanggal = String(plan.tanggal || '').slice(0, 10);
+    if (!planId || !planTanggal) continue;
+    const { start, end } = planDayWindowWib(planTanggal);
+    if (releaseDate < start || releaseDate > end) continue;
+
+    const recipeIds = await loadPlanRecipeProductIds(db, scopeAuth, planId);
+    if (!recipeIds.size) continue;
+
+    let overlapQty = 0;
+    let overlapProductCount = 0;
+    for (const pid of releaseProductIds) {
+      if (!recipeIds.has(pid)) continue;
+      overlapProductCount += 1;
+      overlapQty += Number(opts.productQtyById?.[pid]) || 1;
+    }
+    if (!overlapProductCount) continue;
+
+    matches.push({
+      productionPlanId: planId,
+      productionPlanNo: String(plan.noDokumen || planId),
+      planStatus: String(plan.status || ''),
+      overlapQty: roundQty(overlapQty),
+      overlapProductCount,
+    });
+  }
+
+  return matches.sort((a, b) => (
+    b.overlapProductCount - a.overlapProductCount
+    || b.overlapQty - a.overlapQty
+  ));
+}
+
+export type InferProductionPlanResult =
+  | { productionPlanId: string; productionPlanNo: string; autoLinked: true }
+  | { ambiguous: PlanOverlapMatch[] }
+  | { planAlreadyCompleted: PlanOverlapMatch[] }
+  | { requiresPlan: true }
+  | null;
+
+/** Infer / validasi link rencana saat buat RL operasional. */
+export async function inferProductionPlanForRelease(
+  db: Db,
+  scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
+  opts: {
+    keperluan: string;
+    productIds: string[];
+    productQtyById?: Record<string, number>;
+    releaseDate?: Date;
+    kitchenId?: string;
+    explicitPlanId?: string;
+  },
+): Promise<InferProductionPlanResult> {
+  const explicit = String(opts.explicitPlanId || '').trim();
+  if (explicit) return null;
+
+  if (isExcludedOperationalKeperluan(opts.keperluan)) return null;
+
+  const matches = await findProductionPlanOverlapsForRelease(db, scopeAuth, {
+    productIds: opts.productIds,
+    productQtyById: opts.productQtyById,
+    releaseDate: opts.releaseDate,
+    kitchenId: opts.kitchenId,
+  });
+
+  const eligible = matches.filter((m) => ISSUE_ELIGIBLE_PLAN_STATUSES.has(m.planStatus));
+  const completedOnly = matches.filter((m) => m.planStatus === 'COMPLETED');
+
+  if (eligible.length === 1) {
+    return {
+      productionPlanId: eligible[0].productionPlanId,
+      productionPlanNo: eligible[0].productionPlanNo,
+      autoLinked: true,
+    };
+  }
+  if (eligible.length > 1) return { ambiguous: eligible };
+  if (!eligible.length && completedOnly.length) return { planAlreadyCompleted: completedOnly };
+
+  if (looksLikeProductionKeperluan(opts.keperluan)) return { requiresPlan: true };
+
+  return null;
+}
+
+/** RL POSTED tanpa planId tapi overlap resep rencana (hari/dapur sama) — untuk readiness. */
+export async function aggregateOrphanOperationalConsumption(
+  db: Db,
+  scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
+  plan: { id: string; tanggal?: string; kitchenId?: string },
+): Promise<Map<string, PlanConsumptionEntry>> {
+  const map = new Map<string, PlanConsumptionEntry>();
+  const planId = String(plan.id || '').trim();
+  const planTanggal = String(plan.tanggal || '').slice(0, 10);
+  if (!planId || !planTanggal) return map;
+
+  const recipeIds = await loadPlanRecipeProductIds(db, scopeAuth, planId);
+  if (!recipeIds.size) return map;
+
+  const { start, end } = planDayWindowWib(planTanggal);
+  // Jangan filter kitchenId di inventory_releases — dokumen RL historis tidak punya field itu.
+  const filter: Record<string, unknown> = {
+    status: { $in: [...RL_POSTED_STATUSES] },
+    $or: [
+      { productionPlanId: { $exists: false } },
+      { productionPlanId: null },
+      { productionPlanId: '' },
+    ],
+    tanggal: { $gte: start, $lte: end },
+  };
+
+  const releases = await db.collection(INVENTORY_RELEASES_COLLECTION)
+    .find(withTenantFilter(scopeAuth, filter))
+    .project({ noRelease: 1, items: 1, keperluan: 1 })
+    .toArray();
+
+  for (const rl of releases) {
+    if (isExcludedOperationalKeperluan(String(rl.keperluan || ''))) continue;
+    const noRelease = String(rl.noRelease || '');
+    for (const it of (rl.items || []) as Array<{ stokId?: string; qtyBase?: number; qty?: number }>) {
+      const pid = String(it.stokId || '').trim();
+      const qty = Number(it.qtyBase ?? it.qty) || 0;
+      if (!pid || !(qty > 0) || !recipeIds.has(pid)) continue;
+      addConsumption(map, pid, 'operational', qty, { noRelease });
+    }
+  }
+  return map;
+}
+
+function mergeConsumptionMaps(
+  base: Map<string, PlanConsumptionEntry>,
+  extra: Map<string, PlanConsumptionEntry>,
+): Map<string, PlanConsumptionEntry> {
+  for (const [pid, entry] of extra) {
+    for (const ref of entry.operationalRefs) {
+      addConsumption(base, pid, 'operational', ref.qty, { noRelease: ref.noRelease });
+    }
+  }
+  return base;
 }
 
 export interface PlanConsumptionSummary {
@@ -35,21 +302,34 @@ export interface PlanConsumptionSummary {
   pblCompletedCount: number;
 }
 
-/** Ringkasan konsumsi bahan per rencana (RL linked + PBL completed). */
+/** Ringkasan konsumsi bahan per rencana (RL linked + orphan same-day + PBL completed). */
 export async function loadPlanConsumptionSummary(
   db: Db,
   scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
   productionPlanId: string,
 ): Promise<PlanConsumptionSummary> {
   const planId = String(productionPlanId || '').trim();
-  const map = await aggregatePlanMaterialConsumption(db, scopeAuth, planId);
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { id: planId }),
+    { projection: { tanggal: 1, kitchenId: 1 } },
+  ) as { tanggal?: string; kitchenId?: string } | null;
+  const map = await aggregatePlanMaterialConsumption(db, scopeAuth, planId, {
+    includeOrphanOperational: true,
+    planMeta: plan
+      ? { tanggal: plan.tanggal, kitchenId: plan.kitchenId }
+      : undefined,
+  });
   let qtyFromRl = 0;
   let qtyFromPbl = 0;
   for (const entry of map.values()) {
     qtyFromRl += entry.operational;
     qtyFromPbl += entry.pbl;
   }
-  const [rlCount, pblCompletedCount] = await Promise.all([
+  const orphanNos = new Set<string>();
+  for (const entry of map.values()) {
+    for (const ref of entry.operationalRefs) orphanNos.add(ref.noRelease);
+  }
+  const [rlCountLinked, pblCompletedCount] = await Promise.all([
     db.collection(INVENTORY_RELEASES_COLLECTION).countDocuments(
       withTenantFilter(scopeAuth, {
         productionPlanId: planId,
@@ -69,7 +349,7 @@ export async function loadPlanConsumptionSummary(
     qtyFromRl,
     qtyFromPbl,
     qtyTotal: roundQty(qtyFromRl + qtyFromPbl),
-    rlCount,
+    rlCount: Math.max(rlCountLinked, orphanNos.size),
     pblCompletedCount,
   };
 }
@@ -153,7 +433,12 @@ export async function aggregatePlanMaterialConsumption(
   db: Db,
   scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
   productionPlanId: string,
-  opts: { excludeIssueId?: string } = {},
+  opts: {
+    excludeIssueId?: string;
+    /** Sertakan RL operasional same-day yang belum punya productionPlanId. */
+    includeOrphanOperational?: boolean;
+    planMeta?: { tanggal?: string; kitchenId?: string };
+  } = {},
 ): Promise<Map<string, PlanConsumptionEntry>> {
   const map = new Map<string, PlanConsumptionEntry>();
   const planId = String(productionPlanId || '').trim();
@@ -194,6 +479,15 @@ export async function aggregatePlanMaterialConsumption(
     }
   }
 
+  if (opts.includeOrphanOperational && opts.planMeta) {
+    const orphan = await aggregateOrphanOperationalConsumption(db, scopeAuth, {
+      id: planId,
+      tanggal: opts.planMeta.tanggal,
+      kitchenId: opts.planMeta.kitchenId,
+    });
+    mergeConsumptionMaps(map, orphan);
+  }
+
   return map;
 }
 
@@ -213,11 +507,22 @@ export async function buildIssueReconciliation(
   scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
   issue: Pick<MaterialIssueDoc, 'id' | 'productionPlanId' | 'lines' | 'tenantId'>,
 ): Promise<IssueReconciliation> {
+  const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { id: issue.productionPlanId }),
+    { projection: { tanggal: 1, kitchenId: 1 } },
+  ) as { tanggal?: string; kitchenId?: string } | null;
+
   const consumption = await aggregatePlanMaterialConsumption(
     db,
     scopeAuth,
     issue.productionPlanId,
-    { excludeIssueId: issue.id },
+    {
+      excludeIssueId: issue.id,
+      includeOrphanOperational: true,
+      planMeta: plan
+        ? { tanggal: plan.tanggal, kitchenId: plan.kitchenId }
+        : undefined,
+    },
   );
 
   const whPairs = (issue.lines || []).map((l) => ({
@@ -315,8 +620,12 @@ export async function seedNetIssueLines(
   productionPlanId: string,
   tenantId: string,
   lines: MaterialIssueLine[],
+  planMeta?: { tanggal?: string; kitchenId?: string },
 ): Promise<MaterialIssueLine[]> {
-  const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, productionPlanId);
+  const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, productionPlanId, {
+    includeOrphanOperational: true,
+    planMeta,
+  });
 
   const whByProduct = new Map<string, string>();
   for (const l of lines) {

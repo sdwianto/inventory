@@ -4,6 +4,8 @@ import {
   applyReconciliationToLines,
   mergeConsumptionLinesForCost,
   looksLikeProductionKeperluan,
+  isExcludedOperationalKeperluan,
+  planDayWindowWib,
 } from '@/lib/food-production/material-issue-reconcile';
 import type { MaterialIssueLine } from '@/lib/food-production/material-issue';
 import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
@@ -80,6 +82,22 @@ describe('material-issue-reconcile', () => {
 
   it('looksLikeProductionKeperluan detects production keywords', () => {
     expect(looksLikeProductionKeperluan('Masak menu harian')).toBe(true);
+    expect(looksLikeProductionKeperluan('AYAM KREMES')).toBe(true);
+    expect(looksLikeProductionKeperluan('SIOMAY IKAN')).toBe(true);
     expect(looksLikeProductionKeperluan('Maintenance AC')).toBe(false);
+    expect(looksLikeProductionKeperluan('mencuci alat masak')).toBe(false);
+    expect(looksLikeProductionKeperluan('STOK OPNAME')).toBe(false);
+  });
+
+  it('isExcludedOperationalKeperluan skips non-production ops', () => {
+    expect(isExcludedOperationalKeperluan('STOK OPNAME')).toBe(true);
+    expect(isExcludedOperationalKeperluan('mencuci alat masak')).toBe(true);
+    expect(isExcludedOperationalKeperluan('AYAM KREMES')).toBe(false);
+  });
+
+  it('planDayWindowWib covers WIB calendar day', () => {
+    const { start, end } = planDayWindowWib('2026-08-27');
+    expect(start.toISOString()).toBe('2026-08-26T17:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-08-27T16:59:59.999Z');
   });
 });

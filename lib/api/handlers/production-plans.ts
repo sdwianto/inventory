@@ -917,7 +917,10 @@ export async function handleProductionPlans({
     const built = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in built && built.error) return err(built.error, 400);
 
-    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, id);
+    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, id, {
+      includeOrphanOperational: true,
+      planMeta: { tanggal: plan.tanggal, kitchenId: plan.kitchenId },
+    });
     const netLines = applyConsumptionToRequirementLines(built.lines || [], consumption);
     const shortageCount = netLines.summary.shortageCount;
     const stockReady = shortageCount === 0;

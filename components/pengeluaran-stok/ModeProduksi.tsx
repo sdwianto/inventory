@@ -119,6 +119,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
 
   const [rows, setRows] = useState<IssueRow[]>([]);
   const [plans, setPlans] = useState<PlanOpt[]>([]);
+  const [completedPblPlanIds, setCompletedPblPlanIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [openCreate, setOpenCreate] = useState(false);
   const [detail, setDetail] = useState<IssueRow | null>(null);
@@ -128,6 +129,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
   const [planReadiness, setPlanReadiness] = useState<{
     shortageCount: number;
     shortageLines: Array<{ productKode?: string; productNama?: string; qtyNet?: number; satuan?: string }>;
+    issueCompleted?: boolean;
+    completedIssueNo?: string | null;
   } | null>(null);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [overrideShortage, setOverrideShortage] = useState(false);
@@ -148,23 +151,37 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
       if (filterStatus) qs.set('status', filterStatus);
       if (filterTanggal) qs.set('tanggal', filterTanggal);
       const issueUrl = qs.toString() ? `/api/material-issues?${qs}` : '/api/material-issues';
-      const [iRes, pRes] = await Promise.all([
+      const [iRes, pRes, completedRes] = await Promise.all([
         fetch(issueUrl, { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } }),
         fetch('/api/production-plans', { headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() } }),
+        fetch('/api/material-issues?status=COMPLETED', {
+          headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+        }),
       ]);
       const iData = await iRes.json();
       const pData = await pRes.json();
+      const completedData = await completedRes.json();
       if (!iRes.ok) throw new Error(iData?.error || 'Gagal memuat');
       setRows(Array.isArray(iData) ? iData : []);
       setPlans((Array.isArray(pData) ? pData : []).filter((p: PlanOpt) =>
         ISSUE_ELIGIBLE_PLAN_STATUSES.has(p.status),
       ));
+      const donePlanIds = new Set<string>();
+      for (const row of (Array.isArray(completedData) ? completedData : []) as IssueRow[]) {
+        if (row.productionPlanId) donePlanIds.add(row.productionPlanId);
+      }
+      setCompletedPblPlanIds(donePlanIds);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat');
     } finally {
       setLoading(false);
     }
   }, [filterStatus, filterTanggal]);
+
+  const creatablePlans = useMemo(
+    () => plans.filter((p) => !completedPblPlanIds.has(p.id)),
+    [plans, completedPblPlanIds],
+  );
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -208,6 +225,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
         setPlanReadiness({
           shortageCount: Number(data.shortageCount || 0),
           shortageLines: Array.isArray(data.shortageLines) ? data.shortageLines : [],
+          issueCompleted: data.issueCompleted === true,
+          completedIssueNo: data.completedIssueNo ? String(data.completedIssueNo) : null,
         });
       } catch {
         if (!cancelled) setPlanReadiness(null);
@@ -293,6 +312,14 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
   async function createIssue() {
     if (!planId) {
       toast.error('Pilih rencana produksi');
+      return;
+    }
+    if (planReadiness?.issueCompleted) {
+      toast.error(
+        planReadiness.completedIssueNo
+          ? `PBL ${planReadiness.completedIssueNo} sudah selesai — buka detail & Sinkron, jangan buat PBL baru`
+          : 'PBL untuk rencana ini sudah selesai',
+      );
       return;
     }
     const shortageCount = planReadiness?.shortageCount || 0;
@@ -663,12 +690,23 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
               onChange={(e) => setPlanId(e.target.value)}
             >
               <option value="">— Pilih —</option>
-              {plans.map((p) => (
+              {creatablePlans.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.noDokumen} · {p.tanggal} · {p.kitchenNama || 'Dapur'}
                 </option>
               ))}
             </select>
+            {!creatablePlans.length && (
+              <p className="text-xs text-muted-foreground">
+                Tidak ada rencana baru — semua rencana aktif sudah punya PBL selesai.
+              </p>
+            )}
+            {planReadiness?.issueCompleted && (
+              <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-800">
+                PBL {planReadiness.completedIssueNo || ''} sudah selesai untuk rencana ini.
+                Buka detail PBL → <strong>Sinkron</strong> jika ada RL operasional, jangan buat PBL baru.
+              </div>
+            )}
             {mrpId && (
               <p className="text-xs text-muted-foreground">
                 Dari MRP terpilih (seed qtyGross).
@@ -677,7 +715,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
             {readinessLoading && (
               <p className="text-xs text-muted-foreground">Cek kelengkapan bahan…</p>
             )}
-            {planReadiness && planReadiness.shortageCount > 0 && (
+            {planReadiness && planReadiness.shortageCount > 0 && !planReadiness.issueCompleted && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-2 space-y-2">
                 <p className="text-xs text-amber-800 font-medium">
                   Bahan belum lengkap — {planReadiness.shortageCount} item kurang
@@ -720,6 +758,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
               disabled={
                 saving
                 || !planId
+                || planReadiness?.issueCompleted
                 || Boolean(planReadiness && planReadiness.shortageCount > 0
                   && (!overrideShortage || !overrideReason.trim()))
               }

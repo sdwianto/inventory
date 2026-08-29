@@ -357,13 +357,27 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       return err(`Rencana status ${plan.status} belum siap (wajib Disetujui/Diproses)`, 400);
     }
 
+    const completedIssue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, status: 'COMPLETED' }),
+      { projection: { id: 1, noDokumen: 1 } },
+    );
+    if (completedIssue) {
+      return err(
+        `Sudah ada pengambilan selesai ${String(completedIssue.noDokumen || completedIssue.id)}. Buka PBL tersebut (Sinkron) — jangan buat PBL baru.`,
+        400,
+      );
+    }
+
     // Gate bisnis: idealnya bahan sudah lengkap (resep-vs-stok, atau PO-vs-diterima
     // begitu PO diberlakukan — lihat useLinkedPoAsTarget di buildPlanMaterialExplosion).
     // Tapi operasional lapangan tidak selalu bisa 100% lengkap — blokir LUNAK: boleh
     // lanjut kalau admin sadar memilih override + isi alasan (tercatat di riwayat & audit).
     const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
     if ('error' in readiness && readiness.error) return err(readiness.error, 400);
-    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, plan.id);
+    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, plan.id, {
+      includeOrphanOperational: true,
+      planMeta: { tanggal: plan.tanggal, kitchenId: plan.kitchenId },
+    });
     const netReadiness = applyConsumptionToRequirementLines(readiness.lines || [], consumption);
     const shortageCount = netReadiness.summary.shortageCount;
     const overrideShortage = issueBody.overrideShortage === true;
@@ -397,7 +411,10 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
 
     const tenantId = tenantIdForWrite(scopeAuth, issueBody);
     let lines = seeded.lines;
-    lines = await seedNetIssueLines(db, scopeAuth, plan.id, tenantId, lines);
+    lines = await seedNetIssueLines(db, scopeAuth, plan.id, tenantId, lines, {
+      tanggal: plan.tanggal,
+      kitchenId: plan.kitchenId,
+    });
     if (issueBody.lines != null) {
       const normalized = normalizeIssueLines(issueBody.lines);
       if ('error' in normalized) return err(normalized.error, 400);

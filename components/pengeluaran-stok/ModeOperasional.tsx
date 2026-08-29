@@ -42,6 +42,7 @@ import {
   type ReleaseFormState,
 } from '@/lib/pengeluaran-stok/release-form-items';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
+import { looksLikeProductionKeperluan } from '@/lib/food-production/material-issue-reconcile';
 
 const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 
@@ -113,10 +114,10 @@ export function ModeOperasional() {
     [productionPlansData],
   );
 
-  const looksLikeProductionKeperluan = useMemo(() => {
-    const k = form.keperluan.trim().toLowerCase();
-    return /produksi|masak|menu|dapur|porsi|bahan/.test(k);
-  }, [form.keperluan]);
+  const looksLikeProductionKeperluanForm = useMemo(
+    () => looksLikeProductionKeperluan(form.keperluan),
+    [form.keperluan],
+  );
 
   const { data: saldoData } = useApiQuery<JsonObject>(
     queryKeys.stokSaldo.list,
@@ -412,6 +413,10 @@ export function ModeOperasional() {
   const save = async (submit = false) => {
     if (!form.keperluan.trim()) { toast.error('Keperluan wajib diisi'); return; }
     if (!form.items.length) { toast.error('Tambah minimal 1 item'); return; }
+    if (looksLikeProductionKeperluanForm && !form.productionPlanId) {
+      toast.error('Pilih Rencana Produksi — bahan menu/produksi wajib ditautkan ke RPN');
+      return;
+    }
     setSaving(true);
     try {
       const items = form.items.map(({ clientKey: _ck, ...rest }) => rest);
@@ -596,7 +601,10 @@ export function ModeOperasional() {
                 </Select>
               </div>
               <div>
-                <Label>Rencana produksi (opsional)</Label>
+                <Label>
+                  Rencana produksi
+                  {looksLikeProductionKeperluanForm ? ' *' : ' (opsional)'}
+                </Label>
                 <select
                   className="w-full h-10 border rounded-md px-2 text-sm bg-white"
                   value={form.productionPlanId}
@@ -614,10 +622,10 @@ export function ModeOperasional() {
                 </p>
               </div>
             </div>
-            {looksLikeProductionKeperluan && !form.productionPlanId && (
+            {looksLikeProductionKeperluanForm && !form.productionPlanId && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Keperluan terlihat untuk produksi — pertimbangkan pilih Rencana Produksi
-                atau gunakan Mode Produksi (PBL) sebagai jalur resmi.
+                Keperluan terlihat untuk produksi — <strong>wajib</strong> pilih Rencana Produksi
+                agar stok tercatat ke RPN (PBL bisa sinkron otomatis).
               </div>
             )}
             <div>

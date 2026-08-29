@@ -32,7 +32,11 @@ import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
-import { looksLikeProductionKeperluan } from '@/lib/food-production/material-issue-reconcile';
+import {
+  inferProductionPlanForRelease,
+  looksLikeProductionKeperluan,
+} from '@/lib/food-production/material-issue-reconcile';
+import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -158,6 +162,62 @@ async function buildReleaseLineItems(
   return { lineItems };
 }
 
+async function resolveReleaseProductionPlan(
+  db: Db,
+  scopeAuth: AuthContext,
+  url: HandlerContext['url'],
+  request: HandlerContext['request'],
+  opts: {
+    keperluan: string;
+    productIds: string[];
+    productQtyById?: Record<string, number>;
+    explicitPlanId?: string;
+    releaseDate?: Date;
+  },
+): Promise<
+  | { productionPlanId?: string; productionPlanNo?: string; autoLinked?: boolean }
+  | { error: string }
+> {
+  const kitchenId = resolveKitchenIdFilter(url, request);
+  const infer = await inferProductionPlanForRelease(db, scopeAuth, {
+    keperluan: opts.keperluan,
+    productIds: opts.productIds,
+    productQtyById: opts.productQtyById,
+    releaseDate: opts.releaseDate,
+    kitchenId,
+    explicitPlanId: opts.explicitPlanId,
+  });
+
+  if (infer && 'autoLinked' in infer) {
+    return {
+      productionPlanId: infer.productionPlanId,
+      productionPlanNo: infer.productionPlanNo,
+      autoLinked: true,
+    };
+  }
+  if (infer && 'ambiguous' in infer) {
+    const list = infer.ambiguous.map((m) => m.productionPlanNo).join(', ');
+    return {
+      error: `Barang cocok beberapa rencana produksi (${list}). Pilih Rencana Produksi.`,
+    };
+  }
+  if (infer && 'planAlreadyCompleted' in infer) {
+    const list = infer.planAlreadyCompleted.map((m) => m.productionPlanNo).join(', ');
+    return {
+      error: `Rencana ${list} sudah selesai — bahan sudah tercatat. Jangan release operasional duplikat; cek PBL/RL yang ada.`,
+    };
+  }
+  if (infer && 'requiresPlan' in infer) {
+    return {
+      error: 'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL).',
+    };
+  }
+
+  const explicit = String(opts.explicitPlanId || '').trim();
+  if (!explicit) return {};
+  return resolveProductionPlanLink(db, scopeAuth, explicit);
+}
+
 async function resolveProductionPlanLink(
   db: Db,
   scopeAuth: AuthContext,
@@ -220,13 +280,6 @@ export async function handleInventoryReleases({
     if (!items.length) return err('Minimal 1 item');
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
     const keperluan = String(releaseBody.keperluan).trim();
-    const planIdRaw = String(releaseBody.productionPlanId || '').trim();
-    if (looksLikeProductionKeperluan(keperluan) && !planIdRaw) {
-      return err(
-        'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL)',
-        400,
-      );
-    }
     const tenantId = tenantIdForWrite(scopeAuth, releaseBody);
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi);
     if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
@@ -235,10 +288,24 @@ export async function handleInventoryReleases({
     if ('error' in built) return err(built.error, built.status || 400);
     const lineItems = built.lineItems;
 
-    const planLink = await resolveProductionPlanLink(db, scopeAuth, releaseBody.productionPlanId);
-    if ('error' in planLink) return err(planLink.error, 400);
-
+    const productIds = lineItems.map((it) => String(it.stokId || '').trim()).filter(Boolean);
+    const productQtyById: Record<string, number> = {};
+    for (const it of lineItems) {
+      const pid = String(it.stokId || '').trim();
+      if (!pid) continue;
+      productQtyById[pid] = (productQtyById[pid] || 0) + (Number(it.qtyBase ?? it.qty) || 0);
+    }
     const now = new Date();
+    const kitchenId = resolveKitchenIdFilter(url, request);
+    const planResolved = await resolveReleaseProductionPlan(db, scopeAuth, url, request, {
+      keperluan,
+      productIds,
+      productQtyById,
+      explicitPlanId: String(releaseBody.productionPlanId || '').trim() || undefined,
+      releaseDate: now,
+    });
+    if ('error' in planResolved) return err(planResolved.error, 400);
+
     const submitNow = releaseBody.submit === true;
     const noRelease = await nextDocNumber(db, tenantId, 'RL', 'RL');
     const doc = stampTenantId(tenantId, {
@@ -248,13 +315,19 @@ export async function handleInventoryReleases({
       tanggal: now,
       lokasiKode,
       lokasiNama: warehouseLabel(lokasiKode),
+      ...(kitchenId ? { kitchenId } : {}),
       keperluan: String(releaseBody.keperluan).trim(),
-      keterangan: releaseBody.keterangan || '',
+      keterangan: [
+        releaseBody.keterangan || '',
+        planResolved.autoLinked
+          ? `[auto-link ${planResolved.productionPlanNo}]`
+          : '',
+      ].filter(Boolean).join(' ').trim(),
       maintenanceRequestId: releaseBody.maintenanceRequestId || null,
       assetId: releaseBody.assetId || null,
-      ...(planLink.productionPlanId ? {
-        productionPlanId: planLink.productionPlanId,
-        productionPlanNo: planLink.productionPlanNo,
+      ...(planResolved.productionPlanId ? {
+        productionPlanId: planResolved.productionPlanId,
+        productionPlanNo: planResolved.productionPlanNo,
       } : {}),
       items: lineItems,
       createdBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
@@ -295,16 +368,6 @@ export async function handleInventoryReleases({
     if (!items.length) return err('Minimal 1 item');
     if (!releaseBody.keperluan?.trim()) return err('Keperluan operasional wajib diisi');
     const keperluan = String(releaseBody.keperluan).trim();
-    const planIdRaw = releaseBody.productionPlanId !== undefined
-      ? String(releaseBody.productionPlanId || '').trim()
-      : String(doc.productionPlanId || '').trim();
-    if (looksLikeProductionKeperluan(keperluan) && !planIdRaw) {
-      return err(
-        'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL)',
-        400,
-      );
-    }
-
     const tenantId = doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody);
     const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi || doc.lokasiKode);
     if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
@@ -312,10 +375,24 @@ export async function handleInventoryReleases({
     const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, items);
     if ('error' in built) return err(built.error, built.status || 400);
 
-    const planLink = releaseBody.productionPlanId !== undefined
-      ? await resolveProductionPlanLink(db, scopeAuth, releaseBody.productionPlanId)
-      : {};
-    if ('error' in planLink) return err(planLink.error, 400);
+    const productIds = built.lineItems.map((it) => String(it.stokId || '').trim()).filter(Boolean);
+    const productQtyById: Record<string, number> = {};
+    for (const it of built.lineItems) {
+      const pid = String(it.stokId || '').trim();
+      if (!pid) continue;
+      productQtyById[pid] = (productQtyById[pid] || 0) + (Number(it.qtyBase ?? it.qty) || 0);
+    }
+    const explicitPlanId = releaseBody.productionPlanId !== undefined
+      ? String(releaseBody.productionPlanId || '').trim()
+      : String(doc.productionPlanId || '').trim();
+    const planResolved = await resolveReleaseProductionPlan(db, scopeAuth, url, request, {
+      keperluan,
+      productIds,
+      productQtyById,
+      explicitPlanId: explicitPlanId || undefined,
+      releaseDate: doc.tanggal ? new Date(String(doc.tanggal)) : new Date(),
+    });
+    if ('error' in planResolved) return err(planResolved.error, 400);
 
     const submitNow = releaseBody.submit === true;
     if (submitNow) {
@@ -340,11 +417,11 @@ export async function handleInventoryReleases({
       updatedAt: now,
     };
 
-    if (releaseBody.productionPlanId !== undefined) {
-      if (planLink.productionPlanId) {
-        patch.productionPlanId = planLink.productionPlanId;
-        patch.productionPlanNo = planLink.productionPlanNo;
-      } else {
+    if (releaseBody.productionPlanId !== undefined || planResolved.productionPlanId) {
+      if (planResolved.productionPlanId) {
+        patch.productionPlanId = planResolved.productionPlanId;
+        patch.productionPlanNo = planResolved.productionPlanNo;
+      } else if (releaseBody.productionPlanId !== undefined) {
         patch.productionPlanId = null;
         patch.productionPlanNo = null;
       }
@@ -381,6 +458,12 @@ export async function handleInventoryReleases({
     if (doc.createdBy?.userId !== auth.userId && !auth.isMaster && auth.role !== 'ADMIN') {
       return err('Hanya pembuat yang bisa mengajukan', 403);
     }
+    if (looksLikeProductionKeperluan(String(doc.keperluan || '')) && !String(doc.productionPlanId || '').trim()) {
+      return err(
+        'Release bahan produksi tanpa Rencana Produksi — pilih RPN dulu sebelum ajukan.',
+        400,
+      );
+    }
     const now = new Date();
     await db.collection('inventory_releases').updateOne(
       { id: doc.id },
@@ -403,6 +486,12 @@ export async function handleInventoryReleases({
     if (doc.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
     if (doc.createdBy?.userId === auth.userId && !auth.isMaster && auth.role !== 'ADMIN') {
       return err('Tidak bisa menyetujui permintaan sendiri', 403);
+    }
+    if (looksLikeProductionKeperluan(String(doc.keperluan || '')) && !String(doc.productionPlanId || '').trim()) {
+      return err(
+        'Release bahan produksi tanpa Rencana Produksi — edit draft & pilih RPN dulu, atau batalkan.',
+        400,
+      );
     }
 
     const tenantId = doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody);
