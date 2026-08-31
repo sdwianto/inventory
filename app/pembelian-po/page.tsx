@@ -9,9 +9,17 @@ import PoFormDialog from '@/components/pembelian-po/PoFormDialog';
 import PoListCard from '@/components/pembelian-po/PoListCard';
 import { Button } from '@/components/ui/button';
 import {
-  CalendarDays, Plus, RefreshCw, ShoppingBag,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  CalendarDays, ChevronDown, Plus, RefreshCw, ShoppingBag,
 } from 'lucide-react';
-import { formatArrivalLabel, type PoArrivalFields } from '@/lib/po-calendar';
+import { formatArrivalLabel, PO_STATUS_ORDER, PO_STATUS_STYLE, type PoArrivalFields } from '@/lib/po-calendar';
 import { useCustomerPoPage } from '@/lib/hooks/use-customer-po-page';
 
 function CustomerPoPageContent() {
@@ -33,6 +41,11 @@ function CustomerPoPageContent() {
     handleSelectDate,
     listTitle,
     filteredList,
+    statusFilters,
+    statusCounts,
+    allStatusesSelected,
+    toggleStatusFilter,
+    selectAllStatuses,
     expandedId,
     setExpandedId,
     hasMore,
@@ -139,7 +152,59 @@ function CustomerPoPageContent() {
                   <p className="text-xs text-slate-500">{formatArrivalLabel(selectedDate)}</p>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap items-center">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 gap-1.5">
+                      Status
+                      <span className="text-xs font-normal text-slate-500">
+                        {allStatusesSelected
+                          ? '(semua)'
+                          : `(${statusFilters.size}/${PO_STATUS_ORDER.length})`}
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-[min(92vw,18rem)] max-h-[min(70vh,22rem)] overflow-y-auto">
+                    <DropdownMenuLabel className="font-normal text-xs text-muted-foreground">
+                      Centang status yang ditampilkan
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {PO_STATUS_ORDER.map((status) => {
+                      const checked = statusFilters.has(status);
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={status}
+                          checked={checked}
+                          onCheckedChange={() => toggleStatusFilter(status)}
+                          onSelect={(e) => e.preventDefault()}
+                          className="text-xs"
+                        >
+                          <span className="flex w-full items-center justify-between gap-3">
+                            <span className={`rounded border px-1.5 py-0.5 font-semibold ${PO_STATUS_STYLE[status]}`}>
+                              {status}
+                            </span>
+                            <span className="tabular-nums text-muted-foreground">
+                              {statusCounts[status] || 0}
+                            </span>
+                          </span>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
+                    {!allStatusesSelected && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <button
+                          type="button"
+                          className="w-full px-2 py-1.5 text-left text-xs text-orange-700 hover:bg-orange-50 rounded-sm"
+                          onClick={selectAllStatuses}
+                        >
+                          Tampilkan semua
+                        </button>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 {selectedDate && (
                   <Button variant="outline" size="sm" onClick={() => setShowAll((v) => !v)}>
                     {showAll ? 'Filter tanggal' : 'Lihat semua'}
@@ -156,9 +221,11 @@ function CustomerPoPageContent() {
             {!filteredList.length ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12 text-sm">
                 <CalendarDays className="w-10 h-10 mb-2 opacity-40" />
-                {selectedDate && !showAll
-                  ? 'Belum ada PO untuk tanggal ini — klik + di kalender untuk buat'
-                  : 'Belum ada PO — pilih tanggal di kalender'}
+                {!allStatusesSelected && Object.values(statusCounts).some((c) => c > 0)
+                  ? 'Tidak ada PO untuk status yang dipilih — klik Tampilkan semua'
+                  : selectedDate && !showAll
+                    ? 'Belum ada PO untuk tanggal ini — klik + di kalender untuk buat'
+                    : 'Belum ada PO — pilih tanggal di kalender'}
               </div>
             ) : (
               <div className="space-y-2 overflow-y-auto max-h-[520px] pr-1">

@@ -10,7 +10,7 @@ import { fetchJson } from '@/lib/fetch-json';
 import { getUser } from '@/lib/auth-client';
 import { poEstimasiFromProduct, parseEstimasiHargaInput } from '@/lib/po-estimasi-harga';
 import {
-  dateKey, formatArrivalLabel, getPoArrivalDate,
+  dateKey, formatArrivalLabel, getPoArrivalDate, PO_STATUS_ORDER,
 } from '@/lib/po-calendar';
 import { formatDate } from '@/lib/format';
 import {
@@ -62,6 +62,7 @@ export function useCustomerPoPage() {
   const [submitting, setSubmitting] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [statusFilters, setStatusFilters] = useState(() => new Set<string>(PO_STATUS_ORDER));
   const autoSyncBusy = useRef(false);
   const autoSyncCooldownUntil = useRef(0);
   const [vendorSyncJobId, setVendorSyncJobId] = useState<string | null>(null);
@@ -346,12 +347,39 @@ export function useCustomerPoPage() {
     return () => clearTimeout(t);
   }, [user, pendingVendorSyncCount, vendorSyncJobId, runAutoVendorSync]);
 
-  const filteredList = useMemo(() => {
+  const dateFilteredList = useMemo(() => {
     const rows = Array.isArray(list) ? list : [];
     if (showAll || !selectedDate) return rows;
     const key = dateKey(selectedDate);
     return rows.filter((po) => dateKey(getPoArrivalDate(po)) === key);
   }, [list, selectedDate, showAll]);
+
+  const statusCounts = useMemo(() => {
+    const counts = Object.fromEntries(PO_STATUS_ORDER.map((s) => [s, 0])) as Record<string, number>;
+    for (const po of dateFilteredList) {
+      const st = String(po.status || '').toUpperCase();
+      if (counts[st] !== undefined) counts[st] += 1;
+    }
+    return counts;
+  }, [dateFilteredList]);
+
+  const filteredList = useMemo(
+    () => dateFilteredList.filter((po) => statusFilters.has(String(po.status || '').toUpperCase())),
+    [dateFilteredList, statusFilters],
+  );
+
+  const allStatusesSelected = PO_STATUS_ORDER.every((s) => statusFilters.has(s));
+
+  const toggleStatusFilter = (status: string) => {
+    setStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  };
+
+  const selectAllStatuses = () => setStatusFilters(new Set(PO_STATUS_ORDER));
 
   const openCreate = (date?: Date | string | null) => {
     const d = date ? new Date(date) : selectedDate ? new Date(selectedDate) : new Date();
@@ -886,6 +914,11 @@ export function useCustomerPoPage() {
     handleSelectDate,
     listTitle,
     filteredList,
+    statusFilters,
+    statusCounts,
+    allStatusesSelected,
+    toggleStatusFilter,
+    selectAllStatuses,
     expandedId,
     setExpandedId,
     hasMore,

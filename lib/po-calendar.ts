@@ -11,6 +11,7 @@ export const PO_STATUS_STYLE = {
   SUBMITTED: 'bg-blue-100 text-blue-800 border-blue-300',
   CONFIRMED: 'bg-indigo-100 text-indigo-800 border-indigo-300',
   PARTIAL_CANCELLED: 'bg-rose-100 text-rose-800 border-rose-300',
+  CANCELLED: 'bg-slate-200 text-slate-600 border-slate-400',
   PARTIAL_SHIPPED: 'bg-amber-100 text-amber-800 border-amber-300',
   SHIPPED: 'bg-orange-100 text-orange-800 border-orange-300',
   PARTIAL_RECEIVED: 'bg-teal-100 text-teal-800 border-teal-300',
@@ -26,6 +27,7 @@ export const PO_STATUS_DOT = {
   SUBMITTED: 'bg-blue-600',
   CONFIRMED: 'bg-indigo-600',
   PARTIAL_CANCELLED: 'bg-rose-600',
+  CANCELLED: 'bg-slate-500',
   PARTIAL_SHIPPED: 'bg-amber-600',
   SHIPPED: 'bg-orange-600',
   PARTIAL_RECEIVED: 'bg-teal-600',
@@ -42,6 +44,7 @@ export const PO_STATUS_VISUAL = {
   SUBMITTED: { color: '#1d4ed8', variant: 'solid' },
   CONFIRMED: { color: '#7c3aed', variant: 'ring' },
   PARTIAL_CANCELLED: { color: '#e11d48', variant: 'striped' },
+  CANCELLED: { color: '#64748b', variant: 'solid' },
   PARTIAL_SHIPPED: { color: '#b45309', variant: 'striped' },
   SHIPPED: { color: '#dc2626', variant: 'solid' },
   PARTIAL_RECEIVED: { color: '#0284c7', variant: 'striped' },
@@ -57,7 +60,8 @@ export const PO_STATUS_COLOR = Object.fromEntries(
 ) as Record<PoStatus, string>;
 
 export const PO_STATUS_ORDER: PoStatus[] = [
-  'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUBMITTED', 'CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED',
+  'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUBMITTED', 'CONFIRMED',
+  'PARTIAL_CANCELLED', 'CANCELLED', 'PARTIAL_SHIPPED',
   'SHIPPED', 'PARTIAL_RECEIVED', 'RECEIVED', 'INVOICED',
 ];
 
