@@ -130,8 +130,16 @@ export default function ProdukPage() {
   const defaultTier = str(vendorTiersData?.tierHargaDefault, 'ECER');
 
   const metaMutation = useApiMutation([queryKeys.productMeta.all]);
-  const productMutation = useApiMutation([queryKeys.products.all, queryKeys.productMeta.all]);
-  const syncVendorMutation = useApiMutation([queryKeys.products.all, queryKeys.integrations.all]);
+  const productMutation = useApiMutation([
+    queryKeys.products.all,
+    queryKeys.productMeta.all,
+    ['pages', 'produk'],
+  ]);
+  const syncVendorMutation = useApiMutation([
+    queryKeys.products.all,
+    queryKeys.integrations.all,
+    ['pages', 'produk'],
+  ]);
 
   const load = async () => {
     await reload();
@@ -199,6 +207,37 @@ export default function ProdukPage() {
           tenantId: tid,
           uoms: uomRowsFromProduct({ ...p, ...detail } as ProductLike),
         });
+        // List sering stale (cache pages/produk) sementara detail GET sudah benar —
+        // sync baris list + refetch supaya kolom Stok/Harga mengikuti master.
+        const productId = str(p.id);
+        const gudang = str(detail.gudangKode || p.gudangKode, 'GKERING').toUpperCase();
+        const stok = num(detail.stok);
+        const hargaBeli = num(detail.hargaBeli);
+        queryClient.setQueriesData({ queryKey: ['pages', 'produk'] }, (old: unknown) => {
+          if (!old || typeof old !== 'object') return old;
+          const data = old as { pages?: Array<{ items?: JsonObject[] }> };
+          if (!Array.isArray(data.pages)) return old;
+          return {
+            ...data,
+            pages: data.pages.map((page) => ({
+              ...page,
+              items: (page.items ?? []).map((item) => {
+                if (str(item.id) !== productId) return item;
+                const prevWh = asObject(item.stokByWarehouse) as Record<string, number | string>;
+                return {
+                  ...item,
+                  ...detail,
+                  stok,
+                  hargaBeli,
+                  stokDisplay: str(detail.stokDisplay) || `${stok} ${str(detail.satuan || item.satuan)}`,
+                  stokGudangQty: stok,
+                  stokByWarehouse: { ...prevWh, [gudang]: stok },
+                };
+              }),
+            })),
+          };
+        });
+        void queryClient.invalidateQueries({ queryKey: ['pages', 'produk'] });
       } catch (e) {
         if (e instanceof OfflineQueuedError) toast.message(e.message);
         else toast.error(e instanceof Error ? e.message : String(e));

@@ -30,6 +30,9 @@ export function invalidateDashboardAndStockCaches(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
   void qc.invalidateQueries({ queryKey: queryKeys.stokSaldo.all });
   void qc.invalidateQueries({ queryKey: queryKeys.products.all });
+  void qc.invalidateQueries({ queryKey: queryKeys.stokKartu.all });
+  // Master Produk list memakai key terpisah dari products.*
+  void qc.invalidateQueries({ queryKey: ['pages', 'produk'] });
 }
 
 /** Invalidate badge, dashboard, stok, dan halaman operasional terkait. */
@@ -41,6 +44,8 @@ export function invalidateOperationalCaches(
   void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
   void qc.invalidateQueries({ queryKey: queryKeys.stokSaldo.all });
   void qc.invalidateQueries({ queryKey: queryKeys.products.all });
+  void qc.invalidateQueries({ queryKey: queryKeys.stokKartu.all });
+  void qc.invalidateQueries({ queryKey: ['pages', 'produk'] });
   void qc.invalidateQueries({ queryKey: queryKeys.goodsReceipts.all });
   void qc.invalidateQueries({ queryKey: ['pages', 'penerimaan'] });
   void qc.invalidateQueries({ queryKey: ['pages', 'hutang'] });

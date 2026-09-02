@@ -46,7 +46,12 @@ export function useProdukCatalog({
     loadingMore,
     reload,
     error,
-  } = useCursorQuery<JsonObject>(queryKey, baseUrl, { limit: pageLimit, enabled });
+  } = useCursorQuery<JsonObject>(queryKey, baseUrl, {
+    limit: pageLimit,
+    enabled,
+    // Stok/harga berubah di luar form (GRN, penyesuaian, fix script) — jangan tahan 60s.
+    staleTime: 0,
+  });
 
   const loadProducts = useCallback(async () => {
     await reload();
