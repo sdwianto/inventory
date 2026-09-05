@@ -16,7 +16,10 @@ describe('material-issues POST — blokir lunak shortage (bahan tidak harus 100%
   it('menyimpan jejak shortageOverride (siapa, kapan, alasan, baris kurang) di dokumen', () => {
     expect(src).toMatch(/const shortageOverride = shortageCount > 0 \? \{/);
     expect(src).toMatch(/reason: overrideShortageNote/);
-    expect(src).toMatch(/shortageLines: \(readiness\.lines \|\| \[\]\)\.filter\(\(l\) => l\.shortage\)/);
+    // netReadiness (bukan lagi readiness mentah) — commit lain menambahkan
+    // applyConsumptionToRequirementLines() setelah fix ini, memperhitungkan
+    // konsumsi Issue lain yang paralel; shortageLines tetap difilter dari sana.
+    expect(src).toMatch(/shortageLines: netReadiness\.lines\.filter\(\(l\) => l\.shortage\)/);
     expect(src).toMatch(/\.\.\.\(shortageOverride \? \{ shortageOverride \} : \{\}\)/);
   });
 

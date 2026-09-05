@@ -249,6 +249,14 @@ export default function ReturVendorPage() {
     setDetail({ ...detail, items, subTotal, total: subTotal });
   };
 
+  const removeItem = (idx: number) => {
+    if (!detail) return;
+    const items = asArray(detail.items).filter((_, i) => i !== idx);
+    if (!items.length) return;
+    const subTotal = items.reduce((s: number, it) => s + num(asObject(it).jumlah), 0);
+    setDetail({ ...detail, items, subTotal, total: subTotal });
+  };
+
   const isDraft = str(detail?.status) === 'DRAFT';
   const isGrnReject = str(detail?.source) === 'grn-reject';
   const cnSync = str(detail?.cnSyncStatus);
@@ -436,6 +444,7 @@ export default function ReturVendorPage() {
                       <th className="px-2 py-1.5 text-left">Gudang</th>
                       <th className="px-2 py-1.5 text-right">Harga</th>
                       <th className="px-2 py-1.5 text-right">Jumlah</th>
+                      {isDraft && !isGrnReject && <th className="px-2 py-1.5 w-10" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -445,6 +454,7 @@ export default function ReturVendorPage() {
                         (r) => str(r.invoiceLineId) === str(it.invoiceLineId),
                       );
                       const maxQty = num(ret?.maxQty ?? it.maxQty ?? it.qty);
+                      const onlyOneLeft = asArray(detail.items).length <= 1;
                       return (
                       <tr key={`${str(it.lineId)}-${idx}`} className="border-t">
                         <td className="px-2 py-1.5 font-mono text-xs">{str(it.localKode)}</td>
@@ -479,6 +489,21 @@ export default function ReturVendorPage() {
                         </td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.harga))}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.jumlah))}</td>
+                        {isDraft && !isGrnReject && (
+                          <td className="px-2 py-1.5 text-center">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-red-600 hover:bg-red-50"
+                              disabled={onlyOneLeft}
+                              title={onlyOneLeft ? 'Minimal 1 baris retur' : 'Hapus baris ini dari retur'}
+                              onClick={() => removeItem(idx)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </td>
+                        )}
                       </tr>
                       );
                     })}
