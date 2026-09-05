@@ -1,6 +1,6 @@
 {
   "source": "USDA SR Legacy (FoodData Central)",
-  "note": "Cadangan sebagian (gap-fill) bila bahan tidak ada di TKPI 2019 — bukan seluruh ~8790 baris USDA/Andrafarm. Nilai per 100 g edible portion (BDD 100%). Sumber resmi USDA SR; Andrafarm hanya untuk menemukan NDB yang sudah ada di SR.",
+  "note": "Cadangan sebagian (gap-fill) bila bahan tidak ada di TKPI 2019 — bukan seluruh ~8790 baris USDA/Andrafarm. Nilai per 100 g edible portion (BDD 100%). Sumber resmi USDA SR; Andrafarm hanya untuk menemukan NDB yang sudah ada di SR. Pengecualian: entri berkode awalan \"EST-\" (bukan \"USDA-\", tanpa field ndb/fdcId) BUKAN dari USDA SR — tidak ada NDB resmi untuk bahan itu baik di USDA maupun TKPI (dicek langsung ke dataset mentahnya), nilainya estimasi dari agregator nutrisi pihak ketiga (dicatat di field namaId entri itu sendiri), dipakai hanya karena tidak ada sumber resmi sama sekali untuk bahan tsb.",
   "items": [
     {
       "kode": "USDA-09172",
@@ -1122,6 +1122,24 @@
       "karbohidratG": 8.06,
       "seratG": 2.3,
       "natriumMg": 666,
+      "bddPct": 100
+    },
+    {
+      "kode": "EST-DAUNJERUK",
+      "nama": "Kaffir lime leaves, raw",
+      "namaId": "Daun jeruk purut, segar — ESTIMASI non-USDA/TKPI (tidak ada NDB resmi; sumber: FatSecret Indonesia, fatsecret.co.id/kalori-gizi/search?q=Daun+Jeruk, per 100 g)",
+      "aliases": [
+        "daun jeruk",
+        "daun jeruk purut",
+        "jeruk purut, daun",
+        "kaffir lime leaf",
+        "kaffir lime leaves"
+      ],
+      "kelompok": "Bumbu",
+      "energiKcal": 12,
+      "proteinG": 0.27,
+      "lemakG": 0.08,
+      "karbohidratG": 4.05,
       "bddPct": 100
     }
   ]
