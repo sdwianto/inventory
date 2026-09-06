@@ -39,7 +39,7 @@ import { fetchTenantSettings } from '@/lib/tenant-client';
 import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
 import WorkerHealthBanner from '@/components/WorkerHealthBanner';
 
-type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue';
+type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue' | 'rtvNeedsAttention';
 
 interface NavLeaf {
   href: string;
@@ -73,7 +73,7 @@ const NAV: NavEntry[] = [
   { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true, badgeKey: 'grnPending' },
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
-  { type: 'item', href: '/retur-vendor', label: 'Retur Vendor', icon: Undo2 },
+  { type: 'item', href: '/retur-vendor', label: 'Retur Vendor', icon: Undo2, badgeKey: 'rtvNeedsAttention' },
   { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
   {
     type: 'group', key: 'maintenance', label: 'Maintenance', icon: Wrench,
@@ -374,6 +374,9 @@ export default function AppShell({ children }: AppShellProps) {
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
   const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
+  // Cocok dengan RTV_ROLES (PO_CREATE_ROLES) di lib/api/handlers/vendor-returns.ts —
+  // supaya badge terlihat oleh role yang benar-benar bisa akses /retur-vendor.
+  const showRtvBadge = user && ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const pmBadgeCount = showPmBadge
     ? (Number(badgeSource?.pmOverdue) || 0) + (Number(badgeSource?.pmDueSoon) || 0)
     : 0;
@@ -383,6 +386,7 @@ export default function AppShell({ children }: AppShellProps) {
     hutangReview: showHutangBadge ? (Number(badgeSource?.hutangReview) || 0) : 0,
     wrPending: showWrBadge ? (Number(badgeSource?.wrPending) || 0) : 0,
     pmOverdue: pmBadgeCount,
+    rtvNeedsAttention: showRtvBadge ? (Number(badgeSource?.rtvNeedsAttention) || 0) : 0,
   };
 
   useEffect(() => {

@@ -848,6 +848,23 @@ export async function applyCreditNoteFromVendor(
     return { action: 'exists' as const, hutangId: hutang.id };
   }
 
+  // ADR-006 — konvergensi: kasus ini cuma muncul dari peer Sales lama (belum upgrade ke
+  // keputusan per baris) yang langsung auto-POSTED semua baris sekaligus. Stempel SEMUA
+  // baris RTV jadi ACCEPTED (bukan cuma agregat dokumen), best-effort di luar transaksi
+  // utama — tidak ada efek finansial di sini, murni menyamakan status tampilan.
+  if (payload.source === 'inventory_return' && creditNoteId) {
+    await db.collection('vendor_returns').updateOne(
+      { tenantId: tid, creditNoteId, vendorDecision: 'PENDING' },
+      {
+        $set: {
+          vendorDecision: 'ACCEPTED',
+          vendorDecisionAt: now,
+          'items.$[].vendorDecision': 'ACCEPTED',
+        },
+      },
+    );
+  }
+
   return {
     action: 'credit_applied',
     hutangId: hutang.id,

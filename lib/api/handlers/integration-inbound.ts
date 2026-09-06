@@ -12,6 +12,7 @@ import {
   applyCreditNoteFromVendor,
   createHutangFromVendorInvoice,
 } from '@/lib/api/hutang-from-vendor';
+import { applyVendorReturnDecision, type VendorReturnLineDecisionInput } from '@/lib/api/vendor-return-decision';
 
 export async function handleIntegrationInbound({
   db,
@@ -259,6 +260,101 @@ export async function handleIntegrationInbound({
         invoiceId: String(payload.invoiceId),
         creditNoteId: creditNoteId || null,
         errorCode: 'CREDIT_NOTE_APPLY_FAILED',
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorClass: 'unknown',
+      });
+      throw e;
+    }
+  }
+
+  // ADR-006 (Category B): keputusan vendor per baris (Terima/Tolak) → stempel RTV.
+  if (route === '/integrations/vendor-return-decision') {
+    const payload = (body || {}) as JsonObject;
+    const customerTenantId = String(payload.customerTenantId || '').trim().toLowerCase();
+    const vendorTenantId = String(
+      payload.vendorTenantId
+      || request.headers.get('x-vendor-tenant-id')
+      || '',
+    ).trim();
+
+    const correlationId = String(
+      request.headers.get('x-correlation-id')
+      || payload.correlationId
+      || '',
+    ).trim();
+    if (!correlationId) {
+      return err('X-Correlation-Id wajib untuk vendor-return-decision', 400);
+    }
+
+    const v = await verifyWebhookSecret(request, db, {
+      customerTenantId,
+      vendorTenantId: vendorTenantId || undefined,
+    });
+    if (!v.ok) return err(v.error, 401);
+
+    if (!customerTenantId) return err('customerTenantId wajib', 400);
+    const returnId = String(payload.returnId || '').trim();
+    if (!returnId) return err('returnId wajib', 400);
+
+    const rawDecisions = Array.isArray(payload.lineDecisions) ? payload.lineDecisions : [];
+    if (!rawDecisions.length) return err('lineDecisions wajib minimal 1 baris', 400);
+    const lineDecisions: VendorReturnLineDecisionInput[] = [];
+    for (const raw of rawDecisions) {
+      const row = (raw || {}) as JsonObject;
+      // Wire field = lineId (konvensi sama seperti items[].lineId di goods-return-posted).
+      const lineId = String(row.lineId || '').trim();
+      const decision = String(row.decision || '').trim();
+      if (!lineId || (decision !== 'ACCEPTED' && decision !== 'REJECTED')) {
+        return err('Tiap lineDecisions wajib lineId + decision ACCEPTED/REJECTED', 400);
+      }
+      const reason = String(row.reason || '').trim();
+      if (decision === 'REJECTED' && !reason) {
+        return err(`Baris ${lineId} ditolak wajib alasan`, 400);
+      }
+      lineDecisions.push({ lineId, decision, reason: reason || undefined });
+    }
+
+    const creditNoteId = String(payload.creditNoteId || '').trim();
+    const { startIntegrationCommand, finishIntegrationCommand } = await import(
+      '@/lib/integration/command-log'
+    );
+    const commandId = await startIntegrationCommand(db, {
+      correlationId,
+      commandType: 'ReceiveVendorReturnDecision',
+      grnId: returnId || null,
+      creditNoteId: creditNoteId || null,
+    });
+
+    try {
+      const result = await applyVendorReturnDecision(db, customerTenantId, {
+        returnId,
+        creditNoteId: creditNoteId || undefined,
+        lineDecisions,
+        decidedBy: (payload.decidedBy as { userId?: string; userName?: string } | undefined) || undefined,
+      });
+      if ('error' in result) {
+        await finishIntegrationCommand(db, commandId, {
+          status: 'FAILED',
+          creditNoteId: creditNoteId || null,
+          errorCode: result.code || 'VENDOR_RETURN_DECISION_FAILED',
+          errorMessage: result.error,
+          errorClass: 'validation',
+          httpStatus: result.status,
+        });
+        return err(result.error, result.status);
+      }
+
+      await finishIntegrationCommand(db, commandId, {
+        status: 'SUCCEEDED',
+        creditNoteId: creditNoteId || null,
+      });
+
+      return ok(clean({ ...result, correlationId }));
+    } catch (e) {
+      await finishIntegrationCommand(db, commandId, {
+        status: 'FAILED',
+        creditNoteId: creditNoteId || null,
+        errorCode: 'VENDOR_RETURN_DECISION_FAILED',
         errorMessage: e instanceof Error ? e.message : String(e),
         errorClass: 'unknown',
       });

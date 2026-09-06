@@ -25,7 +25,7 @@ export async function handleNavBadges({
   const today = startOfDay(new Date());
   const tenantFilter = withTenantFilter(scopeAuth, {});
 
-  const [grnPending, grnRejectedPending, hutangReview, wrPending, pmStats] = await Promise.all([
+  const [grnPending, grnRejectedPending, hutangReview, wrPending, pmStats, rtvNeedsAttention] = await Promise.all([
     db.collection('goods_receipts').countDocuments(
       withTenantFilter(scopeAuth, {
         status: { $in: ['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING'] },
@@ -44,6 +44,18 @@ export async function handleNavBadges({
       withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' }),
     ),
     countScheduleDueStats(db, tenantFilter, today),
+    // ADR-006 — retur vendor yang butuh tindak lanjut: ditolak vendor (sebagian/semua),
+    // atau masih menunggu vendor tapi sudah lewat tenggat keputusan.
+    db.collection('vendor_returns').countDocuments(
+      withTenantFilter(scopeAuth, {
+        $or: [
+          // Ditolak (semua/sebagian) — selalu butuh tindak lanjut, terlepas tenggat.
+          { vendorDecision: { $in: ['REJECTED', 'PARTIAL'] } },
+          // Masih menunggu vendor tapi sudah lewat tenggat 7 hari.
+          { vendorDecision: 'PENDING', vendorDecisionDueAt: { $lt: new Date() } },
+        ],
+      }),
+    ),
   ]);
 
   return ok({
@@ -53,5 +65,6 @@ export async function handleNavBadges({
     wrPending,
     pmOverdue: Number(pmStats?.overdue || 0),
     pmDueSoon: Number(pmStats?.dueSoon || 0),
+    rtvNeedsAttention,
   });
 }

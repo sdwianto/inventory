@@ -34,6 +34,8 @@ export type PostedReturnLike = {
     uomId?: string;
     satuan?: string;
     qty?: number;
+    /** ADR-006 — baris yang ditolak vendor tidak pernah terkunci; lihat sumPostedReturnQtyByLine. */
+    vendorDecision?: string;
   }>;
 };
 
@@ -66,6 +68,9 @@ export function sumPostedReturnQtyByLine(
     const st = String(doc.status || '');
     if (st !== 'POSTED' && st !== 'POSTING') continue;
     for (const it of doc.items || []) {
+      // ADR-006 — vendor menolak baris ini: tidak pernah dibukukan (D3), jangan kunci qty-nya (D5) —
+      // buyer harus bisa mengajukan retur baru untuk baris yang sama.
+      if (String(it.vendorDecision || '') === 'REJECTED') continue;
       const key = vendorReturnLineKey(it);
       if (!key || key === '::' || key === 'inv:') continue;
       out[key] = (out[key] || 0) + (parseFloat(String(it.qty)) || 0);

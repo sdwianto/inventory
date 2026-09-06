@@ -287,7 +287,7 @@ async function loadHutangForReturn(
   return db.collection('hutang').findOne(q);
 }
 
-async function hydrateDraftItems(
+export async function hydrateDraftItems(
   db: HandlerContext['db'],
   tenantId: string,
   rawItems: unknown[],
@@ -336,6 +336,8 @@ async function hydrateDraftItems(
       gudangKode: gudang,
       lotNo: row.lotNo != null ? String(row.lotNo) : prev?.lotNo,
       maxQty: parseFloat(String(row.maxQty ?? prev?.maxQty ?? qty)) || qty,
+      // ADR-006 — alasan per baris (opsional, kosong = pakai alasan dokumen).
+      reason: row.reason != null ? (String(row.reason).trim() || null) : (prev?.reason ?? null),
     });
   }
   if (!items.length) return { error: 'Minimal satu baris retur dengan qty > 0' };
@@ -361,9 +363,11 @@ export async function handleVendorReturns({
     if (denied) return denied;
 
     const status = url.searchParams.get('status');
+    const vendorDecision = String(url.searchParams.get('vendorDecision') || '').trim();
     const vendorTenantId = String(url.searchParams.get('vendorTenantId') || '').trim();
     const q = String(url.searchParams.get('q') || '').trim();
     let filter: Record<string, unknown> = status ? { status } : {};
+    if (vendorDecision) filter.vendorDecision = vendorDecision;
     if (vendorTenantId) filter.vendorTenantId = vendorTenantId;
     if (q) {
       filter = {

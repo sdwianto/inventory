@@ -75,6 +75,37 @@ describe('vendor-return returable qty', () => {
     expect(sum['inv:l1']).toBe(2);
   });
 
+  // ADR-006 (D5) — ditemukan lewat E2E manual: baris yang ditolak vendor sempat terus
+  // terhitung "sudah diretur" selamanya (RTV tetap POSTED, item-nya tidak pernah dihapus),
+  // padahal D3/D5 eksplisit bilang baris ditolak tidak pernah dibukukan & tidak boleh terkunci.
+  it('sumPostedReturnQtyByLine mengabaikan baris dengan vendorDecision REJECTED (D5)', () => {
+    const sum = sumPostedReturnQtyByLine([
+      {
+        status: 'POSTED',
+        items: [
+          { invoiceLineId: 'l1', qty: 5, vendorDecision: 'ACCEPTED' },
+          { invoiceLineId: 'l2', qty: 3, vendorDecision: 'REJECTED' },
+        ],
+      },
+    ]);
+    expect(sum['inv:l1']).toBe(5);
+    expect(sum['inv:l2']).toBeUndefined();
+  });
+
+  it('buildReturableLines: baris ditolak vendor tidak mengunci sisa qty — buyer bebas retur ulang', () => {
+    const rows = buildReturableLines(hutang, [
+      { id: 'r1', status: 'POSTED', items: [{ invoiceLineId: 'l1', qty: 3, vendorDecision: 'REJECTED' }] },
+    ]);
+    expect(rows[0].maxQty).toBe(10); // bukan 7 — baris l1 ditolak, qty penuh tetap returable.
+  });
+
+  it('buildReturableLines: baris belum ada keputusan (PENDING) tetap terkunci — hanya REJECTED yang bebas', () => {
+    const rows = buildReturableLines(hutang, [
+      { id: 'r1', status: 'POSTED', items: [{ invoiceLineId: 'l1', qty: 3, vendorDecision: 'PENDING' }] },
+    ]);
+    expect(rows[0].maxQty).toBe(7);
+  });
+
   it('menolak hutang tanpa lineId atau uomId', () => {
     expect(hutangLineIdentityError({ kode: 'B1' })).toMatch(/lineId/);
     expect(hutangLineIdentityError({ lineId: 'l1', kode: 'B1' })).toMatch(/uomId/);

@@ -996,6 +996,8 @@ export async function applyVendorReturnCnNotifyResult(
     noCN?: string;
     amount?: number;
     error?: string;
+    /** ADR-006 — CN Sales berhenti di DRAFT, keputusan vendor per baris menyusul lewat webhook terpisah. */
+    pendingDecision?: boolean;
   },
 ): Promise<{
   cnSyncStatus: string;
@@ -1015,6 +1017,27 @@ export async function applyVendorReturnCnNotifyResult(
     patch.creditNoteId = result.creditNoteId || null;
     patch.noCN = result.noCN || null;
     patch.cnSyncError = null;
+
+    // ADR-006 — stempel keputusan vendor: PENDING kalau CN masih DRAFT (menunggu vendor),
+    // ACCEPTED kalau peer lama auto-POSTED semua baris sekaligus (belum upgrade ke keputusan per baris).
+    // PENTING: hanya stempel kalau dokumen MASIH PENDING/belum pernah disentuh — retry/recovery
+    // drain bisa terjadi SETELAH vendor sudah mengambil keputusan nyata (mis. PARTIAL) lewat
+    // webhook terpisah (applyVendorReturnDecision); replay "sudah POSTED" dari Sales pada retry
+    // itu TIDAK boleh menimpa keputusan per-baris yang sudah ada kembali jadi ACCEPTED seragam.
+    const existingDoc = await db.collection('vendor_returns').findOne(
+      { id: returnId },
+      { projection: { items: 1, vendorDecision: 1 } },
+    );
+    const currentDecision = String(existingDoc?.vendorDecision || 'NONE');
+    if (currentDecision === 'PENDING' || currentDecision === 'NONE') {
+      const lineDecision = result.pendingDecision ? 'PENDING' : 'ACCEPTED';
+      const items = Array.isArray(existingDoc?.items) ? existingDoc.items : [];
+      if (items.length) {
+        patch.items = items.map((it: Record<string, unknown>) => ({ ...it, vendorDecision: lineDecision }));
+      }
+      patch.vendorDecision = lineDecision;
+      if (!result.pendingDecision) patch.vendorDecisionAt = now;
+    }
   } else {
     cnSyncStatus = 'FAILED';
     patch.cnSyncError = result.error || 'Gagal sync credit note ke Sales';
@@ -1112,6 +1135,7 @@ export async function drainEnsureGoodsReturnCn(
     noCN?: string;
     amount?: number;
     error?: string;
+    pendingDecision?: boolean;
   };
   try {
     result = await notifySalesGoodsReturnPosted(

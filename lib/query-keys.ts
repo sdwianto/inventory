@@ -35,7 +35,7 @@ export const queryKeys = {
   },
   vendorReturns: {
     all: ['vendor-returns'] as const,
-    list: (params: { status?: string; q?: string } = {}) =>
+    list: (params: { status?: string; vendorDecision?: string; q?: string } = {}) =>
       ['vendor-returns', 'list', params] as const,
     detail: (id: string) => ['vendor-returns', 'detail', id] as const,
     eligible: ['vendor-returns', 'eligible'] as const,

@@ -35,7 +35,27 @@ const CN_STYLE: Record<string, string> = {
   SKIPPED: 'text-slate-500',
 };
 
+function isOverdue(row: JsonObject): boolean {
+  const decision = str(row.vendorDecision);
+  if (!['PENDING', 'PARTIAL'].includes(decision)) return false;
+  const due = str(row.vendorDecisionDueAt);
+  if (!due) return false;
+  return new Date(due).getTime() < Date.now();
+}
+
 function cnLabel(row: JsonObject) {
+  // ADR-006 — keputusan vendor per baris didahulukan, fallback ke status sinkron CN mentah.
+  const decision = str(row.vendorDecision);
+  if (decision === 'PENDING') {
+    return <span className="text-xs text-amber-700">Menunggu vendor</span>;
+  }
+  if (decision === 'PARTIAL') {
+    return <span className="text-xs text-amber-700">Sebagian ditolak</span>;
+  }
+  if (decision === 'REJECTED') {
+    return <span className="text-xs text-red-700">Ditolak vendor</span>;
+  }
+
   const st = str(row.cnSyncStatus) || 'NONE';
   if (st === 'SYNCING') {
     return (
@@ -57,6 +77,7 @@ export default function ReturVendorPage() {
   const qc = useQueryClient();
   const hutangIdParam = searchParams.get('hutangId') || '';
   const [statusFilter, setStatusFilter] = useState('');
+  const [decisionFilter, setDecisionFilter] = useState('');
   const [q, setQ] = useState('');
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [eligibleOpen, setEligibleOpen] = useState(false);
@@ -69,10 +90,11 @@ export default function ReturVendorPage() {
   const listUrl = useMemo(() => {
     const p = new URLSearchParams();
     if (statusFilter) p.set('status', statusFilter);
+    if (decisionFilter) p.set('vendorDecision', decisionFilter);
     if (q) p.set('q', q);
     const qs = p.toString();
     return `/api/vendor-returns${qs ? `?${qs}` : ''}`;
-  }, [statusFilter, q]);
+  }, [statusFilter, decisionFilter, q]);
 
   const {
     items: rows,
@@ -82,7 +104,7 @@ export default function ReturVendorPage() {
     loadingMore,
     reload,
   } = useCursorQuery<JsonObject>(
-    queryKeys.vendorReturns.list({ status: statusFilter, q }),
+    queryKeys.vendorReturns.list({ status: statusFilter, vendorDecision: decisionFilter, q }),
     listUrl,
     { limit: 80 },
   );
@@ -260,9 +282,14 @@ export default function ReturVendorPage() {
   const isDraft = str(detail?.status) === 'DRAFT';
   const isGrnReject = str(detail?.source) === 'grn-reject';
   const cnSync = str(detail?.cnSyncStatus);
+  const vendorDecision = str(detail?.vendorDecision);
   const postedNeedsRetry = !isGrnReject && str(detail?.status) === 'POSTED'
-    && ['FAILED', 'SYNCING', 'SKIPPED'].includes(cnSync);
+    && ['FAILED', 'SYNCING', 'SKIPPED'].includes(cnSync)
+    && !['REJECTED', 'PARTIAL'].includes(vendorDecision);
   const postedFailed = postedNeedsRetry && cnSync === 'FAILED';
+  const rejectedItems = (asArray(detail?.items) as JsonObject[]).filter(
+    (it) => str(it.vendorDecision) === 'REJECTED',
+  );
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -297,6 +324,22 @@ export default function ReturVendorPage() {
             {st || 'Semua'}
           </Button>
         ))}
+        <span className="w-px h-5 bg-slate-300 mx-1" />
+        {[
+          { value: '', label: 'Semua keputusan' },
+          { value: 'PENDING', label: 'Menunggu vendor' },
+          { value: 'PARTIAL', label: 'Sebagian ditolak' },
+          { value: 'REJECTED', label: 'Ditolak' },
+        ].map((opt) => (
+          <Button
+            key={opt.value || 'all-decision'}
+            size="sm"
+            variant={decisionFilter === opt.value ? 'default' : 'outline'}
+            onClick={() => setDecisionFilter(opt.value)}
+          >
+            {opt.label}
+          </Button>
+        ))}
         <Input
           placeholder="Cari no RTV / invoice / GRN / vendor"
           className="h-8 w-64"
@@ -326,7 +369,11 @@ export default function ReturVendorPage() {
               <tr><td colSpan={9} className="text-center py-10 text-slate-400">Belum ada retur vendor</td></tr>
             )}
             {rows.map((row) => (
-              <tr key={str(row.id)} className="border-t hover:bg-slate-50">
+              <tr
+                key={str(row.id)}
+                className={`border-t hover:bg-slate-50 ${isOverdue(row) ? 'bg-amber-50/60' : ''}`}
+                title={isOverdue(row) ? 'Lewat tenggat keputusan vendor' : undefined}
+              >
                 <td className="px-3 py-2 font-mono text-xs text-orange-700">{str(row.noReturn)}</td>
                 <td className="px-3 py-2 text-xs">{formatDateTime(str(row.createdAt) || str(row.postedAt) || undefined)}</td>
                 <td className="px-3 py-2 text-xs truncate max-w-[10rem]">{str(row.supplierName) || '—'}</td>
@@ -410,12 +457,47 @@ export default function ReturVendorPage() {
                   {str(detail.cnSyncError) ? ` ${str(detail.cnSyncError)}` : ''}
                 </div>
               )}
+              {['REJECTED', 'PARTIAL'].includes(vendorDecision) && (
+                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 space-y-1">
+                  <p className="font-semibold">
+                    Perlu tindak lanjut — vendor menolak {rejectedItems.length} dari {asArray(detail.items).length} baris retur ini.
+                    Barang sudah keluar gudang dan hutang untuk baris yang ditolak belum berkurang.
+                  </p>
+                  {rejectedItems.length > 0 && (
+                    <ul className="list-disc list-inside text-xs">
+                      {rejectedItems.map((it, i) => (
+                        <li key={`${str(it.lineId)}-${i}`}>
+                          {str(it.localKode)} — {str(it.localNama)}: {str(it.vendorDecisionReason) || 'Tanpa alasan'}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
                 <div><span className="text-slate-500">Vendor</span><p className="font-semibold">{str(detail.supplierName) || '—'}</p></div>
                 <div><span className="text-slate-500">Status</span><p className="font-semibold">{str(detail.status)}</p></div>
                 <div><span className="text-slate-500">GRN / DO</span><p className="font-mono">{str(detail.noGRN) || str(detail.noDO) || '—'}</p></div>
                 <div><span className="text-slate-500">PO / SO</span><p className="font-mono">{str(detail.noPO) || '—'} / {str(detail.noSO) || '—'}</p></div>
                 <div><span className="text-slate-500">CN</span><p>{str(detail.noCN) || str(detail.cnSyncStatus)}</p></div>
+                {!isGrnReject && str(detail.status) === 'POSTED' && (
+                  <div>
+                    <span className="text-slate-500">Keputusan Vendor</span>
+                    <p className={
+                      vendorDecision === 'REJECTED' ? 'font-semibold text-red-700'
+                        : vendorDecision === 'PARTIAL' ? 'font-semibold text-amber-700'
+                        : vendorDecision === 'PENDING' ? 'text-amber-700'
+                        : vendorDecision === 'ACCEPTED' ? 'text-green-700'
+                        : ''
+                    }>
+                      {vendorDecision === 'PENDING' ? 'Menunggu vendor'
+                        : vendorDecision === 'PARTIAL' ? 'Sebagian ditolak'
+                        : vendorDecision === 'REJECTED' ? 'Ditolak vendor'
+                        : vendorDecision === 'ACCEPTED' ? 'Diterima vendor'
+                        : '—'}
+                    </p>
+                  </div>
+                )}
                 {str(detail.status) !== 'DRAFT' && (
                   <div>
                     <span className="text-slate-500">Kartu stok</span>
@@ -438,12 +520,16 @@ export default function ReturVendorPage() {
                     <tr>
                       <th className="px-2 py-1.5 text-left">Kode</th>
                       <th className="px-2 py-1.5 text-left">Nama</th>
+                      <th className="px-2 py-1.5 text-left">Alasan baris</th>
                       <th className="px-2 py-1.5 text-center">Sat</th>
                       <th className="px-2 py-1.5 text-right">Max</th>
                       <th className="px-2 py-1.5 text-right">Qty</th>
                       <th className="px-2 py-1.5 text-left">Gudang</th>
                       <th className="px-2 py-1.5 text-right">Harga</th>
                       <th className="px-2 py-1.5 text-right">Jumlah</th>
+                      {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
+                        <th className="px-2 py-1.5 text-center">Keputusan Vendor</th>
+                      )}
                       {isDraft && !isGrnReject && <th className="px-2 py-1.5 w-10" />}
                     </tr>
                   </thead>
@@ -455,10 +541,21 @@ export default function ReturVendorPage() {
                       );
                       const maxQty = num(ret?.maxQty ?? it.maxQty ?? it.qty);
                       const onlyOneLeft = asArray(detail.items).length <= 1;
+                      const lineDecision = str(it.vendorDecision);
                       return (
                       <tr key={`${str(it.lineId)}-${idx}`} className="border-t">
                         <td className="px-2 py-1.5 font-mono text-xs">{str(it.localKode)}</td>
                         <td className="px-2 py-1.5 text-xs">{str(it.localNama)}</td>
+                        <td className="px-2 py-1.5 text-xs">
+                          {isDraft && !isGrnReject ? (
+                            <Input
+                              className="h-8 w-40 text-xs"
+                              value={str(it.reason)}
+                              onChange={(e) => patchItem(idx, { reason: e.target.value })}
+                              placeholder="Kosong = pakai alasan retur"
+                            />
+                          ) : (str(it.reason) || str(detail.reason) || '—')}
+                        </td>
                         <td className="px-2 py-1.5 text-center text-xs">{str(it.satuan)}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatNumber(maxQty)}</td>
                         <td className="px-2 py-1.5 text-right">
@@ -489,6 +586,22 @@ export default function ReturVendorPage() {
                         </td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.harga))}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.jumlah))}</td>
+                        {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
+                          <td className="px-2 py-1.5 text-center">
+                            <span
+                              title={lineDecision === 'REJECTED' ? (str(it.vendorDecisionReason) || 'Ditolak vendor') : undefined}
+                              className={`inline-flex text-[11px] px-2 py-0.5 rounded ${
+                                lineDecision === 'ACCEPTED' ? 'bg-green-100 text-green-800'
+                                  : lineDecision === 'REJECTED' ? 'bg-red-100 text-red-800'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {lineDecision === 'ACCEPTED' ? 'Diterima'
+                                : lineDecision === 'REJECTED' ? 'Ditolak'
+                                : 'Menunggu'}
+                            </span>
+                          </td>
+                        )}
                         {isDraft && !isGrnReject && (
                           <td className="px-2 py-1.5 text-center">
                             <Button

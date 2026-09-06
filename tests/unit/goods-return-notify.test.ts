@@ -64,12 +64,28 @@ describe('notifySalesGoodsReturnPosted', () => {
     });
   });
 
-  it('FAILED jika Sales CN belum POSTED — tidak apply hutang', async () => {
+  it('ADR-006: sukses dengan pendingDecision jika Sales CN masih DRAFT — tidak apply hutang', async () => {
     postGoodsReturnPosted.mockResolvedValue({
       creditNoteId: 'cn-draft',
       noCN: 'CN-D',
       amount: 100,
       status: 'DRAFT',
+      posted: false,
+      pendingVendorDecision: true,
+    });
+    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);
+    expect(r.ok).toBe(true);
+    expect(r.pendingDecision).toBe(true);
+    expect(r.creditNoteId).toBe('cn-draft');
+    expect(applyCreditNoteFromVendor).not.toHaveBeenCalled();
+  });
+
+  it('FAILED jika Sales CN status lain (bukan POSTED, bukan DRAFT-pending) — tidak apply hutang', async () => {
+    postGoodsReturnPosted.mockResolvedValue({
+      creditNoteId: 'cn-x',
+      noCN: 'CN-X',
+      amount: 100,
+      status: 'REJECTED',
       posted: false,
     });
     const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);

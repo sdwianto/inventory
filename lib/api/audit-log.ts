@@ -128,7 +128,8 @@ export type AuditAction =
   | 'KA_CASE_UPDATE'
   | 'KA_FOLLOW_UP_CREATE'
   | 'KA_FOLLOW_UP_STATUS'
-  | 'VENDOR_RETURN_POSTED';
+  | 'VENDOR_RETURN_POSTED'
+  | 'VENDOR_RETURN_DECISION_APPLIED';
 
 export interface AuditLogEntry {
   tenantId: string;

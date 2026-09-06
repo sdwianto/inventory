@@ -41,6 +41,7 @@ export interface NavBadgesData {
   wrPending?: number;
   pmOverdue?: number;
   pmDueSoon?: number;
+  rtvNeedsAttention?: number;
 }
 
 function navBadgesUrl(): string | null {

@@ -21,6 +21,8 @@ export async function notifySalesGoodsReturnPosted(
   noCN?: string;
   amount?: number;
   error?: string;
+  /** ADR-006 — CN Sales masih DRAFT, menunggu keputusan vendor per baris (bukan Category A gagal). */
+  pendingDecision?: boolean;
 }> {
   const tid = normalizeTenantId(tenantId);
   const vendorTenantId = String(doc.vendorTenantId || '').trim();
@@ -62,6 +64,8 @@ export async function notifySalesGoodsReturnPosted(
         noSO: doc.noSO || '',
         postedAt: doc.postedAt ? new Date(doc.postedAt).toISOString() : new Date().toISOString(),
         reason: doc.reason,
+        // ADR-006 — bukti foto & alasan per baris, supaya vendor memutuskan dengan informasi cukup.
+        photos: doc.photos || [],
         items: (doc.items || []).map((it) => ({
           lineId: String(it.invoiceLineId),
           kode: it.vendorKode || it.localKode,
@@ -71,11 +75,24 @@ export async function notifySalesGoodsReturnPosted(
           qty: it.qty,
           harga: it.harga,
           stokId: undefined,
+          reason: it.reason || doc.reason,
         })),
       },
     });
 
+    // ADR-006 — CN Sales bisa berhenti di DRAFT (menunggu keputusan vendor per baris), bukan hanya POSTED/gagal.
     const cnPosted = result.posted !== false && String(result.status || 'POSTED') === 'POSTED';
+    const cnPendingDecision = !cnPosted
+      && (String(result.status || '') === 'DRAFT' || result.pendingVendorDecision === true);
+    if (cnPendingDecision) {
+      return {
+        ok: true,
+        pendingDecision: true,
+        creditNoteId: result.creditNoteId,
+        noCN: result.noCN,
+        amount: result.amount,
+      };
+    }
     if (!cnPosted) {
       return {
         ok: false,

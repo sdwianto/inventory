@@ -57,6 +57,8 @@ export type PostGoodsReturnPostedResult = {
   noInvoice: string;
   created?: boolean;
   posted?: boolean;
+  /** ADR-006 — CN dibuat DRAFT, menunggu keputusan vendor per baris (belum di-posting). */
+  pendingVendorDecision?: boolean;
   raw: Record<string, unknown>;
 };
 
@@ -196,6 +198,7 @@ function normalizeGoodsReturnResponse(data: Record<string, unknown>): PostGoodsR
     noInvoice: String(nested.noInvoice || ''),
     created: nested.created as boolean | undefined,
     posted: nested.posted as boolean | undefined,
+    pendingVendorDecision: nested.pendingVendorDecision as boolean | undefined,
     raw: nested,
   };
 }

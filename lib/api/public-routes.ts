@@ -15,9 +15,11 @@ const PUBLIC = [
   { method: 'POST', route: '/integrations/delivery-shipped' },
   { method: 'POST', route: '/integrations/invoice-posted' },
   { method: 'POST', route: '/integrations/credit-note-posted' },
+  { method: 'POST', route: '/integrations/vendor-return-decision' },
   { method: 'POST', route: '/v1/integrations/delivery-shipped' },
   { method: 'POST', route: '/v1/integrations/invoice-posted' },
   { method: 'POST', route: '/v1/integrations/credit-note-posted' },
+  { method: 'POST', route: '/v1/integrations/vendor-return-decision' },
 ] as const;
 
 export function isPublicRoute(method: string, route: string): boolean {

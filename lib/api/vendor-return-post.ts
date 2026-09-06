@@ -14,6 +14,9 @@ import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import { integrationCorrelationId } from '@/lib/api/integration-common';
 
+/** ADR-006 — tenggat keputusan vendor: 7 hari dari posting RTV, murni highlight visual (bukan auto-aksi). */
+const VENDOR_DECISION_SLA_MS = 7 * 24 * 60 * 60 * 1000;
+
 export async function postVendorReturn(
   db: Db,
   {
@@ -94,6 +97,10 @@ export async function postVendorReturn(
         cnSyncStatus: canSyncCn ? 'SYNCING' : 'SKIPPED',
         cnSyncError: canSyncCn ? null : (salesApiKey ? null : 'not_paired'),
         cnSyncAt: null,
+        vendorDecision: canSyncCn ? 'PENDING' : 'NONE',
+        vendorDecisionAt: null,
+        vendorDecisionBy: null,
+        vendorDecisionDueAt: canSyncCn ? new Date(now.getTime() + VENDOR_DECISION_SLA_MS) : null,
       };
 
       const postedBy = {
@@ -220,6 +227,9 @@ export async function retryVendorReturnCn(
   }
   if (doc.source === 'grn-reject') {
     return { error: 'Retur dari item ditolak GRN tidak pernah tertagih — tidak ada credit note untuk disinkron' };
+  }
+  if (doc.vendorDecision === 'REJECTED') {
+    return { error: 'Vendor menolak retur ini — tidak ada CN untuk disinkron' };
   }
   const sync = String(doc.cnSyncStatus || 'NONE');
   if (sync === 'DONE' && (doc.creditNoteId || doc.noCN)) {

@@ -183,11 +183,12 @@ describe('integration-outbox H1.1', () => {
 
   it('applyVendorReturnCnNotifyResult DONE hanya jika Sales CN sukses', async () => {
     const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
-    const docs: Record<string, unknown>[] = [{ id: 'rtv-1' }];
+    const docs: Record<string, unknown>[] = [{ id: 'rtv-1', items: [{ invoiceLineId: 'l1' }] }];
     const db = {
       collection: (name: string) => {
         if (name !== 'vendor_returns') throw new Error(name);
         return {
+          findOne: async () => docs[0],
           updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
             Object.assign(docs[0], u.$set);
             return { modifiedCount: 1 };
@@ -212,5 +213,77 @@ describe('integration-outbox H1.1', () => {
     });
     expect(done.cnSyncStatus).toBe('DONE');
     expect(docs[0].creditNoteId).toBe('cn-1');
+    // ADR-006: peer lama (tanpa pendingDecision) → semua baris otomatis ACCEPTED.
+    expect(docs[0].vendorDecision).toBe('ACCEPTED');
+    expect((docs[0].items as Array<{ vendorDecision?: string }>)[0].vendorDecision).toBe('ACCEPTED');
+  });
+
+  it('applyVendorReturnCnNotifyResult stempel PENDING kalau Sales CN masih menunggu keputusan vendor (ADR-006)', async () => {
+    const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
+    const docs: Record<string, unknown>[] = [{ id: 'rtv-2', items: [{ invoiceLineId: 'l1' }, { invoiceLineId: 'l2' }] }];
+    const db = {
+      collection: (name: string) => {
+        if (name !== 'vendor_returns') throw new Error(name);
+        return {
+          findOne: async () => docs[0],
+          updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
+            Object.assign(docs[0], u.$set);
+            return { modifiedCount: 1 };
+          },
+        };
+      },
+    } as never;
+
+    const result = await applyVendorReturnCnNotifyResult(db, 'rtv-2', {
+      ok: true,
+      creditNoteId: 'cn-draft',
+      noCN: 'CN-D',
+      pendingDecision: true,
+    });
+    expect(result.cnSyncStatus).toBe('DONE');
+    expect(docs[0].vendorDecision).toBe('PENDING');
+    expect(docs[0].vendorDecisionAt).toBeUndefined();
+    const items = docs[0].items as Array<{ vendorDecision?: string }>;
+    expect(items.every((it) => it.vendorDecision === 'PENDING')).toBe(true);
+  });
+
+  it('applyVendorReturnCnNotifyResult TIDAK menimpa keputusan vendor yang sudah nyata (ADR-006 regression)', async () => {
+    // Simulasi retry/recovery drain yang terlambat: notify Sales POSTED lagi (replay),
+    // tapi vendor SUDAH memutuskan PARTIAL lewat webhook terpisah sebelum retry ini jalan.
+    // Ini TIDAK boleh menimpa baris yang sudah REJECTED kembali jadi ACCEPTED.
+    const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
+    const docs: Record<string, unknown>[] = [{
+      id: 'rtv-3',
+      vendorDecision: 'PARTIAL',
+      items: [
+        { invoiceLineId: 'l1', vendorDecision: 'ACCEPTED' },
+        { invoiceLineId: 'l2', vendorDecision: 'REJECTED', vendorDecisionReason: 'Barang rusak' },
+      ],
+    }];
+    const db = {
+      collection: (name: string) => {
+        if (name !== 'vendor_returns') throw new Error(name);
+        return {
+          findOne: async () => docs[0],
+          updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
+            Object.assign(docs[0], u.$set);
+            return { modifiedCount: 1 };
+          },
+        };
+      },
+    } as never;
+
+    const result = await applyVendorReturnCnNotifyResult(db, 'rtv-3', {
+      ok: true,
+      creditNoteId: 'cn-1',
+      noCN: 'CN1',
+      // Tidak ada pendingDecision — bentuk respons yang sama seperti replay "sudah POSTED".
+    });
+    expect(result.cnSyncStatus).toBe('DONE');
+    // vendorDecision agregat & per-baris TIDAK berubah — bukti tidak ada clobbering.
+    expect(docs[0].vendorDecision).toBe('PARTIAL');
+    const items = docs[0].items as Array<{ invoiceLineId: string; vendorDecision?: string; vendorDecisionReason?: string }>;
+    expect(items.find((it) => it.invoiceLineId === 'l2')?.vendorDecision).toBe('REJECTED');
+    expect(items.find((it) => it.invoiceLineId === 'l2')?.vendorDecisionReason).toBe('Barang rusak');
   });
 });
