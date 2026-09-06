@@ -241,6 +241,39 @@ export default function ReturVendorPage() {
     }
   };
 
+  // ADR-006 — follow-up aktif utk RTV yang "menunggu vendor": tanya langsung ke Sales
+  // (Category B pull), bukan cuma menampilkan label tanpa jalan keluar sampai webhook
+  // keputusan vendor (yang bisa gagal terkirim) sampai duluan.
+  const checkDecision = async () => {
+    if (!detail?.id) return;
+    setActing('check-decision');
+    try {
+      const data = await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}/check-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(30_000),
+      });
+      const checkResult = asObject(data.checkResult);
+      const action = str(checkResult.action);
+      setDetail(data);
+      if (action === 'applied') {
+        toast.success(`Vendor sudah memutuskan — ${str(checkResult.vendorDecision)}`);
+      } else if (action === 'still_pending') {
+        toast('Vendor belum memutuskan retur ini.');
+      } else if (action === 'already_resolved' || action === 'already_applied') {
+        toast('Keputusan vendor sudah tersinkron sebelumnya.');
+      } else {
+        toast.error(str(checkResult.error) || 'Gagal cek status ke Sales');
+      }
+      invalidate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal cek status ke Sales');
+    } finally {
+      setActing('');
+    }
+  };
+
   const deleteDraft = async () => {
     if (!detail?.id) return;
     setActing('delete');
@@ -457,8 +490,26 @@ export default function ReturVendorPage() {
                   {str(detail.cnSyncError) ? ` ${str(detail.cnSyncError)}` : ''}
                 </div>
               )}
+              {vendorDecision === 'PENDING' && (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 space-y-2">
+                  <p>
+                    Menunggu keputusan vendor (Terima/Tolak per baris) — belum ada efek stok/hutang
+                    apa pun sampai vendor memutuskan.
+                    {str(detail.vendorDecisionDueAt) && ` Tenggat: ${new Date(str(detail.vendorDecisionDueAt)).toLocaleDateString('id-ID')}.`}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-400 text-amber-800 hover:bg-amber-100"
+                    disabled={acting === 'check-decision'}
+                    onClick={() => void checkDecision()}
+                  >
+                    {acting === 'check-decision' ? 'Mengecek ke Sales…' : 'Cek Keputusan ke Sales'}
+                  </Button>
+                </div>
+              )}
               {['REJECTED', 'PARTIAL'].includes(vendorDecision) && (
-                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 space-y-1">
+                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 space-y-2">
                   <p className="font-semibold">
                     Perlu tindak lanjut — vendor menolak {rejectedItems.length} dari {asArray(detail.items).length} baris retur ini.
                     Barang sudah keluar gudang dan hutang untuk baris yang ditolak belum berkurang.
@@ -471,6 +522,21 @@ export default function ReturVendorPage() {
                         </li>
                       ))}
                     </ul>
+                  )}
+                  <p className="text-xs text-red-700">
+                    Tidak ada reversal stok/hutang otomatis untuk baris yang ditolak — selesaikan manual
+                    (mis. koordinasi ulang dengan vendor di luar sistem), lalu ajukan retur baru kalau perlu.
+                  </p>
+                  {str(detail.hutangId) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-red-400 text-red-700 hover:bg-red-100"
+                      disabled={acting === 'create'}
+                      onClick={() => void createFromHutang(str(detail.hutangId))}
+                    >
+                      {acting === 'create' ? 'Membuat draft…' : 'Ajukan Retur Baru untuk Baris yang Ditolak'}
+                    </Button>
                   )}
                 </div>
               )}

@@ -79,6 +79,22 @@ export async function postVendorReturn(
           ),
         );
         if (qtyErr) throw new Error(qtyErr);
+
+        // Sales hanya izinkan SATU CN DRAFT per invoice — qty tidak overlap tidak cukup;
+        // kalau ada RTV lain utk invoice yang sama masih menunggu keputusan vendor
+        // (CN-nya masih DRAFT di Sales), sync CN retur ini PASTI gagal. Cek di sini,
+        // SEBELUM stok keluar — supaya tidak ada stok yang sudah keluar gudang tapi
+        // transaksinya menggantung menunggu retur LAIN diputuskan dulu.
+        const blockingSibling = posted.find((p) => (
+          String(p.id) !== doc.id
+          && String(p.vendorDecision || '') === 'PENDING'
+          && p.creditNoteId
+        )) as VendorReturnDoc | undefined;
+        if (blockingSibling) {
+          throw new Error(
+            `Invoice ini sudah punya retur ${blockingSibling.noReturn || blockingSibling.id} yang masih menunggu keputusan vendor — tunggu retur itu diputuskan (Terima/Tolak) dulu sebelum mengajukan retur baru untuk invoice yang sama.`,
+          );
+        }
       }
 
       // Item ditolak GRN tidak pernah masuk stok (dikecualikan saat posting GRN) — tidak ada stok OUT untuk dikurangi.

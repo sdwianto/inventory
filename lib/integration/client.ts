@@ -785,6 +785,38 @@ export class IntegrationClient {
     });
   }
 
+  /** ADR-006 — Category B: tanya langsung status keputusan vendor utk satu retur,
+   * independen dari reliability webhook push. Dipakai saat RTV masih "menunggu vendor"
+   * supaya buyer bisa follow-up aktif, bukan cuma menunggu webhook yang mungkin gagal. */
+  async lookupVendorReturnDecisionStatus(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    query: {
+      customerTenantId: string;
+      returnId: string;
+      vendorTenantId?: string;
+    };
+    timeoutMs?: number;
+    grnId?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({
+      customerTenantId: input.query.customerTenantId,
+      returnId: input.query.returnId,
+    });
+    if (input.query.vendorTenantId) qs.set('vendorTenantId', input.query.vendorTenantId);
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/vendor-return-decision-status?${qs}`,
+      commandType: 'LookupVendorReturnDecisionStatus',
+      pool: 'notification',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 30_000,
+      grnId: input.grnId,
+    });
+  }
+
   /** Category B: pull posted invoices (satu halaman cursor). */
   async pullPostedInvoicesPage(input: {
     salesAppUrl: string;

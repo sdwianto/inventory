@@ -5,11 +5,23 @@ vi.mock('@/lib/api/audit-log', () => ({
   writeAuditLog: (...args: unknown[]) => writeAuditLog(...args),
 }));
 
+// Sama seperti so-restock-rejected.test.ts — jalankan "transaksi" tanpa session Mongo asli.
+vi.mock('@/lib/api/transaction', () => ({
+  runInTransactionOrFallback: async (fn: (ctx: { db: unknown; session?: undefined }) => Promise<unknown>) =>
+    fn({ db: (globalThis as { __testDb?: unknown }).__testDb }),
+  txOpts: () => ({}),
+}));
+
+const postStockMutation = vi.fn(async () => ({ ok: true, qtyAfter: 0, lokasiKode: 'GKERING' }));
+vi.mock('@/lib/api/stock-mutation', () => ({
+  postStockMutation: (...args: unknown[]) => postStockMutation(...(args as [])),
+}));
+
 import { applyVendorReturnDecision } from '@/lib/api/vendor-return-decision';
 
 function makeDb(doc: Record<string, unknown> | null) {
   const state = doc ? { ...doc } : null;
-  return {
+  const db = {
     collection: (name: string) => {
       if (name !== 'vendor_returns') throw new Error(name);
       return {
@@ -36,7 +48,9 @@ function makeDb(doc: Record<string, unknown> | null) {
         },
       };
     },
-  } as never;
+  };
+  (globalThis as { __testDb?: unknown }).__testDb = db;
+  return db as never;
 }
 
 const baseDoc = {
@@ -47,8 +61,16 @@ const baseDoc = {
   creditNoteId: 'cn-1',
   vendorDecision: 'PENDING',
   items: [
-    { invoiceLineId: 'l1', vendorDecision: 'PENDING' },
-    { invoiceLineId: 'l2', vendorDecision: 'PENDING' },
+    {
+      invoiceLineId: 'l1', vendorDecision: 'PENDING',
+      localStokId: 'p1', localKode: 'B1', gudangKode: 'GKERING',
+      qty: 5, qtyBase: 5, harga: 1000, uomId: 'u1', satuan: 'KG',
+    },
+    {
+      invoiceLineId: 'l2', vendorDecision: 'PENDING',
+      localStokId: 'p2', localKode: 'B2', gudangKode: 'GBASAH',
+      qty: 3, qtyBase: 3, harga: 2000, uomId: 'u2', satuan: 'PCS',
+    },
   ],
 };
 
@@ -91,7 +113,8 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
     if ('error' in r) expect(r.status).toBe(400);
   });
 
-  it('menerapkan keputusan campuran → agregat PARTIAL, audit log ditulis sekali', async () => {
+  it('menerapkan keputusan campuran → agregat PARTIAL, audit log ditulis sekali, stok baris ditolak dikembalikan', async () => {
+    postStockMutation.mockClear();
     const db = makeDb(baseDoc);
     const r = await applyVendorReturnDecision(db, 'sppg', {
       returnId: 'rtv-1',
@@ -109,9 +132,18 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
       action: 'VENDOR_RETURN_DECISION_APPLIED',
       entityId: 'rtv-1',
     });
+    // Hanya l2 (ditolak) yang stoknya dikembalikan — l1 (diterima) tidak disentuh.
+    expect(postStockMutation).toHaveBeenCalledTimes(1);
+    expect(postStockMutation.mock.calls[0][1]).toMatchObject({
+      productId: 'p2',
+      warehouseKode: 'GBASAH',
+      deltaQtyBase: 3,
+      sourceType: 'VENDOR_RETURN_REJECTED',
+    });
   });
 
-  it('semua ACCEPTED → agregat ACCEPTED', async () => {
+  it('semua ACCEPTED → agregat ACCEPTED, tidak ada reversal stok sama sekali', async () => {
+    postStockMutation.mockClear();
     const db = makeDb(baseDoc);
     const r = await applyVendorReturnDecision(db, 'sppg', {
       returnId: 'rtv-1',
@@ -121,9 +153,11 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
       ],
     });
     expect('vendorDecision' in r && r.vendorDecision).toBe('ACCEPTED');
+    expect(postStockMutation).not.toHaveBeenCalled();
   });
 
-  it('semua REJECTED → agregat REJECTED', async () => {
+  it('semua REJECTED → agregat REJECTED, stok kedua baris dikembalikan (D5 fisik, bukan cuma qty-returnable)', async () => {
+    postStockMutation.mockClear();
     const db = makeDb(baseDoc);
     const r = await applyVendorReturnDecision(db, 'sppg', {
       returnId: 'rtv-1',
@@ -133,6 +167,7 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
       ],
     });
     expect('vendorDecision' in r && r.vendorDecision).toBe('REJECTED');
+    expect(postStockMutation).toHaveBeenCalledTimes(2);
   });
 
   it('replay persis sama → already_applied, TIDAK ada audit log kedua (idempotent)', async () => {

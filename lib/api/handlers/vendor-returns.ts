@@ -565,6 +565,23 @@ export async function handleVendorReturns({
     return ok(clean(result as JsonObject));
   }
 
+  // ADR-006 — follow-up aktif utk RTV yang statusnya "menunggu vendor": tanya langsung
+  // ke Sales (Category B pull), bukan cuma menampilkan label tanpa jalan keluar.
+  if (path[0] === 'vendor-returns' && path[1] && path[2] === 'check-decision' && method === 'POST') {
+    const deniedRole = requireRole(auth, RTV_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
+    const { checkVendorReturnDecisionStatus } = await import('@/lib/api/vendor-return-decision');
+    const result = await checkVendorReturnDecisionStatus(db, tenantId, String(path[1]));
+    if ('error' in result) return err(result.error, result.status);
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    );
+    return ok(clean({ ...(fresh as JsonObject), checkResult: result }));
+  }
+
   if (path[0] === 'vendor-returns' && path[1] && !path[2] && method === 'GET') {
     const deniedRole = requireRole(auth, RTV_ROLES);
     if (deniedRole) return deniedRole;
