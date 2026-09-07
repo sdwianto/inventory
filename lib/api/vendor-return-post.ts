@@ -86,7 +86,7 @@ export async function postVendorReturn(
         // Sales hanya izinkan SATU CN DRAFT per invoice — qty tidak overlap tidak cukup.
         // Blokir sibling in-flight: approval/posting, CN SYNCING/FAILED, atau menunggu vendor.
         const blockingSibling = findInflightVendorReturnSibling(
-          posted as VendorReturnDoc[],
+          posted as unknown as VendorReturnDoc[],
           doc.id,
         );
         if (blockingSibling) {

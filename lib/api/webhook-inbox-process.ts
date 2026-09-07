@@ -209,8 +209,6 @@ export async function processWebhookInboxEvent(
             creditNoteId,
             {
               items: Array.isArray(payload.items) ? payload.items as never : undefined,
-              source: String(payload.source || 'inventory_return'),
-              noReturn: payload.noReturn ? String(payload.noReturn) : undefined,
             },
             new Date(),
           );

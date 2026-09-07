@@ -519,7 +519,7 @@ export async function handleVendorReturns({
       if (qtyErr) return err(qtyErr, 400);
 
       const blocking = findInflightVendorReturnSibling(
-        posted as VendorReturnDoc[],
+        posted as unknown as VendorReturnDoc[],
         doc.id,
       );
       if (blocking) {
