@@ -545,5 +545,145 @@ export async function handleVendorHutang({
     return ok(clean(updated));
   }
 
+  // ADR-008 — pilih baris + drive draft CN koreksi harga di Sales
+  if (path[0] === 'hutang' && path[1] && path[2] === 'request-price-cn' && method === 'POST') {
+    const deniedRole = requireRole(auth, HUTANG_ADMIN_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied: scopeDenied, scopeAuth } = resolveOperationalScope(auth, { url, body: hutangBody, request });
+    if (scopeDenied) return scopeDenied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const reqBody = (body || {}) as {
+      items?: Array<{ lineId?: string; qty?: number | string; hargaBenar?: number | string; reason?: string }>;
+      catatan?: string;
+    };
+    const rawItems = Array.isArray(reqBody.items) ? reqBody.items : [];
+    if (!rawItems.length) return err('Pilih minimal satu baris untuk dikoreksi', 400);
+
+    const doc = await db.collection('hutang').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as HutangDoc | null;
+    if (!doc) return err('Tagihan tidak ditemukan', 404);
+    if (String(doc.approvalStatus || '') === 'REJECTED') {
+      return err('Tagihan ditolak — tidak bisa minta koreksi harga', 400);
+    }
+
+    const { requestPriceAdjustmentCnFromSales } = await import('@/lib/api/price-adjustment-request-sales');
+    const result = await requestPriceAdjustmentCnFromSales(
+      db,
+      String(doc.tenantId || scopeAuth.tenantId || ''),
+      {
+        id: String(doc.id),
+        vendorTenantId: String(doc.vendorTenantId || ''),
+        vendorInvoiceId: String(doc.vendorInvoiceId || doc.invoiceId || ''),
+        noInvoice: String(doc.noInvoice || ''),
+        items: (doc.items || []) as Array<{
+          lineId?: string;
+          stokId?: string;
+          kode?: string;
+          nama?: string;
+          satuan?: string;
+          uomId?: string;
+          qty?: number | string;
+          harga?: number | string;
+        }>,
+      },
+      rawItems.map((it) => ({
+        lineId: String(it.lineId || ''),
+        qty: parseFloat(String(it.qty ?? 0)) || 0,
+        hargaBenar: parseInt(String(it.hargaBenar ?? 0), 10) || 0,
+        reason: it.reason,
+      })),
+      reqBody.catatan,
+    );
+
+    if (!result.ok) {
+      return err(result.error || 'Gagal membuat draft CN di Sales', result.status || 502);
+    }
+
+    const refreshed = await db.collection('hutang').findOne({ id: doc.id });
+    return ok(clean({
+      ...refreshed,
+      priceCn: {
+        claimId: result.claimId,
+        creditNoteId: result.creditNoteId,
+        noCN: result.noCN,
+        amount: result.amount,
+        status: result.cnStatus,
+        created: result.created,
+      },
+    }));
+  }
+
+  // ADR-008 — undercharge → draft DN koreksi harga di Sales
+  if (path[0] === 'hutang' && path[1] && path[2] === 'request-price-dn' && method === 'POST') {
+    const deniedRole = requireRole(auth, HUTANG_ADMIN_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied: scopeDenied, scopeAuth } = resolveOperationalScope(auth, { url, body: hutangBody, request });
+    if (scopeDenied) return scopeDenied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const reqBody = (body || {}) as {
+      items?: Array<{ lineId?: string; qty?: number | string; hargaBenar?: number | string; reason?: string }>;
+      catatan?: string;
+    };
+    const rawItems = Array.isArray(reqBody.items) ? reqBody.items : [];
+    if (!rawItems.length) return err('Pilih minimal satu baris undercharge untuk dikoreksi', 400);
+
+    const doc = await db.collection('hutang').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as HutangDoc | null;
+    if (!doc) return err('Tagihan tidak ditemukan', 404);
+    if (String(doc.approvalStatus || '') === 'REJECTED') {
+      return err('Tagihan ditolak — tidak bisa minta koreksi harga', 400);
+    }
+
+    const { requestPriceAdjustmentDnFromSales } = await import('@/lib/api/price-adjustment-request-sales');
+    const result = await requestPriceAdjustmentDnFromSales(
+      db,
+      String(doc.tenantId || scopeAuth.tenantId || ''),
+      {
+        id: String(doc.id),
+        vendorTenantId: String(doc.vendorTenantId || ''),
+        vendorInvoiceId: String(doc.vendorInvoiceId || doc.invoiceId || ''),
+        noInvoice: String(doc.noInvoice || ''),
+        items: (doc.items || []) as Array<{
+          lineId?: string;
+          stokId?: string;
+          kode?: string;
+          nama?: string;
+          satuan?: string;
+          uomId?: string;
+          qty?: number | string;
+          harga?: number | string;
+        }>,
+      },
+      rawItems.map((it) => ({
+        lineId: String(it.lineId || ''),
+        qty: parseFloat(String(it.qty ?? 0)) || 0,
+        hargaBenar: parseInt(String(it.hargaBenar ?? 0), 10) || 0,
+        reason: it.reason,
+      })),
+      reqBody.catatan,
+    );
+
+    if (!result.ok) {
+      return err(result.error || 'Gagal membuat draft DN di Sales', result.status || 502);
+    }
+
+    const refreshed = await db.collection('hutang').findOne({ id: doc.id });
+    return ok(clean({
+      ...refreshed,
+      priceDn: {
+        claimId: result.claimId,
+        debitNoteId: result.debitNoteId,
+        noDN: result.noDN,
+        amount: result.amount,
+        status: result.dnStatus,
+        created: result.created,
+      },
+    }));
+  }
+
   return null;
 }

@@ -21,6 +21,7 @@ export type StockMutationSourceType =
   | 'RELEASE'
   | 'GRN'
   | 'VENDOR_RETURN'
+  | 'VENDOR_RETURN_REJECTED'
   | 'PENYESUAIAN'
   | 'TRANSFER'
   | 'MASTER_PRODUK'

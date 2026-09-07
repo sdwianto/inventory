@@ -49,6 +49,16 @@ const doc: VendorReturnDoc = {
   updatedAt: new Date(),
 };
 
+function mockDb() {
+  const updateOne = vi.fn(async () => ({ matchedCount: 1 }));
+  return {
+    db: {
+      collection: () => ({ updateOne, findOne: async () => null }),
+    } as never,
+    updateOne,
+  };
+}
+
 describe('notifySalesGoodsReturnPosted', () => {
   beforeEach(() => {
     applyCreditNoteFromVendor.mockReset();
@@ -73,11 +83,18 @@ describe('notifySalesGoodsReturnPosted', () => {
       posted: false,
       pendingVendorDecision: true,
     });
-    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);
+    const { db, updateOne } = mockDb();
+    const r = await notifySalesGoodsReturnPosted(db, 'sppg', doc);
     expect(r.ok).toBe(true);
     expect(r.pendingDecision).toBe(true);
     expect(r.creditNoteId).toBe('cn-draft');
     expect(applyCreditNoteFromVendor).not.toHaveBeenCalled();
+    expect(updateOne).toHaveBeenCalledWith(
+      { id: 'rtv-1' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ creditNoteId: 'cn-draft', noCN: 'CN-D' }),
+      }),
+    );
   });
 
   it('FAILED jika Sales CN status lain (bukan POSTED, bukan DRAFT-pending) — tidak apply hutang', async () => {
@@ -88,7 +105,7 @@ describe('notifySalesGoodsReturnPosted', () => {
       status: 'REJECTED',
       posted: false,
     });
-    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);
+    const r = await notifySalesGoodsReturnPosted(mockDb().db, 'sppg', doc);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/belum POSTED/i);
     expect(applyCreditNoteFromVendor).not.toHaveBeenCalled();
@@ -96,17 +113,30 @@ describe('notifySalesGoodsReturnPosted', () => {
 
   it('FAILED jika hutang tidak ditemukan setelah CN POSTED', async () => {
     applyCreditNoteFromVendor.mockResolvedValue({ action: 'no_hutang', invoiceId: 'inv-1' });
-    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);
+    const { db, updateOne } = mockDb();
+    const r = await notifySalesGoodsReturnPosted(db, 'sppg', doc);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/Hutang terkait tidak ditemukan/);
     expect(r.creditNoteId).toBe('cn-1');
+    expect(updateOne).toHaveBeenCalled();
   });
 
   it('sukses jika hutang already_applied (idempotent)', async () => {
     applyCreditNoteFromVendor.mockResolvedValue({ action: 'already_applied', hutangId: 'h1' });
-    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', doc);
+    const { db, updateOne } = mockDb();
+    const r = await notifySalesGoodsReturnPosted(db, 'sppg', doc);
     expect(r.ok).toBe(true);
     expect(r.creditNoteId).toBe('cn-1');
+    expect(updateOne).toHaveBeenCalledWith(
+      { id: 'rtv-1' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ creditNoteId: 'cn-1', noCN: 'CN1' }),
+      }),
+    );
+    expect(applyCreditNoteFromVendor.mock.calls[0][4]).toMatchObject({
+      returnId: 'rtv-1',
+      appliedVia: 'credit-note-posted-push',
+    });
     expect(postGoodsReturnPosted).toHaveBeenCalledWith(expect.objectContaining({
       body: expect.objectContaining({
         items: [expect.objectContaining({ lineId: 'l1', uomId: 'u-sak' })],
@@ -119,7 +149,7 @@ describe('notifySalesGoodsReturnPosted', () => {
       ...doc,
       items: [{ ...doc.items[0], vendorUomId: '', invoiceLineId: '' }],
     };
-    const r = await notifySalesGoodsReturnPosted({} as never, 'sppg', bad);
+    const r = await notifySalesGoodsReturnPosted(mockDb().db, 'sppg', bad);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/vendorUomId|lineId/i);
     expect(postGoodsReturnPosted).not.toHaveBeenCalled();

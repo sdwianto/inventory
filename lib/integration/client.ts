@@ -62,6 +62,54 @@ export type PostGoodsReturnPostedResult = {
   raw: Record<string, unknown>;
 };
 
+/** ADR-008 — draft CN koreksi harga (finansial). */
+export type PostPriceAdjustmentCnInput = {
+  salesAppUrl: string;
+  apiKey: string;
+  correlationId?: string;
+  idempotencyKey: string;
+  claimId: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+};
+
+export type PostPriceAdjustmentCnResult = {
+  creditNoteId: string;
+  noCN: string;
+  amount: number;
+  currency: string;
+  status: string;
+  invoiceId: string;
+  noInvoice: string;
+  created?: boolean;
+  source?: string;
+  raw: Record<string, unknown>;
+};
+
+/** ADR-008 — draft DN koreksi undercharge (finansial). */
+export type PostPriceAdjustmentDnInput = {
+  salesAppUrl: string;
+  apiKey: string;
+  correlationId?: string;
+  idempotencyKey: string;
+  claimId: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+};
+
+export type PostPriceAdjustmentDnResult = {
+  debitNoteId: string;
+  noDN: string;
+  amount: number;
+  currency: string;
+  status: string;
+  invoiceId: string;
+  noInvoice: string;
+  created?: boolean;
+  source?: string;
+  raw: Record<string, unknown>;
+};
+
 export type CreateSalesOrderFromPoInput = {
   salesAppUrl: string;
   apiKey: string;
@@ -199,6 +247,58 @@ function normalizeGoodsReturnResponse(data: Record<string, unknown>): PostGoodsR
     created: nested.created as boolean | undefined,
     posted: nested.posted as boolean | undefined,
     pendingVendorDecision: nested.pendingVendorDecision as boolean | undefined,
+    raw: nested,
+  };
+}
+
+function normalizePriceAdjustmentCnResponse(data: Record<string, unknown>): PostPriceAdjustmentCnResult {
+  const nested = (data.result && typeof data.result === 'object')
+    ? data.result as Record<string, unknown>
+    : data;
+  const creditNoteId = String(nested.creditNoteId || nested.id || '').trim();
+  if (!creditNoteId) {
+    throw new IntegrationError('Sales.app tidak mengembalikan creditNoteId — draft CN koreksi harga gagal', {
+      code: 'VALIDATION',
+      errorClass: 'validation',
+      retryable: false,
+    });
+  }
+  return {
+    creditNoteId,
+    noCN: String(nested.noCN || '').trim(),
+    amount: parseInt(String(nested.amount ?? nested.total ?? 0), 10) || 0,
+    currency: String(nested.currency || 'IDR'),
+    status: String(nested.status || 'DRAFT'),
+    invoiceId: String(nested.invoiceId || ''),
+    noInvoice: String(nested.noInvoice || ''),
+    created: nested.created as boolean | undefined,
+    source: String(nested.source || 'price_adjustment'),
+    raw: nested,
+  };
+}
+
+function normalizePriceAdjustmentDnResponse(data: Record<string, unknown>): PostPriceAdjustmentDnResult {
+  const nested = (data.result && typeof data.result === 'object')
+    ? data.result as Record<string, unknown>
+    : data;
+  const debitNoteId = String(nested.debitNoteId || nested.id || '').trim();
+  if (!debitNoteId) {
+    throw new IntegrationError('Sales.app tidak mengembalikan debitNoteId — draft DN koreksi harga gagal', {
+      code: 'VALIDATION',
+      errorClass: 'validation',
+      retryable: false,
+    });
+  }
+  return {
+    debitNoteId,
+    noDN: String(nested.noDN || '').trim(),
+    amount: parseInt(String(nested.amount ?? nested.total ?? 0), 10) || 0,
+    currency: String(nested.currency || 'IDR'),
+    status: String(nested.status || 'DRAFT'),
+    invoiceId: String(nested.invoiceId || ''),
+    noInvoice: String(nested.noInvoice || ''),
+    created: nested.created as boolean | undefined,
+    source: String(nested.source || 'price_adjustment'),
     raw: nested,
   };
 }
@@ -349,6 +449,164 @@ export class IntegrationClient {
       await finishIntegrationCommand(this.db, commandId, {
         status: 'SUCCEEDED',
         invoiceId: normalized.creditNoteId,
+      });
+      return normalized;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), {
+          correlationId,
+          cause: e,
+        });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
+      });
+      throw err;
+    }
+  }
+
+  /** Category A: ADR-008 draft CN koreksi harga (finansial) — sync SUCCESS|FAILED only. */
+  async postPriceAdjustmentCn(input: PostPriceAdjustmentCnInput): Promise<PostPriceAdjustmentCnResult> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const url = `${base}/api/v1/integrations/price-adjustment-cn`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'CreateCreditNotePriceAdjustment',
+      grnId: input.claimId || null,
+    });
+
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url,
+        pool: 'invoice',
+        timeoutMs: input.timeoutMs ?? 35_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify({
+          ...input.body,
+          claimId: input.claimId,
+          correlationId,
+        }),
+      });
+
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+
+      if (res.status === 202) {
+        throw new IntegrationError(
+          'Sales mengembalikan 202 Pending — jalur happy path Category A tidak diizinkan',
+          {
+            code: 'ASYNC_NOT_ALLOWED',
+            errorClass: 'server',
+            httpStatus: 202,
+            retryable: false,
+            correlationId,
+          },
+        );
+      }
+
+      throwIfHttpFailed(res, data, correlationId);
+      const normalized = normalizePriceAdjustmentCnResponse(data);
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'SUCCEEDED',
+        invoiceId: normalized.creditNoteId,
+      });
+      return normalized;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), {
+          correlationId,
+          cause: e,
+        });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
+      });
+      throw err;
+    }
+  }
+
+  /** Category A: ADR-008 draft DN koreksi undercharge (finansial) — sync SUCCESS|FAILED only. */
+  async postPriceAdjustmentDn(input: PostPriceAdjustmentDnInput): Promise<PostPriceAdjustmentDnResult> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const url = `${base}/api/v1/integrations/price-adjustment-dn`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'CreateDebitNotePriceAdjustment',
+      grnId: input.claimId || null,
+    });
+
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url,
+        pool: 'invoice',
+        timeoutMs: input.timeoutMs ?? 35_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify({
+          ...input.body,
+          claimId: input.claimId,
+          correlationId,
+        }),
+      });
+
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+
+      if (res.status === 202) {
+        throw new IntegrationError(
+          'Sales mengembalikan 202 Pending — jalur happy path Category A tidak diizinkan',
+          {
+            code: 'ASYNC_NOT_ALLOWED',
+            errorClass: 'server',
+            httpStatus: 202,
+            retryable: false,
+            correlationId,
+          },
+        );
+      }
+
+      throwIfHttpFailed(res, data, correlationId);
+      const normalized = normalizePriceAdjustmentDnResponse(data);
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'SUCCEEDED',
+        invoiceId: normalized.debitNoteId,
       });
       return normalized;
     } catch (e) {

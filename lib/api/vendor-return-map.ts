@@ -7,6 +7,7 @@ import type { Db } from 'mongodb';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { resolveLineQtyBaseFromUoms } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
+import { peekFefoLotNo } from '@/lib/food-production/ingredient-lot-consume';
 import { vendorReturnLineKey } from '@/types/vendor-return';
 import type { VendorReturnLine } from '@/types/vendor-return';
 import { buildReturableLines, type HutangLike, type PostedReturnLike } from '@/lib/api/vendor-return-returable';
@@ -151,6 +152,12 @@ export async function buildVendorReturnLinesFromHutang(
       ? String(product.gudangKode)
       : defaultWh;
     const harga = row.harga || 0;
+    // Soft prefer FEFO — kosong OK (produk non-lot / stok lama tanpa stamp).
+    const lotNo = await peekFefoLotNo(db, {
+      tenantId,
+      stokId: String(product.id),
+      warehouseKode: gudang,
+    });
     items.push({
       lineId: vendorReturnLineKey({ invoiceLineId: row.invoiceLineId }),
       invoiceLineId: row.invoiceLineId,
@@ -168,6 +175,7 @@ export async function buildVendorReturnLinesFromHutang(
       jumlah: Math.round(row.maxQty * harga),
       gudangKode: gudang,
       maxQty: row.maxQty,
+      ...(lotNo ? { lotNo } : {}),
     });
   }
 

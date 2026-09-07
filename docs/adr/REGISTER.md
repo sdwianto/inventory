@@ -13,6 +13,10 @@
 | **ADR-002** | Kitchen Assurance (MBG Operational Guardrail) | **ACCEPTED** (revisi 2026-07-28) | 2026-07-20 | Inventory Domain | [002-kitchen-assurance.md](./002-kitchen-assurance.md) |
 | **ADR-003** | Logistics Domain | **ACCEPTED** | 2026-07-28 | Inventory Domain | [003-logistics-domain.md](./003-logistics-domain.md) |
 | **ADR-004** | Food Safety (Disposition Control & Audit Lens) | **ACCEPTED** | 2026-08-10 | Inventory Domain | [004-food-safety.md](./004-food-safety.md) |
+| **ADR-005** | Goods Return Posted → Sales Credit Note (Category A) | **ACCEPTED** | 2026-09-07 | Inventory Domain / Integration | [005-goods-return-credit-note.md](./005-goods-return-credit-note.md) |
+| **ADR-006** | Vendor Decision on Goods Return (Category B) | **ACCEPTED** | 2026-09-07 | Inventory Domain / Integration | [006-vendor-return-decision.md](./006-vendor-return-decision.md) |
+| **ADR-007** | CN B2B Stock Boundary (mirror Sales) | **ACCEPTED** | 2026-09-07 | Inventory Domain / Integration | [007-cn-b2b-stock-boundary.md](./007-cn-b2b-stock-boundary.md) |
+| **ADR-008** | Price Error / Commercial Adjustment (bukan RTV) | **ACCEPTED** | 2026-09-07 | Inventory Domain / Integration | [008-price-error-commercial-adjustment.md](./008-price-error-commercial-adjustment.md) |
 
 ### ADR-001 (ringkas)
 
@@ -61,3 +65,25 @@
 | Aturan P0 | HOLD terjadi saat kegagalan **disimpan**, bukan saat pemeriksaan selesai |
 | Traceability | Read model dari `material_requirements.sources[]` — candidate-lot inference, bukan ledger baru |
 | Supersedes sebagian | ADR-001 §Phase 5 (HACCP evidence "DONE"), ADR-002 §Frozen (klarifikasi Checklist Engine) |
+
+### ADR-005 (ringkas)
+
+| Field | Value |
+|-------|--------|
+| Filosofi | Inventory orkestrasi RTV + stok; Sales own CN; Category A push idempotent by returnId |
+| Trigger | RTV `source=hutang` POSTED → `goods-return-posted` |
+| Akuntansi | Post: `RTV_TRANSIT_OUT` Dr Barang dalam retur / Cr Persediaan. CN: Dr Hutang / Cr transit (atau Persediaan legacy) / Cr PPN. Reject: `RTV_TRANSIT_RESTORE` |
+| Transit GL | Ditunda — qty turun di Post tanpa jurnal; nilai Persediaan turun saat CN apply |
+| Bukan | GRN-reject CN, unpost GRN, sales return AR → **[ADR-007](./007-cn-b2b-stock-boundary.md)** (CN manual B2B finansial; no buyer warehouse IN) |
+
+### ADR-006 (ringkas)
+
+| Field | Value |
+|-------|--------|
+| Filosofi | Keputusan vendor per baris setelah stok sudah OUT (D2) |
+| Status baris | `PENDING` / `ACCEPTED` / `REJECTED` → agregat dokumen |
+| Tolak | Stok IN + unlock qty returable (D5); restore `lotConsume` bila ada; tanpa dampak hutang (D3) |
+| SLA | +7 hari highlight saja (D4) |
+| Jalur | Webhook `vendor-return-decision` + pull `check-decision` |
+| Lot | Post FEFO → `lotConsume[]`; reject restore by invoiceLineId/lineId |
+| SoD (P2) | `DRAFT → PENDING_APPROVAL → POSTED`; `RTV_CREATE` vs `RTV_APPROVE`; pembuat ≠ approver |

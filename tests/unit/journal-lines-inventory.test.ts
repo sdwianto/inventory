@@ -4,6 +4,9 @@ import {
   buildPenyesuaianJournalLines,
   buildVendorHutangJournalLines,
   buildHutangPaymentJournalLines,
+  buildCreditNoteHutangJournalLines,
+  buildVendorReturnTransitOutJournalLines,
+  buildVendorReturnTransitRestoreJournalLines,
   reverseJournalDetails,
 } from '@/lib/api/journal-lines';
 
@@ -88,5 +91,74 @@ describe('reverseJournalDetails', () => {
       expect(line.rekeningKode).toBe(original[i].rekeningKode);
       expect(line.keterangan).toBe(`Void: ${original[i].keterangan}`);
     });
+  });
+});
+
+describe('buildCreditNoteHutangJournalLines', () => {
+  it('tanpa PPN — seluruh amount ke Persediaan (kompatibel mundur)', () => {
+    const lines = buildCreditNoteHutangJournalLines({ noDoc: 'CN1', amount: 50000 });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ rekeningKode: '20010', debet: 50000 });
+    expect(lines[1]).toMatchObject({ rekeningKode: '10310', kredit: 50000 });
+    const debet = lines.reduce((s, l) => s + l.debet, 0);
+    const kredit = lines.reduce((s, l) => s + l.kredit, 0);
+    expect(debet).toBe(kredit);
+  });
+
+  it('dengan PPN proporsional dari rasio hutang invoice', () => {
+    // Invoice 111_000 = 100_000 + PPN 11_000; CN 55_500 → net 50_000 + PPN 5_500
+    const lines = buildCreditNoteHutangJournalLines({
+      noDoc: 'CN2',
+      amount: 55500,
+      ppn: 11000,
+      invoiceTotal: 111000,
+    });
+    expect(lines.find((l) => l.rekeningKode === '20010')?.debet).toBe(55500);
+    expect(lines.find((l) => l.rekeningKode === '10310')?.kredit).toBe(50000);
+    expect(lines.find((l) => l.rekeningKode === '10410')?.kredit).toBe(5500);
+    const debet = lines.reduce((s, l) => s + l.debet, 0);
+    const kredit = lines.reduce((s, l) => s + l.kredit, 0);
+    expect(debet).toBe(kredit);
+  });
+
+  it('PPN penuh bila amount = total invoice', () => {
+    const lines = buildCreditNoteHutangJournalLines({
+      noDoc: 'CN3',
+      amount: 111000,
+      ppn: 11000,
+      invoiceTotal: 111000,
+    });
+    expect(lines.find((l) => l.rekeningKode === '10310')?.kredit).toBe(100000);
+    expect(lines.find((l) => l.rekeningKode === '10410')?.kredit).toBe(11000);
+  });
+
+  it('clearTransit — Cr Barang dalam retur (10315) bukan Persediaan', () => {
+    const lines = buildCreditNoteHutangJournalLines({
+      noDoc: 'CN4',
+      amount: 55500,
+      ppn: 11000,
+      invoiceTotal: 111000,
+      clearTransit: true,
+    });
+    expect(lines.find((l) => l.rekeningKode === '10315')?.kredit).toBe(50000);
+    expect(lines.find((l) => l.rekeningKode === '10310')).toBeUndefined();
+    expect(lines.find((l) => l.rekeningKode === '10410')?.kredit).toBe(5500);
+  });
+});
+
+describe('buildVendorReturnTransitOutJournalLines', () => {
+  it('Dr transit / Cr Persediaan balance', () => {
+    const lines = buildVendorReturnTransitOutJournalLines({ noDoc: 'RTV1', amount: 75000 });
+    expect(lines[0]).toMatchObject({ rekeningKode: '10315', debet: 75000 });
+    expect(lines[1]).toMatchObject({ rekeningKode: '10310', kredit: 75000 });
+    expect(lines.reduce((s, l) => s + l.debet, 0)).toBe(lines.reduce((s, l) => s + l.kredit, 0));
+  });
+});
+
+describe('buildVendorReturnTransitRestoreJournalLines', () => {
+  it('Dr Persediaan / Cr transit balance', () => {
+    const lines = buildVendorReturnTransitRestoreJournalLines({ noDoc: 'RTV1', amount: 25000, lineLabel: 'B1' });
+    expect(lines[0]).toMatchObject({ rekeningKode: '10310', debet: 25000 });
+    expect(lines[1]).toMatchObject({ rekeningKode: '10315', kredit: 25000 });
   });
 });

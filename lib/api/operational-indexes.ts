@@ -546,3 +546,26 @@ export async function ensureOperationalIndexes(db: Db): Promise<void> {
   }
   await operationalIndexesInFlight;
 }
+
+/** Backfill COA defaults (mis. 10315 Barang dalam Retur) untuk tenant yang sudah bootstrap. */
+let rekeningDefaultsEnsured = false;
+let rekeningDefaultsInFlight: Promise<void> | null = null;
+
+export async function ensureRekeningDefaultsForAllTenants(db: Db): Promise<void> {
+  if (rekeningDefaultsEnsured) return;
+  if (!rekeningDefaultsInFlight) {
+    rekeningDefaultsInFlight = (async () => {
+      const { ensureMissingRekeningDefaults } = await import('@/lib/api/tenant-master');
+      const fromRekening = await db.collection('rekening').distinct('tenantId') as string[];
+      const fromSettings = await db.collection('tenant_settings').distinct('tenantId') as string[];
+      const list = [...new Set([...fromRekening, ...fromSettings, 'default'].map((t) => String(t || 'default')))];
+      for (const tid of list) {
+        await ensureMissingRekeningDefaults(db, tid);
+      }
+      rekeningDefaultsEnsured = true;
+    })().finally(() => {
+      rekeningDefaultsInFlight = null;
+    });
+  }
+  await rekeningDefaultsInFlight;
+}

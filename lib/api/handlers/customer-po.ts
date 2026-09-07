@@ -46,6 +46,7 @@ import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { enrichPoListWithSoCancelState, pullSoCancelStateForPo, backfillPoVendorSoFromSales } from '@/lib/api/cpo-so-pull-sync';
 import { poHasVendorSoNumbers } from '@/lib/api/customer-po-so-extract';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
+import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc } from '@/types/vendor-return';
 
 interface CustomerPoBody extends Record<string, unknown> {
   items?: JsonObject[];
@@ -57,6 +58,15 @@ interface CustomerPoBody extends Record<string, unknown> {
   reason?: string;
   maintenanceRequestId?: string | null;
   assetId?: string | null;
+  vendorReturnId?: string | null;
+}
+
+/** RTV pengganti hanya sah kalau sudah posting dan minimal 1 baris diterima vendor. */
+export function assertVendorReturnReplacementEligible(vr: VendorReturnDoc | null): string | null {
+  if (!vr || vr.status !== 'POSTED') return 'Retur vendor tidak ditemukan atau belum posting';
+  const hasAccepted = (vr.items || []).some((it) => it.vendorDecision === 'ACCEPTED');
+  if (!hasAccepted) return 'Retur vendor ini tidak punya baris yang diterima vendor — tidak bisa dibuatkan PO pengganti';
+  return null;
 }
 
 interface ActorInput {
@@ -527,6 +537,16 @@ export async function handleCustomerPo({
     if (!poBody.items?.length) return err('Minimal satu item');
 
     const tenantId = tenantIdForWrite(scopeAuth, poBody);
+
+    let vendorReturnForPo: VendorReturnDoc | null = null;
+    if (poBody.vendorReturnId) {
+      vendorReturnForPo = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: poBody.vendorReturnId }),
+      ) as VendorReturnDoc | null;
+      const ineligible = assertVendorReturnReplacementEligible(vendorReturnForPo);
+      if (ineligible) return err(ineligible, 400);
+    }
+
     const now = new Date();
     const tanggalKedatangan = poBody.tanggalKedatangan
       ? new Date(poBody.tanggalKedatangan)
@@ -551,6 +571,7 @@ export async function handleCustomerPo({
       ...vendorPoWriteFields({
         maintenanceRequestId: poBody.maintenanceRequestId || null,
         assetId: poBody.assetId || null,
+        vendorReturnId: poBody.vendorReturnId || null,
       }),
       createdBy: await actorSnapshot(db, auth),
       createdAt: now,
@@ -568,6 +589,13 @@ export async function handleCustomerPo({
           linkedPoNo: noPO,
         });
       }
+    }
+
+    if (vendorReturnForPo) {
+      await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+        { id: vendorReturnForPo.id },
+        { $set: { replacementCpoId: doc.id, replacementCpoNo: noPO, replacementCpoAt: now } },
+      );
     }
 
     return ok(clean(doc));

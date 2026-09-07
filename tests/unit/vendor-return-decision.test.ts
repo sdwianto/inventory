@@ -17,10 +17,29 @@ vi.mock('@/lib/api/stock-mutation', () => ({
   postStockMutation: (...args: unknown[]) => postStockMutation(...(args as [])),
 }));
 
+const { restoreIngredientLotsFromAllocations } = vi.hoisted(() => ({
+  restoreIngredientLotsFromAllocations: vi.fn(async () => ({
+    stokId: 'p2', needQty: 3, restored: 3, shortfall: 0, allocations: [],
+  })),
+}));
+vi.mock('@/lib/food-production/ingredient-lot-consume', () => ({
+  restoreIngredientLotsFromAllocations,
+}));
+
 import { applyVendorReturnDecision } from '@/lib/api/vendor-return-decision';
 
 function makeDb(doc: Record<string, unknown> | null) {
-  const state = doc ? { ...doc } : null;
+  const state = doc
+    ? {
+      ...doc,
+      items: Array.isArray(doc.items)
+        ? (doc.items as unknown[]).map((it) => ({ ...(it as Record<string, unknown>) }))
+        : [],
+      ...(Array.isArray(doc.lotConsume)
+        ? { lotConsume: (doc.lotConsume as unknown[]).map((it) => ({ ...(it as Record<string, unknown>) })) }
+        : {}),
+    }
+    : null;
   const db = {
     collection: (name: string) => {
       if (name !== 'vendor_returns') throw new Error(name);
@@ -170,14 +189,63 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
     expect(postStockMutation).toHaveBeenCalledTimes(2);
   });
 
+  it('REJECTED dengan lotConsume → restore FEFO lot dari alokasi Post', async () => {
+    postStockMutation.mockClear();
+    restoreIngredientLotsFromAllocations.mockClear();
+    const withLots = {
+      ...baseDoc,
+      lotConsume: [{
+        lineId: 'x',
+        invoiceLineId: 'l2',
+        localStokId: 'p2',
+        warehouseKode: 'GBASAH',
+        needQty: 3,
+        allocated: 3,
+        shortfall: 0,
+        skippedNoLots: false,
+        allocations: [
+          { batchId: 'lot-a', batchNo: 'LA', expiryDate: '2026-10-01', qty: 3 },
+        ],
+      }],
+    };
+    const db = makeDb(withLots);
+    const r = await applyVendorReturnDecision(db, 'sppg', {
+      returnId: 'rtv-1',
+      lineDecisions: [
+        { lineId: 'l1', decision: 'ACCEPTED' },
+        { lineId: 'l2', decision: 'REJECTED', reason: 'Tolak' },
+      ],
+    });
+    expect('action' in r && r.action).toBe('applied');
+    expect(restoreIngredientLotsFromAllocations).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        stokId: 'p2',
+        noDokumen: 'RTV1',
+        returnId: 'rtv-1',
+        restores: [expect.objectContaining({ batchId: 'lot-a', qty: 3 })],
+      }),
+      undefined,
+    );
+  });
+
   it('replay persis sama → already_applied, TIDAK ada audit log kedua (idempotent)', async () => {
     writeAuditLog.mockClear();
+    postStockMutation.mockClear();
     const decided = {
       ...baseDoc,
       vendorDecision: 'PARTIAL',
       items: [
         { invoiceLineId: 'l1', vendorDecision: 'ACCEPTED' },
-        { invoiceLineId: 'l2', vendorDecision: 'REJECTED', vendorDecisionReason: 'Barang rusak' },
+        {
+          invoiceLineId: 'l2',
+          vendorDecision: 'REJECTED',
+          vendorDecisionReason: 'Barang rusak',
+          stockRestoredAt: new Date('2026-01-01'),
+          localStokId: 'p2',
+          gudangKode: 'GBASAH',
+          qtyBase: 3,
+        },
       ],
     };
     const db = makeDb(decided);
@@ -190,6 +258,57 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
     });
     expect('action' in r && r.action).toBe('already_applied');
     expect(writeAuditLog).not.toHaveBeenCalled();
+    expect(postStockMutation).not.toHaveBeenCalled();
+  });
+
+  it('heal: REJECTED tanpa stockRestoredAt → restore stok tanpa audit kedua', async () => {
+    writeAuditLog.mockClear();
+    postStockMutation.mockClear();
+    const stuck = {
+      ...baseDoc,
+      vendorDecision: 'REJECTED',
+      items: [
+        {
+          invoiceLineId: 'l1',
+          vendorDecision: 'REJECTED',
+          localStokId: 'p1',
+          localKode: 'B1',
+          gudangKode: 'GKERING',
+          qty: 5,
+          qtyBase: 5,
+          harga: 1000,
+          satuan: 'KG',
+        },
+        {
+          invoiceLineId: 'l2',
+          vendorDecision: 'REJECTED',
+          localStokId: 'p2',
+          localKode: 'B2',
+          gudangKode: 'GBASAH',
+          qty: 3,
+          qtyBase: 3,
+          harga: 2000,
+          satuan: 'PCS',
+          stockRestoredAt: new Date('2026-01-01'),
+        },
+      ],
+    };
+    const db = makeDb(stuck);
+    const r = await applyVendorReturnDecision(db, 'sppg', {
+      returnId: 'rtv-1',
+      lineDecisions: [
+        { lineId: 'l1', decision: 'REJECTED' },
+        { lineId: 'l2', decision: 'REJECTED' },
+      ],
+    });
+    expect('action' in r && r.action).toBe('already_applied');
+    expect(writeAuditLog).not.toHaveBeenCalled();
+    expect(postStockMutation).toHaveBeenCalledTimes(1);
+    expect(postStockMutation.mock.calls[0][1]).toMatchObject({
+      productId: 'p1',
+      deltaQtyBase: 5,
+      sourceType: 'VENDOR_RETURN_REJECTED',
+    });
   });
 
   it('replay sebagian (1 baris baru, 1 baris sudah sama) → tetap applied, hanya baris baru yang berubah', async () => {
@@ -213,5 +332,47 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
     expect('action' in r && r.action).toBe('applied');
     expect('vendorDecision' in r && r.vendorDecision).toBe('PARTIAL');
     expect(writeAuditLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('sticky PENDING header + baris sudah decided → heal aggregate tanpa stok ulang', async () => {
+    writeAuditLog.mockClear();
+    postStockMutation.mockClear();
+    const sticky = {
+      ...baseDoc,
+      vendorDecision: 'PENDING',
+      items: [
+        {
+          invoiceLineId: 'l1',
+          localStokId: 'p1',
+          gudangKode: 'GKERING',
+          qtyBase: 5,
+          qty: 5,
+          harga: 1000,
+          vendorDecision: 'REJECTED',
+          stockRestoredAt: new Date(),
+          transitRestoredAt: new Date(),
+        },
+        {
+          invoiceLineId: 'l2',
+          localStokId: 'p2',
+          gudangKode: 'GKERING',
+          qtyBase: 3,
+          qty: 3,
+          harga: 2000,
+          vendorDecision: 'ACCEPTED',
+        },
+      ],
+    };
+    const db = makeDb(sticky);
+    const r = await applyVendorReturnDecision(db, 'sppg', {
+      returnId: 'rtv-1',
+      lineDecisions: [
+        { lineId: 'l1', decision: 'REJECTED', reason: 'x' },
+        { lineId: 'l2', decision: 'ACCEPTED' },
+      ],
+    });
+    expect('action' in r && r.action).toBe('already_applied');
+    expect('vendorDecision' in r && r.vendorDecision).toBe('PARTIAL');
+    expect(postStockMutation).not.toHaveBeenCalled();
   });
 });

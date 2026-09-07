@@ -4,7 +4,9 @@
 
 import { FOOD_TRAY_ID, type DispatchLine } from '@/lib/food-production/distribution';
 import { roundQty } from '@/lib/food-production/material-requirement';
-import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
+
+/** Re-export — canonical home is `fefo-allocate.ts`. */
+export { planFefoRestore } from '@/lib/food-production/fefo-allocate';
 
 export type HslFgLine = {
   finishedGoodProductId?: string;
@@ -141,31 +143,4 @@ export function computeDistFgReturnNeeds(input: {
       needQty,
     };
   }).filter((r) => r.needQty > 0);
-}
-
-/**
- * Restore plan: reverse FEFO (LIFO on ship allocations) up to returnQty.
- */
-export function planFefoRestore(
-  returnQty: number,
-  allocations: FefoAllocation[],
-): FefoAllocation[] {
-  const need = Number(returnQty);
-  if (!(need > 0) || !allocations?.length) return [];
-  let left = need;
-  const out: FefoAllocation[] = [];
-  for (const a of [...allocations].reverse()) {
-    if (left <= 0) break;
-    const avail = Number(a.qty) || 0;
-    if (!(avail > 0)) continue;
-    const take = Math.min(avail, left);
-    out.push({
-      batchId: a.batchId,
-      batchNo: a.batchNo,
-      expiryDate: a.expiryDate,
-      qty: take,
-    });
-    left -= take;
-  }
-  return out;
 }

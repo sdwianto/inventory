@@ -12,7 +12,7 @@ import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines } from '@/lib/api/journal-lines';
+import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } from '@/lib/api/journal-lines';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
@@ -704,8 +704,12 @@ export async function createHutangFromVendorInvoice(
 }
 
 export type CreditNoteApplyOptions = {
-  appliedVia?: 'credit-note-posted-push' | 'credit-note-posted-webhook';
+  appliedVia?: 'credit-note-posted-push' | 'credit-note-posted-webhook' | 'check-decision-pull';
   correlationId?: string | null;
+  /** Explicit — caller sudah tahu RTV punya transit (hindari race sebelum creditNoteId ter-stamp). */
+  clearTransit?: boolean;
+  /** Inventory returnId — fallback lookup RTV bila creditNoteId belum tertulis di dokumen. */
+  returnId?: string | null;
 };
 
 export async function applyCreditNoteFromVendor(
@@ -752,6 +756,10 @@ export async function applyCreditNoteFromVendor(
       (n: { creditNoteId?: string }) => String(n?.creditNoteId || '').trim() === creditNoteId,
     );
     if (already) {
+      // Hutang sudah applied — tetap coba konvergensi display full-accept (idempotent).
+      if (payload.source === 'inventory_return') {
+        await maybeStampVendorReturnFullAcceptFromCn(db, tid, creditNoteId, payload, new Date());
+      }
       return { action: 'already_applied' as const, hutangId: hutang.id };
     }
   }
@@ -765,6 +773,9 @@ export async function applyCreditNoteFromVendor(
     postedAt: payload.postedAt || now,
     source: payload.source || null,
     noReturn: payload.noReturn || null,
+    // ADR-007 — transparansi dual-ledger (Sales store skip); tidak mengubah stok Inventory.
+    storeRestockStatus: (payload as { storeRestockStatus?: string }).storeRestockStatus || null,
+    storeRestockReason: (payload as { storeRestockReason?: string | null }).storeRestockReason ?? null,
     appliedVia: opts.appliedVia || null,
     correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
     items: Array.isArray(payload.items)
@@ -822,9 +833,35 @@ export async function applyCreditNoteFromVendor(
     if (upd.matchedCount === 0) return;
     claimed = true;
 
+    // ADR-005 — clear transit bila RTV Post sudah Dr 10315.
+    // Jangan hanya by creditNoteId: race Category A apply CN SEBELUM creditNoteId
+    // ter-stamp di vendor_returns → clearTransit miss → Cr Persediaan ganda + 10315 terbuka.
+    let clearTransit = opts.clearTransit === true;
+    if (!clearTransit) {
+      const noReturn = String(payload.noReturn || '').trim();
+      const returnId = String(opts.returnId || '').trim();
+      const orClauses: Record<string, unknown>[] = [];
+      if (creditNoteId) orClauses.push({ creditNoteId });
+      if (noReturn) orClauses.push({ noReturn });
+      if (returnId) orClauses.push({ id: returnId });
+      if (orClauses.length) {
+        const rtvForTransit = await txDb.collection('vendor_returns').findOne(
+          {
+            ...tenantIdMatchFilter(tid),
+            $or: orClauses,
+          },
+          { projection: { transitAppliedAt: 1, transitJournalId: 1 }, ...txOpts(session) },
+        );
+        clearTransit = Boolean(rtvForTransit?.transitAppliedAt || rtvForTransit?.transitJournalId);
+      }
+    }
+
     const cnLines = buildCreditNoteHutangJournalLines({
       noDoc: payload.noCN || payload.creditNoteId || 'CN',
       amount: reduce,
+      ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
+      invoiceTotal: parseInt(String(hutang.total || 0), 10) || 0,
+      clearTransit,
     });
     if (cnLines.length) {
       await createJournalIfNotExists(txDb, {
@@ -834,7 +871,9 @@ export async function applyCreditNoteFromVendor(
         sourceId: cnSourceId,
         userName: opts.appliedVia === 'credit-note-posted-push'
           ? 'credit-note-push'
-          : 'credit-note-webhook',
+          : opts.appliedVia === 'check-decision-pull'
+            ? 'check-decision-pull'
+            : 'credit-note-webhook',
         details: cnLines,
         tenantId: tid,
       }, session);
@@ -848,21 +887,12 @@ export async function applyCreditNoteFromVendor(
     return { action: 'exists' as const, hutangId: hutang.id };
   }
 
-  // ADR-006 — konvergensi: kasus ini cuma muncul dari peer Sales lama (belum upgrade ke
-  // keputusan per baris) yang langsung auto-POSTED semua baris sekaligus. Stempel SEMUA
-  // baris RTV jadi ACCEPTED (bukan cuma agregat dokumen), best-effort di luar transaksi
-  // utama — tidak ada efek finansial di sini, murni menyamakan status tampilan.
+  // ADR-006 — konvergensi display HANYA untuk full-accept legacy (semua lineId RTV
+  // ada di payload.items). Partial CN (subset baris) JANGAN stamp — biarkan
+  // Category B decision push menstempel ACCEPTED/REJECTED + restore stok D5.
+  // Tanpa items[].lineId di payload: partial vs full tidak bisa dibedakan → skip.
   if (payload.source === 'inventory_return' && creditNoteId) {
-    await db.collection('vendor_returns').updateOne(
-      { tenantId: tid, creditNoteId, vendorDecision: 'PENDING' },
-      {
-        $set: {
-          vendorDecision: 'ACCEPTED',
-          vendorDecisionAt: now,
-          'items.$[].vendorDecision': 'ACCEPTED',
-        },
-      },
-    );
+    await maybeStampVendorReturnFullAcceptFromCn(db, tid, creditNoteId, payload, now);
   }
 
   return {
@@ -872,4 +902,213 @@ export async function applyCreditNoteFromVendor(
     sisa: newSisa,
     vendorTenantId,
   };
+}
+
+export type DebitNoteApplyOptions = {
+  appliedVia?: 'debit-note-posted-push' | 'debit-note-posted-webhook';
+  correlationId?: string | null;
+};
+
+/** ADR-008 — Debit Note naikkan hutang (undercharge). Stok qty tidak berubah. */
+export async function applyDebitNoteFromVendor(
+  db: Db,
+  customerTenantId: string,
+  payload: VendorInvoicePayload & {
+    debitNoteId?: string;
+    noDN?: string;
+    source?: string;
+  },
+  vendorTenantId: string | null | undefined,
+  opts: DebitNoteApplyOptions = {},
+) {
+  const tid = normalizeTenantId(customerTenantId || 'default');
+  const invoiceId = String(payload.invoiceId || '').trim();
+  const noInvoice = String(payload.noInvoice || '').trim();
+  const debitTotal = parseInt(String(payload.total || 0), 10);
+  if ((!invoiceId && !noInvoice) || debitTotal <= 0) {
+    return { error: 'invoiceId/noInvoice dan total wajib' };
+  }
+
+  const debitNoteId = String(payload.debitNoteId || '').trim() || null;
+  const vendorTid = vendorTenantId ? String(vendorTenantId).trim() : '';
+
+  let hutang = invoiceId
+    ? await db.collection('hutang').findOne({
+      ...tenantIdMatchFilter(tid),
+      vendorInvoiceId: invoiceId,
+      referenceType: 'VENDOR_INVOICE',
+    })
+    : null;
+  if (!hutang && noInvoice) {
+    hutang = await db.collection('hutang').findOne({
+      ...tenantIdMatchFilter(tid),
+      noInvoice,
+      referenceType: 'VENDOR_INVOICE',
+      ...(vendorTid ? { vendorTenantId: vendorTid } : {}),
+    });
+  }
+  if (!hutang) return { action: 'no_hutang', invoiceId: invoiceId || noInvoice };
+
+  const existingNotes = Array.isArray(hutang.debitNotes) ? hutang.debitNotes : [];
+  if (debitNoteId) {
+    const already = existingNotes.some(
+      (n: { debitNoteId?: string }) => String(n?.debitNoteId || '').trim() === debitNoteId,
+    );
+    if (already) {
+      return { action: 'already_applied' as const, hutangId: hutang.id };
+    }
+  }
+
+  const now = new Date();
+  const oldTotal = Number(hutang.total) || 0;
+  const oldTerbayar = Number(hutang.terbayar) || 0;
+  const oldPpn = parseInt(String(hutang.ppn || 0), 10) || 0;
+  const dnPpnBump = Math.max(0, parseInt(String(payload.ppn || 0), 10) || 0);
+  const newTotal = oldTotal + debitTotal;
+  const newSisa = Math.max(0, newTotal - oldTerbayar);
+  const reopenStatus = newSisa <= 0
+    ? 'LUNAS'
+    : (oldTerbayar > 0 ? 'PARTIAL' : (hutang.status === 'LUNAS' ? 'APPROVED' : (hutang.status || 'APPROVED')));
+  const dnTrail = {
+    debitNoteId: payload.debitNoteId,
+    noDN: payload.noDN,
+    amount: debitTotal,
+    postedAt: payload.postedAt || now,
+    source: payload.source || null,
+    storeRestockStatus: (payload as { storeRestockStatus?: string }).storeRestockStatus || 'SKIPPED_B2B',
+    storeRestockReason: (payload as { storeRestockReason?: string | null }).storeRestockReason ?? 'price_adjustment_no_stock',
+    appliedVia: opts.appliedVia || null,
+    correlationId: opts.correlationId ? String(opts.correlationId).trim() || null : null,
+    items: Array.isArray(payload.items)
+      ? payload.items.map((it) => ({
+        lineId: it.lineId,
+        stokId: it.stokId,
+        uomId: it.uomId,
+        satuan: it.satuan,
+        qty: it.qty,
+        qtyBase: it.qtyBase,
+      }))
+      : undefined,
+  };
+  const dnSourceId = String(payload.debitNoteId || payload.noDN || `${hutang.id}-${now.getTime()}`);
+
+  let claimed = false;
+  await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+    const filter: Record<string, unknown> = { id: hutang.id };
+    if (debitNoteId) {
+      filter.debitNotes = { $not: { $elemMatch: { debitNoteId } } };
+    }
+    const upd = await txDb.collection('hutang').updateOne(
+      filter,
+      {
+        $set: {
+          total: newTotal,
+          sisa: newSisa,
+          ...(dnPpnBump > 0 ? { ppn: oldPpn + dnPpnBump } : {}),
+          status: reopenStatus,
+          approvalStatus: hutang.approvalStatus === 'PAID_EXTERNAL'
+            ? hutang.approvalStatus
+            : (newSisa > 0 && hutang.approvalStatus === 'LUNAS' ? 'APPROVED' : (hutang.approvalStatus || 'APPROVED')),
+          updatedAt: now,
+        },
+        $push: { debitNotes: dnTrail } as never,
+      },
+      txOpts(session),
+    );
+    if (upd.matchedCount === 0) return;
+    claimed = true;
+
+    const dnLines = buildDebitNoteHutangJournalLines({
+      noDoc: String(payload.noDN || debitNoteId || 'DN'),
+      amount: debitTotal,
+      ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
+      invoiceTotal: oldTotal,
+    });
+    if (dnLines.length) {
+      await createJournalIfNotExists(txDb, {
+        tanggal: now,
+        keterangan: `Debit note vendor ${payload.noDN || debitNoteId}`,
+        sourceType: 'AUTO_DN_VENDOR',
+        sourceId: dnSourceId,
+        details: dnLines,
+        userName: opts.appliedVia === 'debit-note-posted-push'
+          ? 'debit-note-push'
+          : 'debit-note-webhook',
+        tenantId: tid,
+      }, session);
+    }
+  });
+
+  if (!claimed) {
+    if (debitNoteId) {
+      return { action: 'already_applied' as const, hutangId: hutang.id };
+    }
+    return { action: 'exists' as const, hutangId: hutang.id };
+  }
+
+  return {
+    action: 'debit_applied',
+    hutangId: hutang.id,
+    increased: debitTotal,
+    total: newTotal,
+    sisa: newSisa,
+    vendorTenantId,
+  };
+}
+
+/**
+ * Stamp RTV ACCEPTED hanya jika CN mencakup SEMUA baris RTV (full accept).
+ * Race-safe vs PARTIAL: CN push yang datang sebelum decision push tidak boleh
+ * menstempel semua baris ACCEPTED dan memblokir restore stok baris ditolak.
+ */
+export async function maybeStampVendorReturnFullAcceptFromCn(
+  db: Db,
+  tenantId: string,
+  creditNoteId: string,
+  payload: { items?: Array<{ lineId?: string | null }> | null },
+  now: Date = new Date(),
+): Promise<{ stamped: boolean; reason: string }> {
+  const acceptedLineIds = new Set(
+    (Array.isArray(payload.items) ? payload.items : [])
+      .map((it) => String(it?.lineId || '').trim())
+      .filter(Boolean),
+  );
+  if (!acceptedLineIds.size) {
+    return { stamped: false, reason: 'no_accepted_line_ids' };
+  }
+
+  const tid = normalizeTenantId(tenantId || 'default');
+  const rtv = await db.collection('vendor_returns').findOne({
+    ...tenantIdMatchFilter(tid),
+    creditNoteId,
+    vendorDecision: 'PENDING',
+  }) as { id?: string; items?: Array<{ invoiceLineId?: string; lineId?: string }> } | null;
+
+  if (!rtv) {
+    return { stamped: false, reason: 'rtv_not_pending' };
+  }
+
+  const rtvLineIds = (Array.isArray(rtv.items) ? rtv.items : [])
+    .map((it) => String(it.invoiceLineId || it.lineId || '').trim())
+    .filter(Boolean);
+  if (!rtvLineIds.length) {
+    return { stamped: false, reason: 'rtv_no_lines' };
+  }
+
+  const fullAccept = rtvLineIds.every((id) => acceptedLineIds.has(id));
+  if (!fullAccept) {
+    return { stamped: false, reason: 'partial_cn_skip' };
+  }
+
+  await db.collection('vendor_returns').updateOne(
+    { id: rtv.id, vendorDecision: 'PENDING' },
+    {
+      $set: {
+        vendorDecision: 'ACCEPTED',
+        vendorDecisionAt: now,
+        'items.$[].vendorDecision': 'ACCEPTED',
+      },
+    },
+  );
+  return { stamped: true, reason: 'full_accept' };
 }

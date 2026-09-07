@@ -6,6 +6,7 @@ describe('isPublicRoute — Category A/B integration webhooks dari Sales', () =>
     'delivery-shipped',
     'invoice-posted',
     'credit-note-posted',
+    'debit-note-posted',
     'vendor-return-decision',
   ];
 

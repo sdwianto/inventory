@@ -45,14 +45,20 @@ export async function handleNavBadges({
     ),
     countScheduleDueStats(db, tenantFilter, today),
     // ADR-006 — retur vendor yang butuh tindak lanjut: ditolak vendor (sebagian/semua),
-    // atau masih menunggu vendor tapi sudah lewat tenggat keputusan.
+    // masih menunggu vendor tapi sudah lewat tenggat keputusan, atau sync CN ke sales
+    // gagal total (stok sudah keluar tapi TIDAK ADA CN sama sekali — bukan "menunggu
+    // vendor", tapi retur yang stuck murni butuh retry/tindak lanjut buyer sendiri).
     db.collection('vendor_returns').countDocuments(
       withTenantFilter(scopeAuth, {
         $or: [
+          // Menunggu approval internal (SoD) sebelum stok keluar.
+          { status: 'PENDING_APPROVAL' },
           // Ditolak (semua/sebagian) — selalu butuh tindak lanjut, terlepas tenggat.
           { vendorDecision: { $in: ['REJECTED', 'PARTIAL'] } },
           // Masih menunggu vendor tapi sudah lewat tenggat 7 hari.
           { vendorDecision: 'PENDING', vendorDecisionDueAt: { $lt: new Date() } },
+          // Sync CN gagal — tidak pernah ada CN, tidak ada yang "menunggu vendor".
+          { status: 'POSTED', cnSyncStatus: 'FAILED' },
         ],
       }),
     ),

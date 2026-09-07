@@ -432,6 +432,10 @@ export default function HutangVendorPage() {
               onApprove={doApprove}
               onReject={() => setShowReject(true)}
               onMarkPaid={doMarkPaid}
+              onDetailRefresh={() => {
+                const id = str(detail.id);
+                if (id) void openDetail(id);
+              }}
             />
           )}
         </DialogContent>

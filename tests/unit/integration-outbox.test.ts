@@ -5,6 +5,8 @@ import {
   claimEnsureGrnInvoiceOutbox,
   insertEnsureGrnInvoiceOutbox,
   insertEnsureGoodsReturnCnOutbox,
+  listPendingGoodsReturnCnOutbox,
+  listPendingGrnInvoiceOutbox,
 } from '@/lib/api/integration-outbox';
 
 function memoryCollection() {
@@ -65,6 +67,38 @@ function memoryCollection() {
       if (idx < 0) return { modifiedCount: 0 };
       docs[idx] = { ...docs[idx], ...(update.$set || {}) };
       return { modifiedCount: 1 };
+    },
+    find(filter: Record<string, unknown>) {
+      const matches = (d: Record<string, unknown>) => {
+        for (const [k, v] of Object.entries(filter)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            if ('$in' in v && !(v.$in as unknown[]).includes(d[k])) return false;
+            if ('$lt' in v && !(Number(d[k] ?? 0) < (v.$lt as number))) return false;
+          } else if (d[k] !== v) {
+            return false;
+          }
+        }
+        return true;
+      };
+      let rows = docs.filter(matches);
+      const chain = {
+        sort(spec: Record<string, number>) {
+          const [key, dir] = Object.entries(spec)[0] || [];
+          if (key) rows = [...rows].sort((a, b) => (Number(a[key]) - Number(b[key])) * (dir || 1));
+          return chain;
+        },
+        limit(n: number) {
+          rows = rows.slice(0, n);
+          return chain;
+        },
+        project() {
+          return chain;
+        },
+        async toArray() {
+          return rows;
+        },
+      };
+      return chain;
     },
   };
 }
@@ -285,5 +319,106 @@ describe('integration-outbox H1.1', () => {
     const items = docs[0].items as Array<{ invoiceLineId: string; vendorDecision?: string; vendorDecisionReason?: string }>;
     expect(items.find((it) => it.invoiceLineId === 'l2')?.vendorDecision).toBe('REJECTED');
     expect(items.find((it) => it.invoiceLineId === 'l2')?.vendorDecisionReason).toBe('Barang rusak');
+  });
+
+  it('applyVendorReturnCnNotifyResult FAILED membatalkan vendorDecision optimistik kalau belum pernah ada CN (regresi RTV2609000043)', async () => {
+    // Sebelum fix: sync gagal (mis. sales tolak "Invoice sudah diretur penuh") tapi
+    // vendorDecision:'PENDING' + vendorDecisionDueAt dari posting-time TIDAK pernah
+    // dibatalkan — UI menampilkan banner "Menunggu vendor" + tenggat palsu padahal
+    // TIDAK ADA CN sama sekali (creditNoteId kosong), retur ini murni stuck butuh retry.
+    const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
+    const docs: Record<string, unknown>[] = [{
+      id: 'rtv-4',
+      vendorDecision: 'PENDING',
+      vendorDecisionDueAt: new Date('2026-09-14'),
+      creditNoteId: null,
+      items: [{ invoiceLineId: 'l1' }],
+    }];
+    const db = {
+      collection: (name: string) => {
+        if (name !== 'vendor_returns') throw new Error(name);
+        return {
+          findOne: async () => docs[0],
+          updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
+            Object.assign(docs[0], u.$set);
+            return { modifiedCount: 1 };
+          },
+        };
+      },
+    } as never;
+
+    const result = await applyVendorReturnCnNotifyResult(db, 'rtv-4', {
+      ok: false,
+      error: 'Invoice sudah diretur penuh',
+    });
+    expect(result.cnSyncStatus).toBe('FAILED');
+    expect(docs[0].vendorDecision).toBe('NONE');
+    expect(docs[0].vendorDecisionDueAt).toBeNull();
+    expect(docs[0].vendorDecisionAt).toBeNull();
+  });
+
+  it('applyVendorReturnCnNotifyResult FAILED TIDAK menimpa vendorDecision kalau CN sudah pernah nyata terbentuk', async () => {
+    // Replay/retry yang gagal SETELAH sync lain sempat sukses tidak boleh menghapus
+    // keputusan yang sudah ada — creditNoteId sudah terisi jadi ini bukan kasus "stuck".
+    const { applyVendorReturnCnNotifyResult } = await import('@/lib/api/integration-outbox');
+    const docs: Record<string, unknown>[] = [{
+      id: 'rtv-5',
+      vendorDecision: 'PARTIAL',
+      vendorDecisionAt: new Date('2026-09-06'),
+      creditNoteId: 'cn-already-real',
+      items: [{ invoiceLineId: 'l1', vendorDecision: 'ACCEPTED' }],
+    }];
+    const db = {
+      collection: (name: string) => {
+        if (name !== 'vendor_returns') throw new Error(name);
+        return {
+          findOne: async () => docs[0],
+          updateOne: async (_f: unknown, u: { $set: Record<string, unknown> }) => {
+            Object.assign(docs[0], u.$set);
+            return { modifiedCount: 1 };
+          },
+        };
+      },
+    } as never;
+
+    const result = await applyVendorReturnCnNotifyResult(db, 'rtv-5', {
+      ok: false,
+      error: 'stale retry conflict',
+    });
+    expect(result.cnSyncStatus).toBe('FAILED');
+    expect(docs[0].vendorDecision).toBe('PARTIAL');
+    expect(docs[0].vendorDecisionAt).toEqual(new Date('2026-09-06'));
+  });
+
+  it('listPendingGoodsReturnCnOutbox berhenti mengambil baris yang sudah kehabisan percobaan auto-recovery (regresi retry storm)', async () => {
+    // Sweep otomatis (grn-invoice-sync-recover.ts) jalan tiap 2 menit dengan dedupeKey
+    // time-bucketed yang TIDAK PERNAH dedup antar-siklus — baris outbox yang FAILED karena
+    // konflik bisnis PERMANEN (retry tidak akan pernah berhasil) sebelumnya di-reclaim
+    // ulang SELAMANYA (ditemukan nyata: attempts:15 dan terus bertambah tiap 2 menit).
+    const col = memoryCollection();
+    col.docs.push(
+      { id: 'ob-fresh', type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN, aggregateId: 'rtv-fresh', tenantId: 't1', status: 'FAILED', attempts: 2, updatedAt: new Date() },
+      { id: 'ob-exhausted', type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN, aggregateId: 'rtv-exhausted', tenantId: 't1', status: 'FAILED', attempts: 15, updatedAt: new Date() },
+      { id: 'ob-pending', type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN, aggregateId: 'rtv-pending', tenantId: 't1', status: 'PENDING', attempts: 0, updatedAt: new Date() },
+    );
+    const db = { collection: (name: string) => (name === 'integration_outbox' ? col : (() => { throw new Error(name); })()) } as never;
+
+    const rows = await listPendingGoodsReturnCnOutbox(db);
+    const ids = rows.map((r) => r.aggregateId).sort();
+    expect(ids).toEqual(['rtv-fresh', 'rtv-pending']);
+    expect(ids).not.toContain('rtv-exhausted');
+  });
+
+  it('listPendingGrnInvoiceOutbox berhenti mengambil baris yang sudah kehabisan percobaan auto-recovery (pola sama, sweep GRN invoice)', async () => {
+    const col = memoryCollection();
+    col.docs.push(
+      { id: 'ob-fresh', type: INTEGRATION_OUTBOX_TYPES.ENSURE_GRN_INVOICE, aggregateId: 'grn-fresh', tenantId: 't1', status: 'FAILED', attempts: 4, updatedAt: new Date() },
+      { id: 'ob-exhausted', type: INTEGRATION_OUTBOX_TYPES.ENSURE_GRN_INVOICE, aggregateId: 'grn-exhausted', tenantId: 't1', status: 'FAILED', attempts: 9, updatedAt: new Date() },
+    );
+    const db = { collection: (name: string) => (name === 'integration_outbox' ? col : (() => { throw new Error(name); })()) } as never;
+
+    const rows = await listPendingGrnInvoiceOutbox(db);
+    const ids = rows.map((r) => r.aggregateId);
+    expect(ids).toEqual(['grn-fresh']);
   });
 });

@@ -85,6 +85,19 @@ export async function notifySalesGoodsReturnPosted(
     const cnPendingDecision = !cnPosted
       && (String(result.status || '') === 'DRAFT' || result.pendingVendorDecision === true);
     if (cnPendingDecision) {
+      // Stamp creditNoteId segera — check-decision / clearTransit butuh identity sebelum decide.
+      if (result.creditNoteId || result.noCN) {
+        await db.collection('vendor_returns').updateOne(
+          { id: doc.id },
+          {
+            $set: {
+              ...(result.creditNoteId ? { creditNoteId: result.creditNoteId } : {}),
+              ...(result.noCN ? { noCN: result.noCN } : {}),
+              updatedAt: new Date(),
+            },
+          },
+        );
+      }
       return {
         ok: true,
         pendingDecision: true,
@@ -101,6 +114,21 @@ export async function notifySalesGoodsReturnPosted(
         noCN: result.noCN,
         amount: result.amount,
       };
+    }
+
+    // Stamp creditNoteId SEBELUM apply hutang — supaya clearTransit lookup by creditNoteId
+    // tidak miss (race dengan stamp di outbox drain sesudah notify).
+    if (result.creditNoteId || result.noCN) {
+      await db.collection('vendor_returns').updateOne(
+        { id: doc.id },
+        {
+          $set: {
+            ...(result.creditNoteId ? { creditNoteId: result.creditNoteId } : {}),
+            ...(result.noCN ? { noCN: result.noCN } : {}),
+            updatedAt: new Date(),
+          },
+        },
+      );
     }
 
     const applied = await applyCreditNoteFromVendor(
@@ -125,7 +153,12 @@ export async function notifySalesGoodsReturnPosted(
         noReturn: doc.noReturn,
       },
       vendorTenantId,
-      { appliedVia: 'credit-note-posted-push', correlationId: `rtv:${doc.id}` },
+      {
+        appliedVia: 'credit-note-posted-push',
+        correlationId: `rtv:${doc.id}`,
+        returnId: doc.id,
+        clearTransit: Boolean(doc.transitAppliedAt || doc.transitJournalId),
+      },
     );
     if (applied && 'error' in applied && applied.error) {
       return {

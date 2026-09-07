@@ -10,6 +10,16 @@ import { logger } from '@/lib/api/logger';
 
 export const INTEGRATION_OUTBOX_COLLECTION = 'integration_outbox';
 
+// Sweep otomatis (grn-invoice-sync-recover.ts) memakai dedupeKey berbasis time-bucket
+// (berganti tiap GRN_INVOICE_PENDING_STALE_MS) — artinya dedup job-enqueue TIDAK PERNAH
+// menangkap sweep antar-siklus. Tanpa batas ini, baris outbox yang FAILED karena konflik
+// bisnis PERMANEN (mis. invoice sudah diretur penuh oleh dokumen lain — retry tidak akan
+// pernah berhasil) di-reclaim ulang setiap siklus sweep SELAMANYA (ditemukan: 1 baris RTV
+// dengan attempts:15 dan tetap bertambah). Begitu attempts lewat batas ini, sweep OTOMATIS
+// berhenti mengambilnya — retry manual (tombol "Retry sync CN"/setara) TETAP jalan kapan
+// saja karena lewat claim langsung, bukan lewat fungsi list* di bawah ini.
+const MAX_AUTO_RECOVERY_ATTEMPTS = 5;
+
 /** Locked type names — ENSURE_GRN_INVOICE / ENSURE_GOODS_RETURN_CN / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO. */
 export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_GRN_INVOICE: 'ENSURE_GRN_INVOICE',
@@ -400,6 +410,7 @@ export async function listPendingGrnInvoiceOutbox(
     .find({
       type: INTEGRATION_OUTBOX_TYPES.ENSURE_GRN_INVOICE,
       status: { $in: ['PENDING', 'FAILED'] },
+      attempts: { $lt: MAX_AUTO_RECOVERY_ATTEMPTS },
     })
     .sort({ updatedAt: 1 })
     .limit(limit)
@@ -974,6 +985,7 @@ export async function listPendingGoodsReturnCnOutbox(
     .find({
       type: INTEGRATION_OUTBOX_TYPES.ENSURE_GOODS_RETURN_CN,
       status: { $in: ['PENDING', 'FAILED'] },
+      attempts: { $lt: MAX_AUTO_RECOVERY_ATTEMPTS },
     })
     .sort({ updatedAt: 1 })
     .limit(limit)
@@ -1042,6 +1054,24 @@ export async function applyVendorReturnCnNotifyResult(
     cnSyncStatus = 'FAILED';
     patch.cnSyncError = result.error || 'Gagal sync credit note ke Sales';
     needsRecovery = true;
+
+    // Sync gagal — TIDAK ADA CN yang pernah terbentuk (creditNoteId tetap kosong), jadi
+    // tidak ada apa pun yang benar-benar "menunggu keputusan vendor". Nilai optimistik
+    // vendorDecision:'PENDING'/vendorDecisionDueAt yang disetel saat posting (sebelum sync
+    // dicoba) harus dibatalkan di sini — kalau tidak, UI tetap menampilkan banner "Menunggu
+    // vendor" + tenggat palsu berdampingan dengan banner FAILED, padahal retur ini stuck
+    // (stok sudah keluar, tidak ada CN, tidak ada yang bisa diputuskan vendor sama sekali)
+    // sampai retry sync berhasil. Guard by creditNoteId kosong — replay yang gagal SETELAH
+    // sync lain sempat sukses tidak boleh menghapus keputusan yang sudah nyata ada.
+    const existingForFailure = await db.collection('vendor_returns').findOne(
+      { id: returnId },
+      { projection: { creditNoteId: 1 } },
+    );
+    if (!existingForFailure?.creditNoteId) {
+      patch.vendorDecision = 'NONE';
+      patch.vendorDecisionDueAt = null;
+      patch.vendorDecisionAt = null;
+    }
   }
   patch.cnSyncStatus = cnSyncStatus;
   await db.collection('vendor_returns').updateOne({ id: returnId }, { $set: patch });

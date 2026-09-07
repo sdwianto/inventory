@@ -66,7 +66,8 @@ export function sumPostedReturnQtyByLine(
   for (const doc of posted) {
     if (opts?.excludeReturnId && doc.id === opts.excludeReturnId) continue;
     const st = String(doc.status || '');
-    if (st !== 'POSTED' && st !== 'POSTING') continue;
+    // Kunci qty selama menunggu approval / posting / sudah posted (kecuali baris REJECTED).
+    if (st !== 'POSTED' && st !== 'POSTING' && st !== 'PENDING_APPROVAL') continue;
     for (const it of doc.items || []) {
       // ADR-006 — vendor menolak baris ini: tidak pernah dibukukan (D3), jangan kunci qty-nya (D5) —
       // buyer harus bisa mengajukan retur baru untuk baris yang sama.

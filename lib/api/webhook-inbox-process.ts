@@ -5,7 +5,12 @@ import type { JsonObject } from '@/types/json';
 import type { VendorInvoicePayload } from '@/types/integration';
 import { createGrnFromDelivery } from '@/lib/api/grn-from-webhook';
 import { upsertProductFromVendor, deactivateProductFromVendor } from '@/lib/api/product-sync';
-import { createHutangFromVendorInvoice, applyCreditNoteFromVendor, hutangAlreadyFromGrnPrimaryPath } from '@/lib/api/hutang-from-vendor';
+import {
+  createHutangFromVendorInvoice,
+  applyCreditNoteFromVendor,
+  applyDebitNoteFromVendor,
+  hutangAlreadyFromGrnPrimaryPath,
+} from '@/lib/api/hutang-from-vendor';
 import { syncCpoFromVendorEvent } from '@/lib/api/cpo-status-sync';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 
@@ -16,6 +21,7 @@ const DASHBOARD_INVALIDATE_EVENTS = new Set([
   ...PRODUCT_EVENTS,
   ...CPO_EVENTS,
   'credit_note.posted',
+  'debit_note.posted',
 ]);
 
 export interface WebhookProcessInput {
@@ -194,6 +200,21 @@ export async function processWebhookInboxEvent(
         'creditNotes.creditNoteId': creditNoteId,
       });
       if (existingHutang) {
+        // Hutang sudah applied — tetap konvergensi display full-accept (idempotent).
+        if (String(payload.source || '') === 'inventory_return' || payload.noReturn) {
+          const { maybeStampVendorReturnFullAcceptFromCn } = await import('@/lib/api/hutang-from-vendor');
+          await maybeStampVendorReturnFullAcceptFromCn(
+            db,
+            customerTenantId,
+            creditNoteId,
+            {
+              items: Array.isArray(payload.items) ? payload.items as never : undefined,
+              source: String(payload.source || 'inventory_return'),
+              noReturn: payload.noReturn ? String(payload.noReturn) : undefined,
+            },
+            new Date(),
+          );
+        }
         await invalidateDashboardSnapshot(db, customerTenantId);
         return {
           action: 'already_applied',
@@ -202,6 +223,27 @@ export async function processWebhookInboxEvent(
         };
       }
     }
+    const creditNoteIdForLookup = String(payload.creditNoteId || '').trim();
+    const noReturnForLookup = String(payload.noReturn || '').trim();
+    let clearTransit: boolean | undefined;
+    let returnId: string | undefined;
+    if (creditNoteIdForLookup || noReturnForLookup) {
+      const rtv = await db.collection('vendor_returns').findOne(
+        {
+          tenantId: customerTenantId,
+          $or: [
+            ...(creditNoteIdForLookup ? [{ creditNoteId: creditNoteIdForLookup }] : []),
+            ...(noReturnForLookup ? [{ noReturn: noReturnForLookup }] : []),
+          ],
+        },
+        { projection: { id: 1, transitAppliedAt: 1, transitJournalId: 1 } },
+      );
+      if (rtv) {
+        returnId = String(rtv.id || '');
+        clearTransit = Boolean(rtv.transitAppliedAt || rtv.transitJournalId);
+      }
+    }
+
     const cn = await applyCreditNoteFromVendor(
       db,
       customerTenantId,
@@ -210,11 +252,48 @@ export async function processWebhookInboxEvent(
       {
         appliedVia: 'credit-note-posted-webhook',
         correlationId: payload.correlationId ? String(payload.correlationId) : null,
+        ...(returnId ? { returnId } : {}),
+        ...(clearTransit !== undefined ? { clearTransit } : {}),
       },
     );
     if ('error' in cn && cn.error) throw new Error(String(cn.error));
     await invalidateDashboardSnapshot(db, customerTenantId);
     return cn as Record<string, unknown>;
+  }
+
+  if (event === 'debit_note.posted') {
+    if (!payload.invoiceId) throw new Error('invoiceId wajib');
+    const debitNoteId = String(payload.debitNoteId || '').trim();
+    if (debitNoteId) {
+      const existingHutang = await db.collection('hutang').findOne({
+        tenantId: customerTenantId,
+        vendorInvoiceId: payload.invoiceId,
+        referenceType: 'VENDOR_INVOICE',
+        'debitNotes.debitNoteId': debitNoteId,
+      });
+      if (existingHutang) {
+        await invalidateDashboardSnapshot(db, customerTenantId);
+        return {
+          action: 'already_applied',
+          hutangId: existingHutang.id,
+          message: 'debit_note.posted skipped — sudah applied',
+        };
+      }
+    }
+
+    const dn = await applyDebitNoteFromVendor(
+      db,
+      customerTenantId,
+      payload as VendorInvoicePayload,
+      vendorTenantId,
+      {
+        appliedVia: 'debit-note-posted-webhook',
+        correlationId: payload.correlationId ? String(payload.correlationId) : null,
+      },
+    );
+    if ('error' in dn && dn.error) throw new Error(String(dn.error));
+    await invalidateDashboardSnapshot(db, customerTenantId);
+    return dn as Record<string, unknown>;
   }
 
   return { message: `event ${event} ignored` };

@@ -290,7 +290,7 @@ export default function PenerimaanPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal membuat RTV');
-      toast.success(`RTV ${data.noReturn} dibuat — lanjutkan post di halaman Retur Vendor`);
+      toast.success(`RTV ${data.noReturn} dibuat — lanjutkan ajukan & approval di halaman Retur Vendor`);
       invalidateGrn();
       reload();
       const fresh = await queryClient.fetchQuery({

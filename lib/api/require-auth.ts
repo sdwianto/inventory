@@ -65,5 +65,10 @@ export const PO_APPROVE_ROLES = ['ADMIN', 'MASTER'];
 export const PO_DIRECT_SUBMIT_ROLES = ['ADMIN', 'MASTER'];
 export const PO_EDIT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 
+/** RTV: buat/edit/ajukan — SoD: yang approve bukan role set yang sama untuk GUDANG. */
+export const RTV_CREATE_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+/** RTV: setujui & post (stok OUT + CN) — SUPERVISOR+; pembuat tidak boleh approve sendiri (kecuali ADMIN/MASTER). */
+export const RTV_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+
 export const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 export const PRODUCT_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];

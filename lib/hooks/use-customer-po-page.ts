@@ -73,6 +73,8 @@ export function useCustomerPoPage() {
   const searchParams = useSearchParams();
   const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
   const wrPrefillDone = useRef(false);
+  const [vrMeta, setVrMeta] = useState<JsonObject | null>(null);
+  const vrPrefillDone = useRef(false);
 
   usePrimeLineItemUoms(createOpen || Boolean(editingPo), lines.map((l) => str(l.localStokId)));
 
@@ -150,6 +152,53 @@ export function useCustomerPoPage() {
         toast.info(`PO untuk maintenance ${str(data.noWR)}`);
       })
       .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Gagal memuat WR'));
+  }, [searchParams]);
+
+  // PO pengganti dari baris retur vendor yang diterima (?vendorReturnId=<id>).
+  useEffect(() => {
+    const vrId = searchParams.get('vendorReturnId');
+    if (!vrId || vrPrefillDone.current) return;
+    vrPrefillDone.current = true;
+    (async () => {
+      try {
+        const data = await fetchJson<JsonObject>(`/api/vendor-returns/${vrId}`);
+        const accepted = asArray(data.items).map(asObject)
+          .filter((it) => str(it.vendorDecision) === 'ACCEPTED');
+        if (!accepted.length) {
+          toast.error('Retur ini tidak punya baris yang diterima vendor');
+          return;
+        }
+        // Tidak pakai selectProduct() di sini — fungsi itu bergantung closure
+        // `lines` antar-render, rapuh dipanggil berturutan sebelum re-render.
+        // Panggil primitif underlying-nya langsung lalu satu setLines di akhir.
+        const resolved = await Promise.all(accepted.map(async (it) => {
+          const id = str(it.localStokId);
+          const [defaultUom, product] = await Promise.all([
+            fetchDefaultProductUom(id),
+            fetchJson<JsonObject>(`/api/products/${id}`).catch(() => null),
+          ]);
+          if (product) rememberProduct(product);
+          return {
+            localStokId: id,
+            uomId: defaultUom?.id || '',
+            satuan: defaultUom?.satuan || '',
+            factorToBase: defaultUom?.factorToBase,
+            estimasiHarga: poEstimasiFromProduct(product, vendorTierMap as Record<string, string>, defaultTier) || '',
+            estimasiManual: false,
+            qty: num(it.qty) || 1,
+          };
+        }));
+        setVrMeta({ id: vrId, noReturn: str(data.noReturn) });
+        setCatatan(`Pengganti retur ${str(data.noReturn)} (baris diterima vendor)`);
+        setCreateDate(new Date());
+        setLines(resolved);
+        setCreateOpen(true);
+        toast.info(`PO pengganti untuk retur ${str(data.noReturn)} — cek harga & tanggal sebelum submit`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Gagal memuat retur');
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sengaja sekali jalan per query param, mirror efek wrId di atas
   }, [searchParams]);
 
   // Deep-link from Food Production Kebutuhan Beli (?highlight=<cpoId>&edit=1)
@@ -590,6 +639,7 @@ export function useCustomerPoPage() {
         tanggalKedatangan: toDateInputValue(createDate),
         maintenanceRequestId: wrMeta?.id || null,
         assetId: wrMeta?.assetId || null,
+        vendorReturnId: vrMeta?.id || null,
       };
       const optimisticRow: JsonObject = {
         id: `temp-${Date.now()}`,
@@ -607,6 +657,7 @@ export function useCustomerPoPage() {
       setCreateOpen(false);
       setEditingPo(null);
       setWrMeta(null);
+      setVrMeta(null);
       setSelectedDate(createDate ? toDateInputValue(createDate) : null);
       setShowAll(false);
       setExpandedId(String(data.id));
@@ -616,6 +667,7 @@ export function useCustomerPoPage() {
         setCreateOpen(false);
         setEditingPo(null);
         setWrMeta(null);
+        setVrMeta(null);
       } else if (e instanceof PoMutationAmbiguousError) {
         toast.info('Memuat daftar PO…', { description: e.message });
         await reloadList();

@@ -374,7 +374,7 @@ export default function AppShell({ children }: AppShellProps) {
   const showGrnBadge = user && GRN_BADGE_ROLES.has(user.role);
   const showWrBadge = user && ['ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const showPmBadge = user && ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
-  // Cocok dengan RTV_ROLES (PO_CREATE_ROLES) di lib/api/handlers/vendor-returns.ts —
+  // Cocok dengan RTV_CREATE_ROLES / RTV_APPROVE_ROLES di lib/api/require-auth.ts —
   // supaya badge terlihat oleh role yang benar-benar bisa akses /retur-vendor.
   const showRtvBadge = user && ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'].includes(user.role);
   const pmBadgeCount = showPmBadge

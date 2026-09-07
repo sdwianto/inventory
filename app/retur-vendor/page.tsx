@@ -4,6 +4,7 @@ import type { JsonObject } from '@/types/json';
 import { str, num, asArray, asObject } from '@/types/json';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { TableSkeleton } from '@/components/TableSkeleton';
 import { Button } from '@/components/ui/button';
@@ -20,12 +21,16 @@ import { fetchJson } from '@/lib/fetch-json';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import { invalidateHutangCaches } from '@/lib/hooks/invalidate-operational';
+import { useSessionUser } from '@/lib/hooks/use-session-user';
 
 const STATUS_STYLE: Record<string, string> = {
   DRAFT: 'bg-blue-100 text-blue-800',
-  POSTING: 'bg-amber-100 text-amber-800',
+  PENDING_APPROVAL: 'bg-amber-100 text-amber-800',
+  POSTING: 'bg-orange-100 text-orange-800',
   POSTED: 'bg-green-100 text-green-800',
 };
+
+const RTV_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER', 'OWNER'];
 
 const CN_STYLE: Record<string, string> = {
   NONE: 'text-slate-500',
@@ -74,6 +79,7 @@ function cnLabel(row: JsonObject) {
 
 export default function ReturVendorPage() {
   const searchParams = useSearchParams();
+  const user = useSessionUser();
   const qc = useQueryClient();
   const hutangIdParam = searchParams.get('hutangId') || '';
   const [statusFilter, setStatusFilter] = useState('');
@@ -86,6 +92,11 @@ export default function ReturVendorPage() {
   const [acting, setActing] = useState('');
   const [creatingFromHutang, setCreatingFromHutang] = useState(false);
   const hutangCreateRef = useRef('');
+
+  const canApproveRole = !!user && (
+    user.role === 'MASTER'
+    || RTV_APPROVE_ROLES.includes(str(user.role))
+  );
 
   const listUrl = useMemo(() => {
     const p = new URLSearchParams();
@@ -185,15 +196,43 @@ export default function ReturVendorPage() {
     }
   };
 
-  const postReturn = async () => {
+  const submitReturn = async () => {
     if (!detail?.id) return;
     if (!str(detail.reason).trim()) {
-      toast.error('Alasan retur wajib sebelum post');
+      toast.error('Alasan retur wajib sebelum diajukan');
       return;
     }
-    setActing('post');
+    setActing('submit');
     try {
-      const data = await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}/post`, {
+      await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: detail.reason,
+          photos: detail.photos || [],
+          items: asArray(detail.items),
+        }),
+      });
+      const data = await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: detail.reason }),
+      });
+      setDetail(data);
+      toast.success(`RTV ${str(data.noReturn)} diajukan — menunggu approval`);
+      invalidate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal ajukan');
+    } finally {
+      setActing('');
+    }
+  };
+
+  const approveReturn = async () => {
+    if (!detail?.id) return;
+    setActing('approve');
+    try {
+      const data = await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -207,14 +246,33 @@ export default function ReturVendorPage() {
       if (str(data.cnSyncStatus) === 'FAILED') {
         toast.error(str(data.cnSyncError) || 'Stok sudah keluar — faktur kredit belum terbentuk');
       } else if (str(data.cnSyncStatus) === 'SYNCING') {
-        toast.message('Stok sudah keluar — credit note masih disinkronkan');
+        toast.message('Disetujui — stok keluar, credit note masih disinkronkan');
       } else {
-        toast.success(`RTV ${str(data.noReturn)} diposting`);
+        toast.success(`RTV ${str(data.noReturn)} disetujui & diposting`);
       }
       invalidate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Gagal post');
+      toast.error(e instanceof Error ? e.message : 'Gagal approve');
       if (detail.id) await loadDetail(str(detail.id)).catch(() => {});
+    } finally {
+      setActing('');
+    }
+  };
+
+  const returnToDraft = async () => {
+    if (!detail?.id) return;
+    setActing('withdraw');
+    try {
+      const data = await fetchJson<JsonObject>(`/api/vendor-returns/${str(detail.id)}/return-to-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      setDetail(data);
+      toast.success('Retur dikembalikan ke draft');
+      invalidate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal kembalikan ke draft');
     } finally {
       setActing('');
     }
@@ -256,15 +314,31 @@ export default function ReturVendorPage() {
       });
       const checkResult = asObject(data.checkResult);
       const action = str(checkResult.action);
+      const hutangHeal = asObject(checkResult.hutangHeal);
+      const hutangAction = str(hutangHeal.action);
       setDetail(data);
-      if (action === 'applied') {
+      if (str(checkResult.error) && !action) {
+        toast.error(str(checkResult.error));
+        if (hutangAction === 'credit_applied') {
+          toast.success('Hutang berhasil dikoreksi dari credit note Sales');
+        }
+      } else if (action === 'applied') {
         toast.success(`Vendor sudah memutuskan — ${str(checkResult.vendorDecision)}`);
+        if (hutangAction === 'credit_applied') {
+          toast.success('Hutang dikoreksi sesuai credit note');
+        }
       } else if (action === 'still_pending') {
         toast('Vendor belum memutuskan retur ini.');
       } else if (action === 'already_resolved' || action === 'already_applied') {
-        toast('Keputusan vendor sudah tersinkron sebelumnya.');
+        if (hutangAction === 'credit_applied') {
+          toast.success('Keputusan sudah ada — hutang baru dikoreksi dari Sales');
+        } else {
+          toast('Keputusan vendor sudah tersinkron sebelumnya.');
+        }
+      } else if (str(checkResult.error)) {
+        toast.error(str(checkResult.error));
       } else {
-        toast.error(str(checkResult.error) || 'Gagal cek status ke Sales');
+        toast.error('Gagal cek status ke Sales');
       }
       invalidate();
     } catch (e) {
@@ -313,16 +387,33 @@ export default function ReturVendorPage() {
   };
 
   const isDraft = str(detail?.status) === 'DRAFT';
+  const isPendingApproval = str(detail?.status) === 'PENDING_APPROVAL';
+  const isCreator = !!(user?.id && str(asObject(detail?.createdBy).userId) === user.id);
+  const canSelfApprove = !!user && ['ADMIN', 'MASTER', 'OWNER'].includes(str(user.role));
+  const canApproveThis = isPendingApproval && canApproveRole && (canSelfApprove || !isCreator);
+  const canWithdraw = isPendingApproval && (isCreator || canApproveRole);
   const isGrnReject = str(detail?.source) === 'grn-reject';
   const cnSync = str(detail?.cnSyncStatus);
   const vendorDecision = str(detail?.vendorDecision);
+  const hasCn = !!(str(detail?.creditNoteId) || str(detail?.noCN) || cnSync === 'DONE');
+  // Retry hanya untuk FAILED — SKIPPED = tanpa Sales (bukan error); SYNCING = in-flight.
   const postedNeedsRetry = !isGrnReject && str(detail?.status) === 'POSTED'
-    && ['FAILED', 'SYNCING', 'SKIPPED'].includes(cnSync)
+    && cnSync === 'FAILED'
     && !['REJECTED', 'PARTIAL'].includes(vendorDecision);
-  const postedFailed = postedNeedsRetry && cnSync === 'FAILED';
+  const postedFailed = postedNeedsRetry;
+  const cnSyncing = !isGrnReject && str(detail?.status) === 'POSTED' && cnSync === 'SYNCING';
+  // Banner vendor PENDING hanya jika CN sudah ada / DONE — hindari ganda dengan SYNCING/FAILED.
+  const showVendorPendingBanner = vendorDecision === 'PENDING'
+    && !cnSyncing
+    && !postedNeedsRetry
+    && hasCn;
   const rejectedItems = (asArray(detail?.items) as JsonObject[]).filter(
     (it) => str(it.vendorDecision) === 'REJECTED',
   );
+  const acceptedItems = (asArray(detail?.items) as JsonObject[]).filter(
+    (it) => str(it.vendorDecision) === 'ACCEPTED',
+  );
+  const acceptedTotal = acceptedItems.reduce((s, it) => s + num(it.jumlah), 0);
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -333,7 +424,8 @@ export default function ReturVendorPage() {
             <Undo2 className="w-6 h-6 text-orange-600" /> Retur Vendor
           </h1>
           <p className="text-sm text-slate-500">
-            Barang keluar gudang → credit note vendor → hutang turun. Satu aksi Post menyelesaikan stok dan CN.
+            Ajukan → approval (SoD) → stok keluar + credit note. Hutang turun setelah vendor menerima baris dan CN terbit.
+            Salah harga tanpa barang keluar? Gunakan Koreksi harga di Tagihan (CN overcharge / DN undercharge) — bukan RTV (ADR-008).
           </p>
         </div>
         <div className="flex gap-2">
@@ -347,14 +439,16 @@ export default function ReturVendorPage() {
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
-        {['', 'DRAFT', 'POSTING', 'POSTED'].map((st) => (
+        {['', 'DRAFT', 'PENDING_APPROVAL', 'POSTING', 'POSTED'].map((st) => (
           <Button
             key={st || 'all'}
             size="sm"
             variant={statusFilter === st ? 'default' : 'outline'}
             onClick={() => setStatusFilter(st)}
           >
-            {st || 'Semua'}
+            {st === 'PENDING_APPROVAL' ? 'Menunggu approval'
+              : st === 'POSTING' ? 'Posting'
+                : st || 'Semua'}
           </Button>
         ))}
         <span className="w-px h-5 bg-slate-300 mx-1" />
@@ -414,7 +508,7 @@ export default function ReturVendorPage() {
                 <td className="px-3 py-2 font-mono text-xs">{str(row.noGRN) || str(row.noDO) || '—'}</td>
                 <td className="px-3 py-2 text-center">
                   <span className={`text-[11px] px-2 py-0.5 rounded ${STATUS_STYLE[str(row.status)] || 'bg-slate-100'}`}>
-                    {str(row.status)}
+                    {str(row.status) === 'PENDING_APPROVAL' ? 'Menunggu approval' : str(row.status)}
                   </span>
                 </td>
                 <td className={`px-3 py-2 ${CN_STYLE[str(row.cnSyncStatus)] || ''}`}>{cnLabel(row)}</td>
@@ -484,17 +578,41 @@ export default function ReturVendorPage() {
                   Retur dari item ditolak saat Terima Barang (GRN) — qty ini tidak pernah masuk stok/tertagih, jadi tanpa credit note vendor.
                 </div>
               )}
+              {isPendingApproval && (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Menunggu approval internal (SoD).{' '}
+                  {str(detail.stockAppliedAt)
+                    ? 'Stok sudah keluar (post sebelumnya sempat gagal) — lanjutkan approve/post; tidak akan OUT dua kali.'
+                    : 'Stok belum keluar.'}
+                  {str(asObject(detail.submittedBy).userName) && (
+                    <> Diajukan oleh {str(asObject(detail.submittedBy).userName)}.</>
+                  )}
+                  {isCreator && !canSelfApprove && canApproveRole && (
+                    <> Anda pembuat dokumen — minta SUPERVISOR/ADMIN lain untuk menyetujui.</>
+                  )}
+                </div>
+              )}
+              {str(detail.approvalRejectReason) && isDraft && (
+                <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  Dikembalikan ke draft: {str(detail.approvalRejectReason)}
+                </div>
+              )}
               {postedNeedsRetry && (
                 <div className={`rounded border px-3 py-2 text-sm ${postedFailed ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                   Stok sudah keluar — faktur kredit belum terbentuk.
                   {str(detail.cnSyncError) ? ` ${str(detail.cnSyncError)}` : ''}
                 </div>
               )}
-              {vendorDecision === 'PENDING' && (
+              {cnSyncing && (
+                <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                  Stok sudah keluar — credit note sedang disinkron ke Sales.
+                </div>
+              )}
+              {showVendorPendingBanner && (
                 <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 space-y-2">
                   <p>
-                    Menunggu keputusan vendor (Terima/Tolak per baris) — belum ada efek stok/hutang
-                    apa pun sampai vendor memutuskan.
+                    Menunggu keputusan vendor (Terima/Tolak per baris). Stok sudah keluar gudang saat Post;
+                    hutang belum berkurang sampai credit note terbit setelah vendor menerima.
                     {str(detail.vendorDecisionDueAt) && ` Tenggat: ${new Date(str(detail.vendorDecisionDueAt)).toLocaleDateString('id-ID')}.`}
                   </p>
                   <Button
@@ -512,7 +630,7 @@ export default function ReturVendorPage() {
                 <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 space-y-2">
                   <p className="font-semibold">
                     Perlu tindak lanjut — vendor menolak {rejectedItems.length} dari {asArray(detail.items).length} baris retur ini.
-                    Barang sudah keluar gudang dan hutang untuk baris yang ditolak belum berkurang.
+                    Stok baris yang ditolak sudah dikembalikan ke gudang otomatis; hutang untuk baris itu tidak berkurang.
                   </p>
                   {rejectedItems.length > 0 && (
                     <ul className="list-disc list-inside text-xs">
@@ -524,8 +642,8 @@ export default function ReturVendorPage() {
                     </ul>
                   )}
                   <p className="text-xs text-red-700">
-                    Tidak ada reversal stok/hutang otomatis untuk baris yang ditolak — selesaikan manual
-                    (mis. koordinasi ulang dengan vendor di luar sistem), lalu ajukan retur baru kalau perlu.
+                    Qty baris ditolak sudah bebas untuk diajukan lagi. Ajukan retur baru untuk baris tersebut
+                    kalau masih perlu dikembalikan ke vendor.
                   </p>
                   {str(detail.hutangId) && (
                     <Button
@@ -540,12 +658,51 @@ export default function ReturVendorPage() {
                   )}
                 </div>
               )}
+              {acceptedItems.length > 0 && (
+                <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900 space-y-2">
+                  <p>
+                    Vendor menerima {acceptedItems.length} baris ({formatIDR(acceptedTotal)}).
+                    Stok baris ini tetap keluar gudang (sudah keluar saat Post).
+                    Hutang berkurang lewat credit note setelah CN diposting
+                    {str(detail.noCN) ? ` (${str(detail.noCN)})` : cnSync ? ` — status CN: ${cnSync}` : ''}.
+                    {' '}Kalau perlu barang pengganti, ajukan PO baru untuk baris ini.
+                  </p>
+                  {str(detail.replacementCpoId) && (
+                    <Link
+                      href={`/pembelian-po?highlight=${str(detail.replacementCpoId)}`}
+                      className="block text-sm font-medium underline text-green-800 hover:text-green-900"
+                    >
+                      PO pengganti: {str(detail.replacementCpoNo) || str(detail.replacementCpoId)}
+                    </Link>
+                  )}
+                  <Link href={`/pembelian-po?vendorReturnId=${str(detail.id)}`}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-green-400 text-green-800 hover:bg-green-100"
+                    >
+                      {str(detail.replacementCpoId) ? 'Buat PO Pengganti Lagi' : 'Buat PO Pengganti'}
+                    </Button>
+                  </Link>
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
                 <div><span className="text-slate-500">Vendor</span><p className="font-semibold">{str(detail.supplierName) || '—'}</p></div>
-                <div><span className="text-slate-500">Status</span><p className="font-semibold">{str(detail.status)}</p></div>
+                <div><span className="text-slate-500">Status</span><p className="font-semibold">{str(detail.status) === 'PENDING_APPROVAL' ? 'Menunggu approval' : str(detail.status)}</p></div>
                 <div><span className="text-slate-500">GRN / DO</span><p className="font-mono">{str(detail.noGRN) || str(detail.noDO) || '—'}</p></div>
                 <div><span className="text-slate-500">PO / SO</span><p className="font-mono">{str(detail.noPO) || '—'} / {str(detail.noSO) || '—'}</p></div>
                 <div><span className="text-slate-500">CN</span><p>{str(detail.noCN) || str(detail.cnSyncStatus)}</p></div>
+                {str(detail.transitAppliedAt) && (
+                  <div>
+                    <span className="text-slate-500">Transit GL</span>
+                    <p className="font-semibold" title={str(detail.transitJournalId) || undefined}>
+                      {formatIDR(num(detail.transitAmount))}
+                      <span className="ml-1 font-normal text-slate-500">
+                        ({vendorDecision === 'PENDING' ? 'terbuka' : 'clear via CN/reject'})
+                      </span>
+                    </p>
+                  </div>
+                )}
                 {!isGrnReject && str(detail.status) === 'POSTED' && (
                   <div>
                     <span className="text-slate-500">Keputusan Vendor</span>
@@ -591,6 +748,7 @@ export default function ReturVendorPage() {
                       <th className="px-2 py-1.5 text-right">Max</th>
                       <th className="px-2 py-1.5 text-right">Qty</th>
                       <th className="px-2 py-1.5 text-left">Gudang</th>
+                      <th className="px-2 py-1.5 text-left">Lot</th>
                       <th className="px-2 py-1.5 text-right">Harga</th>
                       <th className="px-2 py-1.5 text-right">Jumlah</th>
                       {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
@@ -642,7 +800,7 @@ export default function ReturVendorPage() {
                             <select
                               className="h-8 border rounded px-1 text-xs"
                               value={str(it.gudangKode) || 'GKERING'}
-                              onChange={(e) => patchItem(idx, { gudangKode: e.target.value })}
+                              onChange={(e) => patchItem(idx, { gudangKode: e.target.value, lotNo: null })}
                             >
                               {WAREHOUSES.map((w) => (
                                 <option key={w.kode} value={w.kode}>{w.short}</option>
@@ -650,12 +808,31 @@ export default function ReturVendorPage() {
                             </select>
                           ) : warehouseName(str(it.gudangKode))}
                         </td>
+                        <td className="px-2 py-1.5">
+                          {isDraft && !isGrnReject ? (
+                            <Input
+                              className="h-8 w-28 text-xs font-mono"
+                              value={str(it.lotNo)}
+                              onChange={(e) => patchItem(idx, { lotNo: e.target.value || null })}
+                              placeholder="FEFO"
+                              title="Lot preferensi (kosong = FEFO otomatis saat post)"
+                            />
+                          ) : (str(it.lotNo) || '—')}
+                        </td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.harga))}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.jumlah))}</td>
                         {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
                           <td className="px-2 py-1.5 text-center">
                             <span
-                              title={lineDecision === 'REJECTED' ? (str(it.vendorDecisionReason) || 'Ditolak vendor') : undefined}
+                              title={
+                                lineDecision === 'ACCEPTED'
+                                  ? 'Stok tetap keluar; hutang turun lewat credit note'
+                                  : lineDecision === 'REJECTED'
+                                    ? (str(it.vendorDecisionReason)
+                                      ? `Stok dikembalikan ke gudang — ${str(it.vendorDecisionReason)}`
+                                      : 'Stok dikembalikan ke gudang otomatis')
+                                    : 'Stok sudah keluar; menunggu keputusan vendor'
+                              }
                               className={`inline-flex text-[11px] px-2 py-0.5 rounded ${
                                 lineDecision === 'ACCEPTED' ? 'bg-green-100 text-green-800'
                                   : lineDecision === 'REJECTED' ? 'bg-red-100 text-red-800'
@@ -707,9 +884,23 @@ export default function ReturVendorPage() {
                 <Button variant="outline" onClick={() => void saveDraft()} disabled={!!acting}>
                   {acting === 'save' ? 'Menyimpan…' : 'Simpan draft'}
                 </Button>
-                <Button className="bg-orange-500 hover:bg-orange-600" onClick={() => void postReturn()} disabled={!!acting}>
-                  {acting === 'post' ? 'Memposting…' : 'Post Retur'}
+                <Button className="bg-orange-500 hover:bg-orange-600" onClick={() => void submitReturn()} disabled={!!acting}>
+                  {acting === 'submit' ? 'Mengajukan…' : 'Ajukan Approval'}
                 </Button>
+              </>
+            )}
+            {isPendingApproval && (
+              <>
+                {canWithdraw && (
+                  <Button variant="outline" onClick={() => void returnToDraft()} disabled={!!acting}>
+                    {acting === 'withdraw' ? 'Mengembalikan…' : 'Kembali ke Draft'}
+                  </Button>
+                )}
+                {canApproveThis && (
+                  <Button className="bg-orange-500 hover:bg-orange-600" onClick={() => void approveReturn()} disabled={!!acting}>
+                    {acting === 'approve' ? 'Menyetujui…' : 'Setujui & Post'}
+                  </Button>
+                )}
               </>
             )}
             {postedNeedsRetry && (

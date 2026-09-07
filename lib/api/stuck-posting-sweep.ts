@@ -11,7 +11,7 @@ export type StuckGrnPostingSweepResult = {
   scanned: number;
 };
 
-/** GRN / RTV stuck POSTING > 10 menit → kembali DRAFT. */
+/** GRN stuck POSTING > 10 menit → DRAFT. RTV stuck POSTING → PENDING_APPROVAL (SoD, bukan DRAFT). */
 export async function sweepStuckGrnPosting(db: Db): Promise<StuckGrnPostingSweepResult> {
   const cutoff = new Date(Date.now() - STUCK_MS);
   const stuck = await db.collection('goods_receipts')
@@ -55,7 +55,13 @@ export async function sweepStuckGrnPosting(db: Db): Promise<StuckGrnPostingSweep
     const r = await db.collection('vendor_returns').updateOne(
       { id: row.id, status: 'POSTING' },
       {
-        $set: { status: 'DRAFT', updatedAt: new Date() },
+        // SoD: jangan jatuh ke DRAFT — tetap butuh approve ulang / retry post.
+        $set: {
+          status: 'PENDING_APPROVAL',
+          updatedAt: new Date(),
+          approvedAt: null,
+          approvedBy: null,
+        },
         $unset: { postingStartedAt: '' },
       },
     );

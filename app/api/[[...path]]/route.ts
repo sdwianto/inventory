@@ -12,7 +12,7 @@ import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
 import { dispatchRoute, normalizeApiRoute } from '@/lib/api/route-dispatch';
-import { ensureOperationalIndexes } from '@/lib/api/operational-indexes';
+import { ensureOperationalIndexes, ensureRekeningDefaultsForAllTenants } from '@/lib/api/operational-indexes';
 import { publicApiErrorMessage } from '@/lib/api/production-response';
 import { enforceDangerousRouteGuard } from '@/lib/api/production-guard';
 import { buildHealthResponse } from '@/lib/api/health';
@@ -114,6 +114,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
 
     const db = await connectToMongo();
     void ensureOperationalIndexes(db).catch(() => {});
+    void ensureRekeningDefaultsForAllTenants(db).catch(() => {});
 
     const isWorker = isWorkerRoute(method, route);
     const workerAuthed = isWorker && verifyWorkerOrCronSecret(request);

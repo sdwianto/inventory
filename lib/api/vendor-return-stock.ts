@@ -1,9 +1,12 @@
-/** Apply stok OUT per RTV line (qtyBase, sourceType VENDOR_RETURN). */
+/** Apply stok OUT per RTV line (qtyBase, sourceType VENDOR_RETURN) + FEFO lot consume. */
 
 import type { ClientSession, Db } from 'mongodb';
 import { postStockMutation } from '@/lib/api/stock-mutation';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
-import type { VendorReturnLine } from '@/types/vendor-return';
+import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
+import type { VendorReturnDoc, VendorReturnLine } from '@/types/vendor-return';
+
+export type VendorReturnLotConsume = NonNullable<VendorReturnDoc['lotConsume']>[number];
 
 export async function applyVendorReturnStock(
   db: Db,
@@ -11,10 +14,17 @@ export async function applyVendorReturnStock(
   noReturn: string,
   items: VendorReturnLine[],
   session?: ClientSession,
-): Promise<{ error?: string; items?: VendorReturnLine[] }> {
+): Promise<{
+  error?: string;
+  items?: VendorReturnLine[];
+  lotConsume?: VendorReturnLotConsume[];
+}> {
   const tid = tenantId || 'default';
   const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
   const nextItems: VendorReturnLine[] = [];
+  const lotConsume: VendorReturnLotConsume[] = [];
+  const now = new Date();
+
   for (const it of items) {
     const qty = parseFloat(String(it.qty)) || 0;
     if (qty <= 0) continue;
@@ -39,6 +49,33 @@ export async function applyVendorReturnStock(
       session,
     });
     if (!mut.ok) return { error: mut.error };
+
+    // Soft FEFO — sama Issue: tanpa lot / shortfall tidak gagalkan RTV.
+    const fefo = await consumeIngredientLotsFefo(
+      db,
+      {
+        tenantId: tid,
+        stokId: it.localStokId,
+        warehouseKode: it.gudangKode,
+        needQty: resolved.qtyBase,
+        asOf: now,
+        noDokumen: noReturn,
+        preferredLotNo: it.lotNo,
+      },
+      session,
+    );
+    lotConsume.push({
+      lineId: it.lineId,
+      invoiceLineId: it.invoiceLineId,
+      localStokId: it.localStokId,
+      warehouseKode: it.gudangKode,
+      needQty: fefo.needQty,
+      allocated: fefo.allocated,
+      shortfall: fefo.shortfall,
+      skippedNoLots: fefo.skippedNoLots,
+      allocations: fefo.allocations,
+    });
+
     nextItems.push({
       ...it,
       qty,
@@ -50,5 +87,5 @@ export async function applyVendorReturnStock(
     });
   }
   if (!nextItems.length) return { error: 'Tidak ada baris stok yang bisa dikeluarkan' };
-  return { items: nextItems };
+  return { items: nextItems, lotConsume };
 }

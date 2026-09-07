@@ -88,3 +88,31 @@ export function allocateFefo(
     shortfall: left,
   };
 }
+
+/**
+ * Restore plan: reverse FEFO (LIFO on prior consume/ship allocations) up to returnQty.
+ * Shared by distribution return + vendor RTV reject restore.
+ */
+export function planFefoRestore(
+  returnQty: number,
+  allocations: FefoAllocation[],
+): FefoAllocation[] {
+  const need = Number(returnQty);
+  if (!(need > 0) || !allocations?.length) return [];
+  let left = need;
+  const out: FefoAllocation[] = [];
+  for (const a of [...allocations].reverse()) {
+    if (left <= 0) break;
+    const avail = Number(a.qty) || 0;
+    if (!(avail > 0)) continue;
+    const take = Math.min(avail, left);
+    out.push({
+      batchId: a.batchId,
+      batchNo: a.batchNo,
+      expiryDate: a.expiryDate,
+      qty: take,
+    });
+    left -= take;
+  }
+  return out;
+}

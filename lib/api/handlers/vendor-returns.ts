@@ -1,7 +1,7 @@
 import type { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean } from '@/lib/api/db';
-import { requireRole, PO_CREATE_ROLES } from '@/lib/api/require-auth';
+import { requireRole, RTV_CREATE_ROLES, RTV_APPROVE_ROLES } from '@/lib/api/require-auth';
 import { resolveOperationalScope, tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
@@ -12,6 +12,7 @@ import { storeBase64Image } from '@/lib/api/media-storage';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { writeAuditLog } from '@/lib/api/audit-log';
 import { buildVendorReturnLinesFromHutang, vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
 import {
   assertReturnQtyWithinMax,
@@ -20,12 +21,33 @@ import {
   type PostedReturnLike,
 } from '@/lib/api/vendor-return-returable';
 import { postVendorReturn, retryVendorReturnCn } from '@/lib/api/vendor-return-post';
+import { findInflightVendorReturnSibling } from '@/lib/api/vendor-return-inflight';
 import { VENDOR_RETURNS_COLLECTION, vendorReturnLineKey, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import type { HandlerContext } from '@/types/api/handler';
 import type { JsonObject } from '@/types/json';
 
 const MAX_PHOTOS = 5;
-const RTV_ROLES = PO_CREATE_ROLES;
+const RTV_ROLES = RTV_CREATE_ROLES;
+
+function rtvActor(auth: HandlerContext['auth'], body?: RtvBody) {
+  return {
+    userId: auth?.userId,
+    userName: auth?.name || body?.userName,
+    role: auth?.role,
+  };
+}
+
+/** SoD: pembuat tidak boleh approve sendiri (kecuali ADMIN / MASTER / OWNER). */
+function rtvSelfApproveBlocked(auth: HandlerContext['auth'], doc: VendorReturnDoc): string | null {
+  if (!auth?.userId) return 'Unauthorized';
+  if (auth.isMaster) return null;
+  const role = String(auth.role || '');
+  if (role === 'ADMIN' || role === 'OWNER') return null;
+  if (doc.createdBy?.userId && doc.createdBy.userId === auth.userId) {
+    return 'Pembuat retur tidak boleh menyetujui sendiri — minta SUPERVISOR/ADMIN lain';
+  }
+  return null;
+}
 
 interface RtvBody extends Record<string, unknown> {
   hutangId?: string;
@@ -159,6 +181,7 @@ async function createVendorReturnFromGrnReject(
     harga,
     jumlah: Math.round(qtyRejected * harga),
     gudangKode,
+    lotNo: item.lotNo != null ? String(item.lotNo) : null,
     maxQty: qtyRejected,
   };
 
@@ -224,7 +247,7 @@ async function createVendorReturnFromGrnReject(
         cnSyncStatus: 'SKIPPED',
         createdAt: now,
         updatedAt: now,
-        createdBy: { userId: auth?.userId, userName: auth?.name || rtvBody.userName },
+        createdBy: rtvActor(auth, rtvBody),
       }) as VendorReturnDoc;
 
       try {
@@ -260,7 +283,7 @@ async function loadPostedReturns(
 ) {
   const filter: Record<string, unknown> = {
     ...tenantIdMatchFilter(tenantId),
-    status: { $in: ['POSTED', 'POSTING'] },
+    status: { $in: ['POSTED', 'POSTING', 'PENDING_APPROVAL'] },
     $or: [
       { noInvoice },
       ...(hutangId ? [{ hutangId }] : []),
@@ -418,7 +441,7 @@ export async function handleVendorReturns({
       ? await db.collection(VENDOR_RETURNS_COLLECTION).find({
         ...tenantIdMatchFilter(tenantId),
         noInvoice: { $in: invoices },
-        status: { $in: ['POSTED', 'POSTING'] },
+        status: { $in: ['POSTED', 'POSTING', 'PENDING_APPROVAL'] },
       }).toArray()
       : [];
     const postedByInvoice = new Map<string, typeof posted>();
@@ -464,8 +487,139 @@ export async function handleVendorReturns({
     return ok(rows);
   }
 
-  if (path[0] === 'vendor-returns' && path[1] && path[2] === 'post' && method === 'POST') {
-    const deniedRole = requireRole(auth, RTV_ROLES);
+  if (path[0] === 'vendor-returns' && path[1] && path[2] === 'submit' && method === 'POST') {
+    const deniedRole = requireRole(auth, RTV_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
+
+    const doc = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as VendorReturnDoc | null;
+    if (!doc) return err('Tidak ditemukan', 404);
+    if (doc.status !== 'DRAFT') return err('Hanya DRAFT yang bisa diajukan untuk approval', 400);
+    const reason = String(rtvBody.reason || doc.reason || '').trim();
+    if (!reason) return err('Alasan retur wajib sebelum diajukan', 400);
+    if (!(doc.items || []).length) return err('Minimal satu baris retur', 400);
+    if ((doc.items || []).some((it) => (parseFloat(String(it.qty)) || 0) <= 0)) {
+      return err('Semua baris retur harus qty > 0', 400);
+    }
+    if (doc.source !== 'grn-reject') {
+      const identErr = vendorReturnSalesIdentityError(doc.items || []);
+      if (identErr) return err(identErr, 400);
+      const hutang = await db.collection('hutang').findOne({
+        ...tenantIdMatchFilter(tenantId),
+        ...(doc.hutangId ? { id: doc.hutangId } : { noInvoice: doc.noInvoice }),
+      });
+      if (!hutang) return err('Tagihan terkait tidak ditemukan', 400);
+      const posted = await loadPostedReturns(db, tenantId, doc.noInvoice || '', doc.hutangId);
+      const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted), { excludeReturnId: doc.id });
+      const qtyErr = assertReturnQtyWithinMax(doc.items || [], returable);
+      if (qtyErr) return err(qtyErr, 400);
+
+      const blocking = findInflightVendorReturnSibling(
+        posted as VendorReturnDoc[],
+        doc.id,
+      );
+      if (blocking) {
+        return err(
+          `Invoice ini sudah punya retur ${blocking.noReturn || blocking.id} yang masih in-flight (approval/posting/sync CN/menunggu vendor) — selesaikan dulu.`,
+          400,
+        );
+      }
+    }
+
+    const now = new Date();
+    const claim = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+      { id: doc.id, status: 'DRAFT' },
+      {
+        $set: {
+          status: 'PENDING_APPROVAL',
+          reason,
+          submittedAt: now,
+          submittedBy: rtvActor(auth, rtvBody),
+          approvalRejectReason: null,
+          updatedAt: now,
+        },
+      },
+    );
+    if (claim.modifiedCount === 0) return err('Retur sudah tidak berstatus DRAFT', 400);
+
+    await writeAuditLog(db, {
+      tenantId,
+      action: 'VENDOR_RETURN_SUBMITTED',
+      entityType: 'vendor_return',
+      entityId: doc.id,
+      summary: `Ajukan RTV ${doc.noReturn} untuk approval`,
+      userId: auth?.userId,
+      userName: auth?.name,
+    });
+
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
+    return ok(clean(fresh as JsonObject));
+  }
+
+  if (path[0] === 'vendor-returns' && path[1] && path[2] === 'return-to-draft' && method === 'POST') {
+    const deniedRole = requireRole(auth, RTV_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Scope tidak valid', 400);
+
+    const doc = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as VendorReturnDoc | null;
+    if (!doc) return err('Tidak ditemukan', 404);
+    if (doc.status !== 'PENDING_APPROVAL') {
+      return err('Hanya retur menunggu approval yang bisa dikembalikan ke draft', 400);
+    }
+    const isCreator = !!(auth?.userId && doc.createdBy?.userId === auth.userId);
+    const approveDenied = requireRole(auth, RTV_APPROVE_ROLES);
+    const canApproveRole = !approveDenied;
+    if (!isCreator && !canApproveRole) {
+      return err('Hanya pembuat atau approver yang boleh mengembalikan ke draft', 403);
+    }
+
+    const now = new Date();
+    const rejectReason = String(rtvBody.reason || '').trim() || null;
+    const claim = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+      { id: doc.id, status: 'PENDING_APPROVAL' },
+      {
+        $set: {
+          status: 'DRAFT',
+          submittedAt: null,
+          submittedBy: null,
+          approvedAt: null,
+          approvedBy: null,
+          approvalRejectReason: rejectReason,
+          updatedAt: now,
+        },
+      },
+    );
+    if (claim.modifiedCount === 0) return err('Retur sudah tidak menunggu approval', 400);
+
+    await writeAuditLog(db, {
+      tenantId,
+      action: 'VENDOR_RETURN_RETURNED_TO_DRAFT',
+      entityType: 'vendor_return',
+      entityId: doc.id,
+      summary: `RTV ${doc.noReturn} kembali ke DRAFT${rejectReason ? `: ${rejectReason}` : ''}`,
+      userId: auth?.userId,
+      userName: auth?.name,
+    });
+
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
+    return ok(clean(fresh as JsonObject));
+  }
+
+  if (
+    path[0] === 'vendor-returns'
+    && path[1]
+    && (path[2] === 'post' || path[2] === 'approve')
+    && method === 'POST'
+  ) {
+    const deniedRole = requireRole(auth, RTV_APPROVE_ROLES);
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: rtvBody, request });
     if (denied) return denied;
@@ -477,7 +631,15 @@ export async function handleVendorReturns({
       withTenantFilter(scopeAuth, { id: path[1] }),
     ) as VendorReturnDoc | null;
     if (!doc) return err('Tidak ditemukan', 404);
-    if (doc.status !== 'DRAFT') return err('Hanya DRAFT yang bisa diposting', 400);
+    if (doc.status === 'DRAFT') {
+      return err('Ajukan retur dulu (submit) — tidak bisa post langsung dari DRAFT', 400);
+    }
+    if (doc.status !== 'PENDING_APPROVAL') {
+      return err('Hanya retur menunggu approval yang bisa disetujui/diposting', 400);
+    }
+    const sod = rtvSelfApproveBlocked(auth, doc);
+    if (sod) return err(sod, 403);
+
     const reason = String(rtvBody.reason || doc.reason || '').trim();
     if (!reason) return err('Alasan retur wajib sebelum post', 400);
     const grn = await resolvePostedGrn(db, tenantId, {
@@ -488,12 +650,8 @@ export async function handleVendorReturns({
     if ('error' in grn) return err(grn.error, 400);
 
     const isGrnReject = doc.source === 'grn-reject';
-    let items = doc.items || [];
-    if (Array.isArray(rtvBody.items) && !isGrnReject) {
-      const hydrated = await hydrateDraftItems(db, tenantId, rtvBody.items, items);
-      if ('error' in hydrated) return err(hydrated.error, 400);
-      items = hydrated;
-    }
+    // Approve mengunci snapshot yang diajukan — jangan mutasi qty/items dari body.
+    const items = doc.items || [];
     if (!items.length) return err('Minimal satu baris retur', 400);
     if (items.some((it) => (parseFloat(String(it.qty)) || 0) <= 0)) {
       return err('Semua baris retur harus qty > 0', 400);
@@ -520,21 +678,25 @@ export async function handleVendorReturns({
     }
 
     const { subTotal, total } = totalsFromItems(items);
+    const now = new Date();
+    const approver = rtvActor(auth, rtvBody);
     await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-      { id: doc.id, status: 'DRAFT' },
+      { id: doc.id, status: 'PENDING_APPROVAL' },
       {
         $set: {
-          items,
           reason,
           subTotal,
           total,
-          updatedAt: new Date(),
+          updatedAt: now,
           ...(Array.isArray(rtvBody.photos) ? { photos: rtvBody.photos } : {}),
         },
       },
     );
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id }) as VendorReturnDoc | null;
     if (!fresh) return err('Tidak ditemukan', 404);
+    if (fresh.status !== 'PENDING_APPROVAL') {
+      return err('Retur sudah tidak menunggu approval', 400);
+    }
 
     const result = await postVendorReturn(db, {
       doc: fresh,
@@ -543,10 +705,23 @@ export async function handleVendorReturns({
         ...rtvBody,
         userName: rtvBody.userName || auth?.name,
         userId: auth?.userId,
+        userRole: auth?.role,
+        approvedBy: approver,
         photos: rtvBody.photos,
       },
     });
     if (result.error) return err(String(result.error), 400);
+
+    await writeAuditLog(db, {
+      tenantId,
+      action: 'VENDOR_RETURN_APPROVED',
+      entityType: 'vendor_return',
+      entityId: doc.id,
+      summary: `Setujui & post RTV ${doc.noReturn}`,
+      userId: auth?.userId,
+      userName: auth?.name,
+    });
+
     return ok(clean(result as JsonObject));
   }
 
@@ -575,10 +750,19 @@ export async function handleVendorReturns({
     if (!tenantId) return err('Scope tidak valid', 400);
     const { checkVendorReturnDecisionStatus } = await import('@/lib/api/vendor-return-decision');
     const result = await checkVendorReturnDecisionStatus(db, tenantId, String(path[1]));
-    if ('error' in result) return err(result.error, result.status);
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
+    if ('error' in result) {
+      const healAction = result.hutangHeal && typeof result.hutangHeal === 'object'
+        ? String((result.hutangHeal as { action?: string }).action || '')
+        : '';
+      // Decision gagal tapi hutang sudah di-heal — kembalikan 200 + checkResult agar UI tidak buta.
+      if (healAction === 'credit_applied' || healAction === 'already_applied') {
+        return ok(clean({ ...(fresh as JsonObject), checkResult: result }));
+      }
+      return err(result.error, result.status);
+    }
     return ok(clean({ ...(fresh as JsonObject), checkResult: result }));
   }
 
@@ -694,7 +878,7 @@ export async function handleVendorReturns({
       cnSyncStatus: 'NONE',
       createdAt: now,
       updatedAt: now,
-      createdBy: { userId: auth?.userId, userName: auth?.name || rtvBody.userName },
+      createdBy: rtvActor(auth, rtvBody),
     }) as VendorReturnDoc;
 
     await db.collection(VENDOR_RETURNS_COLLECTION).insertOne(doc);

@@ -24,9 +24,15 @@ function dedupeSourceId(event: string, payload: JsonObject): string | null {
     }
     return soId || null;
   }
+  if (event === 'debit_note.posted') {
+    return String(payload.debitNoteId || payload.invoiceId || '') || null;
+  }
+  if (event === 'credit_note.posted') {
+    return String(payload.creditNoteId || payload.invoiceId || '') || null;
+  }
   const product = payload.product as JsonObject | undefined;
   return String(
-    payload.deliveryId || payload.invoiceId || payload.creditNoteId
+    payload.deliveryId || payload.invoiceId || payload.creditNoteId || payload.debitNoteId
     || (product ? `${product.id || product.kode}` : ''),
   ) || null;
 }
