@@ -9,12 +9,19 @@ export const DEFAULT_INGREDIENT_SHELF_DAYS = 30;
 
 export type IngredientLotStatus = 'ACTIVE' | 'EXPIRED' | 'CONSUMED';
 
+export type IngredientLotSourceType = 'GRN' | 'PENYESUAIAN';
+
 export interface IngredientLotDoc {
   id: string;
   tenantId: string;
   lotNo: string;
-  grnId: string;
+  /** Kosong untuk lot dari penyesuaian stok (bukan GRN). */
+  grnId?: string;
   noGRN?: string;
+  /** Asal lot: GRN (default/legacy) atau PENYESUAIAN. */
+  sourceType?: IngredientLotSourceType;
+  penyesuaianId?: string;
+  noPenyesuaian?: string;
   productId: string;
   productKode?: string;
   productNama?: string;
@@ -65,6 +72,18 @@ export function buildIngredientLotNo(input: {
   const grn = String(input.noGRN || 'GRN').split('-').pop() || 'X';
   const kode = String(input.productKode || 'P').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'P';
   return `L-${grn}-${kode}-${day}-${input.lineIndex + 1}`.toUpperCase();
+}
+
+/** Lot nomor untuk stok masuk via penyesuaian (tanpa GRN). */
+export function buildPenyesuaianLotNo(input: {
+  noPenyesuaian?: string;
+  productKode?: string;
+  receivedAt: string;
+}): string {
+  const day = String(input.receivedAt || '').replace(/-/g, '').slice(0, 8) || '00000000';
+  const ps = String(input.noPenyesuaian || 'PS').replace(/[^A-Za-z0-9]/g, '').slice(-10) || 'PS';
+  const kode = String(input.productKode || 'P').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'P';
+  return `L-${ps}-${kode}-${day}`.toUpperCase();
 }
 
 export function defaultIngredientExpiryDate(

@@ -78,21 +78,45 @@ describe('W2-8 syncLotsOnVariance', () => {
     expect(updates[0]).toMatchObject({ qtyRemaining: 8, status: 'ACTIVE' });
   });
 
-  it('skips when no lots on count up', async () => {
+  it('count up creates PENYESUAIAN lot when none exist', async () => {
     const findCursor = {
       sort: () => findCursor,
       limit: () => findCursor,
       toArray: async () => [],
     };
+    const inserted: Array<Record<string, unknown>> = [];
     const db = {
-      collection: () => ({ find: () => findCursor }),
+      collection: () => ({
+        find: () => findCursor,
+        insertOne: async (doc: Record<string, unknown>) => {
+          inserted.push(doc);
+          return { insertedId: 'x' };
+        },
+      }),
     };
     const result = await syncLotsOnVariance(db as never, {
       tenantId: 't1',
       stokId: 'p1',
-      warehouseKode: 'GKERING',
-      deltaQty: 2,
+      warehouseKode: 'GBASAH',
+      deltaQty: 175,
+      asOf: new Date('2026-09-12T09:00:00.000Z'),
+      noDokumen: 'PS2609000001',
+      penyesuaianId: 'ps-id-1',
+      productKode: 'B313252',
+      productNama: 'Telur Ayam',
+      satuan: 'PCS',
     });
-    expect(result.skippedNoLots).toBe(true);
+    expect(result.skippedNoLots).toBe(false);
+    expect(result.increased).toBe(175);
+    expect(result.createdLotId).toBeTruthy();
+    expect(inserted[0]).toMatchObject({
+      sourceType: 'PENYESUAIAN',
+      noPenyesuaian: 'PS2609000001',
+      productId: 'p1',
+      warehouseKode: 'GBASAH',
+      qty: 175,
+      qtyRemaining: 175,
+      status: 'ACTIVE',
+    });
   });
 });

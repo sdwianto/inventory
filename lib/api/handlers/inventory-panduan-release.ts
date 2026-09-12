@@ -1,4 +1,4 @@
-// Panduan Release — lot SOH + asal PO/RPN + tgl terima + status invoice
+// Panduan Release — lot SOH + asal PO/RPN/penyesuaian + tgl terima + status invoice
 // + residual SOH dari stok_lokasi, dibatasi saldo kartu stok (satu SKU = satu gudang).
 
 import type { NextResponse } from 'next/server';
@@ -31,6 +31,7 @@ type PanduanRow = {
   noPO: string | null;
   noRpn: string | null;
   noGRN: string | null;
+  noPenyesuaian: string | null;
   purchaseRequirementNo: string | null;
   tanggalTerima: string | null;
   invoiceStatus: InvoiceStatusLabel;
@@ -54,11 +55,22 @@ function deriveInvoiceStatus(grn: {
   return 'BELUM';
 }
 
-function buildAsal(noPO: string, noRpn: string): string {
+function buildAsalFromPoRpn(noPO: string, noRpn: string): string {
   if (noPO && noRpn) return `PO ${noPO} dari RPN ${noRpn}`;
   if (noPO) return `PO ${noPO}`;
   if (noRpn) return `RPN ${noRpn}`;
   return '—';
+}
+
+function buildAsalPenyesuaian(noPS: string): string {
+  return noPS ? `Penyesuaian Stok ${noPS}` : 'Penyesuaian Stok';
+}
+
+function isPenyesuaianLot(lot: IngredientLotDoc): boolean {
+  const src = str(lot.sourceType).toUpperCase();
+  if (src === 'PENYESUAIAN') return true;
+  if (str(lot.noPenyesuaian) || str(lot.penyesuaianId)) return true;
+  return false;
 }
 
 function toIsoDate(v: unknown): string {
@@ -111,6 +123,9 @@ export async function handlePanduanRelease({
       lotNo: 1,
       grnId: 1,
       noGRN: 1,
+      sourceType: 1,
+      noPenyesuaian: 1,
+      penyesuaianId: 1,
       productId: 1,
       productKode: 1,
       productNama: 1,
@@ -294,6 +309,8 @@ export async function handlePanduanRelease({
       remaining = Math.round((remaining - soh) * 1000) / 1000;
       allocated = Math.round((allocated + soh) * 1000) / 1000;
       const { lot, grn, noPO, noRpn } = item;
+      const noPS = str(lot.noPenyesuaian);
+      const fromPs = isPenyesuaianLot(lot);
       rows.push({
         lotId: lot.id,
         lotNo: lot.lotNo || null,
@@ -304,17 +321,18 @@ export async function handlePanduanRelease({
         soh,
         warehouseKode: item.wh,
         warehouseNama: warehouseLabel(item.wh),
-        asal: buildAsal(noPO, noRpn),
-        noPO: noPO || null,
-        noRpn: noRpn || null,
-        noGRN: str(lot.noGRN) || str(grn?.noGRN) || null,
-        purchaseRequirementNo: item.purchaseRequirementNo || null,
+        asal: fromPs ? buildAsalPenyesuaian(noPS) : buildAsalFromPoRpn(noPO, noRpn),
+        noPO: fromPs ? null : (noPO || null),
+        noRpn: fromPs ? null : (noRpn || null),
+        noGRN: fromPs ? null : (str(lot.noGRN) || str(grn?.noGRN) || null),
+        noPenyesuaian: fromPs ? (noPS || null) : null,
+        purchaseRequirementNo: fromPs ? null : (item.purchaseRequirementNo || null),
         tanggalTerima: toIsoDate(lot.receivedAt)
           || toIsoDate(grn?.postedAt)
           || toIsoDate(grn?.tanggal)
           || null,
-        invoiceStatus: deriveInvoiceStatus(grn),
-        noInvoice: str(grn?.noInvoice) || null,
+        invoiceStatus: fromPs ? 'N/A' : deriveInvoiceStatus(grn),
+        noInvoice: fromPs ? null : (str(grn?.noInvoice) || null),
         lotStatus: lot.status || null,
         tracked: true,
       });
@@ -322,6 +340,8 @@ export async function handlePanduanRelease({
     allocatedByProductWh.set(key, allocated);
   }
 
+  // Residual (tanpa lot): jika asal kartu = PENYESUAIAN, tampilkan nomor PS (legacy sebelum lot PS dibuat).
+  const residualKeys: Array<{ key: string; productId: string; wh: string; residual: number }> = [];
   for (const [key, stockQty] of stockByProductWh) {
     if (stockQty <= 0) continue;
     const lotAllocated = allocatedByProductWh.get(key) || 0;
@@ -329,7 +349,43 @@ export async function handlePanduanRelease({
     if (residual <= 0) continue;
     const [productId, wh] = key.split('::');
     if (!productId || !wh) continue;
+    residualKeys.push({ key, productId, wh, residual });
+  }
+
+  const residualProductIds = [...new Set(residualKeys.map((r) => r.productId))];
+  type PsAsal = { noPS: string; tanggal: string };
+  const psAsalByKey = new Map<string, PsAsal>();
+  if (residualProductIds.length) {
+    const kartuPs = await db.collection('stok_kartu')
+      .find({
+        tenantId: tid,
+        stokId: { $in: residualProductIds },
+        sourceType: 'PENYESUAIAN',
+        masuk: { $gt: 0 },
+        ...(warehouseKode ? { lokasiKode: warehouseKode } : {}),
+      })
+      .project({ stokId: 1, lokasiKode: 1, noTransaksi: 1, tanggal: 1, masuk: 1 })
+      .sort({ tanggal: -1 })
+      .limit(2000)
+      .toArray();
+    for (const k of kartuPs) {
+      const pid = str(k.stokId);
+      const wh = normalizeWarehouseKode(str(k.lokasiKode));
+      if (!pid || !isValidWarehouseKode(wh)) continue;
+      const mapKey = productWhKey(pid, wh);
+      if (psAsalByKey.has(mapKey)) continue; // sudah ambil yang terbaru
+      const noPS = str(k.noTransaksi);
+      if (!noPS) continue;
+      psAsalByKey.set(mapKey, {
+        noPS,
+        tanggal: toIsoDate(k.tanggal),
+      });
+    }
+  }
+
+  for (const { key, productId, wh, residual } of residualKeys) {
     const product = productById.get(productId);
+    const ps = psAsalByKey.get(key);
     rows.push({
       lotId: null,
       lotNo: null,
@@ -340,16 +396,17 @@ export async function handlePanduanRelease({
       soh: residual,
       warehouseKode: wh,
       warehouseNama: warehouseLabel(wh),
-      asal: 'Tidak terlacak (tanpa lot)',
+      asal: ps ? buildAsalPenyesuaian(ps.noPS) : 'Tidak terlacak (tanpa lot)',
       noPO: null,
       noRpn: null,
       noGRN: null,
+      noPenyesuaian: ps?.noPS || null,
       purchaseRequirementNo: null,
-      tanggalTerima: null,
+      tanggalTerima: ps?.tanggal || null,
       invoiceStatus: 'N/A',
       noInvoice: null,
       lotStatus: null,
-      tracked: false,
+      tracked: Boolean(ps),
     });
   }
 

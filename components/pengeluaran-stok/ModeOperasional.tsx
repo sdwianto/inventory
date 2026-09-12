@@ -291,6 +291,7 @@ export function ModeOperasional() {
             value: (r: JsonObject) => str(r.warehouseNama) || str(r.warehouseKode) || '—',
           },
           { key: 'noGRN', label: 'No. GRN' },
+          { key: 'noPenyesuaian', label: 'No. Penyesuaian' },
           { key: 'lotNo', label: 'Lot' },
         ],
         rows: panduanRows,
@@ -843,7 +844,7 @@ export function ModeOperasional() {
           <DialogHeader>
             <DialogTitle>Panduan Release</DialogTitle>
             <p className="text-sm text-slate-500">
-              SOH per lot (asal PO/RPN + invoice) dan sisa stok tanpa lot — filter gudang di bawah.
+              SOH per lot (asal PO/RPN / penyesuaian) dan sisa stok tanpa lot — filter gudang di bawah.
             </p>
           </DialogHeader>
           <div className="flex flex-wrap items-end gap-3">
@@ -911,6 +912,8 @@ export function ModeOperasional() {
                         <div>{str(r.asal) || '—'}</div>
                         {str(r.noGRN) ? (
                           <div className="text-[11px] text-slate-400 font-mono mt-0.5">{str(r.noGRN)}</div>
+                        ) : str(r.noPenyesuaian) ? (
+                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">{str(r.noPenyesuaian)}</div>
                         ) : null}
                       </td>
                       <td className="px-3 py-2 text-xs whitespace-nowrap">

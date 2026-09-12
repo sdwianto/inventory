@@ -4,8 +4,11 @@
  */
 
 import type { ClientSession, Db } from 'mongodb';
+import { v4 as uuidv4 } from 'uuid';
 import {
   INGREDIENT_LOTS_COLLECTION,
+  buildPenyesuaianLotNo,
+  defaultIngredientExpiryDate,
   effectiveIngredientQtyRemaining,
   isIngredientExpired,
   type IngredientLotDoc,
@@ -19,6 +22,7 @@ export type CycleCountLotResult = {
   skippedNoLots: boolean;
   consumed?: number;
   increased?: number;
+  createdLotId?: string;
   shortfall?: number;
 };
 
@@ -29,7 +33,7 @@ function txOpts(session?: ClientSession | null) {
 /**
  * Count down → FEFO consume lots (allow expired).
  * Count up → increase newest lot qtyRemaining (+ qty cap).
- * No lots → skip (legacy / no W2-5 stamp).
+ * Count up + no lots → buat lot baru sumber PENYESUAIAN (asal Panduan Release).
  */
 export async function syncLotsOnVariance(
   db: Db,
@@ -40,6 +44,10 @@ export async function syncLotsOnVariance(
     deltaQty: number;
     asOf?: Date;
     noDokumen?: string;
+    penyesuaianId?: string;
+    productKode?: string;
+    productNama?: string;
+    satuan?: string;
   },
   session?: ClientSession | null,
 ): Promise<CycleCountLotResult> {
@@ -93,7 +101,48 @@ export async function syncLotsOnVariance(
     .limit(5)
     .toArray() as unknown as IngredientLotDoc[];
 
-  if (!rows.length) return base;
+  if (!rows.length) {
+    const receivedAt = now.toISOString().slice(0, 10);
+    const noPS = String(input.noDokumen || '').trim();
+    const lotId = uuidv4();
+    const lot: IngredientLotDoc = {
+      id: lotId,
+      tenantId: input.tenantId,
+      lotNo: buildPenyesuaianLotNo({
+        noPenyesuaian: noPS || undefined,
+        productKode: input.productKode,
+        receivedAt,
+      }),
+      grnId: '',
+      sourceType: 'PENYESUAIAN',
+      ...(input.penyesuaianId ? { penyesuaianId: input.penyesuaianId } : {}),
+      ...(noPS ? { noPenyesuaian: noPS } : {}),
+      productId: input.stokId,
+      productKode: input.productKode,
+      productNama: input.productNama,
+      satuan: input.satuan,
+      warehouseKode: input.warehouseKode,
+      receivedAt,
+      expiryDate: defaultIngredientExpiryDate(receivedAt),
+      qty: delta,
+      qtyRemaining: delta,
+      status: 'ACTIVE',
+      lastCycleCountBy: {
+        noDokumen: noPS || undefined,
+        delta,
+        at: now,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.collection(INGREDIENT_LOTS_COLLECTION).insertOne(lot, txOpts(session));
+    return {
+      ...base,
+      skippedNoLots: false,
+      increased: delta,
+      createdLotId: lotId,
+    };
+  }
 
   const target = rows.find((b) => b.status !== 'CONSUMED') || rows[0];
   const before = effectiveIngredientQtyRemaining(target);

@@ -160,6 +160,10 @@ export async function handlePenyesuaian({
               deltaQty: selisih,
               asOf: now,
               noDokumen: noPS,
+              penyesuaianId: String(doc.id),
+              productKode: prod.kode,
+              productNama: prod.nama,
+              satuan: plan.satuan || prod.satuan,
             };
             fefoSync = await syncBatchesOnVariance(txDb, syncInput, session) as unknown as Record<string, unknown>;
             lotSync = await syncLotsOnVariance(txDb, syncInput, session) as unknown as Record<string, unknown>;
