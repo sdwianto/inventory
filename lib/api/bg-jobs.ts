@@ -40,6 +40,7 @@ export const JOB_TYPES = {
   INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE',
   SANDBOX_RESET: 'SANDBOX_RESET',
   AUDIT_LOG_PURGE: 'AUDIT_LOG_PURGE',
+  PRODUCT_ENRICHMENT_SYNC: 'PRODUCT_ENRICHMENT_SYNC',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -401,6 +402,9 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.AUDIT_LOG_PURGE) {
       const { runAuditLogPurgeJob } = await import('@/lib/api/audit-purge-run');
       outcome = await runAuditLogPurgeJob(db);
+    } else if (job.type === JOB_TYPES.PRODUCT_ENRICHMENT_SYNC) {
+      const { runProductEnrichmentSyncJob } = await import('@/lib/api/product-enrichment-recover');
+      outcome = await runProductEnrichmentSyncJob(db, job);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

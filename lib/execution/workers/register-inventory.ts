@@ -19,6 +19,7 @@ import {
   executePoVendorSyncJob,
   executeSandboxResetJob,
   executeWebhookInboxJob,
+  executeProductEnrichmentSyncJob,
 } from '@/lib/api/inventory-execution-handlers';
 import { assertExecutionHandlerSuccess } from '@/lib/api/execution-handler-result';
 
@@ -40,6 +41,21 @@ export function registerInventoryHandlers(): void {
     requiredCapabilities: ['CPU_BATCH'],
     handler: async (ctx) => assertExecutionHandlerSuccess(
       await executeCatalogSyncJob(ctx.db, ctx.tenantId, ctx.jobId),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'PRODUCT_ENRICHMENT_SYNC',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['SYNC'],
+    requiresLock: true,
+    lockTtlTier: 'SHORT',
+    lockKeyFromPayload: (payload, job) => (
+      `product-enrich:${job.tenantId}:${String(payload.productId || payload.aggregateId || job.id)}`
+    ),
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeProductEnrichmentSyncJob(ctx.db, ctx.tenantId, payload),
     ),
   });
 

@@ -31,9 +31,23 @@ function dedupeSourceId(event: string, payload: JsonObject): string | null {
     return String(payload.creditNoteId || payload.invoiceId || '') || null;
   }
   const product = payload.product as JsonObject | undefined;
+  if (product) {
+    const pid = String(product.id || product.kode || '');
+    // Revision wajib agar update berikutnya tidak tertolak sebagai already_processed.
+    const rev = String(
+      product.emittedAt
+      || product.detailFotosUpdatedAt
+      || product.updatedAt
+      || payload.emittedAt
+      || payload.updatedAt
+      || '',
+    );
+    if (pid && rev) return `${pid}:${rev}`;
+    // Tanpa timestamp: jangan dedupe lemah by id saja — biarkan uuid di caller.
+    return null;
+  }
   return String(
-    payload.deliveryId || payload.invoiceId || payload.creditNoteId || payload.debitNoteId
-    || (product ? `${product.id || product.kode}` : ''),
+    payload.deliveryId || payload.invoiceId || payload.creditNoteId || payload.debitNoteId || '',
   ) || null;
 }
 

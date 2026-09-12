@@ -28,6 +28,8 @@ import {
   relocateProductWarehouseWithAudit,
 } from '@/lib/api/stock-ledger';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
+import { normalizeDetailProduk, persistProductFotos } from '@/lib/api/product-media';
+import { drainEnsureProductEnrichment } from '@/lib/api/product-enrichment-outbox';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { requireRole, PRODUCT_MANAGE_ROLES, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
@@ -97,6 +99,8 @@ interface ProductBody extends Record<string, unknown> {
   recipeBaseGrams?: number | string | null;
   /** 1 products.satuan = N ml (konversi resep ML→BTL/dll). */
   recipeBaseMl?: number | string | null;
+  detailProduk?: string;
+  fotos?: unknown[];
 }
 
 interface ProductDoc extends Record<string, unknown> {
@@ -112,6 +116,8 @@ interface ProductDoc extends Record<string, unknown> {
   classificationSource?: 'inferred' | 'manual';
   recipeBaseGrams?: number;
   recipeBaseMl?: number;
+  detailProduk?: string;
+  fotos?: string[];
 }
 
 /** Optional positive factor for recipe kitchen UOM; null clears; undefined skips. */
@@ -325,6 +331,16 @@ export async function handleProducts({
     const recipeMl = parseRecipeBaseFactor(productBody.recipeBaseMl);
     if (recipeGrams != null) doc.recipeBaseGrams = recipeGrams;
     if (recipeMl != null) doc.recipeBaseMl = recipeMl;
+    if (productBody.detailProduk !== undefined) {
+      const detail = normalizeDetailProduk(productBody.detailProduk);
+      if (typeof detail === 'object' && 'error' in detail) return err(detail.error, 400);
+      doc.detailProduk = detail;
+    }
+    if (productBody.fotos !== undefined) {
+      const fotos = await persistProductFotos(tenantId, productBody.fotos);
+      if (!Array.isArray(fotos)) return err(fotos.error, 400);
+      doc.fotos = fotos;
+    }
     const initialStok = doc.stok || 0;
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
@@ -513,14 +529,26 @@ export async function handleProducts({
       ['stok', 'minStok'].forEach((k) => {
         if (update[k] !== undefined) update[k] = parseFloat(String(update[k] || 0));
       });
+      const tid = existing.tenantId || 'default';
       if (productBody.recipeBaseGrams !== undefined) {
         update.recipeBaseGrams = parseRecipeBaseFactor(productBody.recipeBaseGrams) ?? null;
       }
       if (productBody.recipeBaseMl !== undefined) {
         update.recipeBaseMl = parseRecipeBaseFactor(productBody.recipeBaseMl) ?? null;
       }
+      if (productBody.detailProduk !== undefined) {
+        const detail = normalizeDetailProduk(productBody.detailProduk);
+        if (typeof detail === 'object' && 'error' in detail) return err(detail.error, 400);
+        update.detailProduk = detail;
+        update.detailFotosUpdatedAt = new Date();
+      }
+      if (productBody.fotos !== undefined) {
+        const fotos = await persistProductFotos(tid, productBody.fotos);
+        if (!Array.isArray(fotos)) return err(fotos.error, 400);
+        update.fotos = fotos;
+        update.detailFotosUpdatedAt = new Date();
+      }
 
-      const tid = existing.tenantId || 'default';
       const grup = String(update.grup ?? existing.grup ?? 'Umum').trim();
       let uomToWrite: import('@/lib/uom/types').NormalizedUomInput[] | null = null;
 
@@ -671,6 +699,48 @@ export async function handleProducts({
       const doc = await findMasterDoc(db, 'products', auth, { id });
       if (!doc) return ok(clean(doc));
       const enriched = await loadProductWithUoms(db, tid, doc as Record<string, unknown>);
+      if (
+        isVendorSyncedProduct(existing)
+        && (productBody.detailProduk !== undefined || productBody.fotos !== undefined)
+      ) {
+        const localId = String(enriched.id || id);
+        drainEnsureProductEnrichment(db, {
+          tenantId: tid,
+          productId: localId,
+          vendorStokId: String(enriched.vendorStokId || existing.vendorStokId || ''),
+          vendorTenantId: String(enriched.vendorTenantId || existing.vendorTenantId || ''),
+          kode: String(enriched.kode || existing.kode || ''),
+          detailProduk: String(enriched.detailProduk ?? ''),
+          fotos: Array.isArray(enriched.fotos) ? enriched.fotos.map(String) : [],
+        }).then(async (r) => {
+          if (!r.ok && !r.skipped) {
+            console.warn('[product-enrichment] push failed', r.error);
+            try {
+              const { enqueueJob, scheduleJobProcessing, JOB_TYPES } = await import('@/lib/api/bg-jobs');
+              await enqueueJob(db, {
+                type: JOB_TYPES.PRODUCT_ENRICHMENT_SYNC,
+                tenantId: tid,
+                payload: {
+                  productId: localId,
+                  aggregateId: localId,
+                  vendorTenantId: String(enriched.vendorTenantId || existing.vendorTenantId || ''),
+                  vendorStokId: String(enriched.vendorStokId || existing.vendorStokId || ''),
+                  kode: String(enriched.kode || existing.kode || ''),
+                  detailProduk: String(enriched.detailProduk ?? ''),
+                  fotos: Array.isArray(enriched.fotos) ? enriched.fotos.map(String) : [],
+                  recoverOutbox: true,
+                  dedupeKey: `enrich-put:${localId}`,
+                },
+              });
+              scheduleJobProcessing(db, { limit: 2 });
+            } catch {
+              /* best-effort */
+            }
+          }
+        }).catch((e) => {
+          console.warn('[product-enrichment] push error', e instanceof Error ? e.message : e);
+        });
+      }
       return ok(clean(enriched));
     }
     if (method === 'DELETE') {

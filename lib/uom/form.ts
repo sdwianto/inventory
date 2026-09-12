@@ -143,6 +143,8 @@ export type ProductFormUomFields = {
   tenantId: string;
   itemRole?: string;
   uoms: ProductUomFormRow[];
+  detailProduk?: string;
+  fotos?: string[];
 };
 
 export function productToFormFields(
@@ -161,6 +163,10 @@ export function productToFormFields(
     tenantId: tenantId ?? String(product.tenantId || 'default'),
     itemRole: String(product.itemRole || 'INGREDIENT'),
     uoms,
+    detailProduk: String((product as { detailProduk?: string }).detailProduk || ''),
+    fotos: Array.isArray((product as { fotos?: string[] }).fotos)
+      ? (product as { fotos: string[] }).fotos.map(String).filter(Boolean)
+      : [],
   };
 }
 
@@ -183,6 +189,8 @@ export function formFieldsToProductPayload(
     hargaEcer: base?.hargaEcer,
     hargaGrosir: base?.hargaGrosir,
     hargaSpesial: base?.hargaSpesial,
+    detailProduk: fields.detailProduk ?? '',
+    fotos: Array.isArray(fields.fotos) ? fields.fotos : [],
   };
   if (options?.includeTenantId) payload.tenantId = fields.tenantId;
   if (!options?.isEdit) payload.stok = fields.stok;

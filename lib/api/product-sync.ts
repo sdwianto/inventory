@@ -12,6 +12,7 @@ import {
   productDenormFromBaseUom,
   bulkReplaceProductUoms,
 } from '@/lib/api/product-uom';
+import { materializeInboundProductFotos } from '@/lib/api/product-media';
 
 function parseVendorPrices(product: Record<string, unknown>) {
   return {
@@ -20,6 +21,16 @@ function parseVendorPrices(product: Record<string, unknown>) {
     hargaSpesial: parseInt(String(product.hargaSpesial || 0), 10),
     hargaEcer: parseInt(String(product.hargaEcer || 0), 10),
   };
+}
+
+function parseSyncTime(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const t = new Date(String(value)).getTime();
+  return Number.isFinite(t) ? t : null;
 }
 
 export function vendorProductSnapshot(product: Record<string, unknown>) {
@@ -43,6 +54,19 @@ export function vendorProductSnapshot(product: Record<string, unknown>) {
     recipeBaseMl: recipeMl,
     hasRecipeBaseGrams: Object.prototype.hasOwnProperty.call(product, 'recipeBaseGrams'),
     hasRecipeBaseMl: Object.prototype.hasOwnProperty.call(product, 'recipeBaseMl'),
+    detailProduk: Object.prototype.hasOwnProperty.call(product, 'detailProduk')
+      ? String(product.detailProduk ?? '')
+      : undefined,
+    hasDetailProduk: Object.prototype.hasOwnProperty.call(product, 'detailProduk'),
+    fotos: Object.prototype.hasOwnProperty.call(product, 'fotos')
+      ? (Array.isArray(product.fotos) ? product.fotos.map(String).filter(Boolean).slice(0, 5) : [])
+      : undefined,
+    hasFotos: Object.prototype.hasOwnProperty.call(product, 'fotos'),
+    detailFotosUpdatedAt: Object.prototype.hasOwnProperty.call(product, 'detailFotosUpdatedAt')
+      ? product.detailFotosUpdatedAt
+      : undefined,
+    hasDetailFotosUpdatedAt: Object.prototype.hasOwnProperty.call(product, 'detailFotosUpdatedAt'),
+    emittedAt: product.emittedAt ?? product.updatedAt ?? null,
     ...prices,
   };
 }
@@ -104,6 +128,20 @@ export async function upsertProductFromVendor(
       syncSource: 'sales.app',
     });
   }
+  // Satu baris Inventory = satu vendor Sales. Sibling master (puspita/uddawam) tetap
+  // dua dokumen terpisah agar badge multi-vendor & harga/stok per vendor tetap akurat.
+
+  // Tolak push basi — tutup race in-flight update setelah deactivate lokal.
+  const incomingEmit = parseSyncTime(snap.emittedAt);
+  const lastEmit = parseSyncTime((existing as { lastVendorSyncEmittedAt?: unknown } | null)?.lastVendorSyncEmittedAt);
+  if (existing && lastEmit != null && incomingEmit != null && incomingEmit < lastEmit) {
+    return {
+      action: 'skipped_stale',
+      id: existing.id,
+      kode: snap.kode,
+      vendorTenantId: vTenant,
+    };
+  }
 
   const barcodeDup = await findBarcodeDuplicate(db, tid, snap.barcode, snap.id, existing?.id ? String(existing.id) : undefined);
   // Kalau kedua produk memang sudah dikonfirmasi Master Product yang sama (identitas resmi dari
@@ -136,9 +174,40 @@ export async function upsertProductFromVendor(
     syncSource: 'sales.app',
     masterProductId: snap.masterProductId,
     updatedAt: now,
+    ...(incomingEmit != null ? { lastVendorSyncEmittedAt: new Date(incomingEmit) } : { lastVendorSyncEmittedAt: now }),
   };
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
   if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
+  // Detail/Foto LWW: hanya percaya detailFotosUpdatedAt (jangan pakai emittedAt/updatedAt —
+  // touch harga/nama di Sales tidak boleh mengalahkan enrichment Inventory).
+  if (snap.hasDetailProduk || snap.hasFotos) {
+    const localDetailAt = parseSyncTime(
+      (existing as { detailFotosUpdatedAt?: unknown } | null)?.detailFotosUpdatedAt,
+    );
+    const salesDetailAt = parseSyncTime(
+      snap.hasDetailFotosUpdatedAt ? snap.detailFotosUpdatedAt : null,
+    );
+    const allowDetail = localDetailAt == null
+      || (salesDetailAt != null && salesDetailAt >= localDetailAt);
+    if (allowDetail) {
+      if (snap.hasDetailProduk) {
+        const incoming = snap.detailProduk ?? '';
+        const localDetail = existing ? String((existing as { detailProduk?: string }).detailProduk || '') : '';
+        if (incoming || !localDetail) syncSet.detailProduk = incoming;
+      }
+      if (snap.hasFotos) {
+        const incoming = Array.isArray(snap.fotos) ? snap.fotos : [];
+        const existingFotos = existing
+          ? (existing as { fotos?: unknown }).fotos
+          : undefined;
+        const localFotos = Array.isArray(existingFotos) ? existingFotos.map(String) : [];
+        if (incoming.length || !localFotos.length) {
+          syncSet.fotos = await materializeInboundProductFotos(tid, incoming);
+        }
+      }
+      if (salesDetailAt != null) syncSet.detailFotosUpdatedAt = new Date(salesDetailAt);
+    }
+  }
 
   if (existing) {
     const classPatch = await applyInferredClassification(db, tid, existing, snap);
@@ -331,9 +400,35 @@ export async function deactivateProductFromVendor(
     filter.vendorTenantId = vTenant;
   } else return null;
 
+  const existing = await db.collection('products').findOne(filter, {
+    projection: { id: 1, kode: 1, lastVendorSyncEmittedAt: 1 },
+  });
+  if (!existing) return null;
+
+  const now = new Date();
+  const incomingEmit = parseSyncTime(product.emittedAt ?? product.updatedAt);
+  const lastEmit = parseSyncTime(
+    (existing as { lastVendorSyncEmittedAt?: unknown }).lastVendorSyncEmittedAt,
+  );
+  // Jangan regresi watermark — deactivate basi bisa membuka pintu revive via update mid-age.
+  if (lastEmit != null && incomingEmit != null && incomingEmit < lastEmit) {
+    return { kode: product.kode, action: 'skipped_stale' };
+  }
+
+  // Stamp = intent Sales (emittedAt), bukan wall-clock — supaya update/soft-reactivate
+  // concurrent dengan emittedAt sedikit lebih baru tidak kalah skipped_stale.
+  const stampMs = incomingEmit != null
+    ? Math.max(incomingEmit, lastEmit ?? 0)
+    : Math.max(lastEmit ?? 0, now.getTime());
   const r = await db.collection('products').updateOne(
-    filter,
-    { $set: { aktif: false, updatedAt: new Date() } },
+    { id: existing.id },
+    {
+      $set: {
+        aktif: false,
+        updatedAt: now,
+        lastVendorSyncEmittedAt: new Date(stampMs),
+      },
+    },
   );
   return r.modifiedCount ? { kode: product.kode, action: 'deactivated' } : null;
 }
@@ -387,7 +482,7 @@ export async function reconcileOrphanVendorProducts(
   const now = new Date();
   const r = await db.collection('products').updateMany(
     { tenantId: tid, id: { $in: orphanIds } },
-    { $set: { aktif: false, updatedAt: now } },
+    { $set: { aktif: false, updatedAt: now, lastVendorSyncEmittedAt: now } },
   );
   return { deactivated: r.modifiedCount, sample };
 }

@@ -17,13 +17,16 @@ const PUBLIC = [
   { method: 'POST', route: '/integrations/credit-note-posted' },
   { method: 'POST', route: '/integrations/debit-note-posted' },
   { method: 'POST', route: '/integrations/vendor-return-decision' },
+  { method: 'POST', route: '/integrations/product-upserted' },
   { method: 'POST', route: '/v1/integrations/delivery-shipped' },
   { method: 'POST', route: '/v1/integrations/invoice-posted' },
   { method: 'POST', route: '/v1/integrations/credit-note-posted' },
   { method: 'POST', route: '/v1/integrations/debit-note-posted' },
   { method: 'POST', route: '/v1/integrations/vendor-return-decision' },
+  { method: 'POST', route: '/v1/integrations/product-upserted' },
 ] as const;
 
 export function isPublicRoute(method: string, route: string): boolean {
+  if (method === 'GET' && /^\/media\/[^/]+\/[^/]+$/.test(route)) return true;
   return PUBLIC.some((p) => p.method === method && p.route === route);
 }

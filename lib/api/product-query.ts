@@ -8,7 +8,12 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Build Mongo filter for product search within tenant scope. */
+/**
+ * Build Mongo filter for product search within tenant scope.
+ * Pola sama sales.app: regex nama/kode/barcode (bukan $text) —
+ * $text gagal bila digabung tenantId regex / compound text-index prefix.
+ * Inventory menambah clause vendorTenantName/Id untuk cari nama vendor.
+ */
 export function buildProductSearchFilter(q?: string | null): Filter<Record<string, unknown>> {
   const term = (q || '').trim();
   if (!term) return {};
@@ -19,9 +24,6 @@ export function buildProductSearchFilter(q?: string | null): Filter<Record<strin
   ];
 
   const isCodeLike = /^[A-Za-z0-9\-_.]+$/.test(term) && term.length <= 48;
-  if (!isCodeLike && term.length >= 3) {
-    return { $text: { $search: term } };
-  }
   if (isCodeLike) {
     return {
       $or: [
@@ -73,9 +75,6 @@ export function mergeFilterWithVendorTenantIds(
 ): Filter<Record<string, unknown>> {
   if (!vendorTenantIds.length) return filter;
   const vendorClause = { vendorTenantId: { $in: vendorTenantIds } };
-  if (filter.$text) {
-    return { $or: [filter, vendorClause] };
-  }
   const existingOr = Array.isArray(filter.$or) ? [...filter.$or] : [];
   if (!existingOr.length && Object.keys(filter).length === 0) {
     return vendorClause;
@@ -126,6 +125,8 @@ export const PRODUCT_LIST_PROJECTION = {
   /** Bridge resep dapur — wajib di list agar COUNT (BTL/PCS/…) bisa pilih GR/ML. */
   recipeBaseGrams: 1,
   recipeBaseMl: 1,
+  detailProduk: 1,
+  fotos: 1,
   nutrition: 1,
   tkpiCode: 1,
   usdaCode: 1,

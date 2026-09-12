@@ -186,7 +186,12 @@ export async function sweepAllStuckGrnInvoiceSyncs(
       });
       enqueued += 1;
     }
-    if (pendingOutbox.length > 0 || pendingRtv.length > 0) {
+    const { sweepPendingProductEnrichment } = await import('@/lib/api/product-enrichment-recover');
+    const enrichSweep = await sweepPendingProductEnrichment(db, {
+      limit: Math.max(0, limit - enqueued),
+    });
+    enqueued += enrichSweep.enqueued;
+    if (pendingOutbox.length > 0 || pendingRtv.length > 0 || enrichSweep.enqueued > 0) {
       scheduleJobProcessing(db, { limit: Math.min(20, enqueued || 1) });
     }
   } catch {
