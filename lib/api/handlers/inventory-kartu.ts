@@ -4,7 +4,7 @@ import { findMasterDoc, resolveOperationalScope } from '@/lib/api/tenant-master'
 import { guardPosting } from '@/lib/api/period-lock';
 import { withOperationalFilter } from '@/lib/api/tenant-operational';
 import { requireRole, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
-import { ledgerSaldoForProduct, reconcileProductStockFromLedger } from '@/lib/api/stock-ledger';
+import { ledgerSaldoForProduct, reconcileProductStockFromLedger, reconcileTenantStockFromLedger } from '@/lib/api/stock-ledger';
 import { listProductUoms } from '@/lib/api/product-uom';
 import { formatStockDualLabel } from '@/lib/uom/display';
 import type { HandlerContext } from '@/types/api/handler';
@@ -109,6 +109,8 @@ export async function handleStokKartu({
           : String(saldo),
       };
     });
+    // Saldo dihitung ASC; tampilkan terbaru di atas (DESC).
+    enriched.reverse();
     let product: Record<string, unknown> | null = null;
     let ledgerSaldo: number | null = null;
     if (productId) {
@@ -147,11 +149,28 @@ export async function handleStokKartu({
     const p = await findMasterDoc(db, 'products', scopeAuth, { id: productId });
     if (!p) return err('Produk tidak ditemukan', 404);
     const tid = p.tenantId || scopeAuth?.tenantId || 'default';
-    const result = await reconcileProductStockFromLedger(db, tid, p);
+    const clearNegative = invBody.clearNegative === true;
+    const result = await reconcileProductStockFromLedger(db, tid, p, { clearNegative });
     if ('error' in result && result.error) return err(result.error, 400);
     const product = clean(await findMasterDoc(db, 'products', scopeAuth, { id: productId }));
     const ledgerSaldo = await ledgerSaldoForProduct(db, tid, productId);
     return ok({ product, ledgerSaldo, reconciled: result });
+  }
+
+  if (route === '/stok/kartu/reconcile-all' && method === 'POST') {
+    const deniedRole = requireRole(auth, STOCK_ADJUST_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth, tenantId } = resolveOperationalScope(auth, { url, body: invBody, request });
+    if (denied) return denied;
+    if (!tenantId) return err('Scope tenant tidak valid', 400);
+    const dryRun = invBody.dryRun !== false; // default dry-run untuk aman di production
+    const clearNegative = invBody.clearNegative === true;
+    if (!dryRun) {
+      const locked = await guardPosting(db, scopeAuth, invBody);
+      if (locked) return locked;
+    }
+    const summary = await reconcileTenantStockFromLedger(db, tenantId, { dryRun, clearNegative });
+    return ok(summary);
   }
 
   return null;

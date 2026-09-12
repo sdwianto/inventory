@@ -2,6 +2,7 @@ import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { applyLedgerCapToWarehouseMap, ledgerSaldoForProducts } from '@/lib/api/stock-ledger';
 import { warehouseLabel, WAREHOUSE_CODES, normalizeWarehouseKode, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { qtyAtWarehouse } from '@/lib/api/warehouse-qty';
@@ -311,11 +312,18 @@ export async function handleStokSaldo({
     if (!ids.length) return ok({ byProductId: {} });
 
     const stockMap = await getStokByWarehouseBatch(db, tid, ids);
+    const ledgerMap = await ledgerSaldoForProducts(db, tid, ids);
+    const products = await db.collection('products')
+      .find({ tenantId: tid, id: { $in: ids } })
+      .project({ id: 1, gudangKode: 1 })
+      .toArray();
+    const gudangById = new Map(products.map((p) => [String(p.id), resolveProductGudangKode(p)]));
     const byProductId: Record<string, Record<string, number>> = {};
     for (const id of ids) {
       const wh = stockMap.get(id) || {};
+      const capped = applyLedgerCapToWarehouseMap(wh, gudangById.get(id), ledgerMap.get(id));
       byProductId[id] = Object.fromEntries(
-        WAREHOUSE_CODES.map((k) => [k, Number(wh[k]) || 0]),
+        WAREHOUSE_CODES.map((k) => [k, Number(capped[k]) || 0]),
       );
     }
     return ok({ byProductId });
@@ -362,6 +370,7 @@ export async function handleStokSaldo({
     .toArray();
   const uomMap = await listProductUomsByProductIds(db, tid, products.map((p) => String(p.id)));
   const stokMap = await getStokByWarehouseBatch(db, tid, products.map((p) => p.id));
+  const ledgerMap = await ledgerSaldoForProducts(db, tid, products.map((p) => String(p.id)));
   let summaryQtyKering = 0;
   let summaryQtyBasah = 0;
   let summaryQtyJanitor = 0;
@@ -372,7 +381,9 @@ export async function handleStokSaldo({
 
   const rows = products.map((p) => {
     const gudangKode = resolveProductGudangKode(p);
-    const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+    const ledger = ledgerMap.get(String(p.id));
+    const rawByWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+    const byWh = applyLedgerCapToWarehouseMap(rawByWh, gudangKode, ledger);
     const qtyKering = qtyAtWarehouse(byWh, 'GKERING');
     const qtyBasah = qtyAtWarehouse(byWh, 'GBASAH');
     const qtyJanitor = qtyAtWarehouse(byWh, 'GJANITOR');

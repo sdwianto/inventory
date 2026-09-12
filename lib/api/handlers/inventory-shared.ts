@@ -10,6 +10,10 @@ export interface InventoryBody extends Record<string, unknown> {
   lokasiTujuanNama?: string;
   ids?: unknown[];
   aktif?: boolean;
+  /** Reconcile: default true pada reconcile-all. */
+  dryRun?: boolean;
+  /** Reconcile: tulis PS (+) untuk kartu negatif. Default false. */
+  clearNegative?: boolean;
 }
 
 export interface ProductRow extends Record<string, unknown> {

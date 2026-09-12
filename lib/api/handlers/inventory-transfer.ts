@@ -15,6 +15,7 @@ import {
   ensureStokLokasiRow,
   transferStokBetweenLokasi,
 } from '@/lib/api/stok-lokasi';
+import { getAvailableQtyAtLokasi } from '@/lib/api/stock-ledger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import { writeAuditLog } from '@/lib/api/audit-log';
@@ -131,6 +132,14 @@ export async function handleTransfer({
         for (const it of transferLines) {
           const stokId = itemStokId(it);
           await ensureStokLokasiRow(txDb, tenantId, stokId, invBody.lokasiAsal!, session);
+          const available = await getAvailableQtyAtLokasi(
+            txDb, tenantId, stokId, invBody.lokasiAsal!, session,
+          );
+          if (available < it.qtyBase) {
+            throw new Error(
+              `Stok ${String((it as { nama?: string }).nama || stokId)} tidak cukup di asal (sisa: ${available})`,
+            );
+          }
           const tr = await transferStokBetweenLokasi(
             txDb, tenantId, stokId, invBody.lokasiAsal!, invBody.lokasiTujuan!, it.qtyBase, session,
           );

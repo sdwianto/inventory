@@ -21,7 +21,12 @@ import {
   setProductWarehouseStock,
 } from '@/lib/api/product-warehouse';
 import { classifyProduct, resolveClassificationSource } from '@/lib/api/product-classification';
-import { recordMasterProductStockChange, relocateProductWarehouseWithAudit } from '@/lib/api/stock-ledger';
+import {
+  applyLedgerCapToWarehouseMap,
+  ledgerSaldoForProducts,
+  recordMasterProductStockChange,
+  relocateProductWarehouseWithAudit,
+} from '@/lib/api/stock-ledger';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { requireRole, PRODUCT_MANAGE_ROLES, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
@@ -218,15 +223,17 @@ export async function handleProducts({
     const withUom = await enrichProductList(db, tid, enriched, includeUom, enrichUom);
     const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1' || !!q;
     if (withWarehouseStock && withUom.length > 0) {
-      const stokMap = await getStokByWarehouseBatch(db, tid, withUom.map((p) => p.id));
+      const ids = withUom.map((p) => p.id);
+      const stokMap = await getStokByWarehouseBatch(db, tid, ids);
+      const ledgerMap = await ledgerSaldoForProducts(db, tid, ids);
       for (const p of withUom) {
-        const byWh = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+        const raw = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+        const home = resolveProductGudangKode(p as Record<string, unknown>);
+        const byWh = applyLedgerCapToWarehouseMap(raw, home, ledgerMap.get(p.id));
         const whDoc = p as ProductDoc & { stokByWarehouse?: Record<string, number>; gudangKode?: string };
         whDoc.stokByWarehouse = byWh;
-        // Tampilan picker: qty gudang home (stok_lokasi), bukan master.stok yang bisa stale.
-        const home = resolveProductGudangKode(p as Record<string, unknown>);
-        const whQty = Number(byWh[home]) || 0;
-        whDoc.stokGudangQty = whQty;
+        // Tampilan picker: qty gudang home dibatasi saldo kartu (bukan phantom lokasi).
+        whDoc.stokGudangQty = Number(byWh[home]) || 0;
       }
     }
     const cleaned = withUom.map(clean);

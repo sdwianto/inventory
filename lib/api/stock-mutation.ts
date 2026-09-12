@@ -11,6 +11,10 @@ import {
   syncProductStokFromLokasi,
   parseLokasiKode,
 } from '@/lib/api/stok-lokasi';
+import {
+  getAvailableQtyAtLokasi,
+  shouldEnforceLedgerOnOutbound,
+} from '@/lib/api/stock-ledger';
 import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
 import { warehouseLabel } from '@/lib/api/warehouses';
@@ -69,6 +73,24 @@ export async function postStockMutation(
   }
 
   await ensureStokLokasiRow(db, tid, input.productId, lokasiKode, input.session);
+
+  if (delta < 0 && shouldEnforceLedgerOnOutbound(input.sourceType)) {
+    const need = -delta;
+    const available = await getAvailableQtyAtLokasi(
+      db,
+      tid,
+      input.productId,
+      lokasiKode,
+      input.session,
+    );
+    if (available < need) {
+      return {
+        ok: false,
+        error: `Stok di lokasi ${lokasiKode} tidak cukup (sisa: ${available} — dibatasi saldo kartu stok)`,
+      };
+    }
+  }
+
   const adj = await adjustStokLokasi(
     db,
     tid,

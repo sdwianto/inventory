@@ -17,7 +17,9 @@ import { loadPoRequestedShipDatesByNoPo } from '@/lib/api/grn-enrich';
 import { buildProductSearchFilter, mergeProductSearchWithVendorName, applyProductCatalogFilters, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { applyLedgerCapToWarehouseMap, ledgerSaldoForProducts } from '@/lib/api/stock-ledger';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
+import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 
 function mapHutangRow(
@@ -155,11 +157,16 @@ export async function handlePages({
     const stokMap = enriched.length
       ? await getStokByWarehouseBatch(db, tenantId, enriched.map((p) => String(p.id)))
       : new Map<string, Record<string, number>>();
+    const ledgerMap = enriched.length
+      ? await ledgerSaldoForProducts(db, tenantId, enriched.map((p) => String(p.id)))
+      : new Map();
     for (const p of enriched) {
-      const byWh = stokMap.get(String(p.id)) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+      const pid = String(p.id);
+      const home = resolveProductGudangKode(p as Record<string, unknown>);
+      const raw = stokMap.get(pid) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+      const byWh = applyLedgerCapToWarehouseMap(raw, home, ledgerMap.get(pid));
       (p as Record<string, unknown>).stokByWarehouse = byWh;
-      const gudang = String(p.gudangKode || 'GKERING').toUpperCase();
-      (p as Record<string, unknown>).stokGudangQty = byWh[gudang] ?? 0;
+      (p as Record<string, unknown>).stokGudangQty = byWh[home] ?? 0;
     }
     const cleaned = enriched.map(clean);
     const { items, hasMore } = sliceCursorPage(cleaned, limit);

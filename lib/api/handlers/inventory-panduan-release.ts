@@ -1,5 +1,5 @@
 // Panduan Release — lot SOH + asal PO/RPN + tgl terima + status invoice
-// + residual SOH dari stok_lokasi. Display SOH capped by saldo aktual (stok_lokasi).
+// + residual SOH dari stok_lokasi, dibatasi saldo kartu stok (satu SKU = satu gudang).
 
 import type { NextResponse } from 'next/server';
 import { ok, err } from '@/lib/api/db';
@@ -11,6 +11,8 @@ import {
   WAREHOUSE_CODES,
 } from '@/lib/api/warehouses';
 import { INGREDIENT_LOTS_COLLECTION, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
+import { applyLedgerCapToWarehouseMap, ledgerSaldoForProducts } from '@/lib/api/stock-ledger';
+import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 
 type InvoiceStatusLabel = 'SUDAH' | 'BELUM' | 'N/A';
@@ -202,10 +204,29 @@ export async function handlePanduanRelease({
   const products = productIdsNeeded.size
     ? await db.collection('products')
       .find({ tenantId: tid, id: { $in: [...productIdsNeeded] } })
-      .project({ id: 1, kode: 1, nama: 1, satuan: 1 })
+      .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1 })
       .toArray()
     : [];
   const productById = new Map(products.map((p) => [str(p.id), p]));
+  const ledgerMap = await ledgerSaldoForProducts(db, tid, [...productIdsNeeded]);
+
+  // Cap SOH by kartu + zero phantom non-home warehouses.
+  for (const product of products) {
+    const pid = str(product.id);
+    if (!pid) continue;
+    const home = resolveProductGudangKode(product);
+    const raw: Record<string, number> = {};
+    for (const wh of WAREHOUSE_CODES) {
+      raw[wh] = stockByProductWh.get(productWhKey(pid, wh)) || 0;
+    }
+    const capped = applyLedgerCapToWarehouseMap(raw, home, ledgerMap.get(pid));
+    for (const wh of WAREHOUSE_CODES) {
+      const key = productWhKey(pid, wh);
+      const qty = Number(capped[wh]) || 0;
+      if (qty > 0) stockByProductWh.set(key, qty);
+      else stockByProductWh.delete(key);
+    }
+  }
 
   type LotEnrich = {
     lot: IngredientLotDoc;
