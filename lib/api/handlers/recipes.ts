@@ -13,8 +13,10 @@ import {
   normalizeRecipeNama,
   todayIsoDate,
   applyFullPortionExceptions,
+  isKategoriMenu,
   type RecipeDoc,
   type RecipeLine,
+  type KategoriMenu,
 } from '@/lib/food-production/recipe';
 import {
   MBG_RECIPE_SEED_ROWS,
@@ -51,12 +53,30 @@ interface RecipeBody extends Record<string, unknown> {
   version?: number;
   effectiveDate?: string;
   yieldQty?: number;
+  kategoriMenu?: string | null;
   wastePct?: number | null;
   lines?: unknown;
   catatan?: string;
   /** data-URL baru, URL media yang sudah ada, atau null/'' untuk hapus. */
   gambarBase64?: string | null;
   aktif?: boolean;
+}
+
+function parseKategoriMenu(
+  raw: unknown,
+  opts: { required?: boolean } = {},
+): { value: KategoriMenu } | { value: null } | { error: string } | Record<string, never> {
+  if (raw === undefined) {
+    if (opts.required) return { error: 'Kategori Menu wajib dipilih' };
+    return {};
+  }
+  if (raw === null || raw === '') {
+    if (opts.required) return { error: 'Kategori Menu wajib dipilih' };
+    return { value: null };
+  }
+  const v = String(raw).trim();
+  if (!isKategoriMenu(v)) return { error: 'Kategori Menu tidak valid' };
+  return { value: v };
 }
 
 /** Persist recipe photo: keep existing /api/media URL, store new data-URL, or clear. */
@@ -559,6 +579,13 @@ export async function handleRecipes({
     const yieldQty = Number(recipeBody.yieldQty);
     if (!Number.isFinite(yieldQty) || yieldQty <= 0) return err('Yield (porsi) harus > 0');
 
+    const kategoriParsed = parseKategoriMenu(recipeBody.kategoriMenu, { required: true });
+    if ('error' in kategoriParsed) return err(kategoriParsed.error, 400);
+    if (!('value' in kategoriParsed) || !kategoriParsed.value) {
+      return err('Kategori Menu wajib dipilih', 400);
+    }
+    const kategoriMenu = kategoriParsed.value;
+
     const finishedGoodProductId = String(recipeBody.finishedGoodProductId || '').trim();
     const linesRaw = normalizeRecipeLines(recipeBody.lines, {
       finishedGoodProductId: finishedGoodProductId || undefined,
@@ -619,6 +646,7 @@ export async function handleRecipes({
       version,
       effectiveDate,
       yieldQty,
+      kategoriMenu,
       wastePct,
       lines,
       catatan: String(recipeBody.catatan || '').trim() || undefined,
@@ -699,6 +727,11 @@ export async function handleRecipes({
       const yieldQty = Number(recipeBody.yieldQty);
       if (!Number.isFinite(yieldQty) || yieldQty <= 0) return err('Yield (porsi) harus > 0');
       update.yieldQty = yieldQty;
+    }
+    if (recipeBody.kategoriMenu !== undefined) {
+      const kategoriParsed = parseKategoriMenu(recipeBody.kategoriMenu, { required: true });
+      if ('error' in kategoriParsed) return err(kategoriParsed.error, 400);
+      update.kategoriMenu = kategoriParsed.value;
     }
     if (recipeBody.wastePct !== undefined) {
       if (recipeBody.wastePct === null) {

@@ -21,6 +21,10 @@ import {
   clampPctKecil,
   isFullPortionProduct,
   portionExceptionMatchSet,
+  KATEGORI_MENU_OPTIONS,
+  kategoriMenuLabel,
+  isKategoriMenu,
+  type KategoriMenu,
 } from '@/lib/food-production/recipe';
 import {
   getTkpiFood,
@@ -131,6 +135,7 @@ interface RecipeRow {
   finishedGoodProductId?: string;
   effectiveDate: string;
   yieldQty: number;
+  kategoriMenu?: KategoriMenu | string;
   wastePct?: number;
   catatan?: string;
   gambarUrl?: string;
@@ -274,6 +279,7 @@ export default function FoodProductionRecipePage() {
   const [form, setForm] = useState({
     kode: '',
     nama: '',
+    kategoriMenu: '' as '' | KategoriMenu,
     effectiveDate: today(),
     yieldQty: '500',
     wastePct: '',
@@ -696,6 +702,7 @@ export default function FoodProductionRecipePage() {
     setForm({
       kode: nextKode,
       nama: '',
+      kategoriMenu: '',
       effectiveDate: today(),
       yieldQty: '500',
       wastePct: '',
@@ -725,6 +732,7 @@ export default function FoodProductionRecipePage() {
     setForm({
       kode: row.kode,
       nama: row.nama,
+      kategoriMenu: isKategoriMenu(row.kategoriMenu) ? row.kategoriMenu : '',
       effectiveDate: row.effectiveDate || today(),
       yieldQty: String(row.yieldQty || 1),
       wastePct: row.wastePct != null ? String(row.wastePct) : '',
@@ -745,6 +753,7 @@ export default function FoodProductionRecipePage() {
     setForm((f) => ({
       ...f,
       nama: row.nama,
+      kategoriMenu: isKategoriMenu(row.kategoriMenu) ? row.kategoriMenu : f.kategoriMenu,
       effectiveDate: row.effectiveDate || today(),
       yieldQty: String(row.yieldQty || 1),
       wastePct: row.wastePct != null ? String(row.wastePct) : '',
@@ -768,6 +777,7 @@ export default function FoodProductionRecipePage() {
     try {
       const nama = normalizeNama(form.nama);
       if (!nama) throw new Error('Nama resep wajib diisi');
+      if (!form.kategoriMenu) throw new Error('Kategori Menu wajib dipilih');
       if (!editing && exactNamaMatch) {
         throw new Error(
           `Resep "${exactNamaMatch.nama}" sudah ada (${exactNamaMatch.kode}). Ubah nama, atau batalkan jika sama.`,
@@ -788,6 +798,7 @@ export default function FoodProductionRecipePage() {
       }
       const payload = {
         nama,
+        kategoriMenu: form.kategoriMenu,
         effectiveDate: form.effectiveDate,
         yieldQty: Number(form.yieldQty),
         wastePct: form.wastePct === '' ? null : Number(form.wastePct),
@@ -994,27 +1005,28 @@ export default function FoodProductionRecipePage() {
       </div>
 
       <div className="rounded-md border overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left p-3 font-medium w-14">Gambar</th>
-              <th className="text-left p-3 font-medium">Kode</th>
+              <th className="text-left p-3 font-medium w-24">Kode</th>
               <th className="text-left p-3 font-medium">Nama Resep</th>
-              <th className="text-left p-3 font-medium">Hasil</th>
-              <th className="text-left p-3 font-medium">Efektif</th>
-              <th className="text-left p-3 font-medium">Status</th>
-              <th className="p-3" />
+              <th className="text-left p-3 font-medium w-[8.5rem]">Kategori Menu</th>
+              <th className="text-left p-3 font-medium w-24">Hasil</th>
+              <th className="text-left p-3 font-medium w-28">Efektif</th>
+              <th className="text-left p-3 font-medium w-20">Status</th>
+              <th className="p-2 w-[4.5rem]" />
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-muted-foreground">Memuat…</td>
+                <td colSpan={8} className="p-6 text-center text-muted-foreground">Memuat…</td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-muted-foreground">
+                <td colSpan={8} className="p-6 text-center text-muted-foreground">
                   Belum ada resep. Buat resep sebelum Menu / Rencana Produksi.
                 </td>
               </tr>
@@ -1033,18 +1045,20 @@ export default function FoodProductionRecipePage() {
                     <div className="h-10 w-10 rounded border bg-muted/40" />
                   )}
                 </td>
-                <td className="p-3 font-mono text-xs">{row.kode}</td>
-                <td className="p-3 font-medium">{row.nama}</td>
-                <td className="p-3">{row.yieldQty} porsi</td>
+                <td className="p-3 font-mono text-xs whitespace-nowrap">{row.kode}</td>
+                <td className="p-3 font-medium truncate" title={row.nama}>{row.nama}</td>
+                <td className="p-3 whitespace-nowrap text-sm">{kategoriMenuLabel(row.kategoriMenu)}</td>
+                <td className="p-3 whitespace-nowrap">{row.yieldQty} porsi</td>
                 <td className="p-3 whitespace-nowrap">{row.effectiveDate || '—'}</td>
-                <td className="p-3">{row.aktif ? 'Aktif' : 'Nonaktif'}</td>
-                <td className="p-3 text-right whitespace-nowrap">
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="Ubah">
+                <td className="p-3 whitespace-nowrap">{row.aktif ? 'Aktif' : 'Nonaktif'}</td>
+                <td className="p-1 pr-2 text-right whitespace-nowrap">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(row)} title="Ubah">
                     <Pencil className="h-4 w-4" />
                   </Button>
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
+                    className="h-8 w-8"
                     onClick={() => void removeRecipe(row)}
                     title={row.aktif ? 'Nonaktifkan' : 'Hapus permanen'}
                   >
@@ -1087,55 +1101,73 @@ export default function FoodProductionRecipePage() {
                 Qty bahan diisi untuk satu batch = Hasil. RPN akan mengalikan (porsi rencana / Hasil).
               </p>
             </div>
-            <div className="space-y-1 sm:col-span-2" ref={namaWrapRef}>
-              <Label>Nama Resep *</Label>
-              <Input
-                value={form.nama}
-                autoComplete="off"
-                placeholder="Ketik nama resep…"
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, nama: e.target.value }));
-                  setNamaSuggestOpen(true);
-                  if (loadedFrom) setLoadedFrom(null);
-                }}
-                onFocus={() => {
-                  if (!editing) setNamaSuggestOpen(true);
-                }}
-              />
-              {!editing && namaSuggestOpen && namaSuggestions.length > 0 && (
-                <ul className="mt-1 max-h-44 overflow-y-auto rounded-md border bg-white shadow-sm text-sm z-10 relative">
-                  {namaSuggestions.map((r) => (
-                    <li key={r.id}>
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-2 hover:bg-muted/80"
-                        onClick={() => applyFromExisting(r)}
-                      >
-                        <span className="font-medium">{r.nama}</span>
-                        <span className="ml-2 font-mono text-xs text-muted-foreground">{r.kode}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {r.yieldQty} porsi · {(r.lines || []).length} bahan — klik untuk muat detail
-                        </span>
-                      </button>
-                    </li>
+            <div className="sm:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-start">
+              <div className="space-y-1 sm:col-span-3" ref={namaWrapRef}>
+                <Label>Nama Resep *</Label>
+                <Input
+                  value={form.nama}
+                  autoComplete="off"
+                  placeholder="Ketik nama resep…"
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, nama: e.target.value }));
+                    setNamaSuggestOpen(true);
+                    if (loadedFrom) setLoadedFrom(null);
+                  }}
+                  onFocus={() => {
+                    if (!editing) setNamaSuggestOpen(true);
+                  }}
+                />
+                {!editing && namaSuggestOpen && namaSuggestions.length > 0 && (
+                  <ul className="mt-1 max-h-44 overflow-y-auto rounded-md border bg-white shadow-sm text-sm z-10 relative">
+                    {namaSuggestions.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          className="w-full text-left px-3 py-2 hover:bg-muted/80"
+                          onClick={() => applyFromExisting(r)}
+                        >
+                          <span className="font-medium">{r.nama}</span>
+                          <span className="ml-2 font-mono text-xs text-muted-foreground">{r.kode}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {r.yieldQty} porsi · {(r.lines || []).length} bahan — klik untuk muat detail
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Identitas resep (bukan master Produk). Ketik untuk cari &amp; muat bahan dari resep lama;
+                  simpan wajib nama berbeda.
+                </p>
+                {loadedFrom && (
+                  <p className="text-xs text-amber-700">
+                    Detail dimuat dari {loadedFrom.kode} ({loadedFrom.nama}). Ubah nama sebelum simpan
+                    sebagai resep baru; jika sama persis, batalkan saja.
+                  </p>
+                )}
+                {!editing && exactNamaMatch && (
+                  <p className="text-xs text-destructive">
+                    Nama sudah dipakai {exactNamaMatch.kode}. Ubah nama atau batalkan.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 sm:col-span-1 sm:pt-7">
+                <Label className="shrink-0 whitespace-nowrap text-xs sm:text-sm">Kategori Menu *</Label>
+                <select
+                  className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-sm bg-white h-9"
+                  value={form.kategoriMenu}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    kategoriMenu: isKategoriMenu(e.target.value) ? e.target.value : '',
+                  }))}
+                >
+                  <option value="">— Pilih —</option>
+                  {KATEGORI_MENU_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
-                </ul>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Identitas resep (bukan master Produk). Ketik untuk cari &amp; muat bahan dari resep lama;
-                simpan wajib nama berbeda.
-              </p>
-              {loadedFrom && (
-                <p className="text-xs text-amber-700">
-                  Detail dimuat dari {loadedFrom.kode} ({loadedFrom.nama}). Ubah nama sebelum simpan
-                  sebagai resep baru; jika sama persis, batalkan saja.
-                </p>
-              )}
-              {!editing && exactNamaMatch && (
-                <p className="text-xs text-destructive">
-                  Nama sudah dipakai {exactNamaMatch.kode}. Ubah nama atau batalkan.
-                </p>
-              )}
+                </select>
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Waste % (opsional)</Label>
@@ -1469,7 +1501,7 @@ export default function FoodProductionRecipePage() {
             <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
             <Button
               onClick={() => void save()}
-              disabled={saving || !normalizeNama(form.nama) || (!editing && !!exactNamaMatch)}
+              disabled={saving || !normalizeNama(form.nama) || !form.kategoriMenu || (!editing && !!exactNamaMatch)}
             >
               {saving ? 'Menyimpan…' : 'Simpan'}
             </Button>

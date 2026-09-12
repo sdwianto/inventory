@@ -4,6 +4,30 @@ import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 
 export const RECIPES_COLLECTION = 'recipes';
 
+/** Kategori menu MBG pada master resep (bukan kategori porsi RPN). */
+export const KATEGORI_MENU_OPTIONS = [
+  { value: 'KARBOHIDRAT', label: 'Karbohidrat' },
+  { value: 'LAUK_NABATI', label: 'Lauk Nabati' },
+  { value: 'LAUK_HEWANI', label: 'Lauk Hewani' },
+  { value: 'SAYUR', label: 'Sayur' },
+  { value: 'BUAH', label: 'Buah' },
+  { value: 'SUSU', label: 'Susu' },
+  { value: 'GARNISH', label: 'Garnish' },
+] as const;
+
+export type KategoriMenu = (typeof KATEGORI_MENU_OPTIONS)[number]['value'];
+
+const KATEGORI_MENU_SET = new Set<string>(KATEGORI_MENU_OPTIONS.map((o) => o.value));
+
+export function isKategoriMenu(v: unknown): v is KategoriMenu {
+  return typeof v === 'string' && KATEGORI_MENU_SET.has(v);
+}
+
+export function kategoriMenuLabel(v: string | undefined | null): string {
+  if (!v) return '—';
+  return KATEGORI_MENU_OPTIONS.find((o) => o.value === v)?.label || v;
+}
+
 /** Default % untuk porsi kecil / balita relatif terhadap qty besar (100%). */
 export const DEFAULT_PCT_KECIL = 70;
 
@@ -79,6 +103,8 @@ export interface RecipeDoc {
   effectiveDate: string;
   /** Yield in portions (porsi) per batch. */
   yieldQty: number;
+  /** Kategori menu MBG (Karbohidrat, Lauk, …). */
+  kategoriMenu?: KategoriMenu;
   /** Optional waste % standard (0–100). */
   wastePct?: number;
   lines: RecipeLine[];
