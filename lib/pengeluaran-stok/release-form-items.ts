@@ -227,15 +227,25 @@ export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
   };
 }
 
-/** Tombol edit: release ditolak, user punya hak buat, dan pembuat atau admin. */
-export function canUserEditRejectedRelease(
+/** Tombol edit: DRAFT/REJECTED, role pembuat release, dan pembuat atau admin. */
+export function canUserEditRelease(
   release: JsonObject,
   user: { id?: string; role?: string } | null | undefined,
 ): boolean {
-  if (str(release.status) !== 'REJECTED') return false;
+  const status = str(release.status);
+  if (status !== 'DRAFT' && status !== 'REJECTED') return false;
   const role = str(user?.role);
   if (!['GUDANG', 'ADMIN', 'MASTER'].includes(role)) return false;
   if (role === 'ADMIN' || role === 'MASTER') return true;
   const createdBy = asObject(release.createdBy);
   return str(createdBy.userId) === str(user?.id);
+}
+
+/** Alias: hanya release ditolak. */
+export function canUserEditRejectedRelease(
+  release: JsonObject,
+  user: { id?: string; role?: string } | null | undefined,
+): boolean {
+  if (str(release.status) !== 'REJECTED') return false;
+  return canUserEditRelease(release, user);
 }

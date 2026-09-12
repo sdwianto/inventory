@@ -1,6 +1,7 @@
 import type { JsonObject } from '@/types/json';
 import { useCallback, useMemo } from 'react';
 import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
+import { getActingTenantId } from '@/lib/acting-tenant-client';
 import { buildProdukPageUrl, produkPageQueryKey } from '@/lib/produk-page-scope';
 
 export const PRODUCT_PAGE_DEFAULT_LIMIT = 100;
@@ -37,7 +38,14 @@ export function useProdukCatalog({
     [filterTenantId, q, catalogFilters],
   );
 
-  const enabled = !isMaster || !!filterTenantId;
+  // MASTER: dropdown kosong tetap boleh fetch jika cookie acting-tenant sudah set
+  // (header "MASTER | SPPG …"). Tanpa ini, search ganti queryKey → list kosong palsu.
+  const enabled = useMemo(() => {
+    if (!isMaster) return true;
+    if (filterTenantId) return true;
+    return Boolean(getActingTenantId());
+  }, [isMaster, filterTenantId]);
+
   const {
     items: products,
     loading,

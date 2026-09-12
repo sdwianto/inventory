@@ -27,6 +27,9 @@ import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { fetchJson } from '@/lib/fetch-json';
+import { getUser } from '@/lib/auth-client';
+import { useActingTenantId } from '@/lib/hooks/use-acting-tenant-id';
+import { withActingTenantQuery } from '@/lib/tenant-api';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -58,9 +61,15 @@ export default function HutangVendorPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState('PENDING_REVIEW');
-  const hutangUrl = tab
-    ? `/api/pages/hutang?approvalStatus=${encodeURIComponent(tab)}`
-    : '/api/pages/hutang';
+  const actingTenantId = useActingTenantId();
+  const isMaster = getUser()?.role === 'MASTER';
+  const hutangUrl = useMemo(() => {
+    if (isMaster && !actingTenantId) return null;
+    const base = tab
+      ? `/api/pages/hutang?approvalStatus=${encodeURIComponent(tab)}`
+      : '/api/pages/hutang';
+    return withActingTenantQuery(base, actingTenantId, Boolean(isMaster));
+  }, [tab, actingTenantId, isMaster]);
   const {
     items: list,
     loading: isLoading,
@@ -70,9 +79,9 @@ export default function HutangVendorPage() {
     reload,
     error,
   } = useCursorQuery<JsonObject>(
-    queryKeys.pages.hutang({ approvalStatus: tab }),
+    [...queryKeys.pages.hutang({ approvalStatus: tab }), actingTenantId || ''],
     hutangUrl,
-    { limit: 100 },
+    { limit: 100, enabled: Boolean(hutangUrl) },
   );
   const { data: badges } = useNavBadges();
   const pendingCount = badges?.hutangReview ?? 0;

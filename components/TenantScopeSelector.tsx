@@ -49,7 +49,9 @@ export default function TenantScopeSelector({ className = '' }: TenantScopeSelec
         if (!acting && list.length > 0) {
           acting = list[0].tenantId;
           await setActingTenantId(acting);
-        } else if (acting && !getActingTenantId()) {
+        } else if (acting) {
+          // Pastikan cookie server ikut localStorage — tanpa ini API MASTER
+          // (penerimaan/hutang/…) gagal "Pilih tenant operasional" meski UI sudah pilih.
           setActingTenantIdLocal(acting);
           await syncActingTenantToServer(acting);
         }
