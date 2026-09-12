@@ -8,6 +8,7 @@ import RencanaKebutuhanDocument, {
   RENCANA_KEBUTUHAN_PRINT_ID,
 } from '@/components/food-production/RencanaKebutuhanDocument';
 import PrintPortal from '@/components/PrintPortal';
+import RecipeSearchSelect from '@/components/RecipeSearchSelect';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -3238,25 +3239,14 @@ function FoodProductionPlanPageContent() {
                   </div>
                   <div className="min-w-0 space-y-1">
                     <Label className="text-xs sm:hidden">Resep *</Label>
-                    <select
-                      className="w-full border rounded-md px-2.5 py-1.5 text-sm bg-white h-9"
+                    <RecipeSearchSelect
                       value={line.recipeId}
-                      onChange={(e) => setLines((prev) => prev.map((l, i) => (
-                        i === idx ? { ...l, recipeId: e.target.value } : l
+                      placeholder="Ketik / pilih resep…"
+                      recipes={activeRecipes.length ? activeRecipes : Object.values(recipesById)}
+                      onChange={(id) => setLines((prev) => prev.map((l, i) => (
+                        i === idx ? { ...l, recipeId: id } : l
                       )))}
-                    >
-                      <option value="">— Pilih resep —</option>
-                      {(activeRecipes.length
-                        ? activeRecipes
-                        : Object.values(recipesById)
-                      )
-                        .filter((r) => r.aktif !== false || r.id === line.recipeId)
-                        .map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.kode} — {r.nama}{r.aktif === false ? ' (nonaktif)' : ''}
-                          </option>
-                        ))}
-                    </select>
+                    />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs sm:hidden">Porsi</Label>
