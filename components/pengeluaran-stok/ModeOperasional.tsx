@@ -31,7 +31,7 @@ import {
   appendReleaseFormItem,
   backfillReleaseItemLabels,
   buildReleaseFormItem,
-  canUserEditRejectedRelease,
+  canUserEditRelease,
   catalogFromSaldoRows,
   EMPTY_RELEASE_FORM,
   patchReleaseFormItemUom,
@@ -232,17 +232,17 @@ export function ModeOperasional() {
     }
     try {
       const full = await fetchJson<JsonObject>(`/api/inventory-releases/${id}`);
-      if (str(full.status) !== 'REJECTED') {
-        toast.error('Hanya release ditolak yang bisa diperbaiki');
-        return;
-      }
-      if (!canUserEditRejectedRelease(full, user)) {
-        toast.error('Anda tidak punya akses edit release ini');
+      if (!canUserEditRelease(full, user)) {
+        toast.error(
+          str(full.status) === 'DRAFT' || str(full.status) === 'REJECTED'
+            ? 'Anda tidak punya akses edit release ini'
+            : 'Hanya draft atau release ditolak yang bisa diedit',
+        );
         return;
       }
       setEditingReleaseId(id);
       setEditingNoRelease(str(full.noRelease));
-      setEditingRejectReason(str(full.rejectReason));
+      setEditingRejectReason(str(full.status) === 'REJECTED' ? str(full.rejectReason) : '');
       setForm(releaseDocToFormState(full));
       setShowForm(true);
     } catch (e) {
@@ -429,7 +429,9 @@ export function ModeOperasional() {
         });
         toast.success(
           submit
-            ? `Release ${editingNoRelease || ''} diperbaiki dan diajukan ulang`.trim()
+            ? (editingRejectReason
+              ? `Release ${editingNoRelease || ''} diperbaiki dan diajukan ulang`.trim()
+              : `Release ${editingNoRelease || ''} diajukan ke supervisor`.trim())
             : `Perubahan release ${editingNoRelease || ''} disimpan sebagai draft`.trim(),
         );
       } else {
@@ -539,7 +541,7 @@ export function ModeOperasional() {
                   <td className="px-3 py-2 text-xs">{str(createdBy.userName) || '—'}</td>
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-center gap-1.5 flex-nowrap">
-                      {canUserEditRejectedRelease(r, user) && (
+                      {canUserEditRelease(r, user) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -571,7 +573,7 @@ export function ModeOperasional() {
           <DialogHeader>
             <DialogTitle>
               {editingReleaseId
-                ? `Perbaiki Release${editingNoRelease ? ` — ${editingNoRelease}` : ''}`
+                ? `${editingRejectReason ? 'Perbaiki Release' : 'Edit Draft'}${editingNoRelease ? ` — ${editingNoRelease}` : ''}`
                 : 'Buat Release Inventory'}
             </DialogTitle>
           </DialogHeader>
@@ -714,10 +716,10 @@ export function ModeOperasional() {
           <DialogFooter>
             <Button variant="outline" onClick={closeReleaseForm}>Batal</Button>
             <Button variant="outline" disabled={saving} onClick={() => save(false)}>
-              {editingReleaseId ? 'Simpan Perbaikan' : 'Simpan Draft'}
+              {editingRejectReason ? 'Simpan Perbaikan' : 'Simpan Draft'}
             </Button>
             <Button disabled={saving} className="bg-orange-500 hover:bg-orange-600" onClick={() => save(true)}>
-              {editingReleaseId ? 'Ajukan Ulang ke Supervisor' : 'Ajukan ke Supervisor'}
+              {editingRejectReason ? 'Ajukan Ulang ke Supervisor' : 'Ajukan ke Supervisor'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -819,7 +821,7 @@ export function ModeOperasional() {
             </div>
           )}
           <DialogFooter className="gap-2 sm:justify-between">
-            {detail && canUserEditRejectedRelease(detail, user) ? (
+            {detail && canUserEditRelease(detail, user) ? (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -828,7 +830,7 @@ export function ModeOperasional() {
                 }}
               >
                 <Pencil className="w-4 h-4 mr-1" />
-                Perbaiki Release
+                {str(detail.status) === 'REJECTED' ? 'Perbaiki Release' : 'Edit Draft'}
               </Button>
             ) : <span />}
             <Button variant="outline" onClick={() => setDetail(null)}>Tutup</Button>

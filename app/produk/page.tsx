@@ -40,6 +40,7 @@ import {
   suggestProdukGrup,
 } from '@/lib/api/product-classification';
 import { FormSectionTitle, WarehousePicker } from '@/components/produk/ProductFormParts';
+import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import { useProdukCatalog } from '@/hooks/useProdukCatalog';
 import { fetchAllCursorPages } from '@/lib/api/fetch-cursor-pages';
 import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -194,18 +195,27 @@ export default function ProdukPage() {
   const openEdit = (p: JsonObject) => {
     setEditing(p);
     const tid = String(p.tenantId || 'default');
-    setForm({ ...p, tenantId: tid, uoms: uomRowsFromProduct(p as ProductLike) });
+    setForm({
+      ...p,
+      tenantId: tid,
+      uoms: uomRowsFromProduct(p as ProductLike),
+      detailProduk: str(p.detailProduk),
+      fotos: asArray(p.fotos).map((x) => str(x)).filter(Boolean),
+    });
     setShowForm(true);
     void (async () => {
       try {
         let url = `/api/products/${str(p.id)}`;
-        url = withActingTenantQuery(url, filterTenantId, isMaster);
+        // Pakai tenant dokumen produk — filter dropdown MASTER sering kosong.
+        url = withActingTenantQuery(url, tid || filterTenantId, isMaster);
         const detail = await fetchJson<JsonObject>(url);
         setForm({
           ...p,
           ...detail,
           tenantId: tid,
           uoms: uomRowsFromProduct({ ...p, ...detail } as ProductLike),
+          detailProduk: str(detail.detailProduk ?? p.detailProduk),
+          fotos: asArray(detail.fotos ?? p.fotos).map((x) => str(x)).filter(Boolean),
         });
         // List sering stale (cache pages/produk) sementara detail GET sudah benar —
         // sync baris list + refetch supaya kolom Stok/Harga mengikuti master.
@@ -314,6 +324,13 @@ export default function ProdukPage() {
       toast.error('Pilih tenant untuk produk baru');
       return;
     }
+    const actingTenantId = isMaster
+      ? (str(form.tenantId) || filterTenantId || '')
+      : '';
+    if (isMaster && !actingTenantId) {
+      toast.error('Pilih tenant operasional terlebih dahulu');
+      return;
+    }
     const vendorLocked = Boolean(editing && isVendorSynced(editing));
     if (!form.grup) {
       toast.error('Pilih grup dari daftar master');
@@ -336,6 +353,8 @@ export default function ProdukPage() {
           gudangKode: str(form.gudangKode, 'GKERING'),
           itemRole: normalizeItemRole(form.itemRole),
           classificationSource: form.classificationSource === 'manual' ? 'manual' : 'inferred',
+          detailProduk: str(form.detailProduk),
+          fotos: asArray(form.fotos).map((x) => str(x)).filter(Boolean),
         };
       } else {
         const fields = productToFormFields({ ...form, uoms } as ProductLike, str(form.tenantId));
@@ -356,10 +375,20 @@ export default function ProdukPage() {
       payload.recipeBaseMl = form.recipeBaseMl === '' || form.recipeBaseMl == null
         ? null
         : num(form.recipeBaseMl);
-      if (!isMaster) delete payload.tenantId;
+      payload.detailProduk = str(form.detailProduk);
+      payload.fotos = asArray(form.fotos).map((x) => str(x)).filter(Boolean);
+      // MASTER wajib kirim tenant operasional (query + body) — filter dropdown bisa kosong
+      // sementara form.tenantId sudah terisi dari dokumen yang diedit.
+      if (isMaster && actingTenantId) payload.tenantId = actingTenantId;
+      else if (!isMaster) delete payload.tenantId;
       if (editing) delete payload.stok;
+      const url = withActingTenantQuery(
+        editing ? `/api/products/${str(editing.id)}` : '/api/products',
+        actingTenantId,
+        isMaster,
+      );
       await productMutation.mutateAsync({
-        url: editing ? `/api/products/${editing.id}` : '/api/products',
+        url,
         method: editing ? 'PUT' : 'POST',
         body: payload,
       });
@@ -375,7 +404,10 @@ export default function ProdukPage() {
   const remove = async (id: string) => {
     if (!(await confirm({ title: 'Hapus Produk?', description: 'Produk ini akan dihapus dari master data.', confirmText: 'Hapus' }))) return;
     try {
-      await productMutation.mutateAsync({ url: `/api/products/${id}`, method: 'DELETE' });
+      const row = products.find((p) => str(p.id) === id);
+      const tid = str(row?.tenantId) || filterTenantId;
+      const url = withActingTenantQuery(`/api/products/${id}`, tid, isMaster);
+      await productMutation.mutateAsync({ url, method: 'DELETE' });
       toast.success('Produk dihapus');
       void load();
     } catch (e) {
@@ -710,7 +742,7 @@ export default function ProdukPage() {
               <span className="text-xs text-slate-400 ml-1">dari {products.length}</span>
             )}
             {isMaster && !filterTenantId && (
-              <span className="text-xs text-slate-400 ml-1">(semua tenant)</span>
+              <span className="text-xs text-slate-400 ml-1">(tenant aktif workspace)</span>
             )}
             {inactiveHiddenCount > 0 && (
               <span className="text-xs text-slate-400 ml-1">({inactiveHiddenCount} nonaktif disembunyikan)</span>
@@ -1075,6 +1107,26 @@ export default function ProdukPage() {
                   });
                 }}
                 disabled={Boolean(editing && isVendorSynced(editing))}
+              />
+            </div>
+            <div className="col-span-2">
+              <Label>Detail produk</Label>
+              <textarea
+                className="w-full min-h-[80px] border rounded-md px-3 py-2 text-sm bg-white"
+                value={str(form.detailProduk)}
+                placeholder="Keterangan detail produk (opsional)"
+                maxLength={4000}
+                onChange={(e) => setForm({ ...form, detailProduk: e.target.value })}
+              />
+              <p className="text-[11px] text-slate-500 mt-1">{str(form.detailProduk).length}/4000</p>
+            </div>
+            <div className="col-span-2">
+              <PhotoUploadField
+                label="Foto produk"
+                hint="Maksimal 5 foto. Boleh diisi di Inventory meskipun produk sync dari sales.app."
+                photos={asArray(form.fotos).map((x) => str(x)).filter(Boolean)}
+                maxPhotos={5}
+                onChange={(fotos) => setForm({ ...form, fotos })}
               />
             </div>
 

@@ -239,6 +239,15 @@ export async function executeIntegrationReconcileJob(
   return { ...(await runIntegrationReconcile(db, tenantId)) };
 }
 
+export async function executeProductEnrichmentSyncJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runProductEnrichmentSyncJob } = await import('@/lib/api/product-enrichment-recover');
+  return runProductEnrichmentSyncJob(db, { tenantId, payload });
+}
+
 export async function executeAuditLogPurgeJob(
   db: Db,
 ): Promise<Record<string, unknown>> {

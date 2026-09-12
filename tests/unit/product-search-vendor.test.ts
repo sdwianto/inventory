@@ -11,24 +11,36 @@ describe('buildProductSearchFilter vendor', () => {
     const json = JSON.stringify(f);
     expect(json).toContain('vendorTenantName');
     expect(json).toContain('vendorTenantId');
+    expect(json).not.toContain('$text');
   });
 
   it('includes vendor fields for longer non-code term', () => {
     const f = buildProductSearchFilter('sayur');
     const json = JSON.stringify(f);
     expect(json).toContain('vendorTenantName');
+    expect(json).not.toContain('$text');
+  });
+
+  it('uses regex (sales.app style) for multi-word nama — not $text', () => {
+    const f = buildProductSearchFilter('apel fuji');
+    expect(f.$text).toBeUndefined();
+    expect(Array.isArray(f.$or)).toBe(true);
+    const json = JSON.stringify(f);
+    expect(json).toContain('apel fuji');
+    expect(json).toContain('nama');
+    expect(json).toContain('vendorTenantName');
   });
 });
 
 describe('mergeFilterWithVendorTenantIds', () => {
-  it('wraps $text filter with vendor tenant ids', () => {
+  it('wraps plain filter with vendor tenant ids', () => {
     const merged = mergeFilterWithVendorTenantIds(
-      { $text: { $search: 'UD Dawam' } },
+      { nama: { $regex: 'UD Dawam', $options: 'i' } },
       ['vendor-1'],
     );
     expect(merged).toEqual({
       $or: [
-        { $text: { $search: 'UD Dawam' } },
+        { nama: { $regex: 'UD Dawam', $options: 'i' } },
         { vendorTenantId: { $in: ['vendor-1'] } },
       ],
     });

@@ -20,7 +20,7 @@ export const INTEGRATION_OUTBOX_COLLECTION = 'integration_outbox';
 // saja karena lewat claim langsung, bukan lewat fungsi list* di bawah ini.
 const MAX_AUTO_RECOVERY_ATTEMPTS = 5;
 
-/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_GOODS_RETURN_CN / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO. */
+/** Locked type names — ENSURE_GRN_INVOICE / ENSURE_GOODS_RETURN_CN / ENSURE_CREATE_SO / ENSURE_PUSH_CANCEL_SO / ENSURE_PRODUCT_ENRICHMENT. */
 export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_GRN_INVOICE: 'ENSURE_GRN_INVOICE',
   /** RTV POSTED → CreateCreditNote di Sales app. */
@@ -29,6 +29,8 @@ export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_CREATE_SO: 'ENSURE_CREATE_SO',
   /** Customer PO CANCELLED → push cancel SO ke Sales (W1-2 slice 2). */
   ENSURE_PUSH_CANCEL_SO: 'ENSURE_PUSH_CANCEL_SO',
+  /** Detail/Foto produk vendor-synced → Sales enrichment (Category A). */
+  ENSURE_PRODUCT_ENRICHMENT: 'ENSURE_PRODUCT_ENRICHMENT',
 } as const;
 
 export type IntegrationOutboxType =

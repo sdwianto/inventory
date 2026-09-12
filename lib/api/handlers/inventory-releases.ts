@@ -11,9 +11,9 @@ import { guardPosting } from '@/lib/api/period-lock';
 import {
   adjustStokLokasi,
   ensureStokLokasiRow,
-  getQtyStokLokasi,
   syncProductStokFromLokasi,
 } from '@/lib/api/stok-lokasi';
+import { getAvailableQtyAtLokasi } from '@/lib/api/stock-ledger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode, warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
@@ -140,7 +140,7 @@ async function buildReleaseLineItems(
     if ('error' in resolved) return { error: resolved.error, status: 400 };
     const qtyBase = resolved.qtyBase;
     if (qtyBase <= 0) return { error: `Qty tidak valid: ${prodRow.nama}`, status: 400 };
-    const avail = parseFloat(String(await getQtyStokLokasi(db, tenantId, prodRow.id, lokasiKode))) || 0;
+    const avail = await getAvailableQtyAtLokasi(db, tenantId, prodRow.id, lokasiKode);
     if (avail < qtyBase) {
       return {
         error: `Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`,
@@ -565,6 +565,12 @@ export async function handleInventoryReleases({
 
         for (const it of releaseLines) {
           await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
+          const available = await getAvailableQtyAtLokasi(txDb, tenantId, it.stokId, lokasiKode, session);
+          if (available < it.qtyBase) {
+            throw new Error(
+              `${it.nama}: stok tidak cukup (sisa: ${available} satuan dasar — dibatasi saldo kartu stok)`,
+            );
+          }
           const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qtyBase, session);
           if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
           // W2-20: soft bin OUT after warehouse OUT — never fail release on bin shortfall.

@@ -204,3 +204,179 @@ describe('findBarcodeDuplicate — memproyeksikan masterProductId untuk perbandi
     expect(capturedProjection?.masterProductId).toBe(1);
   });
 });
+
+describe('detail/foto LWW + stale emit + vendorBaseUomId', () => {
+  it('buildSyncSet menyertakan vendorBaseUomId (legacy fallback)', () => {
+    const snap = vendorProductSnapshot({ id: 'vp1', kode: 'B001' });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), null, { id: 'vp1' });
+    expect(syncSet.vendorBaseUomId).toBe('legacy:vp1');
+  });
+
+  it('buildSyncSet tidak overwrite detail lokal yang lebih baru', () => {
+    const older = new Date('2026-01-01T00:00:00Z');
+    const newer = new Date('2026-06-01T00:00:00Z');
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      detailProduk: 'dari sales basi',
+      fotos: ['old.jpg'],
+      detailFotosUpdatedAt: older.toISOString(),
+      emittedAt: older.toISOString(),
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      detailProduk: 'enrichment lokal',
+      fotos: ['new.jpg'],
+      detailFotosUpdatedAt: newer,
+    });
+    expect(syncSet.detailProduk).toBeUndefined();
+    expect(syncSet.fotos).toBeUndefined();
+  });
+
+  it('buildSyncSet tidak wipe detail lokal dengan string kosong dari Sales', () => {
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      detailProduk: '',
+      fotos: [],
+      emittedAt: new Date().toISOString(),
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      detailProduk: 'keep me',
+      fotos: ['keep.jpg'],
+    });
+    expect(syncSet.detailProduk).toBeUndefined();
+    expect(syncSet.fotos).toBeUndefined();
+  });
+
+  it('upsertProductFromVendor skip push dengan emittedAt lebih tua dari lastVendorSyncEmittedAt', async () => {
+    const existing = {
+      id: 'local1',
+      tenantId: 'sppg',
+      vendorTenantId: 'puspita',
+      vendorStokId: 'vp1',
+      kode: 'B001',
+      lastVendorSyncEmittedAt: new Date('2026-06-01T00:00:00Z'),
+      aktif: false,
+    };
+    const updates: Array<{ set: Record<string, unknown> }> = [];
+    const db = {
+      collection: () => ({
+        findOne: async (filter: Record<string, unknown>) => {
+          if (filter.vendorStokId === 'vp1' || filter.kode === 'B001') return existing;
+          return null;
+        },
+        updateOne: async (_f: unknown, update: { $set: Record<string, unknown> }) => {
+          updates.push({ set: update.$set });
+        },
+        insertOne: async () => {},
+      }),
+    } as never;
+    const result = await upsertProductFromVendor(db, 'sppg', 'puspita', {
+      id: 'vp1',
+      kode: 'B001',
+      aktif: true,
+      emittedAt: '2026-01-01T00:00:00Z',
+    });
+    expect(result.action).toBe('skipped_stale');
+    expect(updates).toHaveLength(0);
+  });
+
+  it('deactivateProductFromVendor skip stale yang akan regresi watermark', async () => {
+    const { deactivateProductFromVendor } = await import('@/lib/api/product-sync');
+    const existing = {
+      id: 'local1',
+      kode: 'B001',
+      lastVendorSyncEmittedAt: new Date('2026-06-01T00:00:00Z'),
+    };
+    const updates: Array<{ set: Record<string, unknown> }> = [];
+    const db = {
+      collection: () => ({
+        findOne: async () => existing,
+        updateOne: async (_f: unknown, update: { $set: Record<string, unknown> }) => {
+          updates.push({ set: update.$set });
+          return { modifiedCount: 1 };
+        },
+      }),
+    } as never;
+    const result = await deactivateProductFromVendor(db, 'sppg', {
+      id: 'vp1',
+      kode: 'B001',
+      emittedAt: '2026-01-01T00:00:00Z',
+    });
+    expect(result?.action).toBe('skipped_stale');
+    expect(updates).toHaveLength(0);
+  });
+
+  it('deactivate tidak stamp watermark ke wall-clock (agar soft-reactivate tidak skipped_stale)', async () => {
+    const { deactivateProductFromVendor } = await import('@/lib/api/product-sync');
+    const existing = {
+      id: 'local1',
+      kode: 'B001',
+      lastVendorSyncEmittedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const updates: Array<{ set: Record<string, unknown> }> = [];
+    const db = {
+      collection: () => ({
+        findOne: async () => existing,
+        updateOne: async (_f: unknown, update: { $set: Record<string, unknown> }) => {
+          updates.push({ set: update.$set });
+          return { modifiedCount: 1 };
+        },
+      }),
+    } as never;
+    const emitAt = '2026-03-01T00:00:00Z';
+    await deactivateProductFromVendor(db, 'sppg', {
+      id: 'vp1',
+      kode: 'B001',
+      emittedAt: emitAt,
+    });
+    expect(updates).toHaveLength(1);
+    const stamped = updates[0].set.lastVendorSyncEmittedAt as Date;
+    expect(stamped.toISOString()).toBe(new Date(emitAt).toISOString());
+    // Soft-reactivate dengan emittedAt sedikit lebih baru harus lolos skipped_stale.
+    const afterDeactivate = {
+      ...existing,
+      aktif: false,
+      lastVendorSyncEmittedAt: stamped,
+    };
+    const upsertDb = {
+      collection: () => ({
+        findOne: async (filter: Record<string, unknown>) => {
+          if (filter.vendorStokId === 'vp1' || filter.kode === 'B001') return afterDeactivate;
+          return null;
+        },
+        updateOne: async () => {},
+        insertOne: async () => {},
+      }),
+    } as never;
+    const revived = await upsertProductFromVendor(upsertDb, 'sppg', 'puspita', {
+      id: 'vp1',
+      kode: 'B001',
+      aktif: true,
+      emittedAt: '2026-03-01T00:00:01Z',
+    });
+    expect(revived.action).not.toBe('skipped_stale');
+  });
+
+  it('buildSyncSet tidak pakai emittedAt sebagai proxy LWW detail', () => {
+    const newerLocal = new Date('2026-06-01T00:00:00Z');
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      detailProduk: 'sales tanpa stamp detail',
+      fotos: ['a.jpg'],
+      emittedAt: '2026-12-01T00:00:00Z',
+      // no detailFotosUpdatedAt
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      detailProduk: 'enrichment lokal',
+      fotos: ['new.jpg'],
+      detailFotosUpdatedAt: newerLocal,
+    });
+    expect(syncSet.detailProduk).toBeUndefined();
+    expect(syncSet.fotos).toBeUndefined();
+  });
+});

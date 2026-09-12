@@ -132,6 +132,18 @@ export async function runIntegrationReconcile(
   }
   if (autoFixEnqueued > 0) scheduleJobProcessing(db, { limit: Math.min(20, autoFixEnqueued) });
 
+  // Product enrichment (Detail/Foto → Sales) — jangan hanya andalkan GRN sweeper 2m.
+  try {
+    const { sweepPendingProductEnrichment } = await import('@/lib/api/product-enrichment-recover');
+    const enrich = await sweepPendingProductEnrichment(db, { limit: 40 });
+    autoFixEnqueued += (enrich.enqueued || 0) + (enrich.drainedInline || 0);
+  } catch (e) {
+    console.warn(
+      '[integration-reconcile] product enrichment sweep failed',
+      e instanceof Error ? e.message : e,
+    );
+  }
+
   const truncated = cpoMismatchQ.truncated || cpoWithoutSoQ.truncated
     || grnWithoutDoQ.truncated || grnInvoiceQ.truncated || hutangQ.truncated;
 

@@ -482,5 +482,119 @@ export async function handleIntegrationInbound({
     }
   }
 
+  // Category A: product master upsert/deactivate dari Sales (happy path; webhook = fallback).
+  if (route === '/integrations/product-upserted') {
+    const payload = (body || {}) as JsonObject;
+    const customerTenantId = String(payload.customerTenantId || '').trim().toLowerCase();
+    const vendorTenantId = String(
+      payload.vendorTenantId
+      || request.headers.get('x-vendor-tenant-id')
+      || '',
+    ).trim();
+    const event = String(payload.event || 'product.updated').trim();
+
+    const idemKey = String(request.headers.get('idempotency-key') || '').trim();
+    const correlationId = String(
+      request.headers.get('x-correlation-id')
+      || payload.correlationId
+      || '',
+    ).trim();
+    if (!idemKey || !correlationId) {
+      return err('Idempotency-Key dan X-Correlation-Id wajib untuk Category A (product-upserted)', 400);
+    }
+
+    const v = await verifyWebhookSecret(request, db, {
+      customerTenantId,
+      vendorTenantId: vendorTenantId || undefined,
+    });
+    if (!v.ok) return err(v.error, 401);
+
+    if (!customerTenantId) return err('customerTenantId wajib', 400);
+    const product = payload.product;
+    if (!product || typeof product !== 'object') return err('product wajib', 400);
+
+    const {
+      claimIdempotency,
+      releaseIdempotencyClaim,
+      storeIdempotentResponse,
+    } = await import('@/lib/api/idempotency');
+    const claim = await claimIdempotency(
+      db,
+      customerTenantId,
+      '/integrations/product-upserted',
+      'POST',
+      idemKey,
+      body,
+    );
+    if (claim.kind === 'replay') return claim.response;
+
+    const vid = vendorTenantId || v.vendorTenantId || '';
+    const { startIntegrationCommand, finishIntegrationCommand } = await import(
+      '@/lib/integration/command-log'
+    );
+    const productRec = product as Record<string, unknown>;
+    const productId = String(productRec.id || '').trim();
+    const commandId = await startIntegrationCommand(db, {
+      correlationId,
+      commandType: 'ReceiveProductUpserted',
+    });
+
+    try {
+      const { upsertProductFromVendor, deactivateProductFromVendor } = await import(
+        '@/lib/api/product-sync'
+      );
+      let syncResult: Record<string, unknown>;
+      if (event === 'product.deactivated') {
+        syncResult = {
+          ...(await deactivateProductFromVendor(db, customerTenantId, productRec) || { action: 'skipped' }),
+        };
+      } else {
+        syncResult = {
+          ...(await upsertProductFromVendor(db, customerTenantId, vid || null, productRec)),
+        };
+      }
+
+      await finishIntegrationCommand(db, commandId, {
+        status: 'SUCCEEDED',
+      });
+      await invalidateDashboardSnapshot(db, customerTenantId);
+
+      const response = ok(clean({
+        ...syncResult,
+        event,
+        vendorTenantId: vid || null,
+        customerTenantId,
+        productId: productId || null,
+        correlationId,
+        idempotencyKey: idemKey,
+        message: 'product via product-upserted push',
+      }));
+      return storeIdempotentResponse(
+        db,
+        customerTenantId,
+        '/integrations/product-upserted',
+        'POST',
+        idemKey,
+        body,
+        response,
+      );
+    } catch (e) {
+      await releaseIdempotencyClaim(
+        db,
+        customerTenantId,
+        '/integrations/product-upserted',
+        'POST',
+        idemKey,
+      );
+      await finishIntegrationCommand(db, commandId, {
+        status: 'FAILED',
+        errorCode: 'PRODUCT_UPSERT_FAILED',
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorClass: 'unknown',
+      });
+      throw e;
+    }
+  }
+
   return null;
 }

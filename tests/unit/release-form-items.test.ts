@@ -7,6 +7,7 @@ import {
   patchReleaseFormItemUom,
   qtyAtLokasi,
   releaseDocToFormState,
+  canUserEditRelease,
   canUserEditRejectedRelease,
   resolveReleaseItemDisplay,
   snapshotProductLabels,
@@ -202,6 +203,28 @@ describe('releaseDocToFormState', () => {
   });
 });
 
+describe('canUserEditRelease', () => {
+  const base = {
+    createdBy: { userId: 'u-gudang', userName: 'Team Dapur' },
+  };
+
+  it('allows creator to edit DRAFT', () => {
+    expect(canUserEditRelease({ ...base, status: 'DRAFT' }, { id: 'u-gudang', role: 'GUDANG' })).toBe(true);
+  });
+
+  it('allows ADMIN to edit others DRAFT', () => {
+    expect(canUserEditRelease({ ...base, status: 'DRAFT' }, { id: 'other', role: 'ADMIN' })).toBe(true);
+  });
+
+  it('denies non-creator GUDANG on DRAFT', () => {
+    expect(canUserEditRelease({ ...base, status: 'DRAFT' }, { id: 'other', role: 'GUDANG' })).toBe(false);
+  });
+
+  it('denies POSTED', () => {
+    expect(canUserEditRelease({ ...base, status: 'POSTED' }, { id: 'u-gudang', role: 'GUDANG' })).toBe(false);
+  });
+});
+
 describe('canUserEditRejectedRelease', () => {
   const rejected = {
     status: 'REJECTED',
@@ -222,5 +245,9 @@ describe('canUserEditRejectedRelease', () => {
 
   it('denies non-rejected status', () => {
     expect(canUserEditRejectedRelease({ ...rejected, status: 'POSTED' }, { id: 'u-gudang', role: 'GUDANG' })).toBe(false);
+  });
+
+  it('denies DRAFT (use canUserEditRelease)', () => {
+    expect(canUserEditRejectedRelease({ ...rejected, status: 'DRAFT' }, { id: 'u-gudang', role: 'GUDANG' })).toBe(false);
   });
 });

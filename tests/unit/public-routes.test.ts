@@ -8,6 +8,7 @@ describe('isPublicRoute — Category A/B integration webhooks dari Sales', () =>
     'credit-note-posted',
     'debit-note-posted',
     'vendor-return-decision',
+    'product-upserted',
   ];
 
   it.each(webhookRoutes)('POST /integrations/%s bebas dari auth session (auth via X-Webhook-Secret di handler)', (name) => {

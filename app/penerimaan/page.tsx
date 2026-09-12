@@ -32,6 +32,9 @@ import { convertQtyBetweenUoms, patchQtyLineOnUomChange } from '@/lib/uom/line-p
 import { reconcileLineQtyBase, resolveGrnReceiveLineUom } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
+import { getUser } from '@/lib/auth-client';
+import { useActingTenantId } from '@/lib/hooks/use-acting-tenant-id';
+import { withActingTenantQuery } from '@/lib/tenant-api';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -118,7 +121,16 @@ export default function PenerimaanPage() {
   const queryClient = useQueryClient();
   const invalidateGrn = useInvalidateGrn();
   const invalidateHutangBadges = useInvalidateHutangBadges();
-  const listKey = queryKeys.pages.penerimaan();
+  const actingTenantId = useActingTenantId();
+  const isMaster = getUser()?.role === 'MASTER';
+  const listUrl = useMemo(() => {
+    if (isMaster && !actingTenantId) return null;
+    return withActingTenantQuery('/api/pages/penerimaan', actingTenantId, Boolean(isMaster));
+  }, [actingTenantId, isMaster]);
+  const listKey = useMemo(
+    () => [...queryKeys.pages.penerimaan(), actingTenantId || ''] as const,
+    [actingTenantId],
+  );
   const {
     items: list,
     loading: isLoading,
@@ -129,9 +141,10 @@ export default function PenerimaanPage() {
     error,
   } = useCursorQuery<JsonObject>(
     listKey,
-    '/api/pages/penerimaan',
+    listUrl,
     {
       limit: 100,
+      enabled: Boolean(listUrl),
       staleTime: 15_000,
       refetchInterval: (query) => {
         const pages = query.state.data?.pages ?? [];

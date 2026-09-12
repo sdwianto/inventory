@@ -41,6 +41,42 @@ export function resolveMediaFilePath(tenantId: string, filename: string) {
   return join(storageRoot(), safeTenant, safeFile);
 }
 
+export async function storeImageBuffer(
+  tenantId: string,
+  buf: Buffer,
+  {
+    prefix = 'logo',
+    maxBytes = MAX_LOGO_BYTES,
+    mime = 'image/jpeg',
+  }: { prefix?: string; maxBytes?: number; mime?: string } = {},
+): Promise<{ url: string; filename: string } | { error: string }> {
+  const normalizedMime = String(mime || 'image/jpeg').toLowerCase();
+  if (!ALLOWED_MIME.has(normalizedMime)) return { error: 'Format gambar tidak didukung' };
+  if (isServerlessReadOnlyFs()) {
+    return { error: 'Media storage tidak tersedia di serverless' };
+  }
+  if (!buf?.length) return { error: 'Data gambar kosong' };
+  if (buf.length > maxBytes) {
+    return { error: `Gambar terlalu besar (max ${Math.round(maxBytes / 1024)}KB)` };
+  }
+
+  const tid = String(tenantId || 'default').trim().toLowerCase();
+  const filename = `${prefix}-${uuidv4()}.${extFromMime(normalizedMime)}`;
+  const filePath = resolveMediaFilePath(tid, filename);
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, buf);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const hint = /EACCES|EPERM|EROFS|permission denied/i.test(msg)
+      ? ` — pastikan ${storageRoot()} writable (Docker: volume media_data + uid nextjs/1001)`
+      : '';
+    return { error: `Gagal menyimpan media: ${msg}${hint}` };
+  }
+
+  return { url: mediaPublicPath(tid, filename), filename };
+}
+
 export async function storeBase64Image(
   tenantId: string,
   base64: string,
@@ -58,29 +94,7 @@ export async function storeBase64Image(
   }
   if (!ALLOWED_MIME.has(mime)) return { error: 'Format gambar tidak didukung' };
 
-  if (isServerlessReadOnlyFs()) {
-    // Vercel/Lambda: filesystem read-only — skip upload (hutang/GRN tidak bergantung file lokal).
-    return { error: 'Media storage tidak tersedia di serverless' };
-  }
-
-  const buf = Buffer.from(data, 'base64');
-  if (buf.length > maxBytes) return { error: `Gambar terlalu besar (max ${Math.round(maxBytes / 1024)}KB)` };
-
-  const tid = String(tenantId || 'default').trim().toLowerCase();
-  const filename = `${prefix}-${uuidv4()}.${extFromMime(mime)}`;
-  const filePath = resolveMediaFilePath(tid, filename);
-  try {
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, buf);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const hint = /EACCES|EPERM|EROFS|permission denied/i.test(msg)
-      ? ` — pastikan ${storageRoot()} writable (Docker: volume media_data + uid nextjs/1001)`
-      : '';
-    return { error: `Gagal menyimpan media: ${msg}${hint}` };
-  }
-
-  return { url: mediaPublicPath(tid, filename), filename };
+  return storeImageBuffer(tenantId, Buffer.from(data, 'base64'), { prefix, maxBytes, mime });
 }
 
 export async function readMediaFile(tenantId: string, filename: string) {

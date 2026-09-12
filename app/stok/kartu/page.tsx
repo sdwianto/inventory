@@ -78,8 +78,9 @@ export default function KartuStokPage() {
 
   const totalMasuk = data.totalMasuk ?? data.rows.reduce((s, r) => s + num(r.masuk), 0);
   const totalKeluar = data.totalKeluar ?? data.rows.reduce((s, r) => s + num(r.keluar), 0);
+  // Rows newest-first; saldo akhir = baris pertama.
   const saldoKartu = data.rows.length
-    ? num(data.rows[data.rows.length - 1].saldo)
+    ? num(data.rows[0].saldo)
     : (data.ledgerSaldo ?? num(data.product?.stok));
   const stokMismatch = data.product
     && data.ledgerSaldo != null
@@ -232,7 +233,7 @@ export default function KartuStokPage() {
                 {selectedProduct && !loading && data.truncated && (
                   <tr className="bg-amber-50 border-t">
                     <td colSpan={KARTU_COL_SPAN} className="px-3 py-2 text-xs text-amber-800 text-center">
-                      Menampilkan {data.rows.length} mutasi terakhir dari {formatNumber(data.totalRows)} — saldo awal baris pertama {formatNumber(data.saldoAwal)}. Gunakan filter tanggal untuk periode lebih spesifik.
+                      Menampilkan {data.rows.length} mutasi terbaru dari {formatNumber(data.totalRows)} (urutan terbaru di atas) — saldo sebelum periode tampilan {formatNumber(data.saldoAwal)}. Gunakan filter tanggal untuk periode lebih spesifik.
                     </td>
                   </tr>
                 )}

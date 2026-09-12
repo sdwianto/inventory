@@ -4,7 +4,8 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
-import { vendorProductSnapshot, bulkSyncVendorProductUoms } from '@/lib/api/product-sync';
+import { vendorProductSnapshot, bulkSyncVendorProductUoms, resolveVendorBaseUomId } from '@/lib/api/product-sync';
+import { materializeInboundProductFotos } from '@/lib/api/product-media';
 import type { JsonObject } from '@/types/json';
 
 const BATCH_SIZE = 250;
@@ -12,14 +13,44 @@ const BATCH_SIZE = 250;
 interface BatchUpsertResult {
   created: number;
   updated: number;
+  skippedStale: number;
   errors: JsonObject[];
   byVendor: Record<string, number>;
   duplicateBarcodes: JsonObject[];
 }
 
-type ExistingRow = JsonObject & { id: string; vendorStokId?: string; vendorTenantId?: string; kode?: string; barcode?: string; nama?: string; masterProductId?: string | null };
+type ExistingRow = JsonObject & {
+  id: string;
+  vendorStokId?: string;
+  vendorTenantId?: string;
+  kode?: string;
+  barcode?: string;
+  nama?: string;
+  masterProductId?: string | null;
+  detailProduk?: string;
+  fotos?: string[];
+  detailFotosUpdatedAt?: unknown;
+  lastVendorSyncEmittedAt?: unknown;
+};
 
-export function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTenant: string, now: Date) {
+function parseSyncTime(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const t = new Date(String(value)).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+export function buildSyncSet(
+  snap: ReturnType<typeof vendorProductSnapshot>,
+  vTenant: string,
+  now: Date,
+  existing?: ExistingRow | null,
+  vendorProduct?: Record<string, unknown>,
+) {
+  const incomingEmit = parseSyncTime(snap.emittedAt);
   const syncSet: Record<string, unknown> = {
     kode: snap.kode,
     barcode: snap.barcode,
@@ -30,6 +61,7 @@ export function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTe
     vendorStokId: snap.id,
     vendorTenantId: vTenant,
     vendorTenantName: snap.vendorTenantName || vTenant,
+    vendorBaseUomId: resolveVendorBaseUomId(vendorProduct || { id: snap.id }, snap),
     vendorHargaBeli: snap.hargaBeli,
     vendorHargaGrosir: snap.hargaGrosir,
     vendorHargaSpesial: snap.hargaSpesial,
@@ -40,9 +72,34 @@ export function buildSyncSet(snap: ReturnType<typeof vendorProductSnapshot>, vTe
     syncSource: 'sales.app',
     masterProductId: snap.masterProductId,
     updatedAt: now,
+    ...(incomingEmit != null
+      ? { lastVendorSyncEmittedAt: new Date(incomingEmit) }
+      : { lastVendorSyncEmittedAt: now }),
   };
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
   if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
+  if (snap.hasDetailProduk || snap.hasFotos) {
+    const localDetailAt = parseSyncTime(existing?.detailFotosUpdatedAt);
+    // Hanya detailFotosUpdatedAt — jangan fallback emittedAt (catalog touch harga ≠ detail baru).
+    const salesDetailAt = parseSyncTime(
+      snap.hasDetailFotosUpdatedAt ? snap.detailFotosUpdatedAt : null,
+    );
+    const allowDetail = localDetailAt == null
+      || (salesDetailAt != null && salesDetailAt >= localDetailAt);
+    if (allowDetail) {
+      if (snap.hasDetailProduk) {
+        const incoming = snap.detailProduk ?? '';
+        const localDetail = existing ? String(existing.detailProduk || '') : '';
+        if (incoming || !localDetail) syncSet.detailProduk = incoming;
+      }
+      if (snap.hasFotos) {
+        const incoming = Array.isArray(snap.fotos) ? snap.fotos : [];
+        const localFotos = existing && Array.isArray(existing.fotos) ? existing.fotos : [];
+        if (incoming.length || !localFotos.length) syncSet.fotos = incoming;
+      }
+      if (salesDetailAt != null) syncSet.detailFotosUpdatedAt = new Date(salesDetailAt);
+    }
+  }
   return syncSet;
 }
 
@@ -122,7 +179,14 @@ export async function bulkUpsertProductsFromVendor(
   products: JsonObject[],
 ): Promise<BatchUpsertResult> {
   const tid = customerTenantId || 'default';
-  const result: BatchUpsertResult = { created: 0, updated: 0, errors: [], byVendor: {}, duplicateBarcodes: [] };
+  const result: BatchUpsertResult = {
+    created: 0,
+    updated: 0,
+    skippedStale: 0,
+    errors: [],
+    byVendor: {},
+    duplicateBarcodes: [],
+  };
   const now = new Date();
 
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
@@ -163,8 +227,20 @@ export async function bulkUpsertProductsFromVendor(
     const uomSyncQueue: { productId: string; raw: JsonObject; snap: ReturnType<typeof vendorProductSnapshot> }[] = [];
 
     for (const { snap, vTenant, raw } of parsed) {
-      const syncSet = buildSyncSet(snap, vTenant, now);
       const existing = findExisting(existingMap, snap, vTenant);
+      const incomingEmit = parseSyncTime(snap.emittedAt);
+      const lastEmit = parseSyncTime(existing?.lastVendorSyncEmittedAt);
+      if (existing && lastEmit != null && incomingEmit != null && incomingEmit < lastEmit) {
+        result.skippedStale += 1;
+        continue;
+      }
+      const syncSet = buildSyncSet(snap, vTenant, now, existing, raw);
+      if (Array.isArray(syncSet.fotos)) {
+        syncSet.fotos = await materializeInboundProductFotos(
+          tid,
+          (syncSet.fotos as unknown[]).map(String),
+        );
+      }
       result.byVendor[vTenant] = (result.byVendor[vTenant] || 0) + 1;
 
       const dup = findBarcodeDuplicate(barcodeMap, snap.barcode, snap.id, existing?.id);

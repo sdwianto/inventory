@@ -17,6 +17,8 @@ export const EMPTY_PRODUCT: JsonObject = {
   recipeBaseGrams: '',
   /** 1 satuan basis = N ml — konversi resep dapur ML→kemasan. */
   recipeBaseMl: '',
+  detailProduk: '',
+  fotos: [],
 };
 
 export const PRODUCT_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'] as const;
