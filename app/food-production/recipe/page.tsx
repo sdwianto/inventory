@@ -13,7 +13,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { isIngredientRole } from '@/lib/food-production/item-role';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
-import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2, ListChecks } from 'lucide-react';
+import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2, ListChecks, Search } from 'lucide-react';
 import { str } from '@/types/json';
 import {
   DEFAULT_PCT_KECIL,
@@ -267,6 +267,7 @@ function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
 
 export default function FoodProductionRecipePage() {
   const [rows, setRows] = useState<RecipeRow[]>([]);
+  const [listNamaQ, setListNamaQ] = useState('');
   const [products, setProducts] = useState<ProductOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -695,6 +696,16 @@ export default function FoodProductionRecipePage() {
     }) || null;
   }, [editing, form.nama, rows]);
 
+  const filteredRows = useMemo(() => {
+    const q = normalizeNama(listNamaQ).toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => {
+      const n = normalizeNama(r.nama).toLowerCase();
+      const k = String(r.kode || '').toLowerCase();
+      return n.includes(q) || k.includes(q);
+    });
+  }, [rows, listNamaQ]);
+
   async function openCreate() {
     setEditing(null);
     setLoadedFrom(null);
@@ -1010,7 +1021,27 @@ export default function FoodProductionRecipePage() {
             <tr>
               <th className="text-left p-3 font-medium w-14">Gambar</th>
               <th className="text-left p-3 font-medium w-24">Kode</th>
-              <th className="text-left p-3 font-medium">Nama Resep</th>
+              <th className="text-left p-3 font-medium min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="shrink-0">Nama Resep</span>
+                  <div
+                    className="relative min-w-0 flex-1 max-w-xs"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      type="search"
+                      value={listNamaQ}
+                      onChange={(e) => setListNamaQ(e.target.value)}
+                      placeholder="Cari nama / kode…"
+                      className="h-8 pl-7 text-xs font-normal"
+                      aria-label="Cari nama resep"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+              </th>
               <th className="text-left p-3 font-medium w-[8.5rem]">Kategori Menu</th>
               <th className="text-left p-3 font-medium w-24">Hasil</th>
               <th className="text-left p-3 font-medium w-28">Efektif</th>
@@ -1031,7 +1062,14 @@ export default function FoodProductionRecipePage() {
                 </td>
               </tr>
             )}
-            {rows.map((row) => (
+            {!loading && rows.length > 0 && filteredRows.length === 0 && (
+              <tr>
+                <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                  Tidak ada resep cocok dengan “{listNamaQ.trim()}”.
+                </td>
+              </tr>
+            )}
+            {filteredRows.map((row) => (
               <tr key={row.id} className="border-t">
                 <td className="p-2">
                   {row.gambarUrl ? (
