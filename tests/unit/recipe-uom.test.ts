@@ -19,6 +19,8 @@ describe('recipe-uom — keluarga satuan', () => {
     expect(recipeUomFamily('LITER')).toBe('VOLUME');
     expect(recipeUomFamily('PCS')).toBe('COUNT');
     expect(recipeUomFamily('SAK')).toBe('COUNT');
+    expect(recipeUomFamily('RTG')).toBe('COUNT');
+    expect(recipeUomFamily('RENTENG')).toBe('COUNT');
     expect(recipeUomFamily('XYZ')).toBe('UNKNOWN');
   });
 });
@@ -135,6 +137,29 @@ describe('recipe-uom — opsi & default dapur', () => {
       expect.arrayContaining(['KG', 'GR', 'ONS']),
     );
     expect(defaultKitchenSatuan('KG')).toBe('GR');
+  });
+
+  it('Kaldu RTG + recipeBaseGrams izinkan GR (resep lama edit/save)', () => {
+    const opts = {
+      recipeBaseGrams: 12.5,
+      nama: 'Kaldu Desaku Marinasi Instan 12,5g',
+      kode: 'B511393',
+    };
+    expect(kitchenSatuanOptionsForBase('RTG', opts)).toEqual(
+      expect.arrayContaining(['RTG', 'GR', 'ONS', 'KG']),
+    );
+    expect(defaultKitchenSatuan('RTG', opts)).toBe('GR');
+    const r = toBaseRecipeQty(500, 'GR', { satuan: 'RTG', ...opts });
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.qtyBase).toBeCloseTo(40); // 500 / 12.5
+    expect(r.baseSatuan).toBe('RTG');
+  });
+
+  it('basis UNKNOWN + recipeBaseGrams juga izinkan GR', () => {
+    expect(kitchenSatuanOptionsForBase('CRT', { recipeBaseGrams: 200 })).toEqual(
+      expect.arrayContaining(['CRT', 'GR']),
+    );
   });
 
   it('base SAK tanpa faktor → hanya SAK', () => {

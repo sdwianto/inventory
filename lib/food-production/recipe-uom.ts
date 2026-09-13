@@ -58,6 +58,14 @@ const COUNT_LABELS = new Set([
   'ROLL',
   'BAL',
   'BALL',
+  /** Renteng / sachet pack — umum di master SPPG (mis. kaldu RTG). */
+  'RTG',
+  'RENTENG',
+  'RENCENG',
+  'SCH',
+  'SACHET',
+  'BKS',
+  'BUNGKUS',
 ]);
 
 export function normalizeRecipeSatuan(raw: unknown): string {
@@ -201,7 +209,8 @@ export function kitchenSatuanOptionsForBase(
   } else if (family === 'VOLUME') {
     out.add('ML');
     out.add('L');
-  } else if (family === 'COUNT') {
+  } else if (family === 'COUNT' || family === 'UNKNOWN') {
+    // Packaged / unknown base (RTG, CRT, …): izinkan GR/ML bila ada jembatan.
     if (bridge.recipeBaseGrams != null) {
       out.add('GR');
       out.add('ONS');
@@ -226,7 +235,7 @@ export function defaultKitchenSatuan(
   if (family === 'MASS') return 'GR';
   if (family === 'VOLUME') return 'ML';
   const bridge = resolveRecipeBridge({ ...opts, satuan: base });
-  if (family === 'COUNT') {
+  if (family === 'COUNT' || family === 'UNKNOWN') {
     if (bridge.recipeBaseMl != null && (bridge.gramsSource === 'nutrition' || bridge.gramsSource === 'none')) {
       return 'ML';
     }
