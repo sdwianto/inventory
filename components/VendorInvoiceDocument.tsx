@@ -775,14 +775,14 @@ export default function VendorInvoiceDocument({
           <span className="text-right tabular-nums">{formatIDR(num(totals.subTotal ?? detail.subTotal))}</span>
           <span className="text-slate-500">PPN</span>
           <span className="text-right tabular-nums">{formatIDR(num(totals.ppn ?? detail.ppn))}</span>
-          <span className="font-bold border-t pt-0.5 mt-0.5">Total Akhir</span>
+          <span className="font-bold border-t pt-0.5 mt-0.5">{cnSummary.hasCredits ? 'Tagihan' : 'Total Akhir'}</span>
           <span className="font-bold text-right tabular-nums border-t pt-0.5 mt-0.5">{formatIDR(num(totals.total ?? detail.total))}</span>
           {cnSummary.hasCredits ? (
             <>
-              <span className="text-orange-700">Credit / retur</span>
+              <span className="text-orange-700">Credit note / retur</span>
               <span className="text-right tabular-nums text-orange-700">−{formatIDR(cnSummary.creditTotal)}</span>
-              <span className="font-bold text-slate-900">Sisa hutang</span>
-              <span className="font-bold text-right tabular-nums text-slate-900">{formatIDR(cnSummary.sisa)}</span>
+              <span className="font-bold text-slate-900">Total Tagihan</span>
+              <span className="font-bold text-right tabular-nums text-slate-900">{formatIDR(cnSummary.netTagihan)}</span>
             </>
           ) : null}
         </div>
@@ -895,8 +895,8 @@ export default function VendorInvoiceDocument({
             <span className="text-slate-500">PPN</span>
             <span className="tabular-nums">{formatIDR(num(totals.ppn ?? detail.ppn))}</span>
           </div>
-          <div className="flex justify-between font-bold text-base pt-2 border-t mt-2">
-            <span>Total tagihan</span>
+          <div className={`flex justify-between font-bold pt-2 border-t mt-2 ${cnSummary.hasCredits ? 'text-sm' : 'text-base'}`}>
+            <span>{cnSummary.hasCredits ? 'Tagihan' : 'Total Tagihan'}</span>
             <span className="tabular-nums" style={{ color: brandAccent }}>{formatIDR(num(totals.total ?? detail.total))}</span>
           </div>
           {cnSummary.hasCredits ? (
@@ -905,12 +905,12 @@ export default function VendorInvoiceDocument({
                 <span>Credit note / retur</span>
                 <span className="tabular-nums">−{formatIDR(cnSummary.creditTotal)}</span>
               </div>
-              <div className="flex justify-between font-bold text-sm">
-                <span>Sisa hutang (aktual)</span>
-                <span className="tabular-nums">{formatIDR(cnSummary.sisa)}</span>
+              <div className="flex justify-between font-bold text-base">
+                <span>Total Tagihan</span>
+                <span className="tabular-nums">{formatIDR(cnSummary.netTagihan)}</span>
               </div>
               <p className="text-[10px] text-slate-500 leading-snug">
-                Qty/total baris di atas = nota asli. Posisi bayar terkini = sisa hutang setelah CN/RTV.
+                Qty/total baris di atas = nota asli. Total Tagihan = Tagihan dikurangi credit note / retur.
               </p>
             </div>
           ) : null}

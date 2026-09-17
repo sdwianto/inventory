@@ -295,14 +295,17 @@ export default function VendorInvoiceDetail({
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-medium text-orange-950">Posisi hutang terkini</span>
               <span className="font-bold tabular-nums text-orange-950">
-                Sisa {formatIDR(cnSummary.sisa)}
+                Total Tagihan {formatIDR(cnSummary.netTagihan)}
               </span>
             </div>
             <p className="mt-1 text-xs text-orange-900/80">
-              Total nota {formatIDR(cnSummary.invoiceTotal)} − credit/retur {formatIDR(cnSummary.creditTotal)}
+              Tagihan {formatIDR(cnSummary.invoiceTotal)} − credit note / retur {formatIDR(cnSummary.creditTotal)}
               {cnSummary.hasPhysicalReturnQty
                 ? ' (qty baris di nota = asli; lihat kolom Diretur / Qty netto).'
                 : ' (koreksi finansial — qty fisik tidak berubah).'}
+              {cnSummary.sisa !== cnSummary.netTagihan
+                ? ` Sisa bayar: ${formatIDR(cnSummary.sisa)}.`
+                : ''}
             </p>
           </div>
         )}

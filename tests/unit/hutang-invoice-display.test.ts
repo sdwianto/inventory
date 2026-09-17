@@ -36,6 +36,7 @@ describe('hutang-invoice-display', () => {
     expect(summary.hasCredits).toBe(true);
     expect(summary.hasPhysicalReturnQty).toBe(true);
     expect(summary.creditTotal).toBe(260_000);
+    expect(summary.netTagihan).toBe(4_680_000);
     expect(summary.sisa).toBe(4_680_000);
     expect(summary.returnedQtyByLineId['9e224eec-a407-4355-bdf3-3c9ef4f3204e']).toBe(1);
 
@@ -105,9 +106,12 @@ describe('hutang-invoice-display', () => {
     const doc = readFileSync(resolve(process.cwd(), 'components/VendorInvoiceDocument.tsx'), 'utf8');
     expect(doc).toContain('hasPhysicalReturnQty');
     expect(doc).toContain('Qty netto');
-    expect(doc).toContain('Sisa hutang');
+    expect(doc).toContain('Total Tagihan');
+    expect(doc).toContain('netTagihan');
+    expect(doc).not.toContain('Tagihan − Credit note');
     const thermal = readFileSync(resolve(process.cwd(), 'components/VendorInvoiceThermal.tsx'), 'utf8');
-    expect(thermal).toContain('SISA HUTANG');
+    expect(thermal).toContain('TOTAL TAGIHAN');
+    expect(thermal).toContain('netTagihan');
     const list = readFileSync(resolve(process.cwd(), 'app/hutang/page.tsx'), 'utf8');
     expect(list).toContain('Sisa');
     expect(list).toContain('ada CN/retur');

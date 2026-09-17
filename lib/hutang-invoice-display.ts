@@ -12,6 +12,8 @@ export type HutangCreditDisplaySummary = {
   hasPhysicalReturnQty: boolean;
   invoiceTotal: number;
   creditTotal: number;
+  /** Tagihan − Credit note (display net; bukan sisa setelah pembayaran). */
+  netTagihan: number;
   terbayar: number;
   sisa: number;
   /** Returned qty keyed by normalized invoice lineId (RTV / inventory_return only). */
@@ -69,6 +71,7 @@ export function summarizeHutangCreditDisplay(detail: JsonObject | null | undefin
       hasPhysicalReturnQty: false,
       invoiceTotal: 0,
       creditTotal: 0,
+      netTagihan: 0,
       terbayar: 0,
       sisa: 0,
       returnedQtyByLineId: {},
@@ -80,6 +83,7 @@ export function summarizeHutangCreditDisplay(detail: JsonObject | null | undefin
   const hasPhysicalReturnQty = Object.values(returnedQtyByLineId).some((q) => q > 0);
   const hasCredits = asArray(creditNotes).length > 0 || creditTotal > 0 || hasPhysicalReturnQty;
   const invoiceTotal = num(detail.total);
+  const netTagihan = Math.max(0, Math.round((invoiceTotal - creditTotal) * 100) / 100);
   const terbayar = num(detail.terbayar);
   const sisaRaw = detail.sisa;
   const sisa = sisaRaw != null && sisaRaw !== ''
@@ -91,6 +95,7 @@ export function summarizeHutangCreditDisplay(detail: JsonObject | null | undefin
     hasPhysicalReturnQty,
     invoiceTotal,
     creditTotal,
+    netTagihan,
     terbayar,
     sisa,
     returnedQtyByLineId,

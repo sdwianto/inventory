@@ -132,18 +132,18 @@ export default function VendorInvoiceThermal({
             </tr>
           ) : null}
           <tr>
-            <td className="bold">TOTAL NOTA</td>
+            <td className="bold">{cnSummary.hasCredits ? 'TAGIHAN' : 'TOTAL TAGIHAN'}</td>
             <td className="text-right bold">{formatIDR(num(totals.total ?? detail.total))}</td>
           </tr>
           {cnSummary.hasCredits ? (
             <>
               <tr>
-                <td>Credit/retur</td>
+                <td>Credit note / retur</td>
                 <td className="text-right">-{formatIDR(cnSummary.creditTotal)}</td>
               </tr>
               <tr>
-                <td className="bold">SISA HUTANG</td>
-                <td className="text-right bold">{formatIDR(cnSummary.sisa)}</td>
+                <td className="bold">TOTAL TAGIHAN</td>
+                <td className="text-right bold">{formatIDR(cnSummary.netTagihan)}</td>
               </tr>
             </>
           ) : null}
