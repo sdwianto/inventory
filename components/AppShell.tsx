@@ -116,6 +116,7 @@ const NAV: NavEntry[] = [
       { href: '/kitchen-assurance/operasi', label: 'Operasi harian', icon: ClipboardList },
       { href: '/kitchen-assurance/temuan', label: 'Temuan & perbaikan', icon: Wrench },
       { href: '/kitchen-assurance/audit', label: 'Siap audit', icon: SquareCheck },
+      { href: '/kitchen-assurance/meeting-records', label: 'Meeting Record', icon: FileText },
     ],
   },
   {
@@ -185,6 +186,7 @@ const KA_OPS_ROUTES = [
   '/kitchen-assurance/operasi',
   '/kitchen-assurance/temuan',
   '/kitchen-assurance/audit',
+  '/kitchen-assurance/meeting-records',
   '/kitchen-assurance/monitoring',
   '/kitchen-assurance/cases',
   '/kitchen-assurance/follow-up',

@@ -57,6 +57,8 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'ka-dashboard': async () => (await import('@/lib/api/handlers/kitchen-assurance')).handleKitchenAssurance,
   'ka-reports': async () => (await import('@/lib/api/handlers/kitchen-assurance')).handleKitchenAssurance,
   'ka-analytics': async () => (await import('@/lib/api/handlers/kitchen-assurance')).handleKitchenAssurance,
+  'meeting-records': async () => (await import('@/lib/api/handlers/meeting-records')).handleMeetingRecords,
+  'meeting-topics': async () => (await import('@/lib/api/handlers/meeting-records')).handleMeetingRecords,
   'food-forecasts': async () => (await import('@/lib/api/handlers/food-forecasts')).handleFoodForecasts,
   'food-dashboard': async () => (await import('@/lib/api/handlers/food-dashboard')).handleFoodDashboard,
   'food-recommendations': async () => (await import('@/lib/api/handlers/food-recommendations')).handleFoodRecommendations,

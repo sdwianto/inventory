@@ -11,7 +11,18 @@ const MIME: Record<string, string> = {
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   gif: 'image/gif',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
 };
+
+const INLINE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'mp4', 'webm']);
 
 export async function handleMedia({
   method,
@@ -24,10 +35,13 @@ export async function handleMedia({
   try {
     const buf = await readMediaFile(tenantId, filename);
     const ext = filename.split('.').pop()?.toLowerCase() || 'png';
+    const contentType = MIME[ext] || 'application/octet-stream';
+    const disposition = INLINE_EXT.has(ext) ? 'inline' : `attachment; filename="${filename}"`;
     return new Response(buf, {
       status: 200,
       headers: {
-        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Content-Type': contentType,
+        'Content-Disposition': disposition,
         'Cache-Control': 'public, max-age=86400, immutable',
       },
     }) as unknown as NextResponse;

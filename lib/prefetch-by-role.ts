@@ -46,6 +46,7 @@ const KA_OPS_ROUTES = [
   '/kitchen-assurance/operasi',
   '/kitchen-assurance/temuan',
   '/kitchen-assurance/audit',
+  '/kitchen-assurance/meeting-records',
   '/kitchen-assurance/monitoring',
   '/kitchen-assurance/cases',
   '/kitchen-assurance/follow-up',
