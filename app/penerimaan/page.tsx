@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
-import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2 } from 'lucide-react';
+import { PackageCheck, FileText, Truck, Eye, RefreshCw, Loader2, PenLine } from 'lucide-react';
 import { warehouseName } from '@/lib/warehouses-client';
 import { useCursorQuery } from '@/lib/hooks/use-cursor-query';
 import { queryKeys } from '@/lib/query-keys';
@@ -35,6 +35,13 @@ import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import { getUser } from '@/lib/auth-client';
 import { useActingTenantId } from '@/lib/hooks/use-acting-tenant-id';
 import { withActingTenantQuery } from '@/lib/tenant-api';
+import {
+  GRN_RECEIVER_SIG_KEY,
+  isSignatureDraftReady,
+  loadSignatureDraft,
+  saveSignatureDraft,
+  type SignatureDraft,
+} from '@/lib/signature-draft';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
@@ -167,6 +174,9 @@ export default function PenerimaanPage() {
   const [rejectReasonMap, setRejectReasonMap] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<string[]>([]);
   const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
+  const [receiverDraft, setReceiverDraft] = useState<SignatureDraft>(() => loadSignatureDraft(GRN_RECEIVER_SIG_KEY));
+  const [sigOpen, setSigOpen] = useState(false);
+  const [sigForm, setSigForm] = useState<SignatureDraft>({ userName: '', jabatan: '', nik: '' });
   /** qtyBase kirim (sudah direkonsiliasi) — untuk max qty saat satuan diganti. */
   const [orderedBaseMap, setOrderedBaseMap] = useState<Record<string, number>>({});
   const [doView, setDoView] = useState<JsonObject | null>(null);
@@ -379,6 +389,15 @@ export default function PenerimaanPage() {
   const postGrn = async () => {
     if (!detail) return;
 
+    if (!isSignatureDraftReady(receiverDraft)) {
+      toast.error('Isi signature dulu (Nama & NIK) lewat tombol Buat signature');
+      setSigForm(receiverDraft.userName || receiverDraft.nik
+        ? receiverDraft
+        : loadSignatureDraft(GRN_RECEIVER_SIG_KEY));
+      setSigOpen(true);
+      return;
+    }
+
     for (const [idx, it] of detailItems.entries()) {
       const key = itemRowKey(it, idx);
       const rejectQty = num(rejectQtyMap[key]);
@@ -409,7 +428,11 @@ export default function PenerimaanPage() {
     }).filter((it) => it.qty > 0 || (it.qtyRejected ?? 0) > 0);
 
     try {
-      const data = await postGrnMutation(grnId, items, photos);
+      const data = await postGrnMutation(grnId, items, photos, {
+        userName: receiverDraft.userName.trim(),
+        jabatan: receiverDraft.jabatan.trim() || undefined,
+        nik: receiverDraft.nik.trim(),
+      });
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
       if (data.noInvoice || data.invoiceSyncStatus === 'DONE') {
@@ -751,10 +774,100 @@ export default function PenerimaanPage() {
             maxPhotos={5}
             disabled={!!posting}
           />
+          <DialogFooter className="flex-col sm:flex-row gap-2 sm:justify-between sm:items-center">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              disabled={!!posting}
+              onClick={() => {
+                setSigForm(isSignatureDraftReady(receiverDraft)
+                  ? receiverDraft
+                  : loadSignatureDraft(GRN_RECEIVER_SIG_KEY));
+                setSigOpen(true);
+              }}
+            >
+              <PenLine className="w-4 h-4 mr-1" /> Buat signature
+              {isSignatureDraftReady(receiverDraft) ? (
+                <span className="ml-1 text-[10px] font-normal text-green-700 hidden sm:inline">
+                  ({receiverDraft.userName})
+                </span>
+              ) : null}
+            </Button>
+            <div className="flex w-full sm:w-auto gap-2 justify-end">
+              <Button variant="outline" onClick={() => setDetail(null)}>Batal</Button>
+              <Button
+                onClick={postGrn}
+                disabled={!!posting || !isSignatureDraftReady(receiverDraft)}
+                className="bg-orange-500 hover:bg-orange-600"
+                title={!isSignatureDraftReady(receiverDraft) ? 'Isi signature dulu (Nama & NIK)' : undefined}
+              >
+                {posting ? 'Menyimpan stok…' : 'Konfirmasi Terima'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={sigOpen} onOpenChange={setSigOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Signature Penerima gudang</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600">
+            Data ini di-stempel ke kolom Penerima gudang saat Anda menekan Konfirmasi Terima.
+          </p>
+          <div className="space-y-3 py-1">
+            <div>
+              <Label className="text-xs font-medium text-slate-600">Nama</Label>
+              <Input
+                value={sigForm.userName}
+                onChange={(e) => setSigForm((s) => ({ ...s, userName: e.target.value }))}
+                placeholder="Nama lengkap"
+                autoComplete="name"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium text-slate-600">Jabatan</Label>
+              <Input
+                value={sigForm.jabatan}
+                onChange={(e) => setSigForm((s) => ({ ...s, jabatan: e.target.value }))}
+                placeholder="Contoh: Petugas Gudang"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium text-slate-600">NIK</Label>
+              <Input
+                value={sigForm.nik}
+                onChange={(e) => setSigForm((s) => ({ ...s, nik: e.target.value }))}
+                placeholder="Nomor induk karyawan"
+                autoComplete="off"
+              />
+            </div>
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDetail(null)}>Batal</Button>
-            <Button onClick={postGrn} disabled={!!posting} className="bg-orange-500 hover:bg-orange-600">
-              {posting ? 'Menyimpan stok…' : 'Konfirmasi Terima'}
+            <Button type="button" variant="outline" onClick={() => setSigOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const next = {
+                  userName: sigForm.userName.trim(),
+                  jabatan: sigForm.jabatan.trim(),
+                  nik: sigForm.nik.trim(),
+                };
+                if (!next.userName || !next.nik) {
+                  toast.error('Nama dan NIK wajib diisi');
+                  return;
+                }
+                setReceiverDraft(next);
+                saveSignatureDraft(GRN_RECEIVER_SIG_KEY, next);
+                setSigOpen(false);
+                toast.success('Signature siap — tekan Konfirmasi Terima untuk menstempel');
+              }}
+            >
+              Simpan signature
             </Button>
           </DialogFooter>
         </DialogContent>

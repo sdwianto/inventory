@@ -39,7 +39,7 @@ export const INVOICE_VARIANTS: DocumentVariant[] = [
   { id: 'inv-06', kind: 'invoice', name: 'Kop Surat', description: 'Gaya kop surat: logo + nama satu baris, judul di antara dua garis.', tokens: t('letterhead', 'minimal', 'inline', 'airy', 2, { compactSign: true }) },
   { id: 'inv-07', kind: 'invoice', name: 'Sidebar Brand', description: 'Pita vertikal tipis di kiri, logo di kop.', tokens: t('sidebar', 'filled', 'twoCards', 'normal', 2) },
   { id: 'inv-08', kind: 'invoice', name: 'Rincian Pajak', description: 'Judul besar di atas, tiga kartu, blok PPN/DPP ditonjolkan.', tokens: t('stackTitle', 'zebra', 'threeCards', 'normal', 2, { taxEmphasis: true }) },
-  { id: 'inv-09', kind: 'invoice', name: 'Pita Atas', description: 'Garis brand di tepi atas, tiga tanda tangan Penjual/Pembeli/Mengetahui.', tokens: t('topBar', 'filled', 'twoCards', 'normal', 3) },
+  { id: 'inv-09', kind: 'invoice', name: 'Pita Atas', description: 'Garis brand di tepi atas; autentikasi sistem + 2 slot internal (Penerima gudang / Mengetahui).', tokens: t('topBar', 'filled', 'twoCards', 'normal', 2) },
   { id: 'inv-10', kind: 'invoice', name: 'Panel Brand', description: 'Kolom kiri berwarna berisi logo, nomor faktur di panel kanan.', tokens: t('splitPanel', 'lined', 'stamp', 'normal', 2) },
   { id: 'inv-11', kind: 'invoice', name: 'Dua Pita', description: 'Baris brand + baris judul terpisah, garis ganda.', tokens: t('banded', 'lined', 'twoCards', 'normal', 2, { doubleRule: true }) },
   { id: 'inv-12', kind: 'invoice', name: 'Masthead', description: 'Logo besar, nama perusahaan menonjol, watermark samar.', tokens: t('masthead', 'zebra', 'twoCards', 'airy', 2, { watermark: true }) },

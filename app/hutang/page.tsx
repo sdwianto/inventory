@@ -161,7 +161,7 @@ export default function HutangVendorPage() {
     setLoadingDetail('');
   };
 
-  const doApprove = async () => {
+  const doApprove = async (knowingBy: { userName: string; jabatan?: string; nik: string }) => {
     if (!detail) return;
     const hutangId = str(detail.id);
     setActing('approve');
@@ -169,6 +169,11 @@ export default function HutangVendorPage() {
       await approve(hutangId, {
         overrideMatch,
         note: overrideMatch ? 'Disetujui dengan override match' : '',
+        knowingBy: {
+          userName: knowingBy.userName,
+          jabatan: knowingBy.jabatan || '',
+          nik: knowingBy.nik,
+        },
       });
       const fresh = await queryClient.fetchQuery({
         queryKey: queryKeys.hutang.detail(hutangId),
@@ -328,7 +333,7 @@ export default function HutangVendorPage() {
         )}
 
         <div className="bg-white border rounded-lg overflow-x-auto">
-          <table className="w-full text-sm min-w-[1040px]">
+          <table className="w-full text-sm min-w-[1120px]">
             <thead className="bg-slate-100 text-xs uppercase text-slate-600">
               <tr>
                 <th className="px-3 py-2 text-left">Invoice</th>
@@ -337,15 +342,16 @@ export default function HutangVendorPage() {
                 <th className="px-3 py-2 text-left">No. DO</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">Minta kirim</th>
                 <th className="px-3 py-2 text-left whitespace-nowrap">Aktual kirim</th>
-                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Total nota</th>
+                <th className="px-3 py-2 text-right">Sisa</th>
                 <th className="px-3 py-2 text-center">Status</th>
                 <th className="px-3 py-2 text-center">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {isLoading && <TableSkeleton rows={8} cols={9} />}
+              {isLoading && <TableSkeleton rows={8} cols={10} />}
               {!isLoading && !allList.length && (
-                <tr><td colSpan={9} className="text-center py-10 text-slate-400">Belum ada tagihan</td></tr>
+                <tr><td colSpan={10} className="text-center py-10 text-slate-400">Belum ada tagihan</td></tr>
               )}
               {!isLoading && allList.length > 0 && (
                 <VirtualTableBody
@@ -353,6 +359,10 @@ export default function HutangVendorPage() {
                   renderRow={(h: JsonObject) => {
                     const a = str(h.approvalStatus || h.status);
                     const snap = asObject(h.vendorBillingSnapshot);
+                    const hasCn = asArray(h.creditNotes).length > 0 || num(h.terbayar) > 0;
+                    const sisa = h.sisa != null && h.sisa !== ''
+                      ? num(h.sisa)
+                      : Math.max(0, num(h.total) - num(h.terbayar));
                     return (
                       <tr key={str(h.id)} className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => openDetail(str(h.id))}>
                         <td className="px-3 py-2 font-mono text-xs text-orange-700">{str(h.noInvoice)}</td>
@@ -369,7 +379,15 @@ export default function HutangVendorPage() {
                             ? formatDate(str(h.tanggalAktualKirim || h.tanggal))
                             : '—'}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium">{formatIDR(num(h.total))}</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-medium">
+                          {formatIDR(num(h.total))}
+                          {hasCn ? (
+                            <span className="block text-[10px] font-normal text-orange-700">ada CN/retur</span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-medium">
+                          {formatIDR(sisa)}
+                        </td>
                         <td className="px-3 py-2 text-center">
                           <span className={`px-2 py-0.5 rounded text-xs ${APPROVAL_BADGE[a as keyof typeof APPROVAL_BADGE] || 'bg-slate-100'}`}>
                             {APPROVAL_LABELS[a as keyof typeof APPROVAL_LABELS] || a}

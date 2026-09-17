@@ -9,7 +9,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
-import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot } from '@/lib/api/hutang-approval';
+import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot, parseKnowingSignature } from '@/lib/api/hutang-approval';
 import {
   resolveHutangVariance,
   buildLineVarianceByUom,
@@ -48,6 +48,7 @@ interface HutangBody extends Record<string, unknown> {
   metode?: string;
   keterangan?: string;
   userName?: string;
+  knowingBy?: { userName?: string; nama?: string; jabatan?: string; nik?: string };
 }
 
 interface HutangDoc extends Record<string, unknown> {
@@ -303,10 +304,19 @@ export async function handleVendorHutang({
 
     const now = new Date();
     const approver = await actorSnapshot(db, auth);
+    const knowingParsed = parseKnowingSignature(hutangBody.knowingBy);
+    if (!knowingParsed.ok) return err(knowingParsed.error, 400);
+    // knowingBy = stempel Mengetahui (teks bebas); jangan isi userId login agar tidak salah label.
+    const knowingBy = { ...knowingParsed.value };
     const patch: Record<string, unknown> = {
       approvalStatus: 'APPROVED',
       status: 'APPROVED',
-      approvedBy: approver,
+      approvedBy: {
+        ...approver,
+        nik: knowingParsed.value.nik,
+        jabatan: knowingParsed.value.jabatan,
+      },
+      knowingBy,
       approvedAt: now,
       updatedAt: now,
     };

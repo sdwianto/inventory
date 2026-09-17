@@ -7,6 +7,7 @@ import { syncShippedDeliveriesFromSales } from '@/lib/api/grn-sync-sales';
 import { isUnresolvedGrnStatus, refreshGrnProducts, refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
 import { enrichGrnList, enrichGrnDocWithProducts } from '@/lib/api/grn-enrich';
 import { postGoodsReceipt, replayGrnInvoiceAsync, type GrnDoc } from '@/lib/api/grn-post';
+import { actorSnapshot, parseKnowingSignature } from '@/lib/api/hutang-approval';
 import { parseCursorPageParams, applyDescDateIdCursor, cursorPageResponse } from '@/lib/api/cursor-page';
 import { GRN_LIST_EXCLUDE, stripGrnListRow } from '@/lib/api/grn-list-projection';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
@@ -19,6 +20,8 @@ interface GrnPostBody extends Record<string, unknown> {
   asyncInvoice?: boolean;
   items?: unknown[];
   photos?: unknown[];
+  /** Stempel Penerima gudang (Nama + NIK wajib) — dari tombol Buat signature. */
+  receivedBy?: { userName?: string; nama?: string; jabatan?: string; nik?: string };
 }
 
 const MAX_GRN_PHOTOS = 5;
@@ -217,11 +220,22 @@ export async function handleGoodsReceipts({
       grnBody.photoUrls = photoResult;
     }
 
+    const actor = await actorSnapshot(db, scopeAuth);
+    const sig = parseKnowingSignature(grnBody.receivedBy, 'Penerima gudang');
+    if (!sig.ok) return err(sig.error, 400);
+    const receivedBy = {
+      userId: actor.userId,
+      userName: sig.value.userName,
+      role: actor.role,
+      nik: sig.value.nik,
+      jabatan: sig.value.jabatan,
+    };
     const posted = await postGoodsReceipt(db, {
       grn,
       tenantId,
       body: grnBody,
       asyncInvoice: grnBody.asyncInvoice !== false,
+      receivedBy,
     });
     if (posted.error) return err(posted.error, 400);
 

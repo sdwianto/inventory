@@ -160,13 +160,15 @@ body {
   table-layout: fixed;
 }
 .vendor-invoice-items-table .vi-col-no { width: 4%; }
-.vendor-invoice-items-table .vi-col-kode { width: 11%; }
-.vendor-invoice-items-table .vi-col-nama { width: 27%; }
-.vendor-invoice-items-table .vi-col-sat { width: 7%; }
+.vendor-invoice-items-table .vi-col-kode { width: 10%; }
+.vendor-invoice-items-table .vi-col-nama { width: 22%; }
+.vendor-invoice-items-table .vi-col-sat { width: 6%; }
 .vendor-invoice-items-table .vi-col-qty { width: 7%; }
-.vendor-invoice-items-table .vi-col-harga { width: 15%; }
-.vendor-invoice-items-table .vi-col-diskon { width: 12%; }
-.vendor-invoice-items-table .vi-col-jumlah { width: 17%; }
+.vendor-invoice-items-table .vi-col-retur { width: 7%; }
+.vendor-invoice-items-table .vi-col-netto { width: 7%; }
+.vendor-invoice-items-table .vi-col-harga { width: 13%; }
+.vendor-invoice-items-table .vi-col-diskon { width: 10%; }
+.vendor-invoice-items-table .vi-col-jumlah { width: 14%; }
 
 /* Faktur A4 — lebar konten dimaksimalkan, margin tepi tipis tapi tetap ada */
 .vendor-invoice-sheet {

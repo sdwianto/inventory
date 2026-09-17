@@ -163,6 +163,15 @@ export default function HutangVendorPrintPanel({
     () => filteredRows.reduce((s, r) => s + num(r.total), 0),
     [filteredRows],
   );
+  const totalSisa = useMemo(
+    () => filteredRows.reduce((s, r) => {
+      const sisa = r.sisa != null && r.sisa !== ''
+        ? num(r.sisa)
+        : Math.max(0, num(r.total) - num(r.terbayar));
+      return s + sisa;
+    }, 0),
+    [filteredRows],
+  );
 
   const subtitle = [
     tabLabel ? `Status: ${tabLabel}` : null,
@@ -293,7 +302,8 @@ export default function HutangVendorPrintPanel({
 
           <div className="ml-auto text-right text-xs text-slate-600 pb-0.5">
             <div className="font-medium">
-              {filteredRows.length} invoice · {itemCount} baris barang · {formatIDR(totalNilai)}
+              {filteredRows.length} invoice · {itemCount} baris barang · nota {formatIDR(totalNilai)}
+              {totalSisa !== totalNilai ? ` · sisa ${formatIDR(totalSisa)}` : ''}
             </div>
             {loadingItems && (
               <div className="text-[10px] text-slate-400 flex items-center justify-end gap-1 mt-0.5">

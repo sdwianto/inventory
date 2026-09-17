@@ -6,13 +6,205 @@ import { formatDate, formatDateTime, formatIDR } from '@/lib/format';
 import { DEFAULT_DELIVERY_BRAND, resolveBrandColor, darken, readableTextOn } from '@/lib/brand-color';
 import { resolveInvoiceVariantFromVendor, resolveDocLogo } from '@/lib/document-variants';
 import { cellBorder, densityText, effectiveBrand, headerRuleStyle, infoBoxClass, rowClass, sheetPad, tableHeadStyle, usesInfoCards } from '@/lib/document-variants/layout-style';
+import {
+  lineNetQty,
+  lineReturnedQty,
+  summarizeHutangCreditDisplay,
+} from '@/lib/hutang-invoice-display';
 
 const APPROVAL_LABELS = {
   PENDING_REVIEW: 'Menunggu review',
   APPROVED: 'Disetujui',
   REJECTED: 'Ditolak',
   PAID_EXTERNAL: 'Lunas (luar sistem)',
+  LUNAS: 'Lunas',
 };
+
+function approvalActorName(detail: JsonObject, approval: string): string {
+  const approved = asObject(detail.approvedBy);
+  const rejected = asObject(detail.rejectedBy);
+  const knowing = asObject(detail.knowingBy);
+  if (approval === 'REJECTED') {
+    return str(rejected.userName || rejected.name, '');
+  }
+  // Prefer stempel Mengetahui (teks signature) atas nama login approver.
+  if (approval === 'APPROVED' || approval === 'PAID_EXTERNAL' || approval === 'LUNAS') {
+    return str(knowing.userName || approved.userName || approved.name, '');
+  }
+  return str(approved.userName || approved.name, '');
+}
+
+/** Stempel autentikasi sistem — salinan AP, bukan faktur pajak vendor. */
+function SystemAuthStrip({
+  detail,
+  approval,
+  compact = false,
+}: {
+  detail: JsonObject;
+  approval: string;
+  compact?: boolean;
+}) {
+  const label = APPROVAL_LABELS[approval as keyof typeof APPROVAL_LABELS] || approval || '—';
+  const actor = approvalActorName(detail, approval);
+  const printedAt = new Date().toLocaleString('id-ID');
+  return (
+    <div
+      className={`vendor-invoice-system-auth rounded border border-slate-300 bg-slate-50 ${compact ? 'px-2 py-1.5 text-[10px]' : 'px-3 py-2 text-xs'} text-slate-700`}
+      data-testid="vendor-invoice-system-auth"
+    >
+      <p className={`font-semibold text-slate-900 ${compact ? 'text-[10px]' : 'text-xs'}`}>
+        Autentikasi sistem
+      </p>
+      <p className="mt-0.5 leading-snug">
+        Status: <span className="font-medium">{label}</span>
+        {actor ? <> · oleh {actor}</> : null}
+      </p>
+      <p className="leading-snug">
+        No. {str(detail.noInvoice, '—')} · Dicetak: {printedAt}
+      </p>
+      <p className={`mt-1 text-slate-500 leading-snug ${compact ? 'text-[9px]' : 'text-[10px]'}`}>
+        Salinan tagihan dari sistem — bukan faktur pajak / dokumen asli vendor.
+      </p>
+    </div>
+  );
+}
+
+/** Stempel verifikasi digital — tampilan enterprise (bukan label teks polos). */
+function SystemVerificationSeal({
+  compact = false,
+  approvedAt,
+  tone = 'emerald',
+}: {
+  compact?: boolean;
+  approvedAt?: string | Date | null;
+  /** emerald = Penerima gudang; sky = Mengetahui / Pengawas Keuangan */
+  tone?: 'emerald' | 'sky';
+}) {
+  const when = approvedAt
+    ? new Date(approvedAt).toLocaleString('id-ID', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+  const isSky = tone === 'sky';
+  // Pengawas Keuangan: fill lebih terang dari #a9d3e8, tulisan lebih gelap agar kontras.
+  const shellClass = isSky
+    ? 'border-[#a9d3e8] text-[#3d7a96]'
+    : 'border-emerald-700/80 text-emerald-900 bg-emerald-50/80';
+  const urlClass = isSky ? 'text-[#4a8aa5]' : 'text-emerald-800/90';
+  const timeClass = isSky ? 'text-[#6a9fb8]' : 'text-emerald-800/70';
+  return (
+    <div
+      className={`mx-auto inline-flex flex-col items-center justify-center border-2 ${shellClass} ${
+        compact ? 'px-2 py-1 mb-1.5 min-w-[7.5rem]' : 'px-3 py-1.5 mb-2 min-w-[9rem]'
+      }`}
+      style={{
+        borderRadius: 2,
+        ...(isSky ? { backgroundColor: '#eef7fb' } : {}),
+      }}
+      data-testid="vendor-invoice-verification-seal"
+      aria-label="Terverifikasi sistem"
+    >
+      <div className={`flex items-center gap-1 font-bold tracking-wide uppercase ${compact ? 'text-[8px]' : 'text-[10px]'}`}>
+        <svg
+          viewBox="0 0 24 24"
+          className={`shrink-0 ${compact ? 'w-3 h-3' : 'w-3.5 h-3.5'}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          <path d="m9 12 2 2 4-4" />
+        </svg>
+        Terverifikasi
+      </div>
+      <div className={`font-semibold tracking-wider ${urlClass} ${compact ? 'text-[7px]' : 'text-[9px]'}`}>
+        https://dapursppg.my.id/
+      </div>
+      {when ? (
+        <div className={`tabular-nums ${timeClass} ${compact ? 'text-[7px] mt-0.5' : 'text-[8px] mt-0.5'}`}>
+          {when}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Stempel internal: Penerima dari GRN; Mengetahui dari knowingBy saat Setujui. */
+function InternalSignatureSlots({
+  penerima,
+  mengetahui,
+  compact = false,
+}: {
+  penerima?: {
+    userName?: string;
+    nik?: string;
+    jabatan?: string;
+    postedAt?: string | Date | null;
+  } | null;
+  mengetahui?: { userName?: string; nik?: string; jabatan?: string; approvedAt?: string | Date | null } | null;
+  compact?: boolean;
+}) {
+  const gap = compact ? 'mb-6' : 'mb-10';
+  const nameClass = compact ? 'text-[10px] font-semibold text-slate-900' : 'text-sm font-semibold text-slate-900';
+  const metaClass = compact ? 'text-[9px] text-slate-600' : 'text-[11px] text-slate-600';
+  const penerimaStamped = Boolean(penerima?.userName && penerima?.nik);
+  const mengetahuiStamped = Boolean(mengetahui?.userName && mengetahui?.nik);
+  const penerimaJabatan = (penerima?.jabatan || '').trim();
+  const showPenerimaJabatan = penerimaJabatan
+    && penerimaJabatan.toLowerCase() !== 'petugas gudang';
+  const jabatanExtra = (mengetahui?.jabatan || '').trim();
+  // Jangan ulang "Pengawas Keuangan" di atas garis — itu stempel di bawah garis setelah Setujui.
+  const showJabatanAbove = jabatanExtra
+    && jabatanExtra.toLowerCase() !== 'pengawas keuangan';
+  return (
+    <section
+      className={`vendor-invoice-internal-signs grid grid-cols-2 gap-8 text-center ${compact ? 'text-[10px] mt-3 mb-1' : 'text-sm mt-6 mb-4'}`}
+      data-testid="vendor-invoice-internal-signs"
+    >
+      <div>
+        <div className={`font-medium ${penerimaStamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>
+          Penerima gudang
+        </div>
+        {penerimaStamped ? (
+          <div className="leading-snug">
+            <SystemVerificationSeal compact={compact} approvedAt={penerima?.postedAt} />
+            <div className={nameClass}>{penerima!.userName}</div>
+            {penerima!.nik ? <div className={metaClass}>NIK {penerima!.nik}</div> : null}
+            {showPenerimaJabatan ? <div className={metaClass}>{penerimaJabatan}</div> : null}
+          </div>
+        ) : (
+          <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
+        )}
+        <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
+          {penerimaStamped ? 'Petugas Gudang' : '\u00a0'}
+        </div>
+      </div>
+      <div>
+        <div className={`font-medium ${mengetahuiStamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>Mengetahui</div>
+        {mengetahuiStamped ? (
+          <div className="leading-snug">
+            <SystemVerificationSeal compact={compact} approvedAt={mengetahui?.approvedAt} tone="sky" />
+            <div className={nameClass}>{mengetahui!.userName}</div>
+            {mengetahui!.nik ? <div className={metaClass}>NIK {mengetahui!.nik}</div> : null}
+            {showJabatanAbove ? <div className={metaClass}>{jabatanExtra}</div> : null}
+          </div>
+        ) : (
+          <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
+        )}
+        <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
+          {mengetahuiStamped ? 'Pengawas Keuangan' : '\u00a0'}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function VarianceRow({
   label,
@@ -71,6 +263,50 @@ export default function VendorInvoiceDocument({
 
   const approval = str(detail.approvalStatus || detail.status);
   const rejectedBy = asObject(detail.rejectedBy);
+  const penerimaStamp = (() => {
+    const pg = asObject(detail.penerimaGudang);
+    // Enrich sudah kirim stempel lengkap + postedAt dari GRN yang sama.
+    if (str(pg.userName) && str(pg.nik)) {
+      return {
+        userName: str(pg.userName),
+        nik: str(pg.nik),
+        jabatan: str(pg.jabatan) || undefined,
+        postedAt: (pg.postedAt as string | Date | null | undefined)
+          ?? (() => {
+            const posted = asArray(detail.grns).find((g) => {
+              const o = asObject(g);
+              return str(o.status) === 'POSTED' && str(asObject(o.receivedBy).nik);
+            });
+            return posted ? (asObject(posted).postedAt as string | Date | undefined) : undefined;
+          })(),
+      };
+    }
+    const fromGrn = asArray(detail.grns).find((g) => {
+      const o = asObject(g);
+      const rb = asObject(o.receivedBy);
+      return str(o.status) === 'POSTED' && str(rb.userName) && str(rb.nik);
+    });
+    if (fromGrn) {
+      const o = asObject(fromGrn);
+      const rb = asObject(o.receivedBy);
+      return {
+        userName: str(rb.userName),
+        nik: str(rb.nik),
+        jabatan: str(rb.jabatan) || undefined,
+        postedAt: o.postedAt as string | Date | undefined,
+      };
+    }
+    return null;
+  })();
+  const knowing = asObject(detail.knowingBy);
+  const mengetahuiStamp = str(knowing.userName) && str(knowing.nik)
+    ? {
+        userName: str(knowing.userName),
+        nik: str(knowing.nik),
+        jabatan: str(knowing.jabatan) || undefined,
+        approvedAt: detail.approvedAt as string | Date | null | undefined,
+      }
+    : null;
   const po = asObject(detail.po);
   const vendor = asObject(detail.vendorBilling);
   const customer = asObject(detail.customerBilling);
@@ -78,6 +314,8 @@ export default function VendorInvoiceDocument({
   const rows = asArray(detail.itemsFull).length ? asArray(detail.itemsFull) : asArray(detail.items);
   const rowsTyped = rows as JsonObject[];
   const totals = asObject(detail.totals);
+  const cnSummary = summarizeHutangCreditDisplay(detail);
+  const showNetQty = cnSummary.hasPhysicalReturnQty;
   const cmp = asObject(detail.priceComparison);
   const lineVariance = asArray(cmp.lineVarianceByUom) as JsonObject[];
   const soLineDataAvailable = cmp.soLineDataAvailable === true;
@@ -436,6 +674,12 @@ export default function VendorInvoiceDocument({
             <>
               <col className="vi-col-sat" />
               <col className="vi-col-qty" />
+              {showNetQty ? (
+                <>
+                  <col className="vi-col-retur" />
+                  <col className="vi-col-netto" />
+                </>
+              ) : null}
             </>
           )}
           <col className="vi-col-harga" />
@@ -452,7 +696,13 @@ export default function VendorInvoiceDocument({
             ) : (
               <>
                 <th className={`${cell} px-1.5 py-1 text-center`}>Sat</th>
-                <th className={`${cell} px-1.5 py-1 text-right`}>Qty</th>
+                <th className={`${cell} px-1.5 py-1 text-right`}>{showNetQty ? 'Qty nota' : 'Qty'}</th>
+                {showNetQty ? (
+                  <>
+                    <th className={`${cell} px-1.5 py-1 text-right`}>Diretur</th>
+                    <th className={`${cell} px-1.5 py-1 text-right`}>Qty netto</th>
+                  </>
+                ) : null}
               </>
             )}
             <th className={`${cell} px-1.5 py-1 text-right`}>Harga</th>
@@ -461,42 +711,58 @@ export default function VendorInvoiceDocument({
           </tr>
         </thead>
         <tbody>
-          {rowsTyped.map((it, i) => (
+          {rowsTyped.map((it, i) => {
+            const qtyInv = num(it.qty);
+            const qtyRet = lineReturnedQty(cnSummary, it);
+            const qtyNet = lineNetQty(qtyInv, qtyRet);
+            return (
             <tr key={str(it.lineNo, String(i))} className={rowClass(tokens.table, i)}>
               <td className={`${cell} px-1.5 py-1 text-center text-slate-500`}>{str(it.lineNo, String(i + 1))}</td>
               <td className={`${cell} px-1.5 py-1 font-mono text-[10px] break-all`}>{str(it.kode)}</td>
               <td className={`${cell} px-1.5 py-1 break-words`}>{str(it.nama, '—')}</td>
               {tokens.extras.qtyWithUnit ? (
-                <td className={`${cell} px-1.5 py-1`}>{num(it.qty)} {str(it.satuan)}</td>
+                <td className={`${cell} px-1.5 py-1`}>
+                  {qtyInv} {str(it.satuan)}
+                  {showNetQty && qtyRet > 0 ? (
+                    <span className="block text-[10px] text-orange-700">
+                      retur {qtyRet} → netto {qtyNet}
+                    </span>
+                  ) : null}
+                </td>
               ) : (
                 <>
                   <td className={`${cell} px-1.5 py-1 text-center`}>{str(it.satuan, '—')}</td>
-                  <td className={`${cell} px-1.5 py-1 text-right tabular-nums`}>{num(it.qty)}</td>
+                  <td className={`${cell} px-1.5 py-1 text-right tabular-nums`}>{qtyInv}</td>
+                  {showNetQty ? (
+                    <>
+                      <td className={`${cell} px-1.5 py-1 text-right tabular-nums ${qtyRet > 0 ? 'text-orange-700' : 'text-slate-400'}`}>
+                        {qtyRet > 0 ? qtyRet : '—'}
+                      </td>
+                      <td className={`${cell} px-1.5 py-1 text-right tabular-nums font-medium`}>
+                        {qtyNet}
+                      </td>
+                    </>
+                  ) : null}
                 </>
               )}
               <td className={`${cell} px-1.5 py-1 text-right tabular-nums vi-money`}>{formatIDR(num(it.harga))}</td>
               <td className={`${cell} px-1.5 py-1 text-right tabular-nums vi-money`}>{num(it.diskon) ? formatIDR(num(it.diskon)) : '—'}</td>
               <td className={`${cell} px-1.5 py-1 text-right tabular-nums font-medium vi-money`}>
-                {formatIDR(num(it.jumlah, num(it.qty) * num(it.harga)))}
+                {formatIDR(num(it.jumlah, qtyInv * num(it.harga)))}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       {tokens.table === 'hairline' && <div className="border-t mb-2" style={{ borderColor: brand }} />}
 
       {tokens.extras.footerTrio ? (
+      <>
       <section className="grid grid-cols-3 gap-3 border-t border-slate-800 pt-2 mt-2 text-[11px] leading-snug">
-        <div className="min-w-0">
+        <div className="min-w-0 space-y-2">
           <div>Keterangan: {str(detail.catatan, '—')}</div>
-          <div className={`flex gap-4 text-center mt-3 ${tokens.signatures === 3 ? '' : ''}`}>
-            {(tokens.signatures === 3 ? ['Vendor', 'Penerima', 'Mengetahui'] : ['Hormat Kami', 'Penerima']).map((label) => (
-              <div key={label} className="flex-1 min-w-0">
-                <div className="mb-10">{label}</div>
-                <div className="border-b border-dotted border-slate-500 text-[10px] text-slate-400">(..........)</div>
-              </div>
-            ))}
-          </div>
+          <SystemAuthStrip detail={detail} approval={approval} compact />
         </div>
         <div className="min-w-0 space-y-1">
           <div>Jatuh tempo : {formatDate(str(detail.jatuhTempo))}</div>
@@ -511,8 +777,18 @@ export default function VendorInvoiceDocument({
           <span className="text-right tabular-nums">{formatIDR(num(totals.ppn ?? detail.ppn))}</span>
           <span className="font-bold border-t pt-0.5 mt-0.5">Total Akhir</span>
           <span className="font-bold text-right tabular-nums border-t pt-0.5 mt-0.5">{formatIDR(num(totals.total ?? detail.total))}</span>
+          {cnSummary.hasCredits ? (
+            <>
+              <span className="text-orange-700">Credit / retur</span>
+              <span className="text-right tabular-nums text-orange-700">−{formatIDR(cnSummary.creditTotal)}</span>
+              <span className="font-bold text-slate-900">Sisa hutang</span>
+              <span className="font-bold text-right tabular-nums text-slate-900">{formatIDR(cnSummary.sisa)}</span>
+            </>
+          ) : null}
         </div>
       </section>
+      <InternalSignatureSlots compact penerima={penerimaStamp} mengetahui={mengetahuiStamp} />
+      </>
       ) : (
       <>
       <section className="vendor-invoice-footer-grid grid sm:grid-cols-2 gap-3">
@@ -623,16 +899,27 @@ export default function VendorInvoiceDocument({
             <span>Total tagihan</span>
             <span className="tabular-nums" style={{ color: brandAccent }}>{formatIDR(num(totals.total ?? detail.total))}</span>
           </div>
+          {cnSummary.hasCredits ? (
+            <div className="mt-2 pt-2 border-t border-dashed space-y-1">
+              <div className="flex justify-between text-xs text-orange-700">
+                <span>Credit note / retur</span>
+                <span className="tabular-nums">−{formatIDR(cnSummary.creditTotal)}</span>
+              </div>
+              <div className="flex justify-between font-bold text-sm">
+                <span>Sisa hutang (aktual)</span>
+                <span className="tabular-nums">{formatIDR(cnSummary.sisa)}</span>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-snug">
+                Qty/total baris di atas = nota asli. Posisi bayar terkini = sisa hutang setelah CN/RTV.
+              </p>
+            </div>
+          ) : null}
         </div>
       </section>
-      <section className={`grid gap-8 text-center text-sm mt-8 mb-4 ${tokens.signatures === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-        {(tokens.signatures === 3 ? ['Vendor', 'Penerima', 'Mengetahui'] : ['Vendor', 'Penerima']).map((label) => (
-          <div key={label}>
-            <div className="font-medium mb-16">{label}</div>
-            <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">( tanda tangan &amp; cap )</div>
-          </div>
-        ))}
-      </section>
+      <div className="mt-4">
+        <SystemAuthStrip detail={detail} approval={approval} />
+      </div>
+      <InternalSignatureSlots penerima={penerimaStamp} mengetahui={mengetahuiStamp} />
       </>
       )}
       {tokens.extras.complaintNote && (

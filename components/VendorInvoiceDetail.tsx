@@ -17,9 +17,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { printDocument } from '@/lib/doc-print';
 import { formatIDR } from '@/lib/format';
-import { Check, CircleDollarSign, Loader2, Printer, Receipt, Undo2, X } from 'lucide-react';
+import { summarizeHutangCreditDisplay } from '@/lib/hutang-invoice-display';
+import { Check, CircleDollarSign, Loader2, PenLine, Printer, Receipt, Undo2, X } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import {
+  HUTANG_KNOWING_SIG_KEY,
+  isSignatureDraftReady,
+  loadSignatureDraft,
+  saveSignatureDraft,
+  type SignatureDraft,
+} from '@/lib/signature-draft';
 
 const PRINT_ID = 'vendor-invoice-a4-print';
 
@@ -29,6 +37,8 @@ type LineDraft = {
   qty: string;
   hargaBenar: string;
 };
+
+export type KnowingSignature = SignatureDraft;
 
 export default function VendorInvoiceDetail({
   detail,
@@ -44,7 +54,7 @@ export default function VendorInvoiceDetail({
   acting?: string;
   overrideMatch?: boolean;
   onOverrideMatchChange?: (v: boolean) => void;
-  onApprove?: () => void;
+  onApprove?: (knowingBy: KnowingSignature) => void;
   onReject?: () => void;
   onMarkPaid?: () => void;
   /** Dipanggil setelah draft CN/DN koreksi harga berhasil dibuat. */
@@ -58,6 +68,9 @@ export default function VendorInvoiceDetail({
   const [submittingCn, setSubmittingCn] = useState(false);
   const [submittingDn, setSubmittingDn] = useState(false);
   const [catatan, setCatatan] = useState('');
+  const [sigOpen, setSigOpen] = useState(false);
+  const [knowingDraft, setKnowingDraft] = useState<SignatureDraft>(() => loadSignatureDraft(HUTANG_KNOWING_SIG_KEY));
+  const [sigForm, setSigForm] = useState<SignatureDraft>({ userName: '', jabatan: '', nik: '' });
 
   const rawItems = useMemo(() => {
     const items = asArray(detail?.items);
@@ -79,6 +92,7 @@ export default function VendorInvoiceDetail({
       || vendorTenantId
       || 'Vendor',
   );
+  const cnSummary = summarizeHutangCreditDisplay(detail);
 
   const openPriceAdj = () => {
     setLineDrafts(rawItems.map((it) => ({
@@ -276,6 +290,23 @@ export default function VendorInvoiceDetail({
 
         <VendorInvoiceDocument detail={detail} className="mx-auto" />
 
+        {cnSummary.hasCredits && (
+          <div className="mt-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm no-print">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="font-medium text-orange-950">Posisi hutang terkini</span>
+              <span className="font-bold tabular-nums text-orange-950">
+                Sisa {formatIDR(cnSummary.sisa)}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-orange-900/80">
+              Total nota {formatIDR(cnSummary.invoiceTotal)} − credit/retur {formatIDR(cnSummary.creditTotal)}
+              {cnSummary.hasPhysicalReturnQty
+                ? ' (qty baris di nota = asli; lihat kolom Diretur / Qty netto).'
+                : ' (koreksi finansial — qty fisik tidak berubah).'}
+            </p>
+          </div>
+        )}
+
         {asArray(detail.creditNotes).length > 0 && (
           <div className="mt-4 border rounded p-3 no-print">
             <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Credit note / retur</p>
@@ -351,7 +382,36 @@ export default function VendorInvoiceDetail({
           )}
           {approval === 'PENDING_REVIEW' && (
             <>
-              <Button onClick={onApprove} disabled={acting === 'approve'} className="bg-green-600 hover:bg-green-700">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setSigForm(isSignatureDraftReady(knowingDraft)
+                    ? knowingDraft
+                    : loadSignatureDraft(HUTANG_KNOWING_SIG_KEY));
+                  setSigOpen(true);
+                }}
+              >
+                <PenLine className="w-4 h-4 mr-1" /> Buat signature
+                {isSignatureDraftReady(knowingDraft) ? (
+                  <span className="ml-1 text-[10px] font-normal text-green-700 hidden sm:inline">
+                    ({knowingDraft.userName})
+                  </span>
+                ) : null}
+              </Button>
+              <Button
+                onClick={() => {
+                  if (!isSignatureDraftReady(knowingDraft)) {
+                    toast.error('Isi signature dulu (Nama & NIK) lewat tombol Buat signature');
+                    setSigForm(knowingDraft);
+                    setSigOpen(true);
+                    return;
+                  }
+                  onApprove?.(knowingDraft);
+                }}
+                disabled={acting === 'approve'}
+                className="bg-green-600 hover:bg-green-700"
+              >
                 <Check className="w-4 h-4 mr-1" />
                 {acting === 'approve' ? '...' : 'Setujui'}
               </Button>
@@ -373,6 +433,70 @@ export default function VendorInvoiceDetail({
           )}
         </div>
       </div>
+
+      <Dialog open={sigOpen} onOpenChange={setSigOpen}>
+        <DialogContent className="max-w-md no-print">
+          <DialogHeader>
+            <DialogTitle>Signature Mengetahui</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600">
+            Data ini ditempel ke kolom Mengetahui (Pengawas Keuangan) saat Anda menekan Setujui.
+          </p>
+          <div className="space-y-3 py-1">
+            <div>
+              <label className="text-xs font-medium text-slate-600">Nama</label>
+              <Input
+                value={sigForm.userName}
+                onChange={(e) => setSigForm((s) => ({ ...s, userName: e.target.value }))}
+                placeholder="Nama lengkap"
+                autoComplete="name"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-600">Jabatan</label>
+              <Input
+                value={sigForm.jabatan}
+                onChange={(e) => setSigForm((s) => ({ ...s, jabatan: e.target.value }))}
+                placeholder="Contoh: Staff AP"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-600">NIK</label>
+              <Input
+                value={sigForm.nik}
+                onChange={(e) => setSigForm((s) => ({ ...s, nik: e.target.value }))}
+                placeholder="Nomor induk karyawan"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSigOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const next = {
+                  userName: sigForm.userName.trim(),
+                  jabatan: sigForm.jabatan.trim(),
+                  nik: sigForm.nik.trim(),
+                };
+                if (!next.userName || !next.nik) {
+                  toast.error('Nama dan NIK wajib diisi');
+                  return;
+                }
+                setKnowingDraft(next);
+                saveSignatureDraft(HUTANG_KNOWING_SIG_KEY, next);
+                setSigOpen(false);
+                toast.success('Signature siap — tekan Setujui untuk menempelkan');
+              }}
+            >
+              Simpan signature
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={priceAdjOpen} onOpenChange={setPriceAdjOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto no-print">

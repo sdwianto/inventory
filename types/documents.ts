@@ -34,6 +34,12 @@ export type HutangDoc = JsonObject & {
   paidExternalBy?: JsonObject;
   approvedAt?: Date | string;
   approvedBy?: JsonObject;
+  /** Stempel Mengetahui (Pengawas Keuangan) — diisi saat Setujui (teks bebas, bukan user login). */
+  knowingBy?: {
+    userName: string;
+    jabatan?: string;
+    nik: string;
+  } | JsonObject;
 };
 
 export type GrnItemDoc = JsonObject & {
@@ -61,6 +67,15 @@ export type GrnDoc = JsonObject & {
   vendorTenantId?: string;
   receivedTotal?: number | string;
   postedAt?: Date | string;
+  /** Stempel penerima gudang saat POST — invoice hanya menampilkan. */
+  receivedBy?: {
+    userId?: string;
+    userName?: string;
+    role?: string;
+    nik?: string;
+    jabatan?: string;
+  } | JsonObject;
+  userName?: string;
   items?: GrnItemDoc[];
 };
 

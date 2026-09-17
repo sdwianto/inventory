@@ -25,11 +25,21 @@ type GrnDoc = StockGrnDoc & {
 
 export type { GrnDoc };
 
+export type GrnReceivedBy = {
+  userId: string;
+  userName: string;
+  role: string;
+  nik: string;
+  jabatan?: string;
+};
+
 interface PostGoodsReceiptParams {
   grn: GrnDoc;
   tenantId: string;
   body?: Record<string, unknown>;
   asyncInvoice?: boolean;
+  /** Snapshot aktor login saat Terima Barang — stempel Penerima gudang. */
+  receivedBy?: GrnReceivedBy | null;
 }
 
 interface ReplayGrnInvoiceParams {
@@ -39,7 +49,7 @@ interface ReplayGrnInvoiceParams {
 
 export async function postGoodsReceipt(
   db: Db,
-  { grn, tenantId, body, asyncInvoice = true }: PostGoodsReceiptParams,
+  { grn, tenantId, body, asyncInvoice = true, receivedBy = null }: PostGoodsReceiptParams,
 ): Promise<Record<string, unknown> & { error?: string }> {
   // P0: asyncInvoice diabaikan — Category A selalu sync SUCCESS|FAILED (bukan PENDING).
   void asyncInvoice;
@@ -94,6 +104,10 @@ export async function postGoodsReceipt(
       invoicePatch.invoiceSyncError = 'not_paired';
     }
 
+    if (!receivedBy?.userName?.trim() || !receivedBy?.nik?.trim()) {
+      throw new Error('Signature Penerima gudang wajib: isi Nama dan NIK lewat tombol Buat signature');
+    }
+    const receiverName = receivedBy.userName.trim();
     await txDb.collection('goods_receipts').updateOne(
       { id: grn.id, status: 'POSTING' },
       {
@@ -104,7 +118,8 @@ export async function postGoodsReceipt(
           lokasi: lokasiSummary,
           lokasiKodes: [...lokasiSet],
           postedAt: now,
-          userName: body?.userName,
+          userName: receiverName,
+          receivedBy,
           ...(Array.isArray(body?.photoUrls) && body.photoUrls.length ? { photos: body.photoUrls } : {}),
           ...invoicePatch,
         },
@@ -132,7 +147,8 @@ export async function postGoodsReceipt(
       entityType: 'goods_receipt',
       entityId: grn.id,
       summary: `GRN ${grn.noGRN || grn.id} posted — DO ${grn.noDO || '—'}`,
-      userName: typeof body?.userName === 'string' ? body.userName : undefined,
+      userName: receiverName,
+      userId: receivedBy.userId,
       metadata: {
         noDO: grn.noDO,
         receivedTotal: stock.receivedTotal,
@@ -153,7 +169,7 @@ export async function postGoodsReceipt(
           keterangan: `GRN ${grn.noGRN || grn.id}`,
           sourceType: 'AUTO_GRN_ACCRUAL',
           sourceId: grn.id,
-          userName: typeof body?.userName === 'string' ? body.userName : 'System',
+          userName: receiverName,
           details: buildGrnAccrualJournalLines({
             noDoc: String(grn.noGRN || grn.id),
             subTotal: accrualSub,

@@ -4,6 +4,19 @@ import type { JsonObject } from '@/types/json';
 import { asArray, asObject, num, str } from '@/types/json';
 import { formatDate, formatDateTime, formatIDR } from '@/lib/format';
 import { resolvePrintLayout } from '@/lib/printer-settings';
+import {
+  lineNetQty,
+  lineReturnedQty,
+  summarizeHutangCreditDisplay,
+} from '@/lib/hutang-invoice-display';
+
+const APPROVAL_LABELS = {
+  PENDING_REVIEW: 'Menunggu review',
+  APPROVED: 'Disetujui',
+  REJECTED: 'Ditolak',
+  PAID_EXTERNAL: 'Lunas (luar sistem)',
+  LUNAS: 'Lunas',
+} as const;
 
 /** Struk faktur tagihan vendor untuk printer thermal / impact. */
 export default function VendorInvoiceThermal({
@@ -23,6 +36,7 @@ export default function VendorInvoiceThermal({
   const items = asArray(detail.itemsFull).length ? asArray(detail.itemsFull) : asArray(detail.items);
   const rows = items as JsonObject[];
   const totals = asObject(detail.totals);
+  const cnSummary = summarizeHutangCreditDisplay(detail);
   const cmp = asObject(detail.priceComparison);
   const poEst = num(cmp.poEstimasiTotal ?? detail.poEstimasiTotal);
   const soT = num(cmp.soTotal ?? detail.soTotal);
@@ -81,21 +95,27 @@ export default function VendorInvoiceThermal({
       <div className="line" />
       <table className="receipt-items">
         <tbody>
-          {rows.map((it, i) => (
+          {rows.map((it, i) => {
+            const qtyInv = num(it.qty);
+            const qtyRet = lineReturnedQty(cnSummary, it);
+            const qtyNet = lineNetQty(qtyInv, qtyRet);
+            return (
             <tr key={str(it.lineNo, String(i))}>
               <td colSpan={2}>
                 <div className="receipt-wrap">{str(it.nama || it.kode)}</div>
                 <div className="receipt-item-row">
                   <span>
-                    &nbsp;&nbsp;{num(it.qty)} {str(it.satuan, 'PCS')} x {formatIDR(num(it.harga))}
+                    &nbsp;&nbsp;{qtyInv} {str(it.satuan, 'PCS')} x {formatIDR(num(it.harga))}
+                    {qtyRet > 0 ? ` (retur ${qtyRet} → netto ${qtyNet})` : ''}
                   </span>
                   <span className="text-right">
-                    {formatIDR(num(it.jumlah, num(it.harga) * num(it.qty)))}
+                    {formatIDR(num(it.jumlah, num(it.harga) * qtyInv))}
                   </span>
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       <div className="line" />
@@ -112,11 +132,39 @@ export default function VendorInvoiceThermal({
             </tr>
           ) : null}
           <tr>
-            <td className="bold">TOTAL</td>
+            <td className="bold">TOTAL NOTA</td>
             <td className="text-right bold">{formatIDR(num(totals.total ?? detail.total))}</td>
           </tr>
+          {cnSummary.hasCredits ? (
+            <>
+              <tr>
+                <td>Credit/retur</td>
+                <td className="text-right">-{formatIDR(cnSummary.creditTotal)}</td>
+              </tr>
+              <tr>
+                <td className="bold">SISA HUTANG</td>
+                <td className="text-right bold">{formatIDR(cnSummary.sisa)}</td>
+              </tr>
+            </>
+          ) : null}
         </tbody>
       </table>
+      {cnSummary.hasCredits ? (
+        <>
+          <div className="line" />
+          <div className="receipt-line receipt-small bold">Credit note / retur</div>
+          {asArray(detail.creditNotes).map((raw, i) => {
+            const cn = asObject(raw);
+            return (
+              <div key={str(cn.creditNoteId) || i} className="receipt-line receipt-small receipt-wrap">
+                {str(cn.noCN) || str(cn.creditNoteId)}
+                {str(cn.noReturn) ? ` / RTV ${str(cn.noReturn)}` : ''}
+                {' '}{formatIDR(num(cn.amount))}
+              </div>
+            );
+          })}
+        </>
+      ) : null}
       {(poEst > 0 || soT > 0) ? (
         <>
           <div className="line" />
@@ -126,8 +174,41 @@ export default function VendorInvoiceThermal({
         </>
       ) : null}
       <div className="line" />
+      <div className="text-center receipt-line receipt-small bold">
+        Status: {APPROVAL_LABELS[approval as keyof typeof APPROVAL_LABELS] || approval || '—'}
+      </div>
+      {(() => {
+        const approved = asObject(detail.approvedBy);
+        const rejected = asObject(detail.rejectedBy);
+        const knowing = asObject(detail.knowingBy);
+        const penerima = asObject(detail.penerimaGudang);
+        const actor = approval === 'REJECTED'
+          ? str(rejected.userName || rejected.name)
+          : str(knowing.userName || approved.userName || approved.name);
+        return (
+          <>
+            {actor ? (
+              <div className="text-center receipt-line receipt-small">oleh {actor}</div>
+            ) : null}
+            {str(knowing.nik) ? (
+              <div className="text-center receipt-line receipt-small">NIK {str(knowing.nik)}</div>
+            ) : null}
+            {str(knowing.jabatan) ? (
+              <div className="text-center receipt-line receipt-small">{str(knowing.jabatan)}</div>
+            ) : null}
+            {str(penerima.userName) ? (
+              <div className="text-center receipt-line receipt-small">
+                Penerima: {str(penerima.userName)}
+              </div>
+            ) : null}
+            {str(penerima.nik) ? (
+              <div className="text-center receipt-line receipt-small">NIK penerima {str(penerima.nik)}</div>
+            ) : null}
+          </>
+        );
+      })()}
       <div className="text-center receipt-line receipt-small">
-        Status: {approval}
+        Salinan sistem — bukan faktur pajak vendor
       </div>
       {approval === 'REJECTED' ? (
         <>

@@ -42,6 +42,12 @@ export default function HutangVendorPrintDocument({
   const logo = str(settings?.logoBase64 || settings?.logoUrl);
   const detailRows = useMemo(() => buildHutangPrintItemRows(rows), [rows]);
   const totalNilai = rows.reduce((s, r) => s + num(r.total), 0);
+  const totalSisa = rows.reduce((s, r) => {
+    const sisa = r.sisa != null && r.sisa !== ''
+      ? num(r.sisa)
+      : Math.max(0, num(r.total) - num(r.terbayar));
+    return s + sisa;
+  }, 0);
   const skuCount = new Set(detailRows.map((r) => r.kode).filter((k) => k && k !== '—')).size;
   const vendorCount = new Set(detailRows.map((r) => r.vendor).filter((v) => v && v !== '—')).size;
 
@@ -91,7 +97,10 @@ export default function HutangVendorPrintDocument({
         {' '}· <strong>{detailRows.length} baris barang</strong>
         {' '}· <strong>{skuCount} SKU</strong>
         {showVendorColumn ? <> · <strong>{vendorCount} vendor</strong></> : null}
-        {' '}· Total <strong className="text-orange-700">{formatIDR(totalNilai)}</strong>
+        {' '}· Total nota <strong className="text-orange-700">{formatIDR(totalNilai)}</strong>
+        {totalSisa !== totalNilai ? (
+          <> · Sisa hutang <strong className="text-slate-900">{formatIDR(totalSisa)}</strong></>
+        ) : null}
       </p>
 
       <section>

@@ -20,7 +20,36 @@ export async function actorSnapshot(db: Db, auth: AuthContext | null | undefined
   return {
     userId: auth?.userId || '',
     userName: userName || 'Pengguna',
-    role,
+    role: String(role || ''),
+  };
+}
+
+/** Validasi body knowingBy / receivedBy untuk stamp — Nama + NIK wajib. */
+export function parseKnowingSignature(
+  raw: unknown,
+  slotLabel = 'Mengetahui',
+):
+  | { ok: true; value: { userName: string; nik: string; jabatan?: string } }
+  | { ok: false; error: string } {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : null;
+  const userName = String(o?.userName || o?.nama || '').trim();
+  const nik = String(o?.nik || '').trim();
+  const jabatan = String(o?.jabatan || '').trim();
+  if (!userName || !nik) {
+    return {
+      ok: false,
+      error: `Signature ${slotLabel} wajib: isi Nama dan NIK lewat tombol Buat signature`,
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      userName,
+      nik,
+      ...(jabatan ? { jabatan } : {}),
+    },
   };
 }
 
@@ -91,6 +120,14 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
       .limit(20)
       .toArray() as JsonObject[];
   }
+  // Fallback: GRN yang sudah ter-link hutangId (jika noDO kosong / drift).
+  if (!grns.length && hutang.id) {
+    grns = await db.collection('goods_receipts')
+      .find({ tenantId: tid, hutangId: hutang.id })
+      .sort({ postedAt: -1 })
+      .limit(20)
+      .toArray() as JsonObject[];
+  }
 
   const poReceived = po?.status === 'RECEIVED' || po?.status === 'INVOICED';
   const hasPostedGrn = grns.some((g) => g.status === 'POSTED');
@@ -110,6 +147,14 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
     || grnAktual?.tanggal
     || null;
 
+  // Hanya GRN POSTED dengan signature lengkap (Nama+NIK di receivedBy).
+  const postedGrn = grns.find((g) => g.status === 'POSTED' && resolvePenerimaGudang(g, { requireComplete: true }))
+    || null;
+  const penerimaResolved = resolvePenerimaGudang(postedGrn, { requireComplete: true });
+  const penerimaGudang = penerimaResolved && postedGrn
+    ? { ...penerimaResolved, postedAt: postedGrn.postedAt || null }
+    : null;
+
   return {
     po: po ? {
       id: po.id,
@@ -128,10 +173,59 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
       postedAt: g.postedAt,
       tanggalPermintaanKirim: g.tanggalPermintaanKirim || null,
       tanggalAktualKirim: g.tanggalAktualKirim || g.shippedAt || g.tanggal || null,
+      // Stempel hanya untuk POSTED — jangan expose legacy nama di DRAFT.
+      receivedBy: g.status === 'POSTED' ? resolvePenerimaGudang(g) : null,
+      userName: g.userName || null,
     })),
+    penerimaGudang,
     tanggalPermintaanKirim,
     tanggalAktualKirim,
     canApprove: (hutang.approvalStatus || hutang.status) === 'PENDING_REVIEW'
       && (poGate || (!po && hasPostedGrn)),
+  };
+}
+
+/**
+ * Stempel Penerima gudang dari GRN.
+ * Default: receivedBy lalu userName legacy (nama saja).
+ * requireComplete: wajib receivedBy.userName + nik (stempel enterprise).
+ */
+export function resolvePenerimaGudang(
+  grn: JsonObject | null | undefined,
+  { requireComplete = false }: { requireComplete?: boolean } = {},
+): {
+  userId: string;
+  userName: string;
+  role: string;
+  nik?: string;
+  jabatan?: string;
+} | null {
+  if (!grn) return null;
+  const rb = grn.receivedBy && typeof grn.receivedBy === 'object'
+    ? (grn.receivedBy as JsonObject)
+    : null;
+  if (requireComplete) {
+    const userName = String(rb?.userName || '').trim();
+    const nik = String(rb?.nik || '').trim();
+    if (!userName || !nik) return null;
+    const jabatan = String(rb?.jabatan || '').trim();
+    return {
+      userId: String(rb?.userId || ''),
+      userName,
+      role: String(rb?.role || ''),
+      nik,
+      ...(jabatan ? { jabatan } : {}),
+    };
+  }
+  const userName = String(rb?.userName || grn.userName || '').trim();
+  if (!userName) return null;
+  const nik = String(rb?.nik || '').trim();
+  const jabatan = String(rb?.jabatan || '').trim();
+  return {
+    userId: String(rb?.userId || ''),
+    userName,
+    role: String(rb?.role || ''),
+    ...(nik ? { nik } : {}),
+    ...(jabatan ? { jabatan } : {}),
   };
 }

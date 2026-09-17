@@ -52,7 +52,11 @@ export function useHutangMutations(tab: string, reload: () => Promise<void>) {
 
   const approve = useCallback(async (
     hutangId: string,
-    body: { overrideMatch?: boolean; note?: string },
+    body: {
+      overrideMatch?: boolean;
+      note?: string;
+      knowingBy: { userName: string; jabatan?: string; nik: string };
+    },
   ) => {
     const previous = qc.getQueryData<HutangPages>(listKey);
     qc.setQueryData<HutangPages>(listKey, (old) => removeHutangFromCache(old, hutangId));

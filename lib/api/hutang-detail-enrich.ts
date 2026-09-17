@@ -241,6 +241,9 @@ export async function enrichInvoiceItems(db: Db, customerTenantId: string, hutan
 
     return {
       lineNo: idx + 1,
+      lineId: it.lineId || it.invoiceLineId || undefined,
+      stokId: it.stokId || it.localStokId || undefined,
+      uomId: it.uomId || undefined,
       kode,
       nama: it.nama || it.vendorNama || grnLine?.vendorNama || grnLine?.localNama || poLine?.nama || prod?.nama || '—',
       satuan: it.satuan || grnLine?.satuan || poLine?.satuan || prod?.satuan || '—',
