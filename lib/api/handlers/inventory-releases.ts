@@ -731,14 +731,25 @@ export async function handleInventoryReleases({
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
     if (denied) return denied;
+    if (!auth || !scopeAuth) return err('Unauthorized', 401);
     const doc = await loadRelease(db, scopeAuth, path[1]);
     if (!doc) return err('Tidak ditemukan', 404);
-    if (doc.status !== 'DRAFT') return err('Hanya draft yang bisa dibatalkan', 400);
-    await db.collection('inventory_releases').updateOne(
-      { id: doc.id },
-      { $set: { status: 'CANCELLED', cancelledAt: new Date() } },
+    if (doc.status !== 'DRAFT') return err('Hanya draft yang bisa dihapus', 400);
+    if (!canEditReleaseDoc(auth, doc)) return err('Tidak berwenang menghapus draft ini', 403);
+    await db.collection('inventory_releases').deleteOne(
+      withTenantFilter(scopeAuth, { id: doc.id }),
     );
-    return ok({ message: 'cancelled' });
+    await writeAuditLog(db, {
+      tenantId: doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody),
+      action: 'INVENTORY_RELEASE',
+      entityType: 'inventory_release',
+      entityId: String(doc.id),
+      summary: `Draft release ${doc.noRelease} dihapus`,
+      userId: auth.userId,
+      userName: auth.name || auth.email || 'System',
+      metadata: { noRelease: doc.noRelease, status: 'DRAFT', deleted: true },
+    });
+    return ok({ message: 'deleted' });
   }
 
   return null;

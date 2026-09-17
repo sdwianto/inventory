@@ -22,7 +22,8 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
-import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send, Pencil } from 'lucide-react';
+import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send, Pencil, Trash2 } from 'lucide-react';
+import { useConfirm } from '@/components/ConfirmProvider';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
@@ -67,6 +68,7 @@ const PANDUAN_WH_ALL = 'ALL';
 
 export function ModeOperasional() {
   const user = useSessionUser();
+  const confirm = useConfirm();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingReleaseId, setEditingReleaseId] = useState<string | null>(null);
@@ -149,7 +151,10 @@ export function ModeOperasional() {
     [panduanData],
   );
 
-  const list = Array.isArray(listData) ? listData : [];
+  const list = useMemo(
+    () => (Array.isArray(listData) ? listData : []).filter((r) => str(r.status) !== 'CANCELLED'),
+    [listData],
+  );
   const products = useMemo(
     () => asArray(asObject(saldoData).rows) as JsonObject[],
     [saldoData],
@@ -466,6 +471,32 @@ export function ModeOperasional() {
     }
   };
 
+  const deleteDraft = async (r: JsonObject) => {
+    const id = str(r.id);
+    const noRelease = str(r.noRelease);
+    const okConfirm = await confirm({
+      title: 'Hapus draft release?',
+      description: noRelease
+        ? `${noRelease} akan dihapus permanen. Aksi ini tidak bisa dibatalkan.`
+        : 'Draft release akan dihapus permanen. Aksi ini tidak bisa dibatalkan.',
+      confirmText: 'Hapus',
+      variant: 'destructive',
+    });
+    if (!okConfirm) return;
+    try {
+      await actionMutation.mutateAsync({
+        url: `/api/inventory-releases/${id}`,
+        method: 'DELETE',
+        offlineLabel: `Hapus draft release ${noRelease || id}`,
+      });
+      if (str(detail?.id) === id) setDetail(null);
+      toast.success(noRelease ? `Draft ${noRelease} dihapus` : 'Draft release dihapus');
+    } catch (e) {
+      if (e instanceof OfflineQueuedError) toast.message(e.message);
+      else toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const filteredProducts = products.filter((p) => {
     if (str(p.gudangKode, 'GKERING') !== form.lokasiKode) return false;
     if (qtyAtLokasi(p, form.lokasiKode) <= 0) return false;
@@ -556,6 +587,18 @@ export function ModeOperasional() {
                       {str(r.status) === 'DRAFT' && canCreate && str(createdBy.userId) === str(user?.id) && (
                         <Button size="sm" variant="outline" className="h-8 whitespace-nowrap" onClick={() => action(str(r.id), 'submit')}>
                           <Send className="w-3.5 h-3.5 mr-1" /> Ajukan
+                        </Button>
+                      )}
+                      {str(r.status) === 'DRAFT' && canUserEditRelease(r, user) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 px-2"
+                          title="Hapus draft"
+                          aria-label={`Hapus draft ${str(r.noRelease)}`}
+                          onClick={() => { void deleteDraft(r); }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
                         </Button>
                       )}
                       {renderPendingActions(r)}
@@ -822,18 +865,30 @@ export function ModeOperasional() {
             </div>
           )}
           <DialogFooter className="gap-2 sm:justify-between">
-            {detail && canUserEditRelease(detail, user) ? (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  void openEditForm(detail);
-                  setDetail(null);
-                }}
-              >
-                <Pencil className="w-4 h-4 mr-1" />
-                {str(detail.status) === 'REJECTED' ? 'Perbaiki Release' : 'Edit Draft'}
-              </Button>
-            ) : <span />}
+            <div className="flex flex-wrap gap-2">
+              {detail && canUserEditRelease(detail, user) ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void openEditForm(detail);
+                    setDetail(null);
+                  }}
+                >
+                  <Pencil className="w-4 h-4 mr-1" />
+                  {str(detail.status) === 'REJECTED' ? 'Perbaiki Release' : 'Edit Draft'}
+                </Button>
+              ) : null}
+              {detail && str(detail.status) === 'DRAFT' && canUserEditRelease(detail, user) ? (
+                <Button
+                  variant="outline"
+                  className="text-destructive border-destructive/40 hover:bg-destructive/5"
+                  onClick={() => { void deleteDraft(detail); }}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Hapus Draft
+                </Button>
+              ) : null}
+            </div>
             <Button variant="outline" onClick={() => setDetail(null)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>
