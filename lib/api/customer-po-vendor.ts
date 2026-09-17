@@ -325,7 +325,7 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       }
       // Guard: vendorUomId yang dikirim harus cocok satuan order (cegah KG→ONS / BAK→PTG senyap)
       const resolvedSat = satuanForVendorUomId(vendorUomId, productUoms, prod || {});
-      const orderSat = normSatuan(satuan || localUom?.satuan || it.satuan);
+      const orderSat = normSatuan(satuan || localUom?.satuan || (it.satuan != null ? String(it.satuan) : undefined));
       if (resolvedSat && orderSat && resolvedSat !== orderSat && !vendorUomId.startsWith('legacy:')) {
         return {
           error: `Satuan baris "${orderSat}" untuk "${it.nama || vendorKode}" tidak cocok mapping vendor (${resolvedSat}). `
