@@ -15,6 +15,7 @@ import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
+import { vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
@@ -312,8 +313,12 @@ async function mapCpoItemsFromProducts(
       : uoms.find((u) => u.isBase) || uoms[0];
     let vendorUomId = matchedUom?.vendorUomId || '';
     if (!vendorUomId || String(vendorUomId).startsWith('legacy:')) {
-      const fromProduct = prod.vendorBaseUomId != null ? String(prod.vendorBaseUomId).trim() : '';
-      if (fromProduct && !fromProduct.startsWith('legacy:')) vendorUomId = fromProduct;
+      const fromProduct = vendorBaseUomIdIfCompatible(
+        { vendorBaseUomId: prod.vendorBaseUomId, satuan: prod.satuan != null ? String(prod.satuan) : undefined },
+        matchedUom?.satuan || it.satuan || (prod.satuan != null ? String(prod.satuan) : undefined),
+        matchedUom?.isBase,
+      );
+      if (fromProduct) vendorUomId = fromProduct;
     }
     return computeLineEstimasi({
       lineId: uuidv4(),

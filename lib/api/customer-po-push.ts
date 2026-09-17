@@ -3,7 +3,7 @@
 import type { Db } from 'mongodb';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
-import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
+import { enrichPoItemsForVendor, groupPoItemsByVendorTenant, applyEnrichedBindingsToPoItems } from '@/lib/api/customer-po-vendor';
 import { buildVendorSoSnapshot, mergeVendorSoSnapshots } from '@/lib/api/vendor-so-snapshot';
 import {
   enrichSubmissionsWithSoFromSales,
@@ -155,6 +155,20 @@ export async function pushPoToVendor(
 
   const enriched = await enrichPoItemsForVendor(db, tenantId, (po.items || []) as JsonObject[]);
   if (enriched.error) return { error: enriched.error };
+
+  // Persist binding yang sudah benar ke CPO (hindari UI/audit masih tampil vendorUomId ONS).
+  const patchedItems = applyEnrichedBindingsToPoItems(
+    (po.items || []) as JsonObject[],
+    (enriched.items || []) as JsonObject[],
+  );
+  const bindingsChanged = JSON.stringify(po.items || []) !== JSON.stringify(patchedItems);
+  if (bindingsChanged) {
+    po.items = patchedItems;
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: po.id },
+      { $set: { items: patchedItems, updatedAt: new Date(), uomBindingFixedAt: new Date() } },
+    );
+  }
 
   const grouped = groupPoItemsByVendorTenant(enriched.items || []);
   if (grouped.error) return { error: grouped.error };

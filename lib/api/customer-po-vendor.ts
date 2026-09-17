@@ -126,20 +126,62 @@ function isRealVendorUomId(id?: string | null, localUomId?: string): boolean {
   return !v.startsWith('legacy:');
 }
 
-/** vendorUomId di baris PO hanya dipakai jika masih dikenal di katalog lokal (hindari ID usang). */
+/** Satuan lokal yang ditunjuk oleh vendorUomId (lewat mapping product_uom / base produk). */
+function satuanForVendorUomId(
+  id: string,
+  productUoms: ProductUom[],
+  prod: ProductDoc,
+): string | undefined {
+  const v = String(id).trim();
+  const linked = productUoms.find(
+    (u) => isRealVendorUomId(u.vendorUomId, u.id) && String(u.vendorUomId).trim() === v,
+  );
+  if (linked) return normSatuan(linked.satuan);
+  if (isRealVendorUomId(prod.vendorBaseUomId) && String(prod.vendorBaseUomId).trim() === v) {
+    return normSatuan(prod.satuan);
+  }
+  return undefined;
+}
+
+/**
+ * vendorBaseUomId hanya boleh dipakai jika satuan yang diminta cocok dengan satuan dasar produk
+ * (atau baris memang satuan dasar). Hindari stamp ONS base pada baris KG/BAK.
+ */
+export function vendorBaseUomIdIfCompatible(
+  prod: { vendorBaseUomId?: string | null; satuan?: string | null },
+  satuanWant?: string | null,
+  matchedIsBase?: boolean,
+): string {
+  const fromProduct = prod.vendorBaseUomId != null ? String(prod.vendorBaseUomId).trim() : '';
+  if (!fromProduct || fromProduct.startsWith('legacy:')) return '';
+  const want = normSatuan(satuanWant);
+  const prodSat = normSatuan(prod.satuan);
+  if (!want || want === prodSat || matchedIsBase) return fromProduct;
+  return '';
+}
+
+/** vendorUomId di baris PO hanya dipakai jika masih dikenal dan cocok satuan baris. */
 function isKnownLineVendorUomId(
   id: string | undefined | null,
   productUoms: ProductUom[],
   prod: ProductDoc,
   localUomId?: string,
+  targetSatuan?: string,
 ): boolean {
   if (!isRealVendorUomId(id, localUomId)) return false;
   const v = String(id).trim();
+  const target = normSatuan(targetSatuan);
+  if (target) {
+    const idSat = satuanForVendorUomId(v, productUoms, prod);
+    // ID dikenal tapi beda satuan (mis. ONS base pada baris KG) — tolak, biar rebind by satuan.
+    if (idSat && idSat !== target) return false;
+  }
   if (productUoms.some((u) => isRealVendorUomId(u.vendorUomId, u.id) && String(u.vendorUomId).trim() === v)) {
     return true;
   }
   if (isRealVendorUomId(prod.vendorBaseUomId) && String(prod.vendorBaseUomId).trim() === v) {
-    return true;
+    // Hanya jika tanpa target, atau target sudah cocok (dicek di atas).
+    return !target || normSatuan(prod.satuan) === target;
   }
   // Belum ada mapping nyata di katalog — izinkan ID baris (bootstrap / isi manual).
   return !productUoms.some((u) => isRealVendorUomId(u.vendorUomId, u.id));
@@ -153,17 +195,17 @@ export function resolveVendorUomId(
   satuanHint?: string,
   lineVendorUomId?: string,
 ): string | undefined {
-  // 1) ID eksplisit di baris PO — hanya jika masih dikenal di katalog (bukan UUID usang)
-  if (isKnownLineVendorUomId(lineVendorUomId, productUoms, prod, localUom?.id)) {
+  const target = normSatuan(localUom?.satuan || satuanHint);
+
+  // 1) ID eksplisit di baris PO — dikenal + cocok satuan (bukan UUID usang / base salah)
+  if (isKnownLineVendorUomId(lineVendorUomId, productUoms, prod, localUom?.id, target)) {
     return String(lineVendorUomId).trim();
   }
 
-  // 2) Mapping di product_uom yang sudah punya vendorUomId nyata
+  // 2) Mapping di product_uom yang sudah punya vendorUomId nyata (satuan baris)
   if (isRealVendorUomId(localUom?.vendorUomId, localUom?.id)) {
     return String(localUom!.vendorUomId).trim();
   }
-
-  const target = normSatuan(localUom?.satuan || satuanHint);
 
   const linked = productUoms.find(
     (u) => normSatuan(u.satuan) === target && isRealVendorUomId(u.vendorUomId, u.id),
@@ -175,18 +217,14 @@ export function resolveVendorUomId(
     return String(baseLinked.vendorUomId).trim();
   }
 
-  // 3) vendorBaseUomId dari snapshot katalog sales (disimpan saat Sync Katalog)
-  const prodVendorBase = String(prod.vendorBaseUomId || '').trim();
-  if (isRealVendorUomId(prodVendorBase)) {
-    const prodSat = normSatuan(prod.satuan);
-    if (!target || target === prodSat || localUom?.isBase) {
-      return prodVendorBase;
-    }
-  }
+  // 3) vendorBaseUomId dari snapshot katalog sales — hanya jika satuan cocok
+  const prodVendorBase = vendorBaseUomIdIfCompatible(prod, target || satuanHint, localUom?.isBase);
+  if (prodVendorBase) return prodVendorBase;
 
-  // 4) Legacy / baris PO yang masih pakai legacy: — last resort
+  // 4) Legacy / baris PO yang masih pakai legacy: — last resort (hanya jika satuan cocok atau tak diketahui)
   if (isUsableVendorUomId(lineVendorUomId, localUom?.id)) {
-    return String(lineVendorUomId).trim();
+    const idSat = satuanForVendorUomId(String(lineVendorUomId), productUoms, prod);
+    if (!target || !idSat || idSat === target) return String(lineVendorUomId).trim();
   }
   if (isUsableVendorUomId(localUom?.vendorUomId, localUom?.id)) {
     return String(localUom!.vendorUomId).trim();
@@ -259,11 +297,16 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     if (!localUom && it.uomId && productUoms.length) {
       localUom = productUoms.find((u) => u.id === String(it.uomId));
     }
+    // Label satuan baris menang atas uomId yang masih ada di DB tapi beda satuan (ONS vs KG).
+    const orderHint = normSatuan(it.satuan ? String(it.satuan) : undefined);
+    if (orderHint && productUoms.length) {
+      const byOrder = productUoms.find((u) => normSatuan(u.satuan) === orderHint);
+      if (byOrder && (!localUom || normSatuan(localUom.satuan) !== orderHint)) {
+        localUom = byOrder;
+      }
+    }
     if (!localUom && productUoms.length) {
-      const hint = normSatuan(it.satuan ? String(it.satuan) : undefined);
-      localUom = productUoms.find((u) => normSatuan(u.satuan) === hint)
-        || productUoms.find((u) => u.isBase)
-        || productUoms[0];
+      localUom = productUoms.find((u) => u.isBase) || productUoms[0];
     }
 
     if (localUom || it.uomId || it.satuan || it.vendorUomId) {
@@ -278,6 +321,15 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       if (!vendorUomId) {
         return {
           error: `Satuan "${localUom?.satuan || it.satuan || '?'}" untuk "${it.nama || vendorKode}" belum terhubung ke sales.app — jalankan Sync Katalog.`,
+        };
+      }
+      // Guard: vendorUomId yang dikirim harus cocok satuan order (cegah KG→ONS / BAK→PTG senyap)
+      const resolvedSat = satuanForVendorUomId(vendorUomId, productUoms, prod || {});
+      const orderSat = normSatuan(satuan || localUom?.satuan || it.satuan);
+      if (resolvedSat && orderSat && resolvedSat !== orderSat && !vendorUomId.startsWith('legacy:')) {
+        return {
+          error: `Satuan baris "${orderSat}" untuk "${it.nama || vendorKode}" tidak cocok mapping vendor (${resolvedSat}). `
+            + `Jalankan Sync Katalog, lalu Edit PO dan pastikan satuan terhubung sebelum kirim.`,
         };
       }
       // legacy: sering ditolak sales jika produk sudah punya UOM nyata — minta sync ulang
@@ -297,6 +349,8 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       nama: it.nama || prod?.nama,
       satuan,
       uomId: vendorUomId,
+      /** Local catalog uom id — untuk persist binding kembali ke CPO. */
+      localUomId: localUom?.id || (it.uomId ? String(it.uomId) : undefined),
       estimasiHarga: parseInt(String(it.estimasiHarga || 0), 10),
       harga: parseInt(String(it.estimasiHarga || 0), 10),
     });
@@ -304,6 +358,22 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
 
   if (!enriched.length) return { error: 'PO tidak punya item valid' };
   return { items: enriched };
+}
+
+/** Terapkan hasil enrich ke baris CPO (vendorUomId + uomId lokal + satuan). */
+export function applyEnrichedBindingsToPoItems(
+  poItems: JsonObject[],
+  enrichedItems: JsonObject[],
+): JsonObject[] {
+  return (poItems || []).map((it, idx) => {
+    const e = enrichedItems[idx];
+    if (!e) return it;
+    const next = { ...it };
+    if (e.satuan != null && String(e.satuan).trim()) next.satuan = String(e.satuan);
+    if (e.uomId != null && String(e.uomId).trim()) next.vendorUomId = String(e.uomId);
+    if (e.localUomId != null && String(e.localUomId).trim()) next.uomId = String(e.localUomId);
+    return next;
+  });
 }
 
 export function groupPoItemsByVendorTenant(items: JsonObject[]) {

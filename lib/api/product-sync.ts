@@ -13,6 +13,7 @@ import {
   bulkReplaceProductUoms,
 } from '@/lib/api/product-uom';
 import { materializeInboundProductFotos } from '@/lib/api/product-media';
+import { rematchOpenDocsAfterProductUomSync, rematchOpenDocsAfterBulkProductUomSync } from '@/lib/api/rematch-open-po-uoms';
 
 function parseVendorPrices(product: Record<string, unknown>) {
   return {
@@ -341,6 +342,8 @@ export async function bulkSyncVendorProductUoms(
   if (bulkOps.length) {
     await db.collection('products').bulkWrite(bulkOps, { ordered: false });
   }
+  // Path utama Sync Katalog UI — wajib rematch CPO open (single-product path sudah punya).
+  await rematchOpenDocsAfterBulkProductUomSync(db, tenantId, uomDocsByProduct);
 }
 
 export async function syncVendorProductUoms(
@@ -384,6 +387,8 @@ export async function syncVendorProductUoms(
       },
     );
   }
+  // Rebind CPO/PRB open: uomId lokal + vendorUomId by satuan (hindari ID usang → base ONS)
+  await rematchOpenDocsAfterProductUomSync(db, tenantId, localProductId, uomDocs);
 }
 
 export async function deactivateProductFromVendor(

@@ -18,7 +18,7 @@ import {
 } from '@/lib/api/require-auth';
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { nextDocNumber } from '@/lib/api/document-sequence';
-import { enrichPoItemsForVendor } from '@/lib/api/customer-po-vendor';
+import { enrichPoItemsForVendor, vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
 import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
 import { orchestrateEnsurePushCancelSoAfterCommit } from '@/lib/api/cpo-cancel-push-integration';
@@ -241,12 +241,14 @@ async function mapPoItems(db: Db, tenantId: string, items: JsonObject[]) {
         vendorUomId = localUom.vendorUomId || vendorUomId;
       }
     }
-    // Fallback: ID satuan dasar dari snapshot katalog sales (setelah Sync Katalog)
+    // Fallback: ID satuan dasar — hanya jika satuan baris cocok satuan dasar produk
     if (!vendorUomId || String(vendorUomId).startsWith('legacy:')) {
-      const fromProduct = prod?.vendorBaseUomId != null ? String(prod.vendorBaseUomId).trim() : '';
-      if (fromProduct && !fromProduct.startsWith('legacy:')) {
-        vendorUomId = fromProduct;
-      }
+      const fromProduct = vendorBaseUomIdIfCompatible(
+        { vendorBaseUomId: prod?.vendorBaseUomId as string | undefined, satuan: prod?.satuan as string | undefined },
+        satuan != null ? String(satuan) : undefined,
+        false,
+      );
+      if (fromProduct) vendorUomId = fromProduct;
     }
     return computeLineEstimasi({
       lineId: String(it.lineId || uuidv4()),

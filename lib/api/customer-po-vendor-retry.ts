@@ -2,7 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { getIntegrationConfig } from '@/lib/api/integration-config';
-import { enrichPoItemsForVendor, groupPoItemsByVendorTenant } from '@/lib/api/customer-po-vendor';
+import { enrichPoItemsForVendor, groupPoItemsByVendorTenant, applyEnrichedBindingsToPoItems } from '@/lib/api/customer-po-vendor';
 import { pushPoGroupToVendor, finalizePoSubmission, warmUpSalesApp } from '@/lib/api/customer-po-push';
 import type { JsonObject } from '@/types/json';
 
@@ -14,6 +14,18 @@ export async function retryVendorSyncForSingleVendor(
   const tenantId = String(po.tenantId || 'default');
   const enriched = await enrichPoItemsForVendor(db, tenantId, (po.items || []) as JsonObject[]);
   if (enriched.error) return { error: enriched.error, status: 400 };
+
+  const patchedItems = applyEnrichedBindingsToPoItems(
+    (po.items || []) as JsonObject[],
+    (enriched.items || []) as JsonObject[],
+  );
+  if (JSON.stringify(po.items || []) !== JSON.stringify(patchedItems)) {
+    po.items = patchedItems;
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: po.id },
+      { $set: { items: patchedItems, updatedAt: new Date(), uomBindingFixedAt: new Date() } },
+    );
+  }
 
   const grouped = groupPoItemsByVendorTenant(enriched.items || []);
   if (grouped.error) return { error: grouped.error, status: 400 };
