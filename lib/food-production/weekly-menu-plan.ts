@@ -10,7 +10,6 @@ import {
 } from '@/lib/food-production/recipe';
 import {
   resolveMenuItemKategoriMenu,
-  type MenuItem,
 } from '@/lib/food-production/menu';
 import {
   emptyPortionTargets,
@@ -527,9 +526,17 @@ export function weekHasSlotContent(days: WeeklyMenuDay[]): boolean {
  * Isi slot satu hari dari paket menu. Resep master = sumber slot.
  * Tidak menyalin porsi/note/alergi. Tidak menulis productionPlanId.
  */
+/** Payload paket dari API — kategoriMenu masih string longgar. */
+type MenuPackageItemInput = {
+  recipeId: string;
+  recipeKode?: string;
+  kategoriMenu?: string | null;
+  bahanPangan?: string;
+};
+
 export function applyMenuPackageToDay(
   day: WeeklyMenuDay,
-  items: Array<Pick<MenuItem, 'recipeId'> & Partial<Pick<MenuItem, 'kategoriMenu' | 'bahanPangan' | 'recipeKode'>>>,
+  items: MenuPackageItemInput[],
   recipesById: Map<string, WeeklyRecipeRef>,
 ): WeeklyMenuDay | { error: string; warnings?: string[] } {
   if (!items.length) return { error: 'Paket menu kosong' };
@@ -570,7 +577,7 @@ export function applyMenuPackageToDay(
 }
 
 export function applyMenuPackageWarnings(
-  items: Array<Pick<MenuItem, 'recipeId'> & Partial<Pick<MenuItem, 'kategoriMenu' | 'bahanPangan' | 'recipeKode'>>>,
+  items: MenuPackageItemInput[],
   recipesById: Map<string, WeeklyRecipeRef>,
 ): string[] {
   const warnings: string[] = [];
