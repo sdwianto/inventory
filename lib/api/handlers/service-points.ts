@@ -17,6 +17,7 @@ import {
   normalizeServicePointDrops,
   assertDropsWithinJamMakan,
   resolvePenerimaManfaat,
+  presentPorsiByKategori,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
@@ -38,6 +39,17 @@ interface SpBody extends Record<string, unknown> {
   pic?: string;
   picNoTelp?: string;
   aktif?: boolean;
+}
+
+function projectServicePoint(d: Record<string, unknown> | null) {
+  if (!d) return null;
+  const presented = presentPorsiByKategori(d.porsiByKategori);
+  return clean({
+    ...d,
+    ...(d.porsiByKategori !== undefined
+      ? { porsiByKategori: presented ?? {} }
+      : {}),
+  });
 }
 
 function nextServicePointKode(rows: Array<{ kode?: unknown }>): string {
@@ -73,7 +85,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       .sort({ nama: 1 })
       .limit(300)
       .toArray();
-    return ok(list.map((d) => clean(d as Record<string, unknown>)));
+    return ok(list.map((d) => projectServicePoint(d as Record<string, unknown>)));
   }
 
   if (route === '/service-points' && method === 'POST') {
@@ -159,7 +171,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       summary: `Titik layanan ${doc.nama} dibuat`,
       ...auditActor(auth),
     });
-    return ok(clean(doc as unknown as Record<string, unknown>));
+    return ok(projectServicePoint(doc as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'service-points' && path[1] && !path[2] && method === 'PUT') {
@@ -267,7 +279,7 @@ export async function handleServicePoints(ctx: HandlerContext): Promise<NextResp
       summary: `Titik layanan ${existing.nama} diperbarui`,
       ...auditActor(auth),
     });
-    return ok(clean(saved as Record<string, unknown>));
+    return ok(projectServicePoint(saved as Record<string, unknown>));
   }
 
   if (path[0] === 'service-points' && path[1] && !path[2] && method === 'DELETE') {

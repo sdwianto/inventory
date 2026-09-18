@@ -21,7 +21,9 @@ export default function KitchenScopeBar() {
   const [kitchenId, setKitchenId] = useState('');
 
   useEffect(() => {
-    setKitchenId(getActingKitchenId());
+    const sync = () => setKitchenId(getActingKitchenId());
+    sync();
+    window.addEventListener('fp-kitchen-changed', sync);
     void (async () => {
       try {
         const res = await fetch('/api/kitchens?aktif=1', {
@@ -33,6 +35,7 @@ export default function KitchenScopeBar() {
         /* ignore */
       }
     })();
+    return () => window.removeEventListener('fp-kitchen-changed', sync);
   }, []);
 
   return (
@@ -59,7 +62,7 @@ export default function KitchenScopeBar() {
         </select>
       </div>
       <p className="text-[11px] text-muted-foreground pb-2">
-        Berlaku untuk Plan / Issue / Result / Titik / Distribusi / Kalender / Batch / Rekomendasi
+        Berlaku untuk Perencanaan Menu / Plan / Issue / Result / Titik / Distribusi / Kalender / Batch / Rekomendasi
       </p>
     </div>
   );

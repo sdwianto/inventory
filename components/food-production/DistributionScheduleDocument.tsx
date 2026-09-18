@@ -12,8 +12,7 @@ import {
   type DeliveryLoading,
 } from '@/lib/logistics/delivery';
 import {
-  KATEGORI_PORSI_OPTIONS,
-  KATEGORI_PORSI_SHORT,
+  formatKategoriPorsiShort,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
 
@@ -46,16 +45,7 @@ type Props = {
 };
 
 function formatKategoriShort(map: ServicePointPorsiByKategori | undefined): string {
-  if (!map) return '—';
-  const parts = KATEGORI_PORSI_OPTIONS
-    .map((o) => {
-      const n = Number(map[o.value]) || 0;
-      if (!(n > 0)) return null;
-      const short = KATEGORI_PORSI_SHORT[o.value] || o.label;
-      return `${short}:${n.toLocaleString('id-ID')}`;
-    })
-    .filter(Boolean);
-  return parts.length ? parts.join(', ') : '—';
+  return formatKategoriPorsiShort(map, ':');
 }
 
 /** Dokumen cetak A4 — jadwal loading / armada / rute titik. */

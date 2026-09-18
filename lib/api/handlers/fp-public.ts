@@ -9,7 +9,10 @@ import { withTenantFilter, resolveOperationalScope, tenantIdForWrite } from '@/l
 import { requireApiScope } from '@/lib/api/require-scope';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
-import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
+import {
+  PRODUCTION_PLANS_COLLECTION,
+  presentProductionPlanKategori,
+} from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
 import { PRODUCTION_BATCHES_COLLECTION } from '@/lib/food-production/production-batch';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
@@ -63,7 +66,9 @@ export async function handleFpPublic(ctx: HandlerContext): Promise<NextResponse 
       .sort({ tanggal: -1 })
       .limit(100)
       .toArray();
-    return ok(list.map((d) => clean(d as Record<string, unknown>)));
+    return ok(list.map((d) => clean(
+      presentProductionPlanKategori(d as Record<string, unknown>),
+    )));
   }
 
   if (path[0] === 'fp-public' && path[1] === 'plans' && path[2] && method === 'GET') {
@@ -73,7 +78,7 @@ export async function handleFpPublic(ctx: HandlerContext): Promise<NextResponse 
       withTenantFilter(scopeAuth, filter),
     );
     if (!doc) return err('Rencana tidak ditemukan', 404);
-    return ok(clean(doc as Record<string, unknown>));
+    return ok(clean(presentProductionPlanKategori(doc as Record<string, unknown>)));
   }
 
   if (route === '/fp-public/results') {

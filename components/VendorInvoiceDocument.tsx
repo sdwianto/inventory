@@ -93,7 +93,7 @@ function SystemVerificationSeal({
   // Pengawas Keuangan: fill lebih terang dari #a9d3e8, tulisan lebih gelap agar kontras.
   const shellClass = isSky
     ? 'border-[#a9d3e8] text-[#3d7a96]'
-    : 'border-emerald-700/80 text-emerald-900 bg-emerald-50/80';
+    : 'border-emerald-700/80 text-emerald-900';
   const urlClass = isSky ? 'text-[#4a8aa5]' : 'text-emerald-800/90';
   const timeClass = isSky ? 'text-[#6a9fb8]' : 'text-emerald-800/70';
   return (
@@ -103,7 +103,9 @@ function SystemVerificationSeal({
       }`}
       style={{
         borderRadius: 2,
-        ...(isSky ? { backgroundColor: '#eef7fb' } : {}),
+        WebkitPrintColorAdjust: 'exact',
+        printColorAdjust: 'exact',
+        backgroundColor: isSky ? '#eef7fb' : '#ecfdf5',
       }}
       data-testid="vendor-invoice-verification-seal"
       aria-label="Terverifikasi sistem"
@@ -136,6 +138,57 @@ function SystemVerificationSeal({
   );
 }
 
+type InternalSignStamp = {
+  userName?: string;
+  nik?: string;
+  jabatan?: string;
+  at?: string | Date | null;
+};
+
+function roleLabelHidden(jabatan: string | undefined, lineLabel: string) {
+  const extra = (jabatan || '').trim();
+  return extra && extra.toLowerCase() !== lineLabel.toLowerCase() ? extra : '';
+}
+
+/** Satu kolom stempel: judul → Terverifikasi → nama/NIK → garis → jabatan. */
+function InternalSignColumn({
+  title,
+  stamp,
+  lineLabel,
+  tone,
+  compact,
+}: {
+  title: string;
+  stamp?: InternalSignStamp | null;
+  lineLabel: string;
+  tone?: 'emerald' | 'sky';
+  compact: boolean;
+}) {
+  const stamped = Boolean(stamp?.userName || stamp?.nik || stamp?.at);
+  const gap = compact ? 'mb-6' : 'mb-10';
+  const nameClass = compact ? 'text-[10px] font-semibold text-slate-900' : 'text-sm font-semibold text-slate-900';
+  const metaClass = compact ? 'text-[9px] text-slate-600' : 'text-[11px] text-slate-600';
+  const jabatanAbove = roleLabelHidden(stamp?.jabatan, lineLabel);
+  return (
+    <div>
+      <div className={`font-medium ${stamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>{title}</div>
+      {stamped ? (
+        <div className="leading-snug">
+          <SystemVerificationSeal compact={compact} approvedAt={stamp?.at} tone={tone} />
+          {stamp?.userName ? <div className={nameClass}>{stamp.userName}</div> : null}
+          {stamp?.nik ? <div className={metaClass}>NIK {stamp.nik}</div> : null}
+          {jabatanAbove ? <div className={metaClass}>{jabatanAbove}</div> : null}
+        </div>
+      ) : (
+        <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
+      )}
+      <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
+        {stamped ? lineLabel : '\u00a0'}
+      </div>
+    </div>
+  );
+}
+
 /** Stempel internal: Penerima dari GRN; Mengetahui dari knowingBy saat Setujui. */
 function InternalSignatureSlots({
   penerima,
@@ -151,57 +204,38 @@ function InternalSignatureSlots({
   mengetahui?: { userName?: string; nik?: string; jabatan?: string; approvedAt?: string | Date | null } | null;
   compact?: boolean;
 }) {
-  const gap = compact ? 'mb-6' : 'mb-10';
-  const nameClass = compact ? 'text-[10px] font-semibold text-slate-900' : 'text-sm font-semibold text-slate-900';
-  const metaClass = compact ? 'text-[9px] text-slate-600' : 'text-[11px] text-slate-600';
-  const penerimaStamped = Boolean(penerima?.userName && penerima?.nik);
-  const mengetahuiStamped = Boolean(mengetahui?.userName && mengetahui?.nik);
-  const penerimaJabatan = (penerima?.jabatan || '').trim();
-  const showPenerimaJabatan = penerimaJabatan
-    && penerimaJabatan.toLowerCase() !== 'petugas gudang';
-  const jabatanExtra = (mengetahui?.jabatan || '').trim();
-  // Jangan ulang "Pengawas Keuangan" di atas garis — itu stempel di bawah garis setelah Setujui.
-  const showJabatanAbove = jabatanExtra
-    && jabatanExtra.toLowerCase() !== 'pengawas keuangan';
   return (
     <section
       className={`vendor-invoice-internal-signs grid grid-cols-2 gap-8 text-center ${compact ? 'text-[10px] mt-3 mb-1' : 'text-sm mt-6 mb-4'}`}
       data-testid="vendor-invoice-internal-signs"
     >
-      <div>
-        <div className={`font-medium ${penerimaStamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>
-          Penerima gudang
-        </div>
-        {penerimaStamped ? (
-          <div className="leading-snug">
-            <SystemVerificationSeal compact={compact} approvedAt={penerima?.postedAt} />
-            <div className={nameClass}>{penerima!.userName}</div>
-            {penerima!.nik ? <div className={metaClass}>NIK {penerima!.nik}</div> : null}
-            {showPenerimaJabatan ? <div className={metaClass}>{penerimaJabatan}</div> : null}
-          </div>
-        ) : (
-          <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
-        )}
-        <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
-          {penerimaStamped ? 'Petugas Gudang' : '\u00a0'}
-        </div>
-      </div>
-      <div>
-        <div className={`font-medium ${mengetahuiStamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>Mengetahui</div>
-        {mengetahuiStamped ? (
-          <div className="leading-snug">
-            <SystemVerificationSeal compact={compact} approvedAt={mengetahui?.approvedAt} tone="sky" />
-            <div className={nameClass}>{mengetahui!.userName}</div>
-            {mengetahui!.nik ? <div className={metaClass}>NIK {mengetahui!.nik}</div> : null}
-            {showJabatanAbove ? <div className={metaClass}>{jabatanExtra}</div> : null}
-          </div>
-        ) : (
-          <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
-        )}
-        <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
-          {mengetahuiStamped ? 'Pengawas Keuangan' : '\u00a0'}
-        </div>
-      </div>
+      <InternalSignColumn
+        title="Penerima gudang"
+        lineLabel="Petugas Gudang"
+        compact={compact}
+        stamp={penerima && (penerima.userName || penerima.nik || penerima.postedAt)
+          ? {
+              userName: penerima.userName,
+              nik: penerima.nik,
+              jabatan: penerima.jabatan,
+              at: penerima.postedAt,
+            }
+          : null}
+      />
+      <InternalSignColumn
+        title="Mengetahui"
+        lineLabel="Pengawas Keuangan"
+        tone="sky"
+        compact={compact}
+        stamp={mengetahui && mengetahui.userName && mengetahui.nik
+          ? {
+              userName: mengetahui.userName,
+              nik: mengetahui.nik,
+              jabatan: mengetahui.jabatan,
+              at: mengetahui.approvedAt,
+            }
+          : null}
+      />
     </section>
   );
 }
@@ -265,38 +299,27 @@ export default function VendorInvoiceDocument({
   const rejectedBy = asObject(detail.rejectedBy);
   const penerimaStamp = (() => {
     const pg = asObject(detail.penerimaGudang);
-    // Enrich sudah kirim stempel lengkap + postedAt dari GRN yang sama.
-    if (str(pg.userName) && str(pg.nik)) {
-      return {
-        userName: str(pg.userName),
-        nik: str(pg.nik),
-        jabatan: str(pg.jabatan) || undefined,
-        postedAt: (pg.postedAt as string | Date | null | undefined)
-          ?? (() => {
-            const posted = asArray(detail.grns).find((g) => {
-              const o = asObject(g);
-              return str(o.status) === 'POSTED' && str(asObject(o.receivedBy).nik);
-            });
-            return posted ? (asObject(posted).postedAt as string | Date | undefined) : undefined;
-          })(),
-      };
-    }
-    const fromGrn = asArray(detail.grns).find((g) => {
-      const o = asObject(g);
+    const postedGrns = asArray(detail.grns)
+      .map((g) => asObject(g))
+      .filter((o) => str(o.status) === 'POSTED');
+    const fromGrn = postedGrns.find((o) => {
       const rb = asObject(o.receivedBy);
-      return str(o.status) === 'POSTED' && str(rb.userName) && str(rb.nik);
-    });
-    if (fromGrn) {
-      const o = asObject(fromGrn);
-      const rb = asObject(o.receivedBy);
-      return {
-        userName: str(rb.userName),
-        nik: str(rb.nik),
-        jabatan: str(rb.jabatan) || undefined,
-        postedAt: o.postedAt as string | Date | undefined,
-      };
-    }
-    return null;
+      return Boolean(str(rb.userName) || str(rb.nik) || str(o.userName));
+    }) || postedGrns[0];
+    const rb = fromGrn ? asObject(fromGrn.receivedBy) : {};
+    const userName = str(pg.userName) || str(rb.userName) || str(fromGrn?.userName);
+    const nik = str(pg.nik) || str(rb.nik);
+    const jabatan = str(pg.jabatan) || str(rb.jabatan);
+    const postedAt = (pg.postedAt as string | Date | null | undefined)
+      || (fromGrn?.postedAt as string | Date | undefined)
+      || null;
+    if (!userName && !nik && !postedAt) return null;
+    return {
+      userName: userName || undefined,
+      nik: nik || undefined,
+      jabatan: jabatan || undefined,
+      postedAt,
+    };
   })();
   const knowing = asObject(detail.knowingBy);
   const mengetahuiStamp = str(knowing.userName) && str(knowing.nik)

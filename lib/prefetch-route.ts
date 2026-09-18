@@ -117,6 +117,10 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/food-production/recommendations':
       prefetch(['food-production', 'food-recommendations'], '/api/food-recommendations?horizon=7');
       break;
+    case '/food-production/menu-plan':
+      prefetch(['food-production', 'recipes'], '/api/recipes?aktif=1');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
     case '/food-production/calendar':
     case '/food-production/plan': {
       const now = new Date();

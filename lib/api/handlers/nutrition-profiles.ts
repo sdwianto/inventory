@@ -25,6 +25,7 @@ import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import {
   PRODUCTION_PLANS_COLLECTION,
   collectPlanLineRefs,
+  expandLegacyKategoriPorsi,
   type ProductionPlanDoc,
   type ProductionPlanLine,
   type KategoriPorsi,
@@ -318,9 +319,11 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         ? kpRaw.map((x) => String(x)).filter(Boolean) as KategoriPorsi[]
         : undefined;
       const legacyKp = r.kategoriPorsi ? String(r.kategoriPorsi) : undefined;
-      const kpList = kategoriPorsiList?.length
-        ? kategoriPorsiList
-        : (legacyKp ? [legacyKp as KategoriPorsi] : undefined);
+      const kpList = expandLegacyKategoriPorsi(
+        kategoriPorsiList?.length
+          ? kategoriPorsiList
+          : (legacyKp ? [legacyKp] : []),
+      );
       return {
         recipeId: r.recipeId ? String(r.recipeId) : undefined,
         menuId: r.menuId ? String(r.menuId) : undefined,

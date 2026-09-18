@@ -7,32 +7,84 @@ export const PRODUCTION_PLANS_COLLECTION = 'production_plans';
 
 export type ProductionPlanStatus = FpDocStatus;
 
-/** Penerima porsi MBG / SPPG. */
+/**
+ * Penerima porsi MBG / SPPG (UI + tulis baru).
+ * Urutan = kerangka Excel: PK Sekolah, PB Sekolah, PK Balita, PB Bumil, PB Busui, PB Organoleptik.
+ */
 export const KATEGORI_PORSI_OPTIONS = [
-  { value: 'PORSI_BESAR', label: 'Porsi Besar Sekolah', hint: 'SD 4–6 + SMP + SMA + Tendik' },
-  { value: 'PORSI_KECIL', label: 'Porsi Kecil Sekolah', hint: 'KB + PAUD + TK + SD 1–3' },
-  { value: 'POSYANDU_BUMIL_BUSUI', label: 'Porsi Besar Posyandu', hint: 'Bumil + Busui' },
-  { value: 'POSYANDU_BALITA', label: 'Porsi Kecil Posyandu', hint: 'Balita 1–5' },
+  { value: 'PORSI_KECIL', label: 'PK Sekolah', hint: 'KB + PAUD + TK + SD 1–3' },
+  { value: 'PORSI_BESAR', label: 'PB Sekolah', hint: 'SD 4–6 + SMP + SMA + Tendik' },
+  { value: 'POSYANDU_BALITA', label: 'PK Balita', hint: 'Balita 1–5 tahun' },
+  { value: 'POSYANDU_BUMIL', label: 'PB Bumil', hint: 'Ibu hamil' },
+  { value: 'POSYANDU_BUSUI', label: 'PB Busui', hint: 'Ibu menyusui' },
+  { value: 'ORGANOLEPTIK', label: 'PB Organoleptik', hint: 'Cicip / uji organoleptik posyandu' },
 ] as const;
 
-export type KategoriPorsi = (typeof KATEGORI_PORSI_OPTIONS)[number]['value'];
+/** Digabung Bumil+Busui — dokumen lama. Baca OK; tulis baru tidak memakai nilai ini. */
+export const KATEGORI_PORSI_LEGACY = 'POSYANDU_BUMIL_BUSUI' as const;
 
-const KATEGORI_PORSI_SET = new Set<string>(KATEGORI_PORSI_OPTIONS.map((o) => o.value));
+export const KATEGORI_PORSI_LEGACY_OPTION = {
+  value: KATEGORI_PORSI_LEGACY,
+  label: 'Porsi Besar Posyandu (lama)',
+  hint: 'Bumil + Busui digabung',
+} as const;
+
+export type KategoriPorsiCurrent = (typeof KATEGORI_PORSI_OPTIONS)[number]['value'];
+export type KategoriPorsi = KategoriPorsiCurrent | typeof KATEGORI_PORSI_LEGACY;
+
+const KATEGORI_PORSI_CURRENT_SET = new Set<string>(KATEGORI_PORSI_OPTIONS.map((o) => o.value));
+const KATEGORI_PORSI_SET = new Set<string>([...KATEGORI_PORSI_CURRENT_SET, KATEGORI_PORSI_LEGACY]);
+
+export function isKategoriPorsiCurrent(v: unknown): v is KategoriPorsiCurrent {
+  return typeof v === 'string' && KATEGORI_PORSI_CURRENT_SET.has(v);
+}
 
 export function isKategoriPorsi(v: unknown): v is KategoriPorsi {
   return typeof v === 'string' && KATEGORI_PORSI_SET.has(v);
 }
 
+function kategoriPorsiMeta(v: string | undefined | null) {
+  if (!v) return null;
+  if (v === KATEGORI_PORSI_LEGACY) return KATEGORI_PORSI_LEGACY_OPTION;
+  return KATEGORI_PORSI_OPTIONS.find((o) => o.value === v) || null;
+}
+
 export function kategoriPorsiLabel(v: string | undefined | null): string {
   if (!v) return '—';
-  const opt = KATEGORI_PORSI_OPTIONS.find((o) => o.value === v);
+  const opt = kategoriPorsiMeta(v);
   if (!opt) return v;
-  // Semua opsi punya hint (as const) — jangan pakai ternary falsy-branch (jadi `never` di tsc).
   return `${opt.label} (${opt.hint})`;
 }
 
-/** Normalize one or many kategori porsi (checkbox multi-select). Preserves option order. */
-export function normalizeKategoriPorsiList(raw: unknown): KategoriPorsi[] | { error: string } {
+/** Label pendek untuk chip / dropdown (tanpa hint). Legacy tetap punya label, bukan enum mentah. */
+export function kategoriPorsiShortLabel(v: string | undefined | null): string {
+  if (!v) return '—';
+  return kategoriPorsiMeta(v)?.label || v;
+}
+
+/**
+ * Legacy POSYANDU_BUMIL_BUSUI → Bumil + Busui (tampilan / tulis baru).
+ * Tidak memecah angka porsi — itu urusan portion_targets.
+ */
+export function expandLegacyKategoriPorsi(
+  list: readonly string[] | null | undefined,
+): KategoriPorsiCurrent[] {
+  const seen = new Set<KategoriPorsiCurrent>();
+  for (const item of list || []) {
+    const v = String(item || '').trim();
+    if (!v) continue;
+    if (v === KATEGORI_PORSI_LEGACY) {
+      seen.add('POSYANDU_BUMIL');
+      seen.add('POSYANDU_BUSUI');
+      continue;
+    }
+    if (isKategoriPorsiCurrent(v)) seen.add(v);
+  }
+  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((k) => seen.has(k));
+}
+
+/** Normalize one or many kategori porsi (checkbox multi-select). Preserves option order. Legacy di-expand. */
+export function normalizeKategoriPorsiList(raw: unknown): KategoriPorsiCurrent[] | { error: string } {
   let list: unknown[] = [];
   if (Array.isArray(raw)) list = raw;
   else if (typeof raw === 'string' && raw.trim()) list = [raw];
@@ -46,14 +98,55 @@ export function normalizeKategoriPorsiList(raw: unknown): KategoriPorsi[] | { er
     seen.add(v);
   }
   if (!seen.size) return { error: 'Minimal satu kategori porsi wajib dipilih' };
-  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((v) => seen.has(v));
+  const expanded = expandLegacyKategoriPorsi([...seen]);
+  if (!expanded.length) return { error: 'Minimal satu kategori porsi wajib dipilih' };
+  return expanded;
 }
 
 export function kategoriPorsiListLabel(list: KategoriPorsi[] | undefined | null): string {
   if (!list?.length) return '—';
-  return list
-    .map((v) => KATEGORI_PORSI_OPTIONS.find((o) => o.value === v)?.label || v)
+  return expandLegacyKategoriPorsi(list)
+    .map((v) => kategoriPorsiShortLabel(v))
     .join(', ');
+}
+
+/**
+ * Presentasi API/UI: pecah POSYANDU_BUMIL_BUSUI → Bumil+Busui.
+ * Tidak menulis Mongo — hanya bentuk yang dilihat klien.
+ */
+export function presentKategoriPorsiList(
+  list: unknown,
+  fallback?: unknown,
+): KategoriPorsiCurrent[] {
+  const raw = Array.isArray(list)
+    ? list
+    : (fallback != null && String(fallback).trim() ? [fallback] : []);
+  return expandLegacyKategoriPorsi(raw.map((v) => String(v)));
+}
+
+/** GET RPN: header + baris memakai 6 kategori; dokumen lama tidak diubah di DB. */
+export function presentProductionPlanKategori<T extends Record<string, unknown>>(doc: T): T {
+  const header = presentKategoriPorsiList(doc.kategoriPorsiList, doc.kategoriPorsi);
+  const linesRaw = doc.lines;
+  const lines = Array.isArray(linesRaw)
+    ? linesRaw.map((row) => {
+      const line = row as Record<string, unknown>;
+      const hasOwn = (Array.isArray(line.kategoriPorsiList) && line.kategoriPorsiList.length > 0)
+        || (line.kategoriPorsi != null && String(line.kategoriPorsi).trim() !== '');
+      if (!hasOwn) return row;
+      return {
+        ...line,
+        kategoriPorsiList: presentKategoriPorsiList(line.kategoriPorsiList, line.kategoriPorsi),
+      };
+    })
+    : linesRaw;
+  return {
+    ...doc,
+    ...(header.length
+      ? { kategoriPorsiList: header, kategoriPorsi: header[0] }
+      : {}),
+    ...(Array.isArray(linesRaw) ? { lines } : {}),
+  };
 }
 
 /**
@@ -127,6 +220,8 @@ export interface ProductionPlanDoc {
   /** Sumber yang sudah dilebur ke RPN lain. */
   consolidatedIntoId?: string;
   consolidatedIntoNo?: string;
+  /** Rencana menu mingguan yang menerbitkan dokumen ini (Fase 1). */
+  weeklyMenuPlanId?: string;
   status: ProductionPlanStatus;
   history: DocHistoryEntry[];
   catatan?: string;
@@ -495,14 +590,14 @@ export function consolidateBlockedReason(status: string): string | null {
 
 export function mergeKategoriPorsiLists(
   lists: Array<KategoriPorsi[] | undefined | null>,
-): KategoriPorsi[] {
-  const seen = new Set<KategoriPorsi>();
+): KategoriPorsiCurrent[] {
+  const seen = new Set<string>();
   for (const list of lists) {
     for (const k of list || []) {
       if (isKategoriPorsi(k)) seen.add(k);
     }
   }
-  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((v) => seen.has(v));
+  return expandLegacyKategoriPorsi([...seen]);
 }
 
 /** Gabung baris resep/menu: kunci sama → jumlah porsi + union kategori. */

@@ -147,12 +147,15 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
     || grnAktual?.tanggal
     || null;
 
-  // Hanya GRN POSTED dengan signature lengkap (Nama+NIK di receivedBy).
+  // Tampilkan stempel Penerima dari GRN POSTED: lengkap dulu, lalu nama legacy, lalu tanggal terima.
   const postedGrn = grns.find((g) => g.status === 'POSTED' && resolvePenerimaGudang(g, { requireComplete: true }))
+    || grns.find((g) => g.status === 'POSTED' && resolvePenerimaGudang(g))
+    || grns.find((g) => g.status === 'POSTED')
     || null;
-  const penerimaResolved = resolvePenerimaGudang(postedGrn, { requireComplete: true });
-  const penerimaGudang = penerimaResolved && postedGrn
-    ? { ...penerimaResolved, postedAt: postedGrn.postedAt || null }
+  const penerimaResolved = resolvePenerimaGudang(postedGrn, { requireComplete: true })
+    || resolvePenerimaGudang(postedGrn);
+  const penerimaGudang = postedGrn
+    ? { ...(penerimaResolved || {}), postedAt: postedGrn.postedAt || null }
     : null;
 
   return {

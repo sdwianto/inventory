@@ -23,10 +23,20 @@ import {
   mergeProductionPlanLines,
   mergeKategoriPorsiLists,
   mergeRecipeBufferPct,
+  presentProductionPlanKategori,
   type ProductionPlanDoc,
   type ProductionPlanLine,
   type ProductionPlanStatus,
 } from '@/lib/food-production/production-plan';
+import {
+  activeWeeklyLinkedPlanQuery,
+  adHocCreateBlockedError,
+  formatAdHocCatatan,
+  isAdHocCatatan,
+  isWeeklyLinkedPlan,
+  productionPlanBodyTouchesComposition,
+  weeklyLinkedCompositionLockedError,
+} from '@/lib/food-production/fp-flow';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
@@ -193,9 +203,10 @@ function actorFields(auth: HandlerContext['auth']): { userId?: string; userName?
 
 function projectPlan(doc: Record<string, unknown> | null) {
   if (!doc) return null;
-  const lines = (doc.lines || []) as ProductionPlanLine[];
+  const presented = presentProductionPlanKategori(doc);
+  const lines = (presented.lines || []) as ProductionPlanLine[];
   return clean({
-    ...doc,
+    ...presented,
     totalTargetPorsi: totalTargetPorsi(lines),
   });
 }
@@ -270,6 +281,14 @@ export async function handleProductionPlans({
 
     const tenantId = tenantIdForWrite(scopeAuth, planBody);
     const tenantFilter = withTenantFilter(scopeAuth, {});
+    const linked = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, activeWeeklyLinkedPlanQuery(kitchenId, tanggal)),
+      { projection: { noDokumen: 1, weeklyMenuPlanId: 1, status: 1 } },
+    ) as { noDokumen?: string; weeklyMenuPlanId?: string; status?: string } | null;
+    const blocked = adHocCreateBlockedError(
+      linked && isWeeklyLinkedPlan(linked) ? linked : null,
+    );
+    if (blocked) return err(blocked, 409);
     const kitchen = await enrichKitchen(db, tenantFilter, kitchenId, { requireActive: true });
     if ('error' in kitchen) return err(kitchen.error, 400);
     const lines = await enrichLines(db, tenantFilter, linesRaw, {
@@ -281,13 +300,17 @@ export async function handleProductionPlans({
     const now = new Date();
     const actor = actorFields(auth);
     const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.PRODUCTION_PLAN);
+    const rawCatatan = String(planBody.catatan || '').trim() || undefined;
+    const catatan = rawCatatan && isAdHocCatatan(rawCatatan)
+      ? formatAdHocCatatan(rawCatatan)
+      : rawCatatan;
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
       toStatus: 'DRAFT',
       userId: actor.userId,
       userName: actor.userName,
-      note: 'Rencana dibuat',
+      note: catatan && isAdHocCatatan(catatan) ? catatan : 'Rencana dibuat',
     });
 
     const doc: ProductionPlanDoc = {
@@ -303,7 +326,7 @@ export async function handleProductionPlans({
       lines,
       status: 'DRAFT',
       history,
-      catatan: String(planBody.catatan || '').trim() || undefined,
+      catatan,
       createdAt: now,
       updatedAt: now,
       createdBy: actor.userId,
@@ -580,6 +603,11 @@ export async function handleProductionPlans({
     if (!isPlanEditable(existing.status)) {
       return err(`Rencana status ${existing.status} tidak dapat diubah`, 400);
     }
+    const compositionLocked = weeklyLinkedCompositionLockedError(
+      isWeeklyLinkedPlan(existing),
+      productionPlanBodyTouchesComposition(planBody),
+    );
+    if (compositionLocked) return err(compositionLocked, 409);
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
     const tenantFilter = withTenantFilter(scopeAuth, {});

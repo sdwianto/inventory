@@ -123,28 +123,29 @@ describe('food-production sprint 2', () => {
   it('validates menu items and consolidates duplicates', () => {
     expect(normalizeMenuItems([])).toEqual({ error: expect.stringMatching(/minimal 1/i) });
     expect(normalizeMenuItems([{ recipeId: 'r1', porsi: 2 }])).toEqual({
-      error: expect.stringMatching(/bahan pangan/i),
+      error: expect.stringMatching(/kategori menu/i),
     });
     const merged = normalizeMenuItems([
       { recipeId: 'r1', bahanPangan: 'SAYUR', porsi: 1 },
       { recipeId: 'r1', bahanPangan: 'SAYUR', porsi: 2 },
     ]);
     expect(merged).toEqual([
-      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'SAYUR', porsi: 3 }),
+      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'SAYUR', kategoriMenu: 'SAYUR', porsi: 3 }),
     ]);
     const split = normalizeMenuItems([
       { recipeId: 'r1', bahanPangan: 'SAYUR', porsi: 1 },
       { recipeId: 'r1', bahanPangan: 'BUAH', porsi: 2 },
     ]);
     expect(split).toEqual([
-      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'SAYUR', porsi: 1 }),
-      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'BUAH', porsi: 2 }),
+      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'SAYUR', kategoriMenu: 'SAYUR', porsi: 1 }),
+      expect.objectContaining({ recipeId: 'r1', bahanPangan: 'BUAH', kategoriMenu: 'BUAH', porsi: 2 }),
     ]);
     const ok = normalizeMenuItems([{ recipeId: 'r1', bahanPangan: 'SUSU', porsi: 2 }]);
     expect(ok).toEqual([
       {
         recipeId: 'r1',
         bahanPangan: 'SUSU',
+        kategoriMenu: 'SUSU',
         porsi: 2,
         recipeKode: undefined,
         recipeNama: undefined,

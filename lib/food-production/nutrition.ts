@@ -14,7 +14,10 @@ import {
 } from '@/lib/food-production/recipe';
 import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import type { MenuDoc } from '@/lib/food-production/menu';
-import type { ProductionPlanLine } from '@/lib/food-production/production-plan';
+import {
+  expandLegacyKategoriPorsi,
+  type ProductionPlanLine,
+} from '@/lib/food-production/production-plan';
 import type { ProductionResultLine } from '@/lib/food-production/production-result';
 import {
   nutritionFromTkpiCode,
@@ -521,8 +524,8 @@ export function akgComplianceWarnings(
 }
 
 function planLineKategoriList(pl: Pick<ProductionPlanLine, 'kategoriPorsiList'> & { kategoriPorsi?: string }): string[] {
-  if (pl.kategoriPorsiList?.length) return pl.kategoriPorsiList;
-  if (pl.kategoriPorsi) return [pl.kategoriPorsi];
+  if (pl.kategoriPorsiList?.length) return expandLegacyKategoriPorsi(pl.kategoriPorsiList);
+  if (pl.kategoriPorsi) return expandLegacyKategoriPorsi([pl.kategoriPorsi]);
   return [];
 }
 

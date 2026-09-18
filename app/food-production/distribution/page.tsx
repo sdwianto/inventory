@@ -47,7 +47,7 @@ import {
 import { cn } from '@/lib/utils';
 import {
   KATEGORI_PORSI_OPTIONS,
-  KATEGORI_PORSI_SHORT,
+  formatKategoriPorsiShort,
   compareServicePointRouteOrder,
   routeJamKirim,
   type ServicePointDrop,
@@ -309,21 +309,17 @@ function DistributionPageContent() {
         const n = Number(map[opt.value]) || 0;
         if (n > 0) acc[opt.value] = (Number(acc[opt.value]) || 0) + n;
       }
+      const legacy = Number(map.POSYANDU_BUMIL_BUSUI) || 0;
+      const split = (Number(acc.POSYANDU_BUMIL) || 0) + (Number(acc.POSYANDU_BUSUI) || 0);
+      if (legacy > 0 && !(split > 0)) {
+        acc.POSYANDU_BUMIL = (Number(acc.POSYANDU_BUMIL) || 0) + legacy;
+      }
       return acc;
     }, {});
   }
 
   function formatKategoriShort(map: ServicePointPorsiByKategori | undefined): string {
-    if (!map) return '—';
-    const parts = KATEGORI_PORSI_OPTIONS
-      .map((o) => {
-        const n = Number(map[o.value]) || 0;
-        if (!(n > 0)) return null;
-        const short = KATEGORI_PORSI_SHORT[o.value] || o.label;
-        return `${short} : ${n.toLocaleString('id-ID')}`;
-      })
-      .filter(Boolean);
-    return parts.length ? parts.join(', ') : '—';
+    return formatKategoriPorsiShort(map, ' : ');
   }
 
   /**

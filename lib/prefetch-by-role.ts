@@ -5,9 +5,9 @@ import { prefetchRouteData } from '@/lib/prefetch-route';
 const ROLE_HOME_ROUTES: Record<string, string[]> = {
   DRIVER: ['/food-production/distribution', '/food-production/service-point', '/maintenance/permintaan', '/dashboard'],
   GUDANG: ['/penerimaan', '/pembelian-po', '/dashboard', '/food-production/kitchen'],
-  SUPERVISOR: ['/penerimaan', '/maintenance/permintaan', '/dashboard', '/food-production/plan'],
-  ADMIN: ['/penerimaan', '/hutang', '/integrasi', '/dashboard', '/food-production/plan'],
-  OWNER: ['/penerimaan', '/hutang', '/dashboard', '/food-production/plan'],
+  SUPERVISOR: ['/penerimaan', '/maintenance/permintaan', '/dashboard', '/food-production/menu-plan', '/food-production/plan'],
+  ADMIN: ['/penerimaan', '/hutang', '/integrasi', '/dashboard', '/food-production/menu-plan', '/food-production/plan'],
+  OWNER: ['/penerimaan', '/hutang', '/dashboard', '/food-production/menu-plan', '/food-production/plan'],
   MASTER: ['/dashboard', '/integrasi', '/utiliti/tenants'],
 };
 
@@ -33,7 +33,7 @@ function canPrefetch(role: string, href: string, perms: string[] | '*'): boolean
 }
 
 const FP_OPS_ROUTES = [
-  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
+  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/menu-plan', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
   '/food-production/report', '/food-production/calendar',
   '/food-production/service-point', '/food-production/distribution', '/food-production/cold-chain',

@@ -14,6 +14,7 @@ import {
 } from '@/lib/food-production/material-requirement';
 import {
   applyRecipeBufferQty,
+  expandLegacyKategoriPorsi,
   materialExcludedSet,
   materialOverrideSatuanMap,
   materialOverridesMap,
@@ -88,9 +89,11 @@ export function buildRencanaKebutuhanLines(input: {
       const targetPorsi = Number(planLine.targetPorsi) || 0;
       if (targetPorsi <= 0) continue;
 
-      const kpList = planLine.kategoriPorsiList?.length
-        ? planLine.kategoriPorsiList
-        : (plan.kategoriPorsiList || []);
+      const kpList = expandLegacyKategoriPorsi(
+        planLine.kategoriPorsiList?.length
+          ? planLine.kategoriPorsiList
+          : (plan.kategoriPorsiList || []),
+      );
       const acuan = plan.acuanByKategori ?? input.acuanByKategori;
       const split = splitPorsiByKategoriFamily(kpList, targetPorsi, acuan);
 
@@ -214,7 +217,7 @@ export function recipeIngredientNeeds(input: {
   const bufferPct = Number(input.bufferPct) || 0;
   const porsiRencana = Number(input.menuTargetPorsi) || 0;
   const split = splitPorsiByKategoriFamily(
-    input.kategoriPorsiList,
+    expandLegacyKategoriPorsi(input.kategoriPorsiList),
     porsiRencana,
     input.acuanByKategori,
   );

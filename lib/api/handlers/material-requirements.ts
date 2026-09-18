@@ -30,7 +30,7 @@ import { RECIPES_COLLECTION, applyFullPortionExceptions, type RecipeDoc } from '
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import {
   PORTION_TARGETS_COLLECTION,
-  emptyPortionTargets,
+  normalizePortionTargets,
   type PortionTargetDoc,
 } from '@/lib/food-production/portion-target';
 import {
@@ -233,8 +233,11 @@ async function buildExplosion(
   const portionDoc = await db.collection(PORTION_TARGETS_COLLECTION).findOne(
     { ...tenantFilter, tanggal: plan.tanggal, kitchenId: plan.kitchenId },
   ) as PortionTargetDoc | null;
-  const acuanByKategori = portionDoc?.targets
-    ? { ...emptyPortionTargets(), ...portionDoc.targets }
+  const acuanNorm = portionDoc?.targets
+    ? normalizePortionTargets(portionDoc.targets)
+    : undefined;
+  const acuanByKategori = acuanNorm && !('error' in acuanNorm)
+    ? acuanNorm
     : undefined;
 
   const exploded = explodeMaterialRequirements({

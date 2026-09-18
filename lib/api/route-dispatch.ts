@@ -35,6 +35,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   ).handleRecipePortionExceptions,
   menus: async () => (await import('@/lib/api/handlers/menus')).handleMenus,
   'production-plans': async () => (await import('@/lib/api/handlers/production-plans')).handleProductionPlans,
+  'weekly-menu-plans': async () => (await import('@/lib/api/handlers/weekly-menu-plans')).handleWeeklyMenuPlans,
   'portion-targets': async () => (await import('@/lib/api/handlers/portion-targets')).handlePortionTargets,
   'material-requirements': async () => (await import('@/lib/api/handlers/material-requirements')).handleMaterialRequirements,
   'purchase-requirements': async () => (await import('@/lib/api/handlers/purchase-requirements')).handlePurchaseRequirements,

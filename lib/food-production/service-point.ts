@@ -4,6 +4,7 @@
  */
 
 import {
+  KATEGORI_PORSI_LEGACY,
   KATEGORI_PORSI_OPTIONS,
   isKategoriPorsi,
   type KategoriPorsi,
@@ -65,8 +66,11 @@ export interface ServicePointDoc {
 export const KATEGORI_PORSI_SHORT: Partial<Record<KategoriPorsi, string>> = {
   PORSI_KECIL: 'PKS',
   PORSI_BESAR: 'PBS',
-  POSYANDU_BUMIL_BUSUI: 'PBP',
   POSYANDU_BALITA: 'PKP',
+  POSYANDU_BUMIL: 'PBM',
+  POSYANDU_BUSUI: 'PBU',
+  ORGANOLEPTIK: 'PBO',
+  POSYANDU_BUMIL_BUSUI: 'PBP',
 };
 
 export const SERVICE_POINT_JENIS_LABELS: Record<ServicePointJenis, string> = {
@@ -216,13 +220,14 @@ export function compareServicePointRouteOrder(
   return String(a.nama || '').localeCompare(String(b.nama || ''), 'id');
 }
 
-/** Parse map kategori → qty; abaikan kategori kosong / non-positif. */
+/** Parse map kategori → qty; abaikan kategori kosong / non-positif. Legacy Bumil+Busui → PB Bumil. */
 export function normalizePorsiByKategori(raw: unknown): ServicePointPorsiByKategori | { error: string } {
   if (raw == null) return {};
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     return { error: 'porsiByKategori harus object' };
   }
   const out: ServicePointPorsiByKategori = {};
+  let legacyQty = 0;
   for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
     if (!isKategoriPorsi(key)) {
       return { error: `Kategori porsi tidak valid: ${key}` };
@@ -233,7 +238,16 @@ export function normalizePorsiByKategori(raw: unknown): ServicePointPorsiByKateg
       return { error: `Qty kategori ${key} tidak valid` };
     }
     const qty = Math.round(n);
-    if (qty > 0) out[key] = qty;
+    if (!(qty > 0)) continue;
+    if (key === KATEGORI_PORSI_LEGACY) {
+      legacyQty = qty;
+      continue;
+    }
+    out[key] = qty;
+  }
+  const hasSplit = (Number(out.POSYANDU_BUMIL) || 0) > 0 || (Number(out.POSYANDU_BUSUI) || 0) > 0;
+  if (legacyQty > 0 && !hasSplit) {
+    out.POSYANDU_BUMIL = legacyQty;
   }
   return out;
 }
@@ -244,7 +258,59 @@ export function sumPorsiByKategori(map: ServicePointPorsiByKategori | null | und
   for (const opt of KATEGORI_PORSI_OPTIONS) {
     total += Number(map[opt.value]) || 0;
   }
+  const splitPosyandu =
+    (Number(map.POSYANDU_BUMIL) || 0)
+    + (Number(map.POSYANDU_BUSUI) || 0);
+  if (!(splitPosyandu > 0)) {
+    total += Number(map[KATEGORI_PORSI_LEGACY]) || 0;
+  }
   return total;
+}
+
+/** Kunci kategori yang punya qty, OPTIONS dulu lalu legacy jika masih relevan. */
+export function porsiKategoriKeysWithQty(
+  map: ServicePointPorsiByKategori | null | undefined,
+): KategoriPorsi[] {
+  if (!map) return [];
+  const keys: KategoriPorsi[] = [];
+  for (const opt of KATEGORI_PORSI_OPTIONS) {
+    if ((Number(map[opt.value]) || 0) > 0) keys.push(opt.value);
+  }
+  const splitPosyandu =
+    (Number(map.POSYANDU_BUMIL) || 0)
+    + (Number(map.POSYANDU_BUSUI) || 0);
+  if (!(splitPosyandu > 0) && (Number(map[KATEGORI_PORSI_LEGACY]) || 0) > 0) {
+    keys.push(KATEGORI_PORSI_LEGACY);
+  }
+  return keys;
+}
+
+export function formatKategoriPorsiShort(
+  map: ServicePointPorsiByKategori | null | undefined,
+  sep = ':',
+): string {
+  const keys = porsiKategoriKeysWithQty(map);
+  if (!keys.length || !map) return '—';
+  return keys
+    .map((k) => {
+      const n = Number(map[k]) || 0;
+      const short = KATEGORI_PORSI_SHORT[k] || k;
+      return `${short}${sep}${n.toLocaleString('id-ID')}`;
+    })
+    .join(', ');
+}
+
+/**
+ * Presentasi API/tulis baru: kunci legacy di-map ke PB Bumil.
+ * `undefined` jika input kosong/invalid — pemanggil GET biarkan field hilang.
+ */
+export function presentPorsiByKategori(
+  raw: unknown,
+): ServicePointPorsiByKategori | undefined {
+  if (raw == null) return undefined;
+  const n = normalizePorsiByKategori(raw);
+  if ('error' in n) return undefined;
+  return n;
 }
 
 /**
@@ -270,4 +336,4 @@ export function resolvePenerimaManfaat(input: {
   };
 }
 
-export { KATEGORI_PORSI_OPTIONS };
+export { KATEGORI_PORSI_OPTIONS, KATEGORI_PORSI_LEGACY };

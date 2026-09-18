@@ -57,6 +57,10 @@ export async function handlePortionTargets(ctx: HandlerContext): Promise<NextRes
     }
     return ok({
       ...clean(existing as unknown as Record<string, unknown>),
+      targets: (() => {
+        const norm = normalizePortionTargets(existing.targets);
+        return 'error' in norm ? emptyPortionTargets() : norm;
+      })(),
       exists: true,
     });
   }

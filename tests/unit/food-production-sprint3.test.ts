@@ -121,10 +121,10 @@ describe('food-production sprint 3 — production plan', () => {
     ]);
     expect(lines).toHaveLength(1);
     expect(lines[0].targetPorsi).toBe(2000);
-    expect(lines[0].kategoriPorsiList).toEqual(['PORSI_BESAR', 'PORSI_KECIL']);
+    expect(lines[0].kategoriPorsiList).toEqual(['PORSI_KECIL', 'PORSI_BESAR']);
     expect(mergeKategoriPorsiLists([['PORSI_KECIL'], ['PORSI_BESAR']])).toEqual([
-      'PORSI_BESAR',
       'PORSI_KECIL',
+      'PORSI_BESAR',
     ]);
     expect(mergeRecipeBufferPct([{ a: 3 }, { a: 5, b: 3 }])).toEqual({ a: 5, b: 3 });
   });

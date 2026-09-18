@@ -65,6 +65,7 @@
         "p0:stabilize": "node scripts/p0-stabilize.mjs",
         "doctor:integration": "node scripts/integration-doctor.mjs",
         "test:procurement-e2e": "node scripts/procurement-e2e-test.mjs",
+        "test:menu-planning-e2e": "node scripts/menu-planning-e2e.mjs",
         "diag:procurement": "node scripts/diag-procurement-e2e.mjs",
         "diag:bg-jobs": "node scripts/diagnose-bg-jobs-stale.mjs",
         "migrate:bootstrap": "node --experimental-strip-types scripts/run-bootstrap.ts",

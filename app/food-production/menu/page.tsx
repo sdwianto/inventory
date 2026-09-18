@@ -13,10 +13,16 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import RecipeSearchSelect from '@/components/RecipeSearchSelect';
 import {
-  BAHAN_PANGAN_OPTIONS,
-  bahanPanganLabel,
+  kategoriMenuLabel,
+  presentMenuItems,
+  resolveMenuItemKategoriMenu,
   type BahanPangan,
 } from '@/lib/food-production/menu';
+import {
+  KATEGORI_MENU_OPTIONS,
+  isKategoriMenu,
+  type KategoriMenu,
+} from '@/lib/food-production/recipe';
 import Link from 'next/link';
 import { UtensilsCrossed, Plus, Pencil, RefreshCw, Trash2, CalendarDays } from 'lucide-react';
 
@@ -25,10 +31,11 @@ interface RecipeOpt {
   kode: string;
   nama: string;
   aktif?: boolean;
+  kategoriMenu?: string | null;
 }
 
 interface MenuItemForm {
-  bahanPangan: '' | BahanPangan;
+  kategoriMenu: '' | KategoriMenu;
   recipeId: string;
   porsi: string;
 }
@@ -45,13 +52,14 @@ interface MenuRow {
     recipeId: string;
     porsi: number;
     bahanPangan?: BahanPangan;
+    kategoriMenu?: KategoriMenu;
     recipeKode?: string;
     recipeNama?: string;
   }>;
   aktif: boolean;
 }
 
-const emptyItem = (): MenuItemForm => ({ bahanPangan: '', recipeId: '', porsi: '1' });
+const emptyItem = (): MenuItemForm => ({ kategoriMenu: '', recipeId: '', porsi: '1' });
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -61,25 +69,25 @@ function normalizeNama(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function formItemKey(recipeId: string, bahanPangan: string): string {
-  return `${recipeId}::${bahanPangan}`;
+function formItemKey(recipeId: string, kategoriMenu: string): string {
+  return `${recipeId}::${kategoriMenu}`;
 }
 
-/** Same recipeId + bahanPangan → one row; porsi summed. Keeps at most one empty row. */
+/** Same recipeId + kategoriMenu → one row; porsi summed. Keeps at most one empty row. */
 function consolidateFormItems(rows: MenuItemForm[]): MenuItemForm[] {
   const byKey = new Map<string, MenuItemForm>();
   let hasEmpty = false;
   for (const row of rows) {
     const id = String(row.recipeId || '').trim();
-    const bp = row.bahanPangan;
-    if (!id || !bp) {
+    const km = row.kategoriMenu;
+    if (!id || !km) {
       hasEmpty = true;
       continue;
     }
-    const key = formItemKey(id, bp);
+    const key = formItemKey(id, km);
     const existing = byKey.get(key);
     if (!existing) {
-      byKey.set(key, { ...row, recipeId: id, bahanPangan: bp });
+      byKey.set(key, { ...row, recipeId: id, kategoriMenu: km });
       continue;
     }
     existing.porsi = String((Number(existing.porsi) || 0) + (Number(row.porsi) || 0));
@@ -89,14 +97,14 @@ function consolidateFormItems(rows: MenuItemForm[]): MenuItemForm[] {
   return merged;
 }
 
-function menuBahanPanganSummary(
+function menuSlotSummary(
   items: MenuRow['items'] | undefined,
 ): string {
   if (!items?.length) return '—';
   const labels = [
     ...new Set(
-      items
-        .map((i) => bahanPanganLabel(i.bahanPangan))
+      presentMenuItems(items)
+        .map((i) => kategoriMenuLabel(i.kategoriMenu))
         .filter((l) => l && l !== '—'),
     ),
   ];
@@ -227,7 +235,7 @@ export default function FoodProductionMenuPage() {
     setItems(
       (row.items || []).length
         ? row.items.map((i) => ({
-          bahanPangan: i.bahanPangan || '',
+          kategoriMenu: resolveMenuItemKategoriMenu(i) || '',
           recipeId: i.recipeId,
           porsi: String(i.porsi),
         }))
@@ -249,7 +257,7 @@ export default function FoodProductionMenuPage() {
     setItems(
       (row.items || []).length
         ? row.items.map((i) => ({
-          bahanPangan: i.bahanPangan || '',
+          kategoriMenu: resolveMenuItemKategoriMenu(i) || '',
           recipeId: i.recipeId,
           porsi: String(i.porsi),
         }))
@@ -271,11 +279,11 @@ export default function FoodProductionMenuPage() {
           `Menu "${exactNamaMatch.nama}" sudah ada (${exactNamaMatch.kode}). Ubah nama, atau batalkan jika sama.`,
         );
       }
-      const filled = consolidateFormItems(items).filter((i) => i.recipeId || i.bahanPangan);
+      const filled = consolidateFormItems(items).filter((i) => i.recipeId || i.kategoriMenu);
       if (!filled.length) throw new Error('Minimal 1 baris isi menu');
       for (let i = 0; i < filled.length; i++) {
-        if (!filled[i].bahanPangan) {
-          throw new Error(`Baris ${i + 1}: bahan pangan wajib dipilih`);
+        if (!filled[i].kategoriMenu) {
+          throw new Error(`Baris ${i + 1}: kategori menu wajib dipilih`);
         }
         if (!filled[i].recipeId) {
           throw new Error(`Baris ${i + 1}: resep wajib dipilih`);
@@ -289,7 +297,7 @@ export default function FoodProductionMenuPage() {
         aktif: form.aktif,
         gambarBase64: gambarPhotos[0] || null,
         items: filled.map((i) => ({
-          bahanPangan: i.bahanPangan,
+          kategoriMenu: i.kategoriMenu,
           recipeId: i.recipeId,
           porsi: Number(i.porsi) || 1,
         })),
@@ -346,10 +354,16 @@ export default function FoodProductionMenuPage() {
             Menu
           </h1>
           <p className="text-sm text-muted-foreground">
-            Master menu untuk Rencana Produksi — identitas + isi per kelompok bahan pangan (resep).
+            Paket resep per kategori menu — dipakai sekali klik di papan Perencanaan Menu.
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/food-production/menu-plan">
+              <CalendarDays className="h-4 w-4 mr-1" />
+              Perencanaan Menu
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/food-production/plan">
               <CalendarDays className="h-4 w-4 mr-1" />
@@ -374,7 +388,7 @@ export default function FoodProductionMenuPage() {
               <th className="text-left p-3 font-medium w-14">Gambar</th>
               <th className="text-left p-3 font-medium">Kode</th>
               <th className="text-left p-3 font-medium">Nama Menu</th>
-              <th className="text-left p-3 font-medium">Bahan pangan</th>
+              <th className="text-left p-3 font-medium">Kategori menu</th>
               <th className="text-left p-3 font-medium">Baris</th>
               <th className="text-left p-3 font-medium">Target biaya</th>
               <th className="text-left p-3 font-medium">Efektif</th>
@@ -411,7 +425,7 @@ export default function FoodProductionMenuPage() {
                 </td>
                 <td className="p-3 font-mono text-xs">{row.kode}</td>
                 <td className="p-3 font-medium">{row.nama}</td>
-                <td className="p-3 text-xs">{menuBahanPanganSummary(row.items)}</td>
+                <td className="p-3 text-xs">{menuSlotSummary(row.items)}</td>
                 <td className="p-3">{(row.items || []).length} baris</td>
                 <td className="p-3">
                   {row.targetCostPerPorsi != null
@@ -558,7 +572,7 @@ export default function FoodProductionMenuPage() {
               <div>
                 <Label>Isi menu</Label>
                 <p className="text-xs text-muted-foreground">
-                  Tiap baris: kelompok bahan pangan, lalu resep (detail bahan).
+                  Tiap baris: kategori menu (slot papan), lalu resep master.
                 </p>
               </div>
               <Button
@@ -573,33 +587,40 @@ export default function FoodProductionMenuPage() {
             </div>
             <div className="rounded-md border overflow-hidden">
               <div className="hidden sm:grid sm:grid-cols-12 gap-2 px-2 py-1.5 bg-muted/50 text-xs font-medium text-muted-foreground">
-                <div className="sm:col-span-3">Bahan pangan</div>
+                <div className="sm:col-span-3">Kategori menu</div>
                 <div className="sm:col-span-6">Resep / detail bahan</div>
                 <div className="sm:col-span-2">Porsi</div>
                 <div className="sm:col-span-1" />
               </div>
               <div className="divide-y">
-                {items.map((item, idx) => (
+                {items.map((item, idx) => {
+                  const rec = recipes.find((r) => r.id === item.recipeId);
+                  const km = rec?.kategoriMenu;
+                  const fromRecipe = isKategoriMenu(km) ? km : undefined;
+                  const slotValue = fromRecipe || item.kategoriMenu;
+                  return (
                   <div key={idx} className="grid gap-2 sm:grid-cols-12 items-center px-2 py-1.5">
                     <div className="sm:col-span-3">
-                      <span className="sm:hidden text-[11px] text-muted-foreground">Bahan pangan</span>
+                      <span className="sm:hidden text-[11px] text-muted-foreground">Kategori menu</span>
                       <select
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"
-                        value={item.bahanPangan}
-                        aria-label={`Bahan pangan baris ${idx + 1}`}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-2 py-2 text-sm disabled:opacity-70"
+                        value={slotValue}
+                        disabled={Boolean(fromRecipe)}
+                        title={fromRecipe ? 'Mengikuti kategori menu resep master' : undefined}
+                        aria-label={`Kategori menu baris ${idx + 1}`}
                         onChange={(e) => {
-                          const bp = e.target.value as '' | BahanPangan;
+                          const km = e.target.value as '' | KategoriMenu;
                           setItems((prev) => {
                             const next = prev.map((it, i) => (
-                              i === idx ? { ...it, bahanPangan: bp } : it
+                              i === idx ? { ...it, kategoriMenu: km } : it
                             ));
-                            if (!bp || !next[idx]?.recipeId) return next;
+                            if (!km || !next[idx]?.recipeId) return next;
                             return consolidateFormItems(next);
                           });
                         }}
                       >
                         <option value="">Pilih…</option>
-                        {BAHAN_PANGAN_OPTIONS.map((opt) => (
+                        {KATEGORI_MENU_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>
@@ -612,21 +633,24 @@ export default function FoodProductionMenuPage() {
                         value={item.recipeId}
                         recipes={recipes}
                         placeholder="Ketik kode / nama resep…"
-                        onChange={(id) => {
+                        onChange={(id, rec) => {
                           if (!id) {
                             setItems((prev) => prev.map((it, i) => (
                               i === idx ? { ...it, recipeId: '' } : it
                             )));
                             return;
                           }
+                          const fromRecipe = isKategoriMenu((rec as RecipeOpt | undefined)?.kategoriMenu)
+                            ? (rec as RecipeOpt).kategoriMenu as KategoriMenu
+                            : undefined;
                           setItems((prev) => {
-                            const bp = prev[idx]?.bahanPangan;
+                            const km = fromRecipe || prev[idx]?.kategoriMenu;
                             const existingIdx = prev.findIndex(
                               (it, i) =>
                                 i !== idx
                                 && it.recipeId === id
-                                && it.bahanPangan
-                                && it.bahanPangan === bp,
+                                && it.kategoriMenu
+                                && it.kategoriMenu === km,
                             );
                             if (existingIdx >= 0) {
                               const addPorsi = Number(prev[idx]?.porsi) || 0;
@@ -644,7 +668,9 @@ export default function FoodProductionMenuPage() {
                             }
                             return consolidateFormItems(
                               prev.map((it, i) => (
-                                i === idx ? { ...it, recipeId: id } : it
+                                i === idx
+                                  ? { ...it, recipeId: id, kategoriMenu: km || it.kategoriMenu }
+                                  : it
                               )),
                             );
                           });
@@ -676,7 +702,8 @@ export default function FoodProductionMenuPage() {
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
             {recipes.length === 0 && (

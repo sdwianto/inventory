@@ -42,6 +42,7 @@ import {
 import {
   SERVICE_POINTS_COLLECTION,
   routeJamKirim,
+  presentPorsiByKategori,
   type ServicePointDoc,
 } from '@/lib/food-production/service-point';
 import { ARMADAS_COLLECTION, type ArmadaDoc } from '@/lib/logistics/armada';
@@ -491,7 +492,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
             ...l,
             kapasitasPorsi,
             jamKirim: l.jamKirim || routeJamKirim({ jamKirim: sp?.jamKirim, drops: sp?.drops }),
-            porsiByKategori: l.porsiByKategori || scalePorsiByKategoriForQty(
+            porsiByKategori: presentPorsiByKategori(l.porsiByKategori) || scalePorsiByKategoriForQty(
               sp?.porsiByKategori,
               l.qtyPorsi,
               kapasitasPorsi,

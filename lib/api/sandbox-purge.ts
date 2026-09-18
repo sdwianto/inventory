@@ -99,6 +99,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'material_requirements',
   'production_plans',
   'portion_targets',
+  'weekly_menu_plans',
   // Food Production — master/simulasi (ikut di-reset)
   'menus',
   'supplier_price_book',

@@ -10,12 +10,14 @@ import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import {
   MENUS_COLLECTION,
+  bahanPanganFromKategoriMenu,
   normalizeMenuItems,
   normalizeMenuNama,
+  presentMenuItems,
   type MenuDoc,
   type MenuItem,
 } from '@/lib/food-production/menu';
-import { RECIPES_COLLECTION, todayIsoDate } from '@/lib/food-production/recipe';
+import { RECIPES_COLLECTION, isKategoriMenu, todayIsoDate } from '@/lib/food-production/recipe';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { nextSequentialCode } from '@/lib/api/document-sequence';
 import { storeBase64Image, deleteMediaFile } from '@/lib/api/media-storage';
@@ -104,7 +106,7 @@ async function enrichItems(
   const ids = items.map((i) => i.recipeId);
   const recipes = await db.collection(RECIPES_COLLECTION)
     .find({ ...tenantFilter, id: { $in: ids } })
-    .project({ id: 1, kode: 1, nama: 1, aktif: 1 })
+    .project({ id: 1, kode: 1, nama: 1, aktif: 1, kategoriMenu: 1 })
     .toArray();
   const byId = new Map(recipes.map((r) => [String(r.id), r]));
   const out: MenuItem[] = [];
@@ -114,8 +116,15 @@ async function enrichItems(
     if (options?.requireActive && r.aktif === false) {
       return { error: `Resep ${String(r.kode || item.recipeId)} nonaktif — aktifkan dulu atau ganti resep` };
     }
+    const fromRecipe = isKategoriMenu(r.kategoriMenu) ? r.kategoriMenu : item.kategoriMenu;
+    if (!isKategoriMenu(fromRecipe)) {
+      return { error: `Resep ${String(r.kode || item.recipeId)} belum punya kategori menu` };
+    }
+    const bahanPangan = bahanPanganFromKategoriMenu(fromRecipe) || item.bahanPangan;
     out.push({
       ...item,
+      kategoriMenu: fromRecipe,
+      bahanPangan,
       recipeKode: item.recipeKode || (r.kode != null ? String(r.kode) : undefined),
       recipeNama: item.recipeNama || (r.nama != null ? String(r.nama) : undefined),
     });
@@ -209,7 +218,13 @@ export async function handleMenus({
       .limit(200)
       .toArray();
 
-    return ok(list.map((doc) => clean(doc)));
+    return ok(list.map((doc) => {
+      const menu = doc as unknown as MenuDoc;
+      return clean({
+        ...menu,
+        items: presentMenuItems(menu.items),
+      } as unknown as Record<string, unknown>);
+    }));
   }
 
   if (route === '/menus' && method === 'POST') {
@@ -284,7 +299,10 @@ export async function handleMenus({
       summary: `Menu ${doc.kode} dibuat`,
       ...auditActor(auth),
     });
-    return ok(clean(doc as unknown as Record<string, unknown>));
+    return ok(clean({
+      ...doc,
+      items: presentMenuItems(doc.items),
+    } as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'menus' && path[1] && method === 'PUT') {
@@ -369,7 +387,11 @@ export async function handleMenus({
       summary: `Menu ${String(saved?.kode || existing.kode)} diubah`,
       ...auditActor(auth),
     });
-    return ok(clean(saved));
+    if (!saved) return err('Gagal menyimpan menu', 500);
+    return ok(clean({
+      ...saved,
+      items: presentMenuItems((saved as unknown as MenuDoc).items),
+    } as unknown as Record<string, unknown>));
   }
 
   if (path[0] === 'menus' && path[1] && method === 'DELETE') {

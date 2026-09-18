@@ -21,6 +21,7 @@ const REQUIRED_MODULES = [
   'lib/food-production/recipe.ts',
   'lib/food-production/menu.ts',
   'lib/food-production/production-plan.ts',
+  'lib/food-production/weekly-menu-plan.ts',
   'lib/food-production/material-requirement.ts',
   'lib/food-production/purchase-requirement.ts',
   'lib/food-production/material-issue.ts',
@@ -34,6 +35,7 @@ const REQUIRED_MODULES = [
   'lib/food-production/forecast.ts',
   'lib/food-production/dashboard.ts',
   'lib/food-production/recommendations.ts',
+  'lib/food-production/fp-flow.ts',
   'lib/food-production/kitchen-transfer.ts',
   'lib/food-production/production-calendar.ts',
   'lib/food-production/production-batch.ts',
@@ -52,6 +54,8 @@ const REQUIRED_MODULES = [
   'lib/api/handlers/haccp.ts',
   'lib/api/handlers/supplier-price-book.ts',
   'lib/api/handlers/ops-dashboard.ts',
+  'lib/api/handlers/weekly-menu-plans.ts',
+  'components/food-production/FpFlowHint.tsx',
   'app/food-production/recommendations/page.tsx',
   'app/food-production/purchase-requirement/page.tsx',
   'app/food-production/report/page.tsx',
@@ -59,8 +63,12 @@ const REQUIRED_MODULES = [
   'app/food-production/calendar/page.tsx',
   'app/food-production/batch/page.tsx',
   'app/food-production/service-point/page.tsx',
+  'app/food-production/menu-plan/page.tsx',
   'app/food-production/distribution/page.tsx',
   'components/food-production/DistributionScheduleDocument.tsx',
+  'components/food-production/MenuHarianDocument.tsx',
+  'components/food-production/KebutuhanBahanHarianDocument.tsx',
+  'lib/food-production/kebutuhan-bahan-harian.ts',
   'app/food-production/cold-chain/page.tsx',
   'app/food-production/haccp/page.tsx',
   'app/food-production/price-book/page.tsx',
@@ -75,6 +83,7 @@ const REQUIRED_DISPATCH = [
   'kitchen-transfers',
   'production-calendar',
   'production-batches',
+  'weekly-menu-plans',
   'service-points',
   'distribution-orders',
   'temperature-logs',
@@ -103,6 +112,7 @@ describe('food-production enterprise gate', () => {
     expect(src).toContain("/food-production/recommendations");
     // Transfer Dapur disembunyikan dari nav (route/API tetap); jangan assert di NAV.
     expect(src).not.toContain("label: 'Transfer Dapur'");
+    expect(src).toContain("/food-production/menu-plan");
     expect(src).toContain("/food-production/plan");
     expect(src).toContain("/food-production/calendar");
     expect(src).toContain("/food-production/batch");
@@ -119,6 +129,49 @@ describe('food-production enterprise gate', () => {
     expect(gudangBlock).not.toContain('FP_MGMT_ROUTES');
     expect(gudangBlock).not.toContain('/food-production/recommendations');
     expect(gudangBlock).not.toContain('/food-production/price-book');
+  });
+
+  it('menu-plan and RPN expose PDF acuan kerja dapur', () => {
+    const menuPlan = readFileSync(resolve(ROOT, 'app/food-production/menu-plan/page.tsx'), 'utf8');
+    expect(menuPlan).toContain('MenuHarianDocument');
+    expect(menuPlan).toContain('KebutuhanBahanHarianDocument');
+    expect(menuPlan).toContain('printDocument');
+    expect(menuPlan).toContain('Unduh PDF acuan kerja');
+    expect(menuPlan).toContain('Kebutuhan bahan saja');
+    expect(menuPlan).toContain('fillEmptySlots');
+    expect(menuPlan).toContain('Terapkan paket');
+    expect(menuPlan).toContain('Salin minggu lalu');
+    expect(menuPlan).toContain('Isi PM dari titik layanan');
+    expect(menuPlan).toContain('analyze-draft');
+    expect(menuPlan).toContain('applyMenuPackageToDay');
+    expect(menuPlan).toContain('copyWeekDays');
+    expect(menuPlan).toContain('sumServicePointPorsi');
+    expect(menuPlan).toContain('presentWeeklyMenuDays');
+    expect(menuPlan).toContain('kitchenId=');
+    expect(menuPlan).toContain("params.get('weekStart')");
+    expect(menuPlan).toContain("params.get('kitchenId')");
+    expect(menuPlan).toContain('production-plans?from=');
+    const menu = readFileSync(resolve(ROOT, 'app/food-production/menu/page.tsx'), 'utf8');
+    expect(menu).toContain('kategoriMenu');
+    expect(menu).toContain('KATEGORI_MENU_OPTIONS');
+    expect(menu).not.toContain('BAHAN_PANGAN_OPTIONS');
+    const domain = readFileSync(resolve(ROOT, 'lib/food-production/weekly-menu-plan.ts'), 'utf8');
+    expect(domain).toContain('applyMenuPackageToDay');
+    expect(domain).toContain('akgKeyForDay');
+    expect(domain).toContain('draftNutritionLinesFromDay');
+    const plan = readFileSync(resolve(ROOT, 'app/food-production/plan/page.tsx'), 'utf8');
+    expect(plan).toContain('MenuHarianDocument');
+    expect(plan).toContain('KebutuhanBahanHarianDocument');
+    expect(plan).toContain('openAcuanKerja');
+    expect(plan).toContain('Kebutuhan bahan saja');
+    expect(plan).toContain('RencanaKebutuhanDocument');
+    const doc = readFileSync(resolve(ROOT, 'components/food-production/MenuHarianDocument.tsx'), 'utf8');
+    expect(doc).toContain('ACUAN KERJA DAPUR');
+    expect(doc).toContain('REKAP TOTAL BAHAN');
+    expect(doc).toContain('qtyBesarPart');
+    expect(doc).toContain('qtyKecilPart');
+    expect(doc).toContain('fillEmptySlots');
+    expect(doc).toContain('recipeYieldOneWarning');
   });
 
   // docs/migration/FOOD-PRODUCTION-DOMAIN-SPLIT.md Sprint 1 STEP 0 + Sprint 2 STEP 2:
@@ -220,5 +273,26 @@ describe('food-production enterprise gate', () => {
     expect(opsSrc).toContain('getFpLatencySnapshots');
     const pkg = readFileSync(resolve(ROOT, 'package.json'), 'utf8');
     expect(pkg).toContain('test:fp:enterprise');
+  });
+
+  it('FP flow: one composition path, API 409, no PR href', () => {
+    const plan = readFileSync(resolve(ROOT, 'app/food-production/plan/page.tsx'), 'utf8');
+    expect(plan).toContain('Rencana ad-hoc');
+    expect(plan).toContain('Ambil Bahan');
+    expect(plan).toContain('Ubah di Perencanaan Menu');
+    expect(plan).toContain('FpFlowHint');
+    expect(plan).toContain('isWeeklyLinkedPlan');
+    expect(plan).not.toContain('Keluarkan Barang');
+    const menuPlan = readFileSync(resolve(ROOT, 'app/food-production/menu-plan/page.tsx'), 'utf8');
+    expect(menuPlan).toContain('planHref');
+    expect(menuPlan).toContain('productionPlanId');
+    expect(menuPlan).toContain('confirmSubmitted');
+    const recs = readFileSync(resolve(ROOT, 'lib/food-production/recommendations.ts'), 'utf8');
+    expect(recs).not.toContain('/food-production/purchase-requirement');
+    expect(recs).toContain('/pembelian-po');
+    const handler = readFileSync(resolve(ROOT, 'lib/api/handlers/production-plans.ts'), 'utf8');
+    expect(handler).toContain('adHocCreateBlockedError');
+    expect(handler).toContain('weeklyLinkedCompositionLockedError');
+    expect(handler).toContain('409');
   });
 });

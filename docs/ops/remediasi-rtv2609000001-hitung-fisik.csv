@@ -1,0 +1,16 @@
+sku,nama,rtv_qty,rtv_qty_base,grn65_qty_base,overlap,sys_net_sep_gkering,satuan,gudang,target_return_qty_base,hitung_fisik,surplus_fisik_minus_buku,keterangan
+B057434,Backing Powder 1 kg,1,1,1,YES,1,PCS,GKERING,1,,,kembalikan 1 set surplus
+B925034,Bumbu Knoor Ayam 1kg,7,7,7,YES,16,KG,GKERING,7,,,kembalikan 7 (bukan seluruh net 16)
+B402689,Garam Kapal 250g,8,8,8,YES,66,PCS,GKERING,8,,,
+B387463,Gula Pasir 1kg,7,7,7,YES,42,PCS,GKERING,7,,,
+B730182,Ladaku Merica Bbk 100g,4,4,4,YES,5,PCS,GKERING,4,,,
+B455629,Minyak Sunco Refil 2L,6,36,36,YES,66,DUS,GKERING,36,,,6 DUS = 36 base
+B559443,Saos Tomat Delmonte 5.7L,1,5,5,YES,5,JRG,GKERING,5,,,1 JRG = 5 base
+B425438,Tepung Sasa Serbaguna,25,25,25,YES,25,PCS,GKERING,25,,,
+B495092,Tepung Tapioka Rose Brand 500g,10,10,10,YES,10,PCS,GKERING,10,,,
+B426390,Tepung Terigu 1kg,25,25,25,YES,25,PCS,GKERING,25,,,
+B511393,Kaldu Desaku Marinasi Instan 12.5g,19,228,228,YES,228,RTG,GKERING,228,,,19 RTG = 228 base
+B403445,Raja Rasa 600 ml,1,1,1,YES,1,BTL,GKERING,1,,,
+B102905,Saos Delmonte Spaghetti 250 gr,72,72,72,YES,72,PCS,GKERING,72,,,
+B630710,Minyak Wijen SGH 620 ml,3,3,,NO,3,BTL,GKERING,0,,,cek fisik; hanya return jika fisik>buku
+B728547,Nori Rumput Laut,,,55,NO,120,,GKERING,0,,,bukan surplus RTV; cek fisik terpisah

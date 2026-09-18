@@ -25,7 +25,8 @@ import {
   type ServicePointJenis,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
-import type { KategoriPorsi } from '@/lib/food-production/production-plan';
+import type { KategoriPorsiCurrent } from '@/lib/food-production/production-plan';
+import { KATEGORI_PORSI_LEGACY } from '@/lib/food-production/production-plan';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 
@@ -47,7 +48,7 @@ interface SpRow {
   aktif: boolean;
 }
 
-type PorsiFormMap = Record<KategoriPorsi, string>;
+type PorsiFormMap = Record<KategoriPorsiCurrent, string>;
 
 function emptyPorsiForm(): PorsiFormMap {
   return Object.fromEntries(KATEGORI_PORSI_OPTIONS.map((o) => [o.value, ''])) as PorsiFormMap;
@@ -59,6 +60,10 @@ function porsiFormFromRow(map?: ServicePointPorsiByKategori): PorsiFormMap {
   for (const opt of KATEGORI_PORSI_OPTIONS) {
     const n = Number(map[opt.value]);
     if (Number.isFinite(n) && n > 0) base[opt.value] = String(n);
+  }
+  if (!base.POSYANDU_BUMIL && !base.POSYANDU_BUSUI) {
+    const legacy = Number(map[KATEGORI_PORSI_LEGACY]);
+    if (Number.isFinite(legacy) && legacy > 0) base.POSYANDU_BUMIL = String(legacy);
   }
   return base;
 }

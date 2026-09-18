@@ -1,6 +1,9 @@
 /** Recipe master (Food BOM) — ADR-001 Sprint 2. */
 
-import type { KategoriPorsi } from '@/lib/food-production/production-plan';
+import {
+  KATEGORI_PORSI_LEGACY,
+  type KategoriPorsi,
+} from '@/lib/food-production/production-plan';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -34,6 +37,9 @@ export const DEFAULT_PCT_KECIL = 70;
 /** Kategori yang memakai qty besar (100%). */
 export const KATEGORI_PORSI_BESAR_FAMILY = new Set<KategoriPorsi>([
   'PORSI_BESAR',
+  'POSYANDU_BUMIL',
+  'POSYANDU_BUSUI',
+  'ORGANOLEPTIK',
   'POSYANDU_BUMIL_BUSUI',
 ]);
 
@@ -235,9 +241,31 @@ export function recipeQtyForKategori(
   return recipeQtyForFamily(line, recipePorsiFamilyForKategori(kategori));
 }
 
+function acuanQtyForKategori(
+  kategori: string,
+  acuan: Partial<Record<string, number>>,
+): number {
+  if (kategori === KATEGORI_PORSI_LEGACY) {
+    const split =
+      Math.max(0, Number(acuan.POSYANDU_BUMIL) || 0)
+      + Math.max(0, Number(acuan.POSYANDU_BUSUI) || 0);
+    if (split > 0) return split;
+    return Math.max(0, Number(acuan[KATEGORI_PORSI_LEGACY]) || 0);
+  }
+  if (kategori === 'POSYANDU_BUMIL' || kategori === 'POSYANDU_BUSUI') {
+    const own = Math.max(0, Number(acuan[kategori]) || 0);
+    if (own > 0) return own;
+    const legacy = Math.max(0, Number(acuan[KATEGORI_PORSI_LEGACY]) || 0);
+    if (legacy > 0 && kategori === 'POSYANDU_BUMIL') return legacy;
+    return 0;
+  }
+  return Math.max(0, Number(acuan[kategori]) || 0);
+}
+
 /**
  * Split target porsi into besar/kecil families from selected categories.
  * Prefer acuan map; fallback: proportional by count of selected categories.
+ * Legacy POSYANDU_BUMIL_BUSUI membaca acuan Bumil+Busui (atau sebaliknya).
  */
 export function splitPorsiByKategoriFamily(
   kategoriList: string[] | undefined | null,
@@ -256,8 +284,8 @@ export function splitPorsiByKategoriFamily(
   if (acuanByKategori) {
     let porsiBesar = 0;
     let porsiKecil = 0;
-    for (const k of besarCats) porsiBesar += Math.max(0, Number(acuanByKategori[k]) || 0);
-    for (const k of kecilCats) porsiKecil += Math.max(0, Number(acuanByKategori[k]) || 0);
+    for (const k of besarCats) porsiBesar += acuanQtyForKategori(k, acuanByKategori);
+    for (const k of kecilCats) porsiKecil += acuanQtyForKategori(k, acuanByKategori);
     const acuanTotal = porsiBesar + porsiKecil;
     if (acuanTotal > 0) {
       // If user overrode targetPorsi, scale families to match total.

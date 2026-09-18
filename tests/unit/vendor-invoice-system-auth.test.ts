@@ -21,14 +21,22 @@ describe('vendor invoice system auth footer', () => {
     expect(src).toContain('https://dapursppg.my.id/');
     expect(src).toContain('vendor-invoice-verification-seal');
     expect(src).toContain('SystemVerificationSeal');
+    expect(src).toContain('InternalSignColumn');
+    expect(src).toContain('Penerima gudang');
+    expect(src).toContain('Petugas Gudang');
+    expect(src).toContain('Pengawas Keuangan');
+    // Kedua slot memakai kolom yang sama: judul → stempel → nama/NIK → garis → jabatan
+    expect(src).toContain('title="Penerima gudang"');
+    expect(src).toContain('title="Mengetahui"');
+    expect(src).toContain('lineLabel="Petugas Gudang"');
+    expect(src).toContain('lineLabel="Pengawas Keuangan"');
+    expect(src).toContain('stamp?.userName || stamp?.nik || stamp?.at');
     // Label polos di slot Mengetahui sudah diganti stempel verifikasi
     expect(src).not.toContain('>{/* autentikasi sistem */}');
     expect(src).not.toMatch(/metaClass\} text-slate-500 mb-0\.5`\}>autentikasi sistem/);
     expect(src).not.toContain('( dari penerimaan GRN )');
-    // Footer label hanya setelah stamp
-    expect(src).toContain("mengetahuiStamped ? 'Pengawas Keuangan'");
-    expect(src).toContain("penerimaStamped ? 'Petugas Gudang'");
-    expect(src).toContain('showJabatanAbove');
+    expect(src).not.toContain('showJabatanAbove');
+    expect(src).not.toContain('penerimaStamped');
     expect(src).toContain('data-testid="vendor-invoice-system-auth"');
     expect(src).toContain('data-testid="vendor-invoice-internal-signs"');
     expect(src).toContain('approvedBy');
@@ -104,6 +112,7 @@ describe('vendor invoice system auth footer', () => {
     expect(src).toContain('hutangId: hutang.id');
     expect(src).toContain('requireComplete: true');
     expect(src).toContain("g.status === 'POSTED' ? resolvePenerimaGudang(g) : null");
+    expect(src).toContain('grns.find((g) => g.status === \'POSTED\' && resolvePenerimaGudang(g))');
   });
 
   it('Thermal: human status + system copy; no vendor signature', () => {

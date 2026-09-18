@@ -1,8 +1,15 @@
-/** Menu master — ADR-001 Sprint 2. References Recipes. */
+/** Menu master — ADR-001 Sprint 2. References Recipes. Fase 3: slot = kategoriMenu. */
+
+import {
+  KATEGORI_MENU_OPTIONS,
+  isKategoriMenu,
+  kategoriMenuLabel,
+  type KategoriMenu,
+} from '@/lib/food-production/recipe';
 
 export const MENUS_COLLECTION = 'menus';
 
-/** Kelompok bahan pangan MBG (per baris isi menu). */
+/** @deprecated Fase 3 — alias lama; kanonik = kategoriMenu resep. Masih dibaca. */
 export const BAHAN_PANGAN_OPTIONS = [
   { value: 'BAHAN_POKOK', label: 'Bahan Pokok' },
   { value: 'PROTEIN_HEWANI', label: 'Protein Hewani' },
@@ -17,6 +24,26 @@ export type BahanPangan = (typeof BAHAN_PANGAN_OPTIONS)[number]['value'];
 
 const BAHAN_PANGAN_SET = new Set<string>(BAHAN_PANGAN_OPTIONS.map((o) => o.value));
 
+export const BAHAN_PANGAN_TO_KATEGORI_MENU: Record<BahanPangan, KategoriMenu> = {
+  BAHAN_POKOK: 'KARBOHIDRAT',
+  PROTEIN_HEWANI: 'LAUK_HEWANI',
+  PROTEIN_NABATI: 'LAUK_NABATI',
+  SAYUR: 'SAYUR',
+  BUAH: 'BUAH',
+  SUSU: 'SUSU',
+  LAINNYA: 'GARNISH',
+};
+
+export const KATEGORI_MENU_TO_BAHAN_PANGAN: Record<KategoriMenu, BahanPangan> = {
+  KARBOHIDRAT: 'BAHAN_POKOK',
+  LAUK_HEWANI: 'PROTEIN_HEWANI',
+  LAUK_NABATI: 'PROTEIN_NABATI',
+  SAYUR: 'SAYUR',
+  BUAH: 'BUAH',
+  SUSU: 'SUSU',
+  GARNISH: 'LAINNYA',
+};
+
 export function isBahanPangan(v: unknown): v is BahanPangan {
   return typeof v === 'string' && BAHAN_PANGAN_SET.has(v);
 }
@@ -26,11 +53,32 @@ export function bahanPanganLabel(v: string | undefined | null): string {
   return BAHAN_PANGAN_OPTIONS.find((o) => o.value === v)?.label || v;
 }
 
+export function kategoriMenuFromBahanPangan(v: unknown): KategoriMenu | null {
+  if (!isBahanPangan(v)) return null;
+  return BAHAN_PANGAN_TO_KATEGORI_MENU[v];
+}
+
+export function bahanPanganFromKategoriMenu(v: unknown): BahanPangan | null {
+  if (!isKategoriMenu(v)) return null;
+  return KATEGORI_MENU_TO_BAHAN_PANGAN[v];
+}
+
+/** Kanonik: kategoriMenu; bahanPangan lama di-map. */
+export function resolveMenuItemKategoriMenu(row: {
+  kategoriMenu?: unknown;
+  bahanPangan?: unknown;
+} | null | undefined): KategoriMenu | null {
+  if (isKategoriMenu(row?.kategoriMenu)) return row.kategoriMenu;
+  return kategoriMenuFromBahanPangan(row?.bahanPangan);
+}
+
 export interface MenuItem {
   recipeId: string;
   recipeKode?: string;
   recipeNama?: string;
-  /** Kelompok bahan pangan MBG untuk baris ini. */
+  /** Slot papan minggu — sama dengan recipe.kategoriMenu. */
+  kategoriMenu: KategoriMenu;
+  /** Alias lama (Fase 3: tetap ditulis agar dokumen lama/API lama aman). */
   bahanPangan: BahanPangan;
   /** Portions contributed by this recipe in the menu (default 1). */
   porsi: number;
@@ -60,21 +108,39 @@ export interface MenuDoc {
   updatedAt: Date;
 }
 
-function itemKey(recipeId: string, bahanPangan: string): string {
-  return `${recipeId}::${bahanPangan}`;
+function itemKey(recipeId: string, kategoriMenu: string): string {
+  return `${recipeId}::${kategoriMenu}`;
 }
 
-/** Same recipeId + bahanPangan → one row; porsi summed. */
+function pairFromRow(row: Record<string, unknown>): {
+  kategoriMenu: KategoriMenu;
+  bahanPangan: BahanPangan;
+} | { error: string } {
+  const km = resolveMenuItemKategoriMenu(row);
+  if (!km) {
+    return { error: 'kategori menu wajib dipilih' };
+  }
+  const bp = bahanPanganFromKategoriMenu(km) || 'LAINNYA';
+  return { kategoriMenu: km, bahanPangan: bp };
+}
+
+/** Same recipeId + kategoriMenu → one row; porsi summed. */
 export function consolidateMenuItems(items: MenuItem[]): MenuItem[] {
   const byKey = new Map<string, MenuItem>();
   for (const item of items) {
     const recipeId = String(item.recipeId || '').trim();
-    const bahanPangan = item.bahanPangan;
-    if (!recipeId || !bahanPangan) continue;
-    const key = itemKey(recipeId, bahanPangan);
+    const kategoriMenu = item.kategoriMenu;
+    if (!recipeId || !kategoriMenu) continue;
+    const key = itemKey(recipeId, kategoriMenu);
     const existing = byKey.get(key);
     if (!existing) {
-      byKey.set(key, { ...item, recipeId, bahanPangan, porsi: Number(item.porsi) || 0 });
+      byKey.set(key, {
+        ...item,
+        recipeId,
+        kategoriMenu,
+        bahanPangan: item.bahanPangan || bahanPanganFromKategoriMenu(kategoriMenu) || 'LAINNYA',
+        porsi: Number(item.porsi) || 0,
+      });
       continue;
     }
     existing.porsi = (Number(existing.porsi) || 0) + (Number(item.porsi) || 0);
@@ -82,6 +148,29 @@ export function consolidateMenuItems(items: MenuItem[]): MenuItem[] {
     if (!existing.recipeNama && item.recipeNama) existing.recipeNama = item.recipeNama;
   }
   return [...byKey.values()];
+}
+
+export function presentMenuItem(raw: unknown): MenuItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  const recipeId = String(row.recipeId || '').trim();
+  if (!recipeId) return null;
+  const pair = pairFromRow(row);
+  if ('error' in pair) return null;
+  const porsi = Number(row.porsi);
+  return {
+    recipeId,
+    recipeKode: row.recipeKode != null ? String(row.recipeKode) : undefined,
+    recipeNama: row.recipeNama != null ? String(row.recipeNama) : undefined,
+    kategoriMenu: pair.kategoriMenu,
+    bahanPangan: pair.bahanPangan,
+    porsi: Number.isFinite(porsi) && porsi > 0 ? porsi : 1,
+  };
+}
+
+export function presentMenuItems(raw: unknown): MenuItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(presentMenuItem).filter((x): x is MenuItem => Boolean(x));
 }
 
 export function normalizeMenuItems(raw: unknown): MenuItem[] | { error: string } {
@@ -93,10 +182,9 @@ export function normalizeMenuItems(raw: unknown): MenuItem[] | { error: string }
     const row = raw[i] as Record<string, unknown>;
     const recipeId = String(row?.recipeId || '').trim();
     const porsi = Number(row?.porsi ?? 1);
-    const bahanPanganRaw = String(row?.bahanPangan || '').trim();
-    if (!bahanPanganRaw) return { error: `Baris ${i + 1}: bahan pangan wajib dipilih` };
-    if (!isBahanPangan(bahanPanganRaw)) {
-      return { error: `Baris ${i + 1}: bahan pangan tidak valid` };
+    const pair = pairFromRow(row || {});
+    if ('error' in pair) {
+      return { error: `Baris ${i + 1}: ${pair.error}` };
     }
     if (!recipeId) return { error: `Baris ${i + 1}: resep wajib` };
     if (!Number.isFinite(porsi) || porsi <= 0) return { error: `Baris ${i + 1}: porsi harus > 0` };
@@ -104,7 +192,8 @@ export function normalizeMenuItems(raw: unknown): MenuItem[] | { error: string }
       recipeId,
       recipeKode: row.recipeKode != null ? String(row.recipeKode) : undefined,
       recipeNama: row.recipeNama != null ? String(row.recipeNama) : undefined,
-      bahanPangan: bahanPanganRaw,
+      kategoriMenu: pair.kategoriMenu,
+      bahanPangan: pair.bahanPangan,
       porsi,
     });
   }
@@ -117,3 +206,9 @@ export function normalizeMenuItems(raw: unknown): MenuItem[] | { error: string }
   }
   return merged;
 }
+
+export function menuItemSlotLabel(item: Pick<MenuItem, 'kategoriMenu' | 'bahanPangan'>): string {
+  return kategoriMenuLabel(item.kategoriMenu) || bahanPanganLabel(item.bahanPangan);
+}
+
+export { KATEGORI_MENU_OPTIONS, kategoriMenuLabel };

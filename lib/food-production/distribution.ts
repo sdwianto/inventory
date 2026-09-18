@@ -39,12 +39,12 @@ import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/documen
 import { FP_DEFAULT_TRANSITIONS } from '@/lib/food-production/document';
 import { roundQty } from '@/lib/food-production/material-requirement';
 import {
-  KATEGORI_PORSI_OPTIONS,
+  porsiKategoriKeysWithQty,
+  presentPorsiByKategori,
   routeJamKirim,
   sumPorsiByKategori,
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
-import type { KategoriPorsi } from '@/lib/food-production/production-plan';
 import type { DeliveryArmada, DeliveryLoading } from '@/lib/logistics/delivery';
 
 export const DISTRIBUTION_ORDERS_COLLECTION = 'distribution_orders';
@@ -286,23 +286,22 @@ export function scalePorsiByKategoriForQty(
   qtyPorsi: number,
   kapasitasPorsi?: number,
 ): ServicePointPorsiByKategori | undefined {
-  if (!map) return undefined;
+  const presented = presentPorsiByKategori(map);
+  if (!presented) return undefined;
   const qty = Math.round(Number(qtyPorsi) || 0);
   if (!(qty > 0)) return undefined;
-  const baseTotal = sumPorsiByKategori(map);
+  const baseTotal = sumPorsiByKategori(presented);
   if (!(baseTotal > 0)) return undefined;
   const kap = Number(kapasitasPorsi);
   const factor = Number.isFinite(kap) && kap > 0 ? qty / kap : qty / baseTotal;
-  const keys = KATEGORI_PORSI_OPTIONS
-    .map((o) => o.value)
-    .filter((k) => (Number(map[k]) || 0) > 0) as KategoriPorsi[];
+  const keys = porsiKategoriKeysWithQty(presented);
   if (!keys.length) return undefined;
 
   const out: ServicePointPorsiByKategori = {};
   let allocated = 0;
   for (let i = 0; i < keys.length - 1; i++) {
     const key = keys[i];
-    const share = Math.max(0, Math.round((Number(map[key]) || 0) * factor));
+    const share = Math.max(0, Math.round((Number(presented[key]) || 0) * factor));
     if (share > 0) {
       out[key] = share;
       allocated += share;
@@ -353,7 +352,7 @@ export function normalizeDistLines(raw: unknown): DispatchLine[] | { error: stri
     const jamKirim = row.jamKirim != null ? String(row.jamKirim).trim() || undefined : undefined;
     const armadaId = row.armadaId != null ? String(row.armadaId).trim() || undefined : undefined;
     const porsiByKategori = row.porsiByKategori && typeof row.porsiByKategori === 'object'
-      ? (row.porsiByKategori as ServicePointPorsiByKategori)
+      ? presentPorsiByKategori(row.porsiByKategori)
       : undefined;
     out.push({
       servicePointId,

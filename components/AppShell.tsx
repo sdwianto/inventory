@@ -16,7 +16,7 @@ import {
   TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine, Scale, Settings, Building2, UserCog,
   MapPin, ArrowLeftRight, RotateCcw, Calculator, Lock, Printer, Wrench, Cog, CalendarClock, BarChart3,
   Eraser, Activity, Shield, ChefHat, Apple, LayoutGrid, ClipboardList,
-  PackageOpen, KeyRound, MapPinned, Car,
+  PackageOpen, KeyRound, MapPinned, Car, CalendarRange,
   ShieldAlert, SquareCheck, ShieldCheck, Undo2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -89,6 +89,7 @@ const NAV: NavEntry[] = [
     items: [
       { href: '/food-production/kitchen', label: 'Dapur', icon: ChefHat },
       { href: '/food-production/recipe', label: 'Resep', icon: BookOpen },
+      { href: '/food-production/menu-plan', label: 'Perencanaan Menu', icon: CalendarRange },
       { href: '/food-production/plan', label: 'Rencana Produksi', icon: CalendarClock },
       { href: '/food-production/result', label: 'Hasil Produksi', icon: Factory },
       { href: '/food-production/report', label: 'Laporan Produksi', icon: ClipboardList },
@@ -172,7 +173,7 @@ const DEFAULT_EXPANDED: Record<string, boolean> = Object.fromEntries(
  * hanya tidak lagi termasuk akses default role operasional SPPG (GUDANG/SUPERVISOR via FP_OPS_ROUTES).
  */
 const FP_OPS_ROUTES = [
-  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/plan',
+  '/food-production/kitchen', '/food-production/recipe', '/food-production/menu', '/food-production/menu-plan', '/food-production/plan',
   '/food-production/mrp', '/food-production/purchase-requirement', '/food-production/issue', '/food-production/result',
   '/food-production/report', '/food-production/calendar',
   '/food-production/service-point', '/food-production/distribution',

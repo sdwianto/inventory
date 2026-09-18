@@ -9,6 +9,7 @@
 
 import { roundQty } from '@/lib/food-production/material-requirement';
 import {
+  KATEGORI_PORSI_LEGACY,
   KATEGORI_PORSI_OPTIONS,
   compareJamKirim,
   normalizeJamKirim,
@@ -138,6 +139,14 @@ export function sumPorsiByKategoriMaps(
     for (const opt of KATEGORI_PORSI_OPTIONS) {
       const n = Number(map[opt.value]) || 0;
       if (n > 0) out[opt.value] = (Number(out[opt.value]) || 0) + n;
+    }
+    const splitPosyandu =
+      (Number(map.POSYANDU_BUMIL) || 0) + (Number(map.POSYANDU_BUSUI) || 0);
+    if (!(splitPosyandu > 0)) {
+      const legacy = Number(map[KATEGORI_PORSI_LEGACY]) || 0;
+      if (legacy > 0) {
+        out.POSYANDU_BUMIL = (Number(out.POSYANDU_BUMIL) || 0) + legacy;
+      }
     }
   }
   return out;

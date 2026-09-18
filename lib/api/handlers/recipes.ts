@@ -526,6 +526,11 @@ export async function handleRecipes({
     const onlyActive = url.searchParams.get('aktif') === '1';
     let filter: Record<string, unknown> = {};
     if (onlyActive) filter.aktif = true;
+    const idsParam = (url.searchParams.get('ids') || '').trim();
+    if (idsParam) {
+      const ids = [...new Set(idsParam.split(',').map((s) => s.trim()).filter(Boolean))];
+      if (ids.length) filter.id = { $in: ids.slice(0, 200) };
+    }
     const q = (url.searchParams.get('q') || '').trim();
     if (q) {
       filter.$or = [

@@ -82,7 +82,7 @@ export function recommendShortages(lines: ForecastLine[]): FoodRecommendation[] 
       title: `Shortage: ${name}`,
       detail: `On-hand ${roundQty(line.onHandQty)} vs forecast ${roundQty(line.forecastQty)} — kekurangan ~${roundQty(line.projectedShortage)}.`,
       audience: 'both',
-      href: '/food-production/purchase-requirement',
+      href: '/pembelian-po',
       evidence: {
         productId: line.productId,
         onHand: roundQty(line.onHandQty),
@@ -91,7 +91,7 @@ export function recommendShortages(lines: ForecastLine[]): FoodRecommendation[] 
       },
       actions: [
         { label: 'Forecast', href: '/food-production/forecast' },
-        { label: 'Kebutuhan beli', href: '/food-production/purchase-requirement' },
+        { label: 'Kebutuhan beli', href: '/pembelian-po' },
       ],
     });
   }

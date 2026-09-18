@@ -1,17 +1,24 @@
 'use client';
 
 import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
 import PlanDateStrip from '@/components/food-production/PlanDateStrip';
 import RencanaKebutuhanDocument, {
   RENCANA_KEBUTUHAN_PRINT_ID,
 } from '@/components/food-production/RencanaKebutuhanDocument';
+import MenuHarianDocument, { MENU_HARIAN_PRINT_ID } from '@/components/food-production/MenuHarianDocument';
+import KebutuhanBahanHarianDocument, {
+  KEBUTUHAN_BAHAN_HARIAN_PRINT_ID,
+} from '@/components/food-production/KebutuhanBahanHarianDocument';
 import PrintPortal from '@/components/PrintPortal';
+import FpFlowHint from '@/components/food-production/FpFlowHint';
 import RecipeSearchSelect from '@/components/RecipeSearchSelect';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -35,7 +42,7 @@ import {
   CalendarDays, Plus, Pencil, RefreshCw, Trash2, Undo2, History,
   ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, ShoppingBag,
-  UtensilsCrossed, FileText, Printer, Combine,
+  UtensilsCrossed, FileText, Printer, Combine, ChefHat,
 } from 'lucide-react';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import {
@@ -46,10 +53,13 @@ import {
 import { normalizeRecipeSatuan } from '@/lib/food-production/recipe-uom';
 import {
   KATEGORI_PORSI_OPTIONS,
+  KATEGORI_PORSI_LEGACY,
   PLAN_STATUS_LABELS,
   RECIPE_NEED_BUFFER_PCT,
   CONSOLIDATE_ELIGIBLE_STATUSES,
   kategoriPorsiListLabel,
+  kategoriPorsiShortLabel,
+  expandLegacyKategoriPorsi,
   getRecipeBufferPct,
   isPlanEditable,
   canEditPlanMaterials,
@@ -66,7 +76,13 @@ import {
   type ProductionPlanStatus,
 } from '@/lib/food-production/production-plan';
 import {
+  emptyPortionDraft,
   emptyPortionTargets,
+  normalizePortionTargets,
+  portionDraftFromTargets,
+  sumAllPorsi,
+  sumPosyanduPorsi,
+  sumSekolahPorsi,
   type PortionTargetMap,
 } from '@/lib/food-production/portion-target';
 import { suggestAkgProfileForCategories } from '@/lib/food-production/nutrition';
@@ -83,6 +99,23 @@ import {
   type RencanaKebutuhanLine,
 } from '@/lib/food-production/rencana-kebutuhan';
 import { printDocument } from '@/lib/doc-print';
+import {
+  ADHOC_REASON_MIN,
+  formatAdHocCatatan,
+  fpFlowStepForPlanStatus,
+  isAdHocCatatan,
+  isAdHocReasonValid,
+  isWeeklyLinkedPlan,
+  menuPlanHref,
+} from '@/lib/food-production/fp-flow';
+import {
+  acuanKerjaDraftWatermark,
+  acuanKerjaFileName,
+  buildKebutuhanBahanHarian,
+  hidanganInputFromPlanLines,
+  type KebutuhanBahanHarian,
+  type KebutuhanRecipeRef,
+} from '@/lib/food-production/kebutuhan-bahan-harian';
 import { formatNumber } from '@/lib/format';
 import {
   parseQtyInput,
@@ -119,6 +152,7 @@ interface RecipeOpt {
   yieldQty?: number;
   wastePct?: number;
   aktif?: boolean;
+  kategoriMenu?: string | null;
   lines?: Array<{
     productId: string;
     productKode?: string;
@@ -161,6 +195,7 @@ interface PlanRow {
   status: ProductionPlanStatus;
   totalTargetPorsi?: number;
   catatan?: string;
+  weeklyMenuPlanId?: string | null;
   history?: PlanHistoryEntry[];
   materialOverrides?: PlanMaterialOverride[];
   recipeBufferPct?: Record<string, number>;
@@ -173,6 +208,7 @@ interface PlanRow {
     menuKode?: string;
     menuNama?: string;
     kategoriPorsiList?: KategoriPorsi[];
+    notes?: string;
   }>;
 }
 
@@ -210,6 +246,11 @@ const emptyLine = (kategoriPorsiList: KategoriPorsi[] = []): PlanLineForm => ({
   targetPorsi: '0',
 });
 
+function coercePortionTargets(raw: unknown): PortionTargetMap {
+  const n = normalizePortionTargets(raw);
+  return 'error' in n ? emptyPortionTargets() : n;
+}
+
 function formatEstKcal(n: number | undefined): string {
   if (n == null || !Number.isFinite(n) || n <= 0) return '0';
   if (n >= 10) return Math.round(n).toLocaleString('id-ID');
@@ -221,15 +262,16 @@ function unionKategoriFromLines(lines: PlanLineForm[]): KategoriPorsi[] {
   for (const line of lines) {
     for (const kp of line.kategoriPorsiList || []) seen.add(kp);
   }
-  return KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter((v) => seen.has(v));
+  return expandLegacyKategoriPorsi([...seen]);
 }
 
 function kategoriDropdownLabel(list: KategoriPorsi[]): string {
-  if (!list.length) return '— Pilih kategori —';
-  if (list.length === 1) {
-    return KATEGORI_PORSI_OPTIONS.find((o) => o.value === list[0])?.label || list[0];
+  const expanded = expandLegacyKategoriPorsi(list);
+  if (!expanded.length) return '— Pilih kategori —';
+  if (expanded.length === 1) {
+    return kategoriPorsiShortLabel(expanded[0]);
   }
-  return `${list.length} kategori`;
+  return `${expanded.length} kategori`;
 }
 
 function today(): string {
@@ -264,6 +306,7 @@ function FoodProductionPlanPageContent() {
   const searchParams = useSearchParams();
   const deepLinkHandled = useRef<string | null>(null);
   const deepLinkFetching = useRef<string | null>(null);
+  const tanggalDeepLinkHandled = useRef<string | null>(null);
   const canManage = useMemo(() => {
     const role = String((getUser() as { role?: string } | null)?.role || '');
     return MANAGE_ROLES.has(role);
@@ -315,6 +358,17 @@ function FoodProductionPlanPageContent() {
     planNos: string[];
     lines: RencanaKebutuhanLine[];
   } | null>(null);
+  const [acuanOpen, setAcuanOpen] = useState(false);
+  const [acuanPrinting, setAcuanPrinting] = useState<'full' | 'bahan' | null>(null);
+  const [acuanDoc, setAcuanDoc] = useState<(KebutuhanBahanHarian & {
+    tanggal: string;
+    kitchenNama?: string;
+    porsiByKategori: PortionTargetMap;
+    note?: string;
+    productionPlanNo?: string;
+    productionPlanStatus?: ProductionPlanStatus;
+    draftWatermark: boolean;
+  }) | null>(null);
   const [shortageDetailOpen, setShortageDetailOpen] = useState(false);
   const [shortageDetail, setShortageDetail] = useState<{
     noDokumen: string;
@@ -326,14 +380,12 @@ function FoodProductionPlanPageContent() {
     kitchenId: '',
     catatan: '',
   });
+  const [adHocOpen, setAdHocOpen] = useState(false);
+  const [adHocReason, setAdHocReason] = useState('');
+  const [adHocDate, setAdHocDate] = useState('');
   const [lines, setLines] = useState<PlanLineForm[]>([emptyLine()]);
   const [portionTargets, setPortionTargets] = useState<PortionTargetMap>(() => emptyPortionTargets());
-  const [portionDraft, setPortionDraft] = useState<Record<KategoriPorsi, string>>(() => ({
-    PORSI_BESAR: '0',
-    PORSI_KECIL: '0',
-    POSYANDU_BUMIL_BUSUI: '0',
-    POSYANDU_BALITA: '0',
-  }));
+  const [portionDraft, setPortionDraft] = useState<Record<keyof PortionTargetMap, string>>(() => emptyPortionDraft());
   const [savingPortion, setSavingPortion] = useState(false);
   const [kitchenScopeTick, setKitchenScopeTick] = useState(0);
   /** Acuan porsi untuk tanggal/dapur di dialog (bisa beda dari panel kiri). */
@@ -383,11 +435,11 @@ function FoodProductionPlanPageContent() {
     const seen = new Set<string>();
     const parts: string[] = [];
     for (const line of lines) {
-      for (const kp of line.kategoriPorsiList || []) {
+      for (const kp of expandLegacyKategoriPorsi(line.kategoriPorsiList || [])) {
         if (seen.has(kp)) continue;
         seen.add(kp);
-        const label = KATEGORI_PORSI_OPTIONS.find((o) => o.value === kp)?.label || kp;
-        const acuan = dialogTargets[kp as KategoriPorsi] ?? 0;
+        const label = kategoriPorsiShortLabel(kp);
+        const acuan = dialogTargets[kp] ?? 0;
         parts.push(`${label} ${Number(acuan).toLocaleString('id-ID')}`);
       }
     }
@@ -597,6 +649,23 @@ function FoodProductionPlanPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link once per planId after load
   }, [searchParams, rows, loading]);
 
+  useEffect(() => {
+    const planId = (searchParams.get('productionPlanId') || searchParams.get('highlight') || '').trim();
+    if (planId) return;
+    const tgl = dateKey(searchParams.get('tanggal') || '');
+    if (!tgl || tanggalDeepLinkHandled.current === tgl) return;
+    tanggalDeepLinkHandled.current = tgl;
+    setShowAll(false);
+    setSelectedDate(tgl);
+    const d = new Date(`${tgl}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return;
+    setMonth((prev) => {
+      const same =
+        prev.getFullYear() === d.getFullYear() && prev.getMonth() === d.getMonth();
+      return same ? prev : d;
+    });
+  }, [searchParams]);
+
   const activeRecipes = useMemo(
     () => Object.values(recipesById).filter((r) => r.aktif !== false),
     [recipesById],
@@ -618,6 +687,30 @@ function FoodProductionPlanPageContent() {
     });
   }, [rows, selectedDate, showAll, filterStatus]);
 
+  const expandedRow = useMemo(
+    () => rows.find((r) => r.id === expandedId),
+    [rows, expandedId],
+  );
+
+  const linkedOnDate = useMemo(() => {
+    if (!selectedDate) return undefined;
+    return rows.find((r) =>
+      dateKey(r.tanggal) === selectedDate
+      && isWeeklyLinkedPlan(r)
+      && (!scopeKitchenId || r.kitchenId === scopeKitchenId),
+    );
+  }, [rows, selectedDate, scopeKitchenId]);
+
+  const cancelledBoardOnDate = useMemo(() => {
+    if (!selectedDate) return undefined;
+    return rows.find((r) =>
+      dateKey(r.tanggal) === selectedDate
+      && Boolean(String(r.weeklyMenuPlanId || '').trim())
+      && r.status === 'CANCELLED'
+      && (!scopeKitchenId || r.kitchenId === scopeKitchenId),
+    );
+  }, [rows, selectedDate, scopeKitchenId]);
+
   const listTitle = showAll || !selectedDate
     ? 'Semua rencana bulan ini'
     : `Rencana Menu ${format(new Date(`${selectedDate}T12:00:00`), 'd-M-yyyy')}`;
@@ -626,12 +719,7 @@ function FoodProductionPlanPageContent() {
     if (!tanggal || !kitchenId) {
       const empty = emptyPortionTargets();
       setPortionTargets(empty);
-      setPortionDraft({
-        PORSI_BESAR: '0',
-        PORSI_KECIL: '0',
-        POSYANDU_BUMIL_BUSUI: '0',
-        POSYANDU_BALITA: '0',
-      });
+      setPortionDraft(emptyPortionDraft());
       return;
     }
     try {
@@ -641,20 +729,12 @@ function FoodProductionPlanPageContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal memuat acuan porsi');
-      const targets = {
-        ...emptyPortionTargets(),
-        ...(data?.targets || {}),
-      } as PortionTargetMap;
+      const targets = coercePortionTargets(data?.targets);
       setPortionTargets(targets);
       const key = `${dateKey(tanggal)}::${kitchenId}`;
       acuanFetchedRef.current.add(key);
       setAcuanByPlanKey((prev) => ({ ...prev, [key]: targets }));
-      setPortionDraft({
-        PORSI_BESAR: String(targets.PORSI_BESAR ?? 0),
-        PORSI_KECIL: String(targets.PORSI_KECIL ?? 0),
-        POSYANDU_BUMIL_BUSUI: String(targets.POSYANDU_BUMIL_BUSUI ?? 0),
-        POSYANDU_BALITA: String(targets.POSYANDU_BALITA ?? 0),
-      });
+      setPortionDraft(portionDraftFromTargets(targets));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat acuan porsi');
     }
@@ -685,10 +765,7 @@ function FoodProductionPlanPageContent() {
         acuanFetchedRef.current.delete(key);
         return;
       }
-      const targets = {
-        ...emptyPortionTargets(),
-        ...(data?.targets || {}),
-      } as PortionTargetMap;
+      const targets = coercePortionTargets(data?.targets);
       setAcuanByPlanKey((prev) => ({ ...prev, [key]: targets }));
     } catch {
       acuanFetchedRef.current.delete(key);
@@ -735,12 +812,12 @@ function FoodProductionPlanPageContent() {
       toast.error('Pilih dapur di scope bar dulu');
       return;
     }
-    const targets = next || {
-      PORSI_BESAR: Math.max(0, Math.floor(Number(portionDraft.PORSI_BESAR) || 0)),
-      PORSI_KECIL: Math.max(0, Math.floor(Number(portionDraft.PORSI_KECIL) || 0)),
-      POSYANDU_BUMIL_BUSUI: Math.max(0, Math.floor(Number(portionDraft.POSYANDU_BUMIL_BUSUI) || 0)),
-      POSYANDU_BALITA: Math.max(0, Math.floor(Number(portionDraft.POSYANDU_BALITA) || 0)),
-    };
+    const fromDraft = coercePortionTargets(
+      Object.fromEntries(
+        KATEGORI_PORSI_OPTIONS.map((o) => [o.value, portionDraft[o.value]]),
+      ),
+    );
+    const targets = next || fromDraft;
     setSavingPortion(true);
     try {
       const res = await fetch('/api/portion-targets', {
@@ -758,20 +835,12 @@ function FoodProductionPlanPageContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal menyimpan acuan porsi');
-      const saved = {
-        ...emptyPortionTargets(),
-        ...(data?.targets || targets),
-      } as PortionTargetMap;
+      const saved = coercePortionTargets(data?.targets || targets);
       setPortionTargets(saved);
       const key = `${dateKey(selectedDate)}::${scopeKitchenId}`;
       acuanFetchedRef.current.add(key);
       setAcuanByPlanKey((prev) => ({ ...prev, [key]: saved }));
-      setPortionDraft({
-        PORSI_BESAR: String(saved.PORSI_BESAR ?? 0),
-        PORSI_KECIL: String(saved.PORSI_KECIL ?? 0),
-        POSYANDU_BUMIL_BUSUI: String(saved.POSYANDU_BUMIL_BUSUI ?? 0),
-        POSYANDU_BALITA: String(saved.POSYANDU_BALITA ?? 0),
-      });
+      setPortionDraft(portionDraftFromTargets(saved));
       toast.success('Acuan kategori porsi disimpan');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal menyimpan acuan porsi');
@@ -781,6 +850,9 @@ function FoodProductionPlanPageContent() {
   }
 
   function porsiAcuanFor(kp: KategoriPorsi, map: PortionTargetMap = dialogTargets): number {
+    if (kp === KATEGORI_PORSI_LEGACY) {
+      return porsiAcuanFor('POSYANDU_BUMIL', map) + porsiAcuanFor('POSYANDU_BUSUI', map);
+    }
     return Math.max(0, Math.floor(Number(map[kp]) || 0));
   }
 
@@ -794,11 +866,12 @@ function FoodProductionPlanPageContent() {
   function toggleLineKategoriPorsi(idx: number, kp: KategoriPorsi, checked: boolean) {
     const line = lines[idx];
     if (!line) return;
+    const current = expandLegacyKategoriPorsi(line.kategoriPorsiList);
     const next = checked
       ? KATEGORI_PORSI_OPTIONS.map((o) => o.value).filter(
-        (v) => v === kp || line.kategoriPorsiList.includes(v),
+        (v) => v === kp || current.includes(v),
       )
-      : line.kategoriPorsiList.filter((v) => v !== kp);
+      : current.filter((v) => v !== kp);
     const n = sumPorsiFromKategori(next);
     if (next.length > 0 && n <= 0) {
       toast.message('Isi acuan porsi di panel Kategori Porsi untuk tanggal ini');
@@ -825,10 +898,7 @@ function FoodProductionPlanPageContent() {
         });
         const data = await res.json();
         if (!res.ok || cancelled) return;
-        const targets = {
-          ...emptyPortionTargets(),
-          ...(data?.targets || {}),
-        } as PortionTargetMap;
+        const targets = coercePortionTargets(data?.targets);
         setDialogTargets(targets);
       } catch {
         if (!cancelled) setDialogTargets(emptyPortionTargets());
@@ -843,7 +913,7 @@ function FoodProductionPlanPageContent() {
     setExpandedId(null);
   }
 
-  function openCreate(date?: Date | string) {
+  function openCreate(date?: Date | string, catatan?: string) {
     const tanggal = date
       ? (typeof date === 'string' ? dateKey(date) : format(date, 'yyyy-MM-dd'))
       : (selectedDate || today());
@@ -852,10 +922,39 @@ function FoodProductionPlanPageContent() {
     setForm({
       tanggal,
       kitchenId,
-      catatan: '',
+      catatan: catatan || '',
     });
     setLines([emptyLine()]);
     setOpen(true);
+  }
+
+  function requestAdHocCreate(date?: Date | string) {
+    const tanggal = date
+      ? (typeof date === 'string' ? dateKey(date) : format(date, 'yyyy-MM-dd'))
+      : (selectedDate || today());
+    const linked = rows.find((r) =>
+      dateKey(r.tanggal) === tanggal
+      && isWeeklyLinkedPlan(r)
+      && (!scopeKitchenId || r.kitchenId === scopeKitchenId),
+    );
+    if (linked) {
+      toast.message(`Hari ini sudah dari Perencanaan Menu (${linked.noDokumen}).`, {
+        action: { label: 'Buka RPN', onClick: () => setExpandedId(linked.id) },
+      });
+      return;
+    }
+    setAdHocDate(tanggal);
+    setAdHocReason('');
+    setAdHocOpen(true);
+  }
+
+  function confirmAdHocCreate() {
+    if (!isAdHocReasonValid(adHocReason)) {
+      toast.error(`Alasan wajib, minimal ${ADHOC_REASON_MIN} karakter`);
+      return;
+    }
+    setAdHocOpen(false);
+    openCreate(adHocDate || selectedDate, formatAdHocCatatan(adHocReason));
   }
 
   function canEditMaterialsForRow(row: PlanRow): boolean {
@@ -875,10 +974,17 @@ function FoodProductionPlanPageContent() {
       toast.error(`Status ${PLAN_STATUS_LABELS[row.status]} tidak dapat diubah`);
       return;
     }
+    if (isWeeklyLinkedPlan(row)) {
+      toast.message('Ubah menu di Perencanaan Menu, lalu terbit ulang.');
+      router.push(menuPlanHref({ kitchenId: row.kitchenId, tanggal: row.tanggal }));
+      return;
+    }
     setEditing(row);
-    const planKp = row.kategoriPorsiList?.length
-      ? row.kategoriPorsiList
-      : (row.kategoriPorsi ? [row.kategoriPorsi] : []);
+    const planKp = expandLegacyKategoriPorsi(
+      row.kategoriPorsiList?.length
+        ? row.kategoriPorsiList
+        : (row.kategoriPorsi ? [row.kategoriPorsi] : []),
+    );
     setForm({
       tanggal: row.tanggal || today(),
       kitchenId: row.kitchenId,
@@ -886,7 +992,9 @@ function FoodProductionPlanPageContent() {
     });
     const formLines: PlanLineForm[] = [];
     for (const l of row.lines || []) {
-      const lineKp = l.kategoriPorsiList?.length ? l.kategoriPorsiList : planKp;
+      const lineKp = expandLegacyKategoriPorsi(
+        l.kategoriPorsiList?.length ? l.kategoriPorsiList : planKp,
+      );
       if (l.recipeId) {
         formLines.push({
           recipeId: l.recipeId,
@@ -939,7 +1047,9 @@ function FoodProductionPlanPageContent() {
         tanggal: form.tanggal,
         kitchenId: form.kitchenId,
         kategoriPorsiList: kpOk,
-        catatan: form.catatan.trim() || undefined,
+        catatan: !editing
+          ? (formatAdHocCatatan(form.catatan || adHocReason) || undefined)
+          : (form.catatan.trim() || undefined),
         lines: validLines.map((l) => ({
           recipeId: l.recipeId,
           kategoriPorsiList: l.kategoriPorsiList,
@@ -1558,6 +1668,120 @@ function FoodProductionPlanPageContent() {
     openRencanaKebutuhanForDate(row.tanggal, row.kitchenNama || row.kitchenId || '');
   }
 
+  async function fetchRecipesForIds(ids: string[]): Promise<Map<string, KebutuhanRecipeRef>> {
+    const merged: Record<string, RecipeOpt> = { ...recipesById };
+    const missing = [...new Set(ids.map((id) => String(id || '').trim()).filter((id) => id && !merged[id]))];
+    if (missing.length) {
+      try {
+        for (let i = 0; i < missing.length; i += 200) {
+          const chunk = missing.slice(i, i + 200);
+          const res = await fetch(
+            `/api/recipes?ids=${encodeURIComponent(chunk.join(','))}`,
+            { headers: { ...actingTenantHeaders() } },
+          );
+          const data = await res.json();
+          if (!res.ok || !Array.isArray(data)) continue;
+          for (const row of data as RecipeOpt[]) {
+            if (row?.id) merged[row.id] = row;
+          }
+        }
+        setRecipesById(merged);
+      } catch {
+        /* pakai yang sudah di-cache */
+      }
+    }
+    return new Map(Object.entries(merged)) as Map<string, KebutuhanRecipeRef>;
+  }
+
+  async function fetchPlanAcuan(row: Pick<PlanRow, 'tanggal' | 'kitchenId'>): Promise<PortionTargetMap> {
+    const key = planAcuanKey(row.tanggal, row.kitchenId);
+    const cached = acuanByPlanKey[key];
+    if (cached) return cached;
+    const tgl = dateKey(row.tanggal);
+    const kid = String(row.kitchenId || '').trim();
+    if (!tgl || !kid) return acuanForPlan(row);
+    try {
+      const qs = new URLSearchParams({ tanggal: tgl, kitchenId: kid });
+      const res = await fetch(`/api/portion-targets?${qs}`, {
+        headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+      });
+      const data = await res.json();
+      if (!res.ok) return acuanForPlan(row);
+      const targets = coercePortionTargets(data?.targets);
+      acuanFetchedRef.current.add(key);
+      setAcuanByPlanKey((prev) => ({ ...prev, [key]: targets }));
+      return targets;
+    } catch {
+      return acuanForPlan(row);
+    }
+  }
+
+  async function openAcuanKerja(row: PlanRow) {
+    const recipeIds = (row.lines || []).map((l) => String(l.recipeId || '').trim()).filter(Boolean);
+    if (!recipeIds.length) {
+      toast.error('Rencana ini belum punya baris resep');
+      return;
+    }
+    const [recipesMap, acuan] = await Promise.all([
+      fetchRecipesForIds(recipeIds),
+      fetchPlanAcuan(row),
+    ]);
+    const fallbackKp = row.kategoriPorsiList?.length
+      ? row.kategoriPorsiList.map(String)
+      : (row.kategoriPorsi ? [row.kategoriPorsi] : []);
+    const hidangan = hidanganInputFromPlanLines(row.lines || [], recipesMap, fallbackKp);
+    if (!hidangan.length) {
+      toast.error('Rencana ini belum punya baris resep');
+      return;
+    }
+    const built = buildKebutuhanBahanHarian({
+      hidangan,
+      recipesById: recipesMap,
+      acuanByKategori: acuan,
+      recipeBufferPct: row.recipeBufferPct,
+    });
+    if (built.errors.length && !built.rekap.length && !built.hidangan.length) {
+      toast.error(built.errors[0] || 'Gagal hitung acuan kerja');
+      return;
+    }
+    if (built.errors.length) toast.message(built.errors[0]);
+    const kitchenLabel = row.kitchenNama
+      || kitchens.find((k) => k.id === row.kitchenId)?.nama
+      || 'Dapur';
+    setAcuanDoc({
+      ...built,
+      tanggal: dateKey(row.tanggal),
+      kitchenNama: kitchenLabel,
+      porsiByKategori: { ...emptyPortionTargets(), ...acuan },
+      note: row.catatan,
+      productionPlanNo: row.noDokumen,
+      productionPlanStatus: row.status,
+      draftWatermark: acuanKerjaDraftWatermark(row.noDokumen, row.status),
+    });
+    setAcuanOpen(true);
+  }
+
+  async function printAcuanKerja(kind: 'full' | 'bahan' = 'full') {
+    if (!acuanDoc) return;
+    setAcuanPrinting(kind);
+    try {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => setTimeout(resolve, 200));
+      });
+      await printDocument(
+        kind === 'full' ? MENU_HARIAN_PRINT_ID : KEBUTUHAN_BAHAN_HARIAN_PRINT_ID,
+        300,
+        acuanKerjaFileName(
+          acuanDoc.kitchenNama,
+          acuanDoc.tanggal,
+          kind === 'bahan' ? 'bahan' : 'acuan',
+        ),
+      );
+    } finally {
+      setAcuanPrinting(null);
+    }
+  }
+
   async function printRencanaKebutuhan() {
     if (!needsDoc) return;
     setNeedsPrinting(true);
@@ -1582,7 +1806,7 @@ function FoodProductionPlanPageContent() {
             );
           }
           throw new Error(
-            'Tidak bisa diproses — barang belum dikeluarkan. Klik Keluarkan Barang dulu.',
+            'Tidak bisa diproses — bahan belum diambil. Klik Ambil Bahan dulu.',
           );
         }
       }
@@ -1609,7 +1833,7 @@ function FoodProductionPlanPageContent() {
         const ready = await fetchReadiness(row.id);
         setExpandedId(row.id);
         if (ready?.materialsReady) {
-          toast.message('Bahan lengkap — silakan Keluarkan Barang');
+          toast.message('Bahan lengkap — silakan Ambil Bahan');
         } else if (ready && ready.shortageCount > 0) {
           toast.message(`Ada ${ready.shortageCount} item kurang — buat Draft Belanja`);
         }
@@ -1649,7 +1873,7 @@ function FoodProductionPlanPageContent() {
   /** Hitung ulang MRP dari resep + acuan porsi terkini (koreksi explode tanpa acuan). */
   async function regenerateMrp(row: PlanRow) {
     const okConfirm = await confirm({
-      title: 'Hitung ulang MRP?',
+      title: 'Hitung ulang kebutuhan bahan?',
       description:
         `${row.noDokumen}: kebutuhan bahan dihitung ulang dari resep dan acuan porsi tanggal/dapur. `
         + 'MRP Disetujui tanpa PR/pengeluaran diganti dokumen baru (Draft). '
@@ -1864,8 +2088,12 @@ function FoodProductionPlanPageContent() {
             Rencana Produksi
           </h1>
           <p className="text-sm text-slate-500">
-            Pilih tanggal menu (distribusi pagi) → susun porsi · Barang datang &amp; masak malam H-1 · Disetujui + bahan lengkap → Ambil Bahan · Kekurangan → Buat Draft Belanja → review PO → Ajukan/Kirim vendor
+            Eksekusi RPN harian: setujui → belanja jika kurang atau ambil bahan jika stok cukup.
           </p>
+          <FpFlowHint
+            active={fpFlowStepForPlanStatus(expandedRow?.status)}
+            className="mt-1"
+          />
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           <select
@@ -1882,8 +2110,20 @@ function FoodProductionPlanPageContent() {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => router.push(menuPlanHref({
+              kitchenId: scopeKitchenId,
+              tanggal: selectedDate || today(),
+            }))}
+            title="Papan menu mingguan ahli gizi"
+          >
+            <CalendarDays className="h-4 w-4 mr-1" />
+            Perencanaan Menu
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => router.push('/food-production/menu')}
-            title="Master menu (bahan pangan + resep) untuk rencana"
+            title="Paket resep untuk papan minggu"
           >
             <UtensilsCrossed className="h-4 w-4 mr-1" />
             Menu
@@ -1895,11 +2135,12 @@ function FoodProductionPlanPageContent() {
           {canManage && (
             <Button
               size="sm"
-              onClick={() => openCreate(selectedDate)}
-              className="bg-orange-500 hover:bg-orange-600"
+              variant="outline"
+              onClick={() => requestAdHocCreate(selectedDate)}
+              title="Tanpa papan minggu — untuk hari darurat"
             >
               <Plus className="h-4 w-4 mr-1" />
-              Buat Rencana
+              Rencana ad-hoc
             </Button>
           )}
         </div>
@@ -1914,7 +2155,7 @@ function FoodProductionPlanPageContent() {
         onMonthChange={setMonth}
         selectedDate={selectedDate}
         onSelectDate={handleSelectDate}
-        onCreateForDate={(d) => openCreate(d)}
+        onCreateForDate={(d) => requestAdHocCreate(d)}
         canCreate={canManage}
       />
 
@@ -1943,8 +2184,25 @@ function FoodProductionPlanPageContent() {
               {formatPlanDateLabel(selectedDate)}
             </p>
             <p className="text-[11px] text-slate-500 mb-3">
-              Acuan manual per tanggal{scopeKitchenId ? '' : ' — pilih dapur dulu'}.
-              Dipakai saat buat rencana.
+              {linkedOnDate ? (
+                <>
+                  Porsi dari Perencanaan Menu ({linkedOnDate.noDokumen}).{' '}
+                  <Link
+                    href={menuPlanHref({
+                      kitchenId: linkedOnDate.kitchenId,
+                      tanggal: selectedDate,
+                    })}
+                    className="text-orange-700 hover:underline"
+                  >
+                    Ubah di papan, lalu terbit ulang.
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Acuan manual per tanggal{scopeKitchenId ? '' : ' — pilih dapur dulu'}.
+                  Dipakai saat rencana ad-hoc.
+                </>
+              )}
             </p>
             <ul className="space-y-1.5">
               {KATEGORI_PORSI_OPTIONS.map((opt) => (
@@ -1963,7 +2221,7 @@ function FoodProductionPlanPageContent() {
                       type="number"
                       min={0}
                       step={1}
-                      disabled={!canManage || !scopeKitchenId || savingPortion}
+                      disabled={!canManage || !scopeKitchenId || savingPortion || Boolean(linkedOnDate)}
                       className="h-7 w-[4.5rem] px-1.5 text-right text-sm font-semibold tabular-nums text-orange-700"
                       value={portionDraft[opt.value]}
                       onChange={(e) => setPortionDraft((prev) => ({
@@ -1971,6 +2229,7 @@ function FoodProductionPlanPageContent() {
                         [opt.value]: e.target.value,
                       }))}
                       onBlur={() => {
+                        if (linkedOnDate) return;
                         const n = Math.max(0, Math.floor(Number(portionDraft[opt.value]) || 0));
                         const next = { ...portionTargets, [opt.value]: n };
                         if (n === portionTargets[opt.value]) return;
@@ -1983,6 +2242,20 @@ function FoodProductionPlanPageContent() {
                 </li>
               ))}
             </ul>
+            <div className="mt-3 space-y-1 border-t border-slate-100 pt-2 text-[11px] tabular-nums">
+              <div className="flex justify-between gap-2 text-slate-600">
+                <span>Sekolah</span>
+                <span className="font-medium">{sumSekolahPorsi(portionTargets).toLocaleString('id-ID')}</span>
+              </div>
+              <div className="flex justify-between gap-2 text-slate-600">
+                <span>Posyandu</span>
+                <span className="font-medium">{sumPosyanduPorsi(portionTargets).toLocaleString('id-ID')}</span>
+              </div>
+              <div className="flex justify-between gap-2 font-semibold text-slate-800">
+                <span>Total</span>
+                <span>{sumAllPorsi(portionTargets).toLocaleString('id-ID')}</span>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="bg-white border rounded-xl shadow-sm p-1.5 flex lg:flex-col items-center gap-1 self-start">
@@ -2037,10 +2310,11 @@ function FoodProductionPlanPageContent() {
               {selectedDate && canManage && (
                 <Button
                   size="sm"
-                  onClick={() => openCreate(selectedDate)}
-                  className="bg-orange-500 hover:bg-orange-600"
+                  variant="outline"
+                  onClick={() => requestAdHocCreate(selectedDate)}
+                  title="Tanpa papan minggu — untuk hari darurat"
                 >
-                  <Plus className="w-3 h-3 mr-1" /> Rencana baru
+                  <Plus className="w-3 h-3 mr-1" /> Rencana ad-hoc
                 </Button>
               )}
             </div>
@@ -2050,16 +2324,44 @@ function FoodProductionPlanPageContent() {
             <p className="text-sm text-muted-foreground py-8 text-center">Memuat…</p>
           )}
           {!loading && filteredList.length === 0 && (
-            <div className="py-10 text-center text-sm text-muted-foreground space-y-2">
+            <div className="py-10 text-center text-sm text-muted-foreground space-y-3">
               <p>
                 {showAll
                   ? 'Belum ada rencana di bulan ini.'
                   : 'Tidak ada rencana pada tanggal ini.'}
               </p>
               {canManage && (
-                <Button size="sm" variant="outline" onClick={() => openCreate(selectedDate)}>
-                  <Plus className="h-3 w-3 mr-1" /> Buat rencana
-                </Button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {cancelledBoardOnDate ? (
+                    <Button
+                      size="sm"
+                      onClick={() => router.push(menuPlanHref({
+                        kitchenId: cancelledBoardOnDate.kitchenId || scopeKitchenId,
+                        tanggal: selectedDate || today(),
+                      }))}
+                    >
+                      Terbit ulang dari Perencanaan Menu
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => router.push(menuPlanHref({
+                        kitchenId: scopeKitchenId,
+                        tanggal: selectedDate || today(),
+                      }))}
+                    >
+                      Susun di Perencanaan Menu
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => requestAdHocCreate(selectedDate)}
+                    title="Tanpa papan minggu — untuk hari darurat"
+                  >
+                    <Plus className="h-3 w-3 mr-1" /> Rencana ad-hoc
+                  </Button>
+                </div>
               )}
             </div>
           )}
@@ -2089,6 +2391,11 @@ function FoodProductionPlanPageContent() {
                     )}>
                       {PLAN_STATUS_LABELS[row.status] || row.status}
                     </span>
+                    {isWeeklyLinkedPlan(row) && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800">
+                        Dari papan menu
+                      </span>
+                    )}
                     <span className="text-sm text-slate-700 truncate">
                       {row.kitchenNama || row.kitchenId}
                     </span>
@@ -2623,19 +2930,27 @@ function FoodProductionPlanPageContent() {
                         >
                           <FileText className="h-4 w-4 mr-1" /> Rencana Kebutuhan
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void openAcuanKerja(row)}
+                          title="PDF acuan kerja dapur (menu + total bahan)"
+                        >
+                          <ChefHat className="h-4 w-4 mr-1" /> Acuan Kerja
+                        </Button>
                         {canManage && MRP_ELIGIBLE_PLAN_STATUSES.has(row.status) && (
                           <Button
                             variant="ghost"
                             size="sm"
                             disabled={regeneratingMrpId === row.id}
-                            title="Hitung ulang MRP dari resep + acuan porsi"
+                            title="Hitung ulang kebutuhan bahan dari resep + acuan porsi"
                             onClick={() => void regenerateMrp(row)}
                           >
                             <RefreshCw className={cn(
                               'h-4 w-4 mr-1',
                               regeneratingMrpId === row.id && 'animate-spin',
                             )} />
-                            {regeneratingMrpId === row.id ? 'Menghitung…' : 'Hitung ulang MRP'}
+                            {regeneratingMrpId === row.id ? 'Menghitung…' : 'Hitung ulang kebutuhan bahan'}
                           </Button>
                         )}
                         {ISSUE_ELIGIBLE_PLAN_STATUSES.has(row.status) && (() => {
@@ -2659,22 +2974,25 @@ function FoodProductionPlanPageContent() {
                           if (ready?.materialsReady) {
                             if (ready.issueCompleted) {
                               return (
-                                <span className="text-xs text-emerald-600 px-1">
-                                  Barang sudah dikeluarkan{ready.completedIssueNo ? ` (${ready.completedIssueNo})` : ''}
+                                <span className="text-xs text-emerald-600 px-1 ml-auto">
+                                  Bahan sudah diambil{ready.completedIssueNo ? ` (${ready.completedIssueNo})` : ''}
                                 </span>
                               );
                             }
                             return (
                               <Button
-                                variant="outline"
+                                variant={ready.openIssue ? 'outline' : 'default'}
                                 size="sm"
-                                title="Keluarkan barang dari gudang untuk produksi"
+                                className="ml-auto"
+                                title={ready.openIssue
+                                  ? 'Lanjutkan pengeluaran bahan'
+                                  : 'Ambil bahan dari gudang untuk produksi'}
                                 onClick={() => router.push(`/stok/pengeluaran?mode=produksi&productionPlanId=${row.id}`)}
                               >
                                 <ArrowUpFromLine className="h-4 w-4 mr-1" />
                                 {ready.openIssue
                                   ? `Lanjutkan Pengeluaran ${ready.openIssue.noDokumen || ''}`
-                                  : 'Keluarkan Barang'}
+                                  : 'Ambil Bahan'}
                               </Button>
                             );
                           }
@@ -2718,6 +3036,7 @@ function FoodProductionPlanPageContent() {
                                       <Button
                                         variant="default"
                                         size="sm"
+                                        className="ml-auto"
                                         onClick={() => router.push(poReviewUrl(ready.linkedPo!.id, true))}
                                       >
                                         <ShoppingBag className="h-4 w-4 mr-1" />
@@ -2750,8 +3069,9 @@ function FoodProductionPlanPageContent() {
                                   </>
                                 ) : canManage ? (
                                   <Button
-                                    variant="outline"
+                                    variant="default"
                                     size="sm"
+                                    className="ml-auto"
                                     disabled={procuringId === row.id}
                                     onClick={() => void procureShortage(row)}
                                   >
@@ -2833,9 +3153,25 @@ function FoodProductionPlanPageContent() {
                           </>
                         )}
                         {canManage && isPlanEditable(row.status) && (
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
-                            <Pencil className="h-4 w-4 mr-1" /> Ubah
-                          </Button>
+                          isWeeklyLinkedPlan(row) ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                toast.message('Ubah menu di Perencanaan Menu, lalu terbit ulang.');
+                                router.push(menuPlanHref({
+                                  kitchenId: row.kitchenId,
+                                  tanggal: row.tanggal,
+                                }));
+                              }}
+                            >
+                              <Pencil className="h-4 w-4 mr-1" /> Ubah di Perencanaan Menu
+                            </Button>
+                          ) : (
+                            <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                              <Pencil className="h-4 w-4 mr-1" /> Ubah
+                            </Button>
+                          )
                         )}
                         {canManage && next && (
                           row.status === 'DRAFT'
@@ -2874,7 +3210,7 @@ function FoodProductionPlanPageContent() {
                           && readinessById[row.id].materialsReady
                           && !readinessById[row.id].issueCompleted && (
                           <span className="text-xs text-muted-foreground px-1">
-                            Tombol Diproses terbuka setelah barang dikeluarkan
+                            Tombol Diproses terbuka setelah bahan diambil
                           </span>
                         )}
                         {canManage && row.status === 'PROCESSING' && readinessById[row.id]
@@ -3016,6 +3352,39 @@ function FoodProductionPlanPageContent() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={adHocOpen} onOpenChange={setAdHocOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rencana ad-hoc</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Tidak memakai papan minggu; resep diisi manual. Untuk hari darurat saja.
+          </p>
+          <div className="space-y-1.5">
+            <Label htmlFor="adhoc-reason">Alasan *</Label>
+            <Textarea
+              id="adhoc-reason"
+              value={adHocReason}
+              onChange={(e) => setAdHocReason(e.target.value)}
+              placeholder="Minimal 8 karakter, contoh: masak extra posyandu"
+              rows={3}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Tercatat di riwayat RPN dengan awalan ADHOC.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAdHocOpen(false)}>Batal</Button>
+            <Button
+              disabled={!isAdHocReasonValid(adHocReason)}
+              onClick={confirmAdHocCreate}
+            >
+              Buat draf
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={open}
         onOpenChange={(next) => {
@@ -3034,7 +3403,7 @@ function FoodProductionPlanPageContent() {
       >
         <DialogContent className="max-w-5xl w-[min(96vw,64rem)] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editing ? 'Ubah Rencana' : 'Buat Rencana Produksi'}</DialogTitle>
+            <DialogTitle>{editing ? 'Ubah Rencana' : 'Rencana ad-hoc'}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 py-2 sm:grid-cols-2">
             <div className="space-y-1">
@@ -3070,7 +3439,8 @@ function FoodProductionPlanPageContent() {
               <Input
                 value={form.catatan}
                 onChange={(e) => setForm((f) => ({ ...f, catatan: e.target.value }))}
-                placeholder="Opsional"
+                readOnly={!editing && isAdHocCatatan(form.catatan)}
+                placeholder={editing ? 'Opsional' : 'ADHOC: alasan darurat'}
               />
             </div>
           </div>
@@ -3142,7 +3512,7 @@ function FoodProductionPlanPageContent() {
                 )}
               </p>
               <p className="text-[10px] text-slate-600">
-                Qty bahan: Porsi Besar Sekolah/Posyandu = 100%; Kecil Sekolah/Posyandu = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
+                Qty bahan: porsi besar (sekolah, bumil, busui, organoleptik) = 100%; kecil sekolah &amp; balita = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
               </p>
               {!!draftAkg?.warnings?.length && (
                 <p className="text-[11px] text-amber-800">{draftAkg.warnings.join(' · ')}</p>
@@ -3193,7 +3563,7 @@ function FoodProductionPlanPageContent() {
                         </DropdownMenuLabel>
                         <DropdownMenuSeparator />
                         {KATEGORI_PORSI_OPTIONS.map((opt) => {
-                          const checked = line.kategoriPorsiList.includes(opt.value);
+                          const checked = expandLegacyKategoriPorsi(line.kategoriPorsiList).includes(opt.value);
                           const acuan = porsiAcuanFor(opt.value);
                           return (
                             <DropdownMenuCheckboxItem
@@ -3221,10 +3591,10 @@ function FoodProductionPlanPageContent() {
                         })}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                    {line.kategoriPorsiList.length > 0 && (
+                    {expandLegacyKategoriPorsi(line.kategoriPorsiList).length > 0 && (
                       <div className="flex flex-wrap gap-1">
-                        {line.kategoriPorsiList.map((kp) => {
-                          const label = KATEGORI_PORSI_OPTIONS.find((o) => o.value === kp)?.label || kp;
+                        {expandLegacyKategoriPorsi(line.kategoriPorsiList).map((kp) => {
+                          const label = kategoriPorsiShortLabel(kp);
                           return (
                             <span
                               key={kp}
@@ -3449,7 +3819,35 @@ function FoodProductionPlanPageContent() {
         </DialogContent>
       </Dialog>
 
-      {needsDoc && (
+      {acuanOpen && acuanDoc ? (
+        <PrintPortal>
+          <div className="doc-print-host">
+            {acuanPrinting === 'bahan' ? (
+              <KebutuhanBahanHarianDocument
+                tanggal={acuanDoc.tanggal}
+                kitchenNama={acuanDoc.kitchenNama || 'Dapur'}
+                planNos={acuanDoc.productionPlanNo ? [acuanDoc.productionPlanNo] : []}
+                rekap={acuanDoc.rekap}
+                printId={KEBUTUHAN_BAHAN_HARIAN_PRINT_ID}
+              />
+            ) : (
+              <MenuHarianDocument
+                tanggal={acuanDoc.tanggal}
+                kitchenNama={acuanDoc.kitchenNama || 'Dapur'}
+                porsiByKategori={acuanDoc.porsiByKategori}
+                hidangan={acuanDoc.hidangan}
+                rekap={acuanDoc.rekap}
+                note={acuanDoc.note}
+                productionPlanNo={acuanDoc.productionPlanNo}
+                productionPlanStatus={acuanDoc.productionPlanStatus}
+                draftWatermark={acuanDoc.draftWatermark}
+                errors={acuanDoc.errors}
+                printId={MENU_HARIAN_PRINT_ID}
+              />
+            )}
+          </div>
+        </PrintPortal>
+      ) : needsDoc ? (
         <PrintPortal>
           <div className="doc-print-host">
             <RencanaKebutuhanDocument
@@ -3461,7 +3859,63 @@ function FoodProductionPlanPageContent() {
             />
           </div>
         </PrintPortal>
-      )}
+      ) : null}
+
+      <Dialog open={acuanOpen} onOpenChange={setAcuanOpen}>
+        <DialogContent className="max-w-5xl w-[min(96vw,56rem)] max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
+          <DialogHeader className="px-4 pt-4 pb-2 border-b shrink-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 pr-8">
+              <DialogTitle>Acuan kerja dapur</DialogTitle>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!acuanDoc || Boolean(acuanPrinting) || !acuanDoc?.rekap.length}
+                  onClick={() => void printAcuanKerja('bahan')}
+                >
+                  <FileText className="h-3.5 w-3.5 mr-1" />
+                  {acuanPrinting === 'bahan' ? 'Mencetak…' : 'Kebutuhan bahan saja'}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-orange-500 hover:bg-orange-600"
+                  disabled={!acuanDoc || Boolean(acuanPrinting)}
+                  onClick={() => void printAcuanKerja('full')}
+                >
+                  <Printer className="h-3.5 w-3.5 mr-1" />
+                  {acuanPrinting === 'full' ? 'Mencetak…' : 'Cetak / PDF'}
+                </Button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground font-normal">
+              Hidangan, porsi, dan total bahan baku. Pilih Cetak / PDF lalu &quot;Save as PDF&quot;.
+            </p>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 bg-slate-100 p-3 sm:p-4">
+            {acuanDoc && (
+              <div className="bg-white shadow-sm border rounded-md overflow-hidden">
+                <MenuHarianDocument
+                  tanggal={acuanDoc.tanggal}
+                  kitchenNama={acuanDoc.kitchenNama || 'Dapur'}
+                  porsiByKategori={acuanDoc.porsiByKategori}
+                  hidangan={acuanDoc.hidangan}
+                  rekap={acuanDoc.rekap}
+                  note={acuanDoc.note}
+                  productionPlanNo={acuanDoc.productionPlanNo}
+                  productionPlanStatus={acuanDoc.productionPlanStatus}
+                  draftWatermark={acuanDoc.draftWatermark}
+                  errors={acuanDoc.errors}
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter className="px-4 py-3 border-t shrink-0">
+            <Button variant="outline" onClick={() => setAcuanOpen(false)}>Tutup</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

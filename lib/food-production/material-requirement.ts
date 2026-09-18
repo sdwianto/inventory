@@ -22,6 +22,7 @@ import {
   materialOverrideSatuanMap,
   materialOverridesMap,
   resolvePlanLineRecipeSlots,
+  expandLegacyKategoriPorsi,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 
@@ -366,9 +367,11 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
     const resolved = resolvePlanLineRecipeSlots(planLine, menusById);
     if (!resolved.ok) return { ok: false, error: resolved.error };
 
-    const kpList = planLine.kategoriPorsiList?.length
-      ? planLine.kategoriPorsiList
-      : (plan.kategoriPorsiList || []);
+    const kpList = expandLegacyKategoriPorsi(
+      planLine.kategoriPorsiList?.length
+        ? planLine.kategoriPorsiList
+        : (plan.kategoriPorsiList || []),
+    );
     const split = splitPorsiByKategoriFamily(kpList, targetPorsi, acuanByKategori);
 
     for (const slot of resolved.slots) {
