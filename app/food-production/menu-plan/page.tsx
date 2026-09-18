@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  CalendarRange, ChevronLeft, ChevronRight, Copy, FileText, Loader2, Package,
+  CalendarRange, Copy, FileText, Loader2, Package,
   Plus, Printer, Send, Trash2, Users, UtensilsCrossed, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,6 +13,7 @@ import KitchenScopeBar from '@/components/KitchenScopeBar';
 import RecipeSearchSelect, { type RecipeSearchOption } from '@/components/RecipeSearchSelect';
 import PrintPortal from '@/components/PrintPortal';
 import FpFlowHint from '@/components/food-production/FpFlowHint';
+import MenuWeekSwitcher, { currentMenuWeekStart } from '@/components/food-production/MenuWeekSwitcher';
 import MenuHarianDocument, { MENU_HARIAN_PRINT_ID } from '@/components/food-production/MenuHarianDocument';
 import KebutuhanBahanHarianDocument, {
   KEBUTUHAN_BAHAN_HARIAN_PRINT_ID,
@@ -54,14 +55,18 @@ import {
   akgKeyForDay,
   applyMenuPackageToDay,
   applyMenuPackageWarnings,
-  copyPorsiToDays,
+  copyPorsiOntoDays,
   copyWeekDays,
   dayHasSlotContent,
   dayPorsiSummary,
   dayRecipeIds,
   draftNutritionLinesFromDay,
   emptyWeeklyDays,
+  formatCopyPorsiDayLabel,
+  groupDatesByWeekStart,
+  indexWeeklyRpnByTanggal,
   isoWeekdays,
+  localIsoDate,
   rpnPublishBlockedReason,
   presentWeeklyMenuDays,
   sumServicePointPorsi,
@@ -169,7 +174,7 @@ function initialMenuWeekStart(): string {
     const start = q ? weekStartFrom(q) : null;
     if (typeof start === 'string') return start;
   }
-  const today = weekStartFrom(new Date().toISOString().slice(0, 10));
+  const today = weekStartFrom(localIsoDate());
   return typeof today === 'string' ? today : '2026-09-21';
 }
 
@@ -285,6 +290,12 @@ export default function MenuPlanPage() {
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyPorsi, setCopyPorsi] = useState(true);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [copyPorsiOpen, setCopyPorsiOpen] = useState(false);
+  const [copyTargetWeek, setCopyTargetWeek] = useState(weekStart);
+  const [copyTargetDates, setCopyTargetDates] = useState<string[]>([]);
+  const [copyTargetLocks, setCopyTargetLocks] = useState<Record<string, ProductionPlanStatus | undefined>>({});
+  const [copyTargetBusy, setCopyTargetBusy] = useState(false);
+  const [copyPorsiSaving, setCopyPorsiSaving] = useState(false);
   const [prefillOpen, setPrefillOpen] = useState(false);
   const [prefillBusy, setPrefillBusy] = useState(false);
   const [prefillSum, setPrefillSum] = useState<PortionTargetMap | null>(null);
@@ -299,11 +310,15 @@ export default function MenuPlanPage() {
   const skipAutosave = useRef(true);
   const recipesRef = useRef<RecipeOpt[]>([]);
   const queryApplied = useRef(false);
+  const copyWeekReq = useRef(0);
+  const copyTargetWeekRef = useRef(weekStart);
   const boardScrollRef = useRef<HTMLDivElement>(null);
   recipesRef.current = recipes;
   useHorizontalDragScroll(boardScrollRef, !loading);
 
   const weekDates = useMemo(() => isoWeekdays(weekStart), [weekStart]);
+  const todayWeekStart = currentMenuWeekStart();
+  copyTargetWeekRef.current = copyTargetWeek;
 
   useEffect(() => {
     setDays((prev) => {
@@ -428,22 +443,11 @@ export default function MenuPlanPage() {
       setSelectedTanggal((prev) => (weekDates.includes(prev) ? prev : weekStart));
       void mergeRecipesByIds(nextDays.flatMap((d) => dayRecipeIds(d)));
 
-      const map: Record<string, PlanLite> = {};
-      if (rpnRes.ok && Array.isArray(rpnData)) {
-        for (const row of rpnData as PlanLite[]) {
-          const tgl = String(row.tanggal || '').slice(0, 10);
-          if (!tgl) continue;
-          const linked = nextDays.find((d) => d.tanggal === tgl)?.productionPlanId;
-          if (linked) {
-            if (row.id === linked) map[tgl] = row;
-            continue;
-          }
-          if (planData.id && row.weeklyMenuPlanId === planData.id) {
-            map[tgl] = row;
-          }
-        }
-      }
-      setRpnByDate(map);
+      setRpnByDate(
+        rpnRes.ok && Array.isArray(rpnData)
+          ? indexWeeklyRpnByTanggal(nextDays, rpnData as PlanLite[], planData.id)
+          : {},
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat minggu');
     } finally {
@@ -693,6 +697,131 @@ export default function MenuPlanPage() {
     }
   }
 
+  function locksFromRpnMap(map: Record<string, PlanLite>): Record<string, ProductionPlanStatus | undefined> {
+    const locks: Record<string, ProductionPlanStatus | undefined> = {};
+    for (const [tgl, row] of Object.entries(map)) locks[tgl] = row.status;
+    return locks;
+  }
+
+  async function fetchCopyTargetWeek(ws: string): Promise<{
+    days: WeeklyMenuDay[];
+    locks: Record<string, ProductionPlanStatus | undefined>;
+  }> {
+    if (!kitchenId) throw new Error('Dapur wajib dipilih');
+    const dates = isoWeekdays(ws);
+    const [planRes, rpnRes] = await Promise.all([
+      fetch(
+        `/api/weekly-menu-plans?kitchenId=${encodeURIComponent(kitchenId)}&weekStart=${encodeURIComponent(ws)}`,
+        { headers: fpHeaders() },
+      ),
+      fetch(
+        `/api/production-plans?from=${encodeURIComponent(ws)}&to=${encodeURIComponent(dates[4])}&kitchenId=${encodeURIComponent(kitchenId)}`,
+        { headers: fpHeaders() },
+      ),
+    ]);
+    const planData = await planRes.json() as WeeklyDoc & { error?: string };
+    const rpnData = await rpnRes.json();
+    if (!planRes.ok) throw new Error(planData.error || 'Gagal memuat minggu tujuan');
+    const days = presentWeeklyMenuDays(Array.isArray(planData.days) ? planData.days : [], ws);
+    const indexed = rpnRes.ok && Array.isArray(rpnData)
+      ? indexWeeklyRpnByTanggal(days, rpnData as PlanLite[], planData.id)
+      : {};
+    return { days, locks: locksFromRpnMap(indexed) };
+  }
+
+  function applyCopyWeekLocks(
+    ws: string,
+    lockMap: Record<string, ProductionPlanStatus | undefined>,
+  ) {
+    const dates = isoWeekdays(ws);
+    setCopyTargetLocks(lockMap);
+    setCopyTargetDates(
+      dates.filter((d) => d !== selectedTanggal && !dayLocked(lockMap[d])),
+    );
+  }
+
+  async function changeCopyTargetWeek(ws: string) {
+    const req = ++copyWeekReq.current;
+    const from = copyTargetWeekRef.current;
+    copyTargetWeekRef.current = ws;
+    setCopyTargetWeek(ws);
+    if (ws === weekStart) {
+      applyCopyWeekLocks(ws, locksFromRpnMap(rpnByDate));
+      setCopyTargetBusy(false);
+      return;
+    }
+    if (!kitchenId) {
+      copyTargetWeekRef.current = from;
+      setCopyTargetWeek(from);
+      return;
+    }
+    setCopyTargetBusy(true);
+    try {
+      const { locks } = await fetchCopyTargetWeek(ws);
+      if (req !== copyWeekReq.current) return;
+      applyCopyWeekLocks(ws, locks);
+    } catch (e) {
+      if (req !== copyWeekReq.current) return;
+      copyTargetWeekRef.current = from;
+      setCopyTargetWeek(from);
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat minggu tujuan');
+    } finally {
+      if (req === copyWeekReq.current) setCopyTargetBusy(false);
+    }
+  }
+
+  async function confirmCopyPorsi() {
+    if (!canManage || !selected) return;
+    const skipDialog = Object.entries(copyTargetLocks)
+      .filter(([, status]) => dayLocked(status))
+      .map(([tanggal]) => tanggal);
+    const targets = copyTargetDates.filter((d) => d !== selected.tanggal && !skipDialog.includes(d));
+    if (!targets.length) {
+      toast.error('Pilih hari tujuan yang belum terkunci');
+      return;
+    }
+    setCopyPorsiSaving(true);
+    try {
+      const copied: string[] = [];
+      const grouped = groupDatesByWeekStart(targets);
+      for (const [ws, tgls] of grouped) {
+        if (ws === weekStart) {
+          const skip = weekDates.filter((d) => dayLocked(rpnByDate[d]?.status));
+          const allowed = tgls.filter((d) => !skip.includes(d));
+          if (!allowed.length) continue;
+          setDays((prev) => copyPorsiOntoDays(prev, selected.porsiByKategori, allowed, skip));
+          copied.push(...allowed);
+          continue;
+        }
+        const { days, locks } = await fetchCopyTargetWeek(ws);
+        const skip = Object.entries(locks)
+          .filter(([, status]) => dayLocked(status))
+          .map(([tanggal]) => tanggal);
+        const allowed = tgls.filter((d) => !skip.includes(d));
+        if (!allowed.length) continue;
+        const nextDays = copyPorsiOntoDays(days, selected.porsiByKategori, allowed, skip);
+        const put = await fetch('/api/weekly-menu-plans', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...fpHeaders() },
+          body: JSON.stringify({ kitchenId, weekStart: ws, days: nextDays }),
+        });
+        const putData = await put.json() as { error?: string };
+        if (!put.ok) throw new Error(putData.error || 'Gagal menyimpan porsi');
+        copied.push(...allowed);
+      }
+      if (!copied.length) {
+        toast.error('Pilih hari tujuan yang belum terkunci');
+        return;
+      }
+      toast.success(`Porsi disalin ke ${copied.map(formatCopyPorsiDayLabel).join(' · ')}`);
+      setCopyPorsiOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menyalin porsi');
+    } finally {
+      setCopyPorsiSaving(false);
+    }
+  }
+
   async function openPrefill() {
     if (!canManage || !kitchenId) return;
     setPrefillBusy(true);
@@ -861,10 +990,14 @@ export default function MenuPlanPage() {
       onNote={(note) => patchDay(selected.tanggal, { note })}
       onAlergi={(alergi) => patchDay(selected.tanggal, { alergi })}
       onCopyPorsi={() => {
-        const rest = weekDates.filter((d) => d !== selected.tanggal);
-        const skip = weekDates.filter((d) => dayLocked(rpnByDate[d]?.status));
-        setDays((prev) => copyPorsiToDays(prev, selected.tanggal, rest, skip));
-        toast.success('Porsi disalin ke hari lain yang belum terkunci');
+        if (!selected) return;
+        setCopyTargetWeek(weekStart);
+        const rest = weekDates.filter((d) => d !== selected.tanggal && !dayLocked(rpnByDate[d]?.status));
+        setCopyTargetDates(rest);
+        const locks: Record<string, ProductionPlanStatus | undefined> = {};
+        for (const d of weekDates) locks[d] = rpnByDate[d]?.status;
+        setCopyTargetLocks(locks);
+        setCopyPorsiOpen(true);
       }}
       onPublishDay={() => void publish(selected.tanggal)}
       onOpenAcuan={() => void openAcuan(selected)}
@@ -889,15 +1022,6 @@ export default function MenuPlanPage() {
           <FpFlowHint active="menu" className="mt-1" />
         </div>
         <div className="flex flex-wrap gap-2 items-center">
-          <Button variant="outline" size="sm" onClick={() => setWeekStart(shiftIsoDate(weekStart, -7))}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <div className="text-sm font-medium min-w-[11rem] text-center">
-            {shortDate(weekStart)} – {shortDate(weekDates[4])}
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setWeekStart(shiftIsoDate(weekStart, 7))}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
           {saving ? (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Loader2 className="h-3 w-3 animate-spin" /> Menyimpan
@@ -986,6 +1110,12 @@ export default function MenuPlanPage() {
           </div>
         </div>
       )}
+
+      <MenuWeekSwitcher
+        weekStart={weekStart}
+        todayWeekStart={todayWeekStart}
+        onWeekStartChange={setWeekStart}
+      />
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_22rem] gap-4 items-start">
         <div
@@ -1331,6 +1461,79 @@ export default function MenuPlanPage() {
             <Button variant="outline" onClick={() => setCopyOpen(false)}>Batal</Button>
             <Button disabled={copyBusy || !kitchenId} onClick={() => void copyPreviousWeek()}>
               {copyBusy ? 'Menyalin…' : 'Salin'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={copyPorsiOpen} onOpenChange={setCopyPorsiOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Salin porsi ke hari lain</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Sumber:{' '}
+            {selected
+              ? `${WEEKLY_MENU_WEEKDAYS[weekDates.indexOf(selected.tanggal)] || ''} ${shortDate(selected.tanggal)}`
+              : 'hari terpilih'}
+            . Hanya porsi (PM) yang disalin — hidangan tidak berubah.
+          </p>
+          <MenuWeekSwitcher
+            compact
+            weekStart={copyTargetWeek}
+            todayWeekStart={todayWeekStart}
+            onWeekStartChange={(ws) => void changeCopyTargetWeek(ws)}
+          />
+          {copyTargetBusy ? (
+            <p className="text-sm text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Memuat hari tujuan…
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {isoWeekdays(copyTargetWeek).map((tanggal, i) => {
+                const locked = dayLocked(copyTargetLocks[tanggal]);
+                const isSource = tanggal === selectedTanggal;
+                const checked = copyTargetDates.includes(tanggal);
+                return (
+                  <label
+                    key={tanggal}
+                    className={cn(
+                      'flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm',
+                      isSource || locked ? 'bg-slate-50 text-slate-500' : 'bg-white',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={isSource || locked}
+                      checked={isSource ? false : checked}
+                      onChange={(e) => {
+                        setCopyTargetDates((prev) => (
+                          e.target.checked
+                            ? [...prev, tanggal]
+                            : prev.filter((d) => d !== tanggal)
+                        ));
+                      }}
+                    />
+                    <span className="flex-1">
+                      {WEEKLY_MENU_WEEKDAYS[i]} · {shortDate(tanggal)}
+                    </span>
+                    {isSource ? (
+                      <span className="text-[11px] text-orange-700">Sumber</span>
+                    ) : locked ? (
+                      <span className="text-[11px] text-slate-500">Terkunci</span>
+                    ) : null}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCopyPorsiOpen(false)}>Batal</Button>
+            <Button
+              disabled={copyTargetBusy || copyPorsiSaving || !copyTargetDates.length}
+              onClick={() => void confirmCopyPorsi()}
+            >
+              {copyPorsiSaving ? 'Menyalin…' : 'Salin porsi'}
             </Button>
           </DialogFooter>
         </DialogContent>

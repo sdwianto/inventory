@@ -8,21 +8,30 @@ import {
   alergiKategoriPorsi,
   akgKeyForDay,
   buildPublishPlanLines,
+  copyPorsiOntoDays,
   copyPorsiToDays,
   copyWeekDays,
   draftNutritionLinesFromDay,
   emptyWeeklyDays,
+  formatCopyPorsiDayLabel,
+  formatWeekRangeId,
+  groupDatesByWeekStart,
+  indexWeeklyRpnByTanggal,
   isoWeekdays,
+  localIsoDate,
   lockedDayEditError,
   normalizeSlots,
   normalizeWeeklyDay,
   normalizeWeeklyDays,
   presentWeeklyMenuDays,
+  relativeWeekLabel,
   rpnPublishBlockedReason,
   selectPublishTargetPlan,
   slotRecipeIds,
   sumServicePointPorsi,
+  weekDelta,
   weekStartFrom,
+  weekWindow,
   weeklyDayContentEqual,
   weeklyPlanStatusFromDays,
   type WeeklyRecipeRef,
@@ -58,6 +67,37 @@ describe('weekly menu plan — weekStart & days', () => {
       '2026-09-24',
       '2026-09-25',
     ]);
+  });
+
+  it('labels a 5-week window relative to this week', () => {
+    const today = '2026-09-14';
+    expect(relativeWeekLabel('2026-09-14', today)).toBe('Minggu ini');
+    expect(relativeWeekLabel('2026-09-07', today)).toBe('Minggu lalu');
+    expect(relativeWeekLabel('2026-09-21', today)).toBe('Minggu depan');
+    expect(relativeWeekLabel('2026-09-28', today)).toBe('2 minggu ke depan');
+    expect(relativeWeekLabel('2026-08-31', today)).toBe('2 minggu lalu');
+    expect(relativeWeekLabel('2026-10-12', today)).toBe('4 minggu ke depan');
+    expect(weekDelta('2026-09-21', today)).toBe(1);
+    expect(weekWindow(today, 2)).toEqual([
+      '2026-08-31',
+      '2026-09-07',
+      '2026-09-14',
+      '2026-09-21',
+      '2026-09-28',
+    ]);
+    expect(formatWeekRangeId('2026-09-14')).toBe('Sen 14 – Jum 18 Sep 2026');
+    expect(formatWeekRangeId('2026-09-28')).toBe('Sen 28 Sep – Jum 2 Okt 2026');
+    expect(formatWeekRangeId('2026-12-28')).toBe('Sen 28 Des 2026 – Jum 1 Jan 2027');
+    expect(weekWindow('2026-09-16', 2)[2]).toBe('2026-09-14');
+    expect(formatCopyPorsiDayLabel('2026-09-22')).toBe('Selasa 22 Sep');
+    expect(localIsoDate(new Date('2026-09-17T17:30:00.000Z'))).toBe('2026-09-18');
+    expect(localIsoDate(new Date('2026-09-17T16:59:00.000Z'))).toBe('2026-09-17');
+    expect([...groupDatesByWeekStart(['2026-09-15', '2026-09-22']).keys()]).toEqual([
+      '2026-09-14',
+      '2026-09-21',
+    ]);
+    expect(weekStartFrom('2026-09-19')).toBe('2026-09-14');
+    expect(weekStartFrom('2026-09-20')).toBe('2026-09-14');
   });
 
   it('normalizes five weekdays and keeps publish links from previous days', () => {
@@ -269,6 +309,30 @@ describe('weekly menu plan — slots & publish lines', () => {
     const skipped = copyPorsiToDays(copied, WEEK_START, ['2026-09-22', '2026-09-23'], ['2026-09-22']);
     expect(skipped[1].porsiByKategori.PORSI_KECIL).toBe(1);
     expect(skipped[2].porsiByKategori.PORSI_KECIL).toBe(50);
+
+    const nextWeek = presentWeeklyMenuDays([], '2026-09-28');
+    const merged = copyPorsiOntoDays(nextWeek, days[0].porsiByKategori, ['2026-09-29']);
+    expect(merged.find((d) => d.tanggal === '2026-09-29')?.porsiByKategori.PORSI_KECIL).toBe(50);
+    expect(merged.find((d) => d.tanggal === '2026-09-28')?.slots).toEqual({});
+    const extra = copyPorsiOntoDays([], { ...emptyPortionTargets(), PORSI_KECIL: 9 }, ['2026-10-01']);
+    expect(extra).toHaveLength(1);
+    expect(extra[0].tanggal).toBe('2026-10-01');
+    expect(extra[0].porsiByKategori.PORSI_KECIL).toBe(9);
+
+    const daysWithLink = emptyWeeklyDays(WEEK_START);
+    daysWithLink[1].productionPlanId = 'rpn-sel';
+    const indexed = indexWeeklyRpnByTanggal(
+      daysWithLink,
+      [
+        { id: 'rpn-sel', tanggal: '2026-09-22', status: 'APPROVED', weeklyMenuPlanId: 'w1' },
+        { id: 'other', tanggal: '2026-09-22', status: 'DRAFT', weeklyMenuPlanId: 'w1' },
+        { id: 'rpn-rab', tanggal: '2026-09-23', status: 'DRAFT', weeklyMenuPlanId: 'w1' },
+      ],
+      'w1',
+    );
+    expect(indexed['2026-09-22']?.status).toBe('APPROVED');
+    expect(indexed['2026-09-23']?.status).toBe('DRAFT');
+    expect(indexed['2026-09-21']).toBeUndefined();
   });
 
   it('rejects the same recipe across two slots or duplicate alergi', () => {

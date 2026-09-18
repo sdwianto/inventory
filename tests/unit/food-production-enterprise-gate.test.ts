@@ -56,6 +56,7 @@ const REQUIRED_MODULES = [
   'lib/api/handlers/ops-dashboard.ts',
   'lib/api/handlers/weekly-menu-plans.ts',
   'components/food-production/FpFlowHint.tsx',
+  'components/food-production/MenuWeekSwitcher.tsx',
   'app/food-production/recommendations/page.tsx',
   'app/food-production/purchase-requirement/page.tsx',
   'app/food-production/report/page.tsx',
@@ -287,6 +288,10 @@ describe('food-production enterprise gate', () => {
     expect(menuPlan).toContain('planHref');
     expect(menuPlan).toContain('productionPlanId');
     expect(menuPlan).toContain('confirmSubmitted');
+    expect(menuPlan).toContain('MenuWeekSwitcher');
+    expect(menuPlan).toContain('copyPorsiOpen');
+    expect(menuPlan).toContain('changeCopyTargetWeek');
+    expect(menuPlan).not.toContain('copyPorsiToDays(prev, selected.tanggal');
     const recs = readFileSync(resolve(ROOT, 'lib/food-production/recommendations.ts'), 'utf8');
     expect(recs).not.toContain('/food-production/purchase-requirement');
     expect(recs).toContain('/pembelian-po');

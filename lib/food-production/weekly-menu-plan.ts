@@ -103,6 +103,98 @@ export function isoWeekdays(weekStart: string): string[] {
   return [0, 1, 2, 3, 4].map((offset) => shiftIsoDate(weekStart, offset));
 }
 
+const WEEK_MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'] as const;
+
+function isoEpochDays(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
+}
+
+export function weekDelta(weekStart: string, todayWeekStart: string): number {
+  return Math.round((isoEpochDays(weekStart) - isoEpochDays(todayWeekStart)) / 7);
+}
+
+/** Label relatif ke minggu berjalan: Minggu ini / lalu / depan / N minggu … */
+export function relativeWeekLabel(weekStart: string, todayWeekStart: string): string {
+  const n = weekDelta(weekStart, todayWeekStart);
+  if (n === 0) return 'Minggu ini';
+  if (n === 1) return 'Minggu depan';
+  if (n === -1) return 'Minggu lalu';
+  if (n === 2) return '2 minggu ke depan';
+  if (n === -2) return '2 minggu lalu';
+  if (n > 0) return `${n} minggu ke depan`;
+  return `${Math.abs(n)} minggu lalu`;
+}
+
+const MENU_CALENDAR_TZ = 'Asia/Jakarta';
+
+/** Tanggal operasional SPPG (WIB), bukan UTC — "Minggu ini" tidak mundur sebelum jam 07. */
+export function localIsoDate(now = new Date(), timeZone = MENU_CALENDAR_TZ): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+export function formatWeekRangeId(weekStart: string): string {
+  const days = isoWeekdays(weekStart);
+  const sen = days[0];
+  const jum = days[4];
+  if (!sen || !jum) return weekStart;
+  const senD = Number(sen.slice(8, 10));
+  const jumD = Number(jum.slice(8, 10));
+  const senM = Number(sen.slice(5, 7));
+  const jumM = Number(jum.slice(5, 7));
+  const senY = sen.slice(0, 4);
+  const jumY = jum.slice(0, 4);
+  if (senM === jumM) {
+    return `Sen ${senD} – Jum ${jumD} ${WEEK_MONTHS_ID[jumM - 1]} ${jumY}`;
+  }
+  if (senY === jumY) {
+    return `Sen ${senD} ${WEEK_MONTHS_ID[senM - 1]} – Jum ${jumD} ${WEEK_MONTHS_ID[jumM - 1]} ${jumY}`;
+  }
+  return `Sen ${senD} ${WEEK_MONTHS_ID[senM - 1]} ${senY} – Jum ${jumD} ${WEEK_MONTHS_ID[jumM - 1]} ${jumY}`;
+}
+
+/** Label toast salin porsi: `Selasa 22 Sep`. */
+export function formatCopyPorsiDayLabel(tanggal: string): string {
+  const start = weekStartFrom(tanggal);
+  const d = Number(String(tanggal || '').slice(8, 10));
+  const m = Number(String(tanggal || '').slice(5, 7));
+  const mon = WEEK_MONTHS_ID[m - 1] || '';
+  if (typeof start !== 'string' || !d || !mon) return String(tanggal || '').trim();
+  const idx = isoWeekdays(start).indexOf(tanggal);
+  const hari = idx >= 0 ? WEEKLY_MENU_WEEKDAYS[idx] : '';
+  return `${hari} ${d} ${mon}`.trim();
+}
+
+/** Jendela minggu: center di tengah, `span` ke kiri/kanan (default 5 chip). */
+export function weekWindow(center: string, span = 2): string[] {
+  const monday = assertWeekStart(center);
+  const start = typeof monday === 'string' ? monday : weekStartFrom(center);
+  if (typeof start !== 'string') return [];
+  const out: string[] = [];
+  for (let i = -span; i <= span; i += 1) {
+    const next = shiftIsoDate(start, i * 7);
+    if (next) out.push(next);
+  }
+  return out;
+}
+
+export function groupDatesByWeekStart(dates: string[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const tanggal of dates) {
+    const start = weekStartFrom(tanggal);
+    if (typeof start !== 'string') continue;
+    const list = map.get(start) || [];
+    list.push(tanggal);
+    map.set(start, list);
+  }
+  return map;
+}
+
 export function emptyWeeklyMenuDay(tanggal: string): WeeklyMenuDay {
   return {
     tanggal,
@@ -383,6 +475,34 @@ export function rpnPublishBlockedReason(status: string | null | undefined): stri
   return null;
 }
 
+type WeeklyRpnIndexRow = {
+  id?: string;
+  tanggal?: string;
+  weeklyMenuPlanId?: string | null;
+};
+
+/** RPN yang mengunci/menandai hari di papan: tautan productionPlanId, else weeklyMenuPlanId. */
+export function indexWeeklyRpnByTanggal<T extends WeeklyRpnIndexRow>(
+  days: Array<{ tanggal: string; productionPlanId?: string }>,
+  rows: T[],
+  weeklyMenuPlanId?: string | null,
+): Record<string, T> {
+  const byDate = new Map(days.map((d) => [d.tanggal, d]));
+  const wid = String(weeklyMenuPlanId || '').trim();
+  const map: Record<string, T> = {};
+  for (const row of rows) {
+    const tgl = String(row.tanggal || '').slice(0, 10);
+    if (!tgl) continue;
+    const linked = String(byDate.get(tgl)?.productionPlanId || '').trim();
+    if (linked) {
+      if (String(row.id || '') === linked) map[tgl] = row;
+      continue;
+    }
+    if (wid && String(row.weeklyMenuPlanId || '').trim() === wid) map[tgl] = row;
+  }
+  return map;
+}
+
 /** Pilih RPN yang di-upsert publish: prefer tautan papan, lalu ad-hoc DRAFT/SUBMITTED. */
 export function selectPublishTargetPlan<T extends {
   status?: string;
@@ -460,6 +580,35 @@ export function normalizeWeeklyDays(
   return days;
 }
 
+/** Tempel porsi ke tanggal tujuan; tanggal yang belum ada di `days` ditambah. */
+export function copyPorsiOntoDays(
+  days: WeeklyMenuDay[],
+  porsi: PortionTargetMap,
+  toTanggal: string[],
+  skipTanggal?: Iterable<string>,
+): WeeklyMenuDay[] {
+  const skip = new Set(skipTanggal || []);
+  const targets = [...new Set(toTanggal.filter((t) => isIsoDate(t) && !skip.has(t)))];
+  if (!targets.length) return days;
+  const byDate = new Map(days.map((d) => [d.tanggal, d]));
+  for (const tanggal of targets) {
+    const existing = byDate.get(tanggal) || emptyWeeklyMenuDay(tanggal);
+    byDate.set(tanggal, { ...existing, tanggal, porsiByKategori: { ...porsi } });
+  }
+  const seen = new Set<string>();
+  const out: WeeklyMenuDay[] = [];
+  for (const day of days) {
+    out.push(byDate.get(day.tanggal) || day);
+    seen.add(day.tanggal);
+  }
+  for (const tanggal of targets) {
+    if (seen.has(tanggal)) continue;
+    const row = byDate.get(tanggal);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
 export function copyPorsiToDays(
   days: WeeklyMenuDay[],
   fromTanggal: string,
@@ -468,17 +617,12 @@ export function copyPorsiToDays(
 ): WeeklyMenuDay[] {
   const source = days.find((d) => d.tanggal === fromTanggal);
   if (!source) return days;
-  const targets = new Set(toTanggal);
-  const skip = new Set(skipTanggal || []);
-  return days.map((day) => {
-    if (!targets.has(day.tanggal) || day.tanggal === fromTanggal || skip.has(day.tanggal)) {
-      return day;
-    }
-    return {
-      ...day,
-      porsiByKategori: { ...source.porsiByKategori },
-    };
-  });
+  return copyPorsiOntoDays(
+    days,
+    source.porsiByKategori,
+    toTanggal.filter((t) => t !== fromTanggal),
+    skipTanggal,
+  );
 }
 
 export function presentWeeklyMenuDays(
