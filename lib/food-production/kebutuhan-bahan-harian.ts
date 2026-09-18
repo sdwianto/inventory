@@ -35,7 +35,7 @@ import {
   type PortionTargetMap,
 } from '@/lib/food-production/portion-target';
 
-export type KebutuhanRecipeRef = WeeklyRecipeRef & {
+export type KebutuhanRecipeRef = Omit<WeeklyRecipeRef, 'lines'> & {
   yieldQty?: number;
   wastePct?: number;
   nama?: string;
