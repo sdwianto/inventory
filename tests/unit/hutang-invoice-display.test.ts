@@ -115,5 +115,35 @@ describe('hutang-invoice-display', () => {
     const list = readFileSync(resolve(process.cwd(), 'app/hutang/page.tsx'), 'utf8');
     expect(list).toContain('Sisa');
     expect(list).toContain('ada CN/retur');
+    expect(list).toContain('summarizeHutangCreditDisplay');
+    expect(list).not.toMatch(/terbayar\)\s*>\s*0/);
+  });
+
+  it('PAID_EXTERNAL tanpa creditNotes bukan CN/retur; CN nyata tetap hasCredits', () => {
+    const lunasLuar = summarizeHutangCreditDisplay({
+      total: 442_500,
+      terbayar: 442_500,
+      sisa: 0,
+      approvalStatus: 'PAID_EXTERNAL',
+      creditNotes: [],
+    });
+    expect(lunasLuar.hasCredits).toBe(false);
+    expect(lunasLuar.hasPhysicalReturnQty).toBe(false);
+
+    const withCn = summarizeHutangCreditDisplay({
+      total: 442_500,
+      terbayar: 442_500,
+      sisa: 0,
+      approvalStatus: 'PAID_EXTERNAL',
+      creditNotes: [{
+        noCN: 'CN2609000001',
+        amount: 50_000,
+        source: 'inventory_return',
+        noReturn: 'RTV2609000001',
+        items: [{ lineId: 'L1', qty: 1 }],
+      }],
+    });
+    expect(withCn.hasCredits).toBe(true);
+    expect(withCn.hasPhysicalReturnQty).toBe(true);
   });
 });

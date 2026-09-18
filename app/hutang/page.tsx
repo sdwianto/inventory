@@ -30,6 +30,7 @@ import { fetchJson } from '@/lib/fetch-json';
 import { getUser } from '@/lib/auth-client';
 import { useActingTenantId } from '@/lib/hooks/use-acting-tenant-id';
 import { withActingTenantQuery } from '@/lib/tenant-api';
+import { summarizeHutangCreditDisplay } from '@/lib/hutang-invoice-display';
 
 const TABS = [
   { key: '', label: 'Semua' },
@@ -359,7 +360,7 @@ export default function HutangVendorPage() {
                   renderRow={(h: JsonObject) => {
                     const a = str(h.approvalStatus || h.status);
                     const snap = asObject(h.vendorBillingSnapshot);
-                    const hasCn = asArray(h.creditNotes).length > 0 || num(h.terbayar) > 0;
+                    const hasCn = summarizeHutangCreditDisplay(h).hasCredits;
                     const sisa = h.sisa != null && h.sisa !== ''
                       ? num(h.sisa)
                       : Math.max(0, num(h.total) - num(h.terbayar));
