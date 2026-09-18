@@ -360,6 +360,8 @@ function FoodProductionPlanPageContent() {
   } | null>(null);
   const [acuanOpen, setAcuanOpen] = useState(false);
   const [acuanPrinting, setAcuanPrinting] = useState<'full' | 'bahan' | null>(null);
+  const [includeRekap, setIncludeRekap] = useState(true);
+  const [includeAcuanResep, setIncludeAcuanResep] = useState(true);
   const [acuanDoc, setAcuanDoc] = useState<(KebutuhanBahanHarian & {
     tanggal: string;
     kitchenNama?: string;
@@ -1670,7 +1672,11 @@ function FoodProductionPlanPageContent() {
 
   async function fetchRecipesForIds(ids: string[]): Promise<Map<string, KebutuhanRecipeRef>> {
     const merged: Record<string, RecipeOpt> = { ...recipesById };
-    const missing = [...new Set(ids.map((id) => String(id || '').trim()).filter((id) => id && !merged[id]))];
+    const missing = [...new Set(ids.map((id) => String(id || '').trim()).filter((id) => {
+      if (!id) return false;
+      const row = merged[id];
+      return !row || !Array.isArray(row.lines);
+    }))];
     if (missing.length) {
       try {
         for (let i = 0; i < missing.length; i += 200) {
@@ -1758,6 +1764,8 @@ function FoodProductionPlanPageContent() {
       productionPlanStatus: row.status,
       draftWatermark: acuanKerjaDraftWatermark(row.noDokumen, row.status),
     });
+    setIncludeRekap(true);
+    setIncludeAcuanResep(true);
     setAcuanOpen(true);
   }
 
@@ -3842,6 +3850,9 @@ function FoodProductionPlanPageContent() {
                 productionPlanStatus={acuanDoc.productionPlanStatus}
                 draftWatermark={acuanDoc.draftWatermark}
                 errors={acuanDoc.errors}
+                includeRekap={includeRekap}
+                includeAcuanResep={includeAcuanResep}
+                acuanResep={acuanDoc.acuanResep}
                 printId={MENU_HARIAN_PRINT_ID}
               />
             )}
@@ -3890,8 +3901,31 @@ function FoodProductionPlanPageContent() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground font-normal">
-              Hidangan, porsi, dan total bahan baku. Pilih Cetak / PDF lalu &quot;Save as PDF&quot;.
+              Hidangan dan kebutuhan bahan per hidangan selalu dicetak.
+              Uncheck Rekap / Acuan resep agar tidak masuk Cetak / PDF. Pilih Cetak / PDF lalu &quot;Save as PDF&quot;.
             </p>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 pt-2">
+              <div className="flex items-center gap-2 text-sm font-normal">
+                <Checkbox
+                  id="acuan-include-rekap"
+                  checked={includeRekap}
+                  onCheckedChange={(v) => setIncludeRekap(v === true)}
+                />
+                <label htmlFor="acuan-include-rekap" className="cursor-pointer select-none">
+                  Rekap Total Bahan (gudang)
+                </label>
+              </div>
+              <div className="flex items-center gap-2 text-sm font-normal">
+                <Checkbox
+                  id="acuan-include-acuan-resep"
+                  checked={includeAcuanResep}
+                  onCheckedChange={(v) => setIncludeAcuanResep(v === true)}
+                />
+                <label htmlFor="acuan-include-acuan-resep" className="cursor-pointer select-none">
+                  Acuan resep
+                </label>
+              </div>
+            </div>
           </DialogHeader>
           <div className="overflow-y-auto flex-1 bg-slate-100 p-3 sm:p-4">
             {acuanDoc && (
@@ -3907,6 +3941,9 @@ function FoodProductionPlanPageContent() {
                   productionPlanStatus={acuanDoc.productionPlanStatus}
                   draftWatermark={acuanDoc.draftWatermark}
                   errors={acuanDoc.errors}
+                  includeRekap={includeRekap}
+                  includeAcuanResep={includeAcuanResep}
+                  acuanResep={acuanDoc.acuanResep}
                 />
               </div>
             )}

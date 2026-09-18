@@ -9,6 +9,7 @@ import {
   KATEGORI_MENU_OPTIONS,
   isKategoriMenu,
   kategoriMenuLabel,
+  recipeQtyForFamily,
   type KategoriMenu,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
@@ -68,7 +69,31 @@ export type KebutuhanBahanRekapLine = {
 export type KebutuhanBahanHarian = {
   hidangan: KebutuhanBahanHidangan[];
   rekap: KebutuhanBahanRekapLine[];
+  acuanResep: AcuanResepCard[];
   errors: string[];
+};
+
+/** Standar kartu resep SPPG yang dicetak di acuan kerja. */
+export const ACUAN_RESEP_PORSI = 500;
+
+export type AcuanResepLine = {
+  productId: string;
+  productKode?: string;
+  productNama?: string;
+  satuan?: string;
+  qtyBesar: number;
+  qtyKecil: number;
+};
+
+export type AcuanResepCard = {
+  recipeId: string;
+  recipeKode?: string;
+  recipeNama?: string;
+  slotLabel: string;
+  yieldQty: number;
+  porsiAcuan: number;
+  lines: AcuanResepLine[];
+  error?: string;
 };
 
 export type KebutuhanHidanganInput = {
@@ -268,8 +293,62 @@ export function buildKebutuhanBahanHarian(input: {
   return {
     hidangan,
     rekap: aggregateRekap(hidangan),
+    acuanResep: buildAcuanResepCards(hidangan, input.recipesById),
     errors: [...new Set(errors)],
   };
+}
+
+/** Kartu resep master yang dipakai hari ini, distandarkan ke 500 porsi (tanpa buffer gudang). */
+export function buildAcuanResepCards(
+  hidangan: Array<{ recipeId: string; slotLabel: string; recipeKode?: string; recipeNama?: string }>,
+  recipesById: Map<string, KebutuhanRecipeRef>,
+  porsiAcuan = ACUAN_RESEP_PORSI,
+): AcuanResepCard[] {
+  const seen = new Set<string>();
+  const cards: AcuanResepCard[] = [];
+  const target = Number(porsiAcuan) > 0 ? Number(porsiAcuan) : ACUAN_RESEP_PORSI;
+  for (const row of hidangan) {
+    const id = String(row.recipeId || '').trim();
+    if (!id) continue;
+    if (seen.has(id)) {
+      const existing = cards.find((c) => c.recipeId === id);
+      if (existing && row.slotLabel && !existing.slotLabel.split(' · ').includes(row.slotLabel)) {
+        existing.slotLabel = `${existing.slotLabel} · ${row.slotLabel}`;
+      }
+      continue;
+    }
+    seen.add(id);
+    const recipe = recipesById.get(id);
+    const yieldQty = Number(recipe?.yieldQty) > 0 ? Number(recipe?.yieldQty) : 1;
+    const factor = target / yieldQty;
+    const base: AcuanResepCard = {
+      recipeId: id,
+      recipeKode: row.recipeKode || recipe?.kode,
+      recipeNama: row.recipeNama || recipe?.nama,
+      slotLabel: row.slotLabel,
+      yieldQty,
+      porsiAcuan: target,
+      lines: [],
+    };
+    if (!recipe) {
+      cards.push({ ...base, error: `Resep ${id} tidak ditemukan` });
+      continue;
+    }
+    if (!recipe.lines?.length) {
+      cards.push({ ...base, error: `Resep ${recipe.kode || id} belum punya bahan` });
+      continue;
+    }
+    base.lines = recipe.lines.map((line) => ({
+      productId: String(line.productId || ''),
+      productKode: line.productKode,
+      productNama: line.productNama,
+      satuan: line.satuan || line.baseSatuan,
+      qtyBesar: roundQty(recipeQtyForFamily(line, 'BESAR') * factor),
+      qtyKecil: roundQty(recipeQtyForFamily(line, 'KECIL') * factor),
+    })).filter((l) => l.qtyBesar > 0 || l.qtyKecil > 0);
+    cards.push(base);
+  }
+  return cards;
 }
 
 export function buildKebutuhanBahanFromWeeklyDay(

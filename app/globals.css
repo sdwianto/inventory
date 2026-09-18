@@ -385,6 +385,12 @@ body {
   body.doc-print-active .no-print {
     display: none !important;
   }
+  body.doc-print-active .acuan-kerja-bahan,
+  body.doc-print-active .acuan-kerja-rekap,
+  body.doc-print-active .acuan-kerja-resep {
+    break-before: page;
+    page-break-before: always;
+  }
   html[data-doc-print='a4'] {
     @page {
       size: A4 portrait;

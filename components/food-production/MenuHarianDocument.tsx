@@ -17,6 +17,7 @@ import {
   type PortionTargetMap,
 } from '@/lib/food-production/portion-target';
 import type {
+  AcuanResepCard,
   KebutuhanBahanHidangan,
   KebutuhanBahanRekapLine,
 } from '@/lib/food-production/kebutuhan-bahan-harian';
@@ -37,6 +38,9 @@ export type MenuHarianDocumentProps = {
   errors?: string[];
   /** Isi semua slot kategori menu (papan minggu). RPN tanpa slot: false. */
   fillEmptySlots?: boolean;
+  includeRekap?: boolean;
+  includeAcuanResep?: boolean;
+  acuanResep?: AcuanResepCard[];
   printId?: string;
   className?: string;
 };
@@ -55,6 +59,9 @@ export default function MenuHarianDocument({
   draftWatermark,
   errors = [],
   fillEmptySlots = false,
+  includeRekap = true,
+  includeAcuanResep = true,
+  acuanResep = [],
   printId,
   className = '',
 }: MenuHarianDocumentProps) {
@@ -315,20 +322,106 @@ export default function MenuHarianDocument({
             );
           })}
 
-          <h2 className="text-sm font-bold text-orange-600 mb-1 mt-4">REKAP TOTAL BAHAN (gudang)</h2>
-          <p className="text-xs text-slate-600 mb-2">
-            Jumlah semua hidangan + alergi, termasuk buffer {RECIPE_NEED_BUFFER_PCT}%.
-          </p>
-          <KebutuhanBahanRekapTable rekap={rekap} />
-
-          {errors.length ? (
+          {errors.length && !includeRekap ? (
             <p className="text-[11px] text-amber-800 mt-3">{errors[0]}</p>
           ) : null}
-
-          <footer className="mt-6 pt-3 border-t border-slate-200 text-[10px] text-slate-500">
-            Acuan masak SPPG — satu lembar untuk tim dapur (hidangan, porsi, dan total bahan yang diambil).
-          </footer>
         </section>
+
+        {includeRekap ? (
+          <section
+            className="acuan-kerja-rekap"
+            style={{ breakBefore: 'page', pageBreakBefore: 'always' }}
+          >
+            <h2 className="text-sm font-bold text-orange-600 mb-1">REKAP TOTAL BAHAN (gudang)</h2>
+            <p className="text-xs text-slate-600 mb-2">
+              Jumlah semua hidangan + alergi, termasuk buffer {RECIPE_NEED_BUFFER_PCT}%.
+            </p>
+            <KebutuhanBahanRekapTable rekap={rekap} />
+            {errors.length ? (
+              <p className="text-[11px] text-amber-800 mt-3">{errors[0]}</p>
+            ) : null}
+          </section>
+        ) : null}
+
+        {includeAcuanResep ? (
+          <section
+            className="acuan-kerja-resep"
+            style={{ breakBefore: 'page', pageBreakBefore: 'always' }}
+          >
+            <h2 className="text-sm font-bold text-orange-600 mb-1">ACUAN RESEP PER 500 PORSI</h2>
+            <p className="text-xs text-slate-600 mb-3">
+              Formula master resep yang dipakai hari ini, distandarkan ke 500 porsi (tanpa buffer gudang).
+            </p>
+            {acuanResep.length === 0 ? (
+              <p className="text-xs text-slate-500">Tidak ada resep yang bisa ditampilkan.</p>
+            ) : acuanResep.map((card, i) => {
+              const yieldWarn = recipeYieldOneWarning(card.yieldQty, card.porsiAcuan);
+              return (
+              <div key={`acuan-${card.recipeId}-${i}`} className="mb-4">
+                <p className="text-xs font-semibold">
+                  {card.slotLabel}
+                  {' · '}
+                  {[card.recipeKode, card.recipeNama].filter(Boolean).join(' · ') || card.recipeId}
+                  {' · per '}
+                  {card.porsiAcuan.toLocaleString('id-ID')}
+                  {' porsi'}
+                  {card.yieldQty !== card.porsiAcuan
+                    ? ` (dari master ${card.yieldQty.toLocaleString('id-ID')} porsi)`
+                    : ''}
+                </p>
+                {yieldWarn ? (
+                  <p className="text-[10px] text-amber-800">{yieldWarn}</p>
+                ) : null}
+                {card.error ? (
+                  <p className="text-[11px] text-amber-800">{card.error}</p>
+                ) : (
+                  <table className="w-full text-[11px] border-collapse mt-1">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-200 px-1.5 py-1 text-left">Bahan</th>
+                        <th className="border border-slate-200 px-1.5 py-1 text-right">Besar</th>
+                        <th className="border border-slate-200 px-1.5 py-1 text-right">Kecil</th>
+                        <th className="border border-slate-200 px-1.5 py-1 text-center">Sat</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {card.lines.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="border border-slate-200 px-1.5 py-1 text-slate-500">
+                            Tidak ada baris bahan.
+                          </td>
+                        </tr>
+                      )}
+                      {card.lines.map((line) => (
+                        <tr key={`${card.recipeId}-${line.productId}-${line.satuan || ''}`}>
+                          <td className="border border-slate-200 px-1.5 py-1">
+                            {line.productNama || line.productKode || line.productId}
+                          </td>
+                          <td className="border border-slate-200 px-1.5 py-1 text-right tabular-nums whitespace-nowrap">
+                            {(Number(line.qtyBesar) || 0) > 0 ? formatNumber(line.qtyBesar) : '—'}
+                          </td>
+                          <td className="border border-slate-200 px-1.5 py-1 text-right tabular-nums whitespace-nowrap">
+                            {(Number(line.qtyKecil) || 0) > 0 ? formatNumber(line.qtyKecil) : '—'}
+                          </td>
+                          <td className="border border-slate-200 px-1.5 py-1 text-center">
+                            {line.satuan || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              );
+            })}
+          </section>
+        ) : null}
+
+        <footer className="mt-6 pt-3 border-t border-slate-200 text-[10px] text-slate-500">
+          Acuan masak SPPG — hidangan, porsi
+          {includeRekap ? ', rekap gudang' : ''}
+          {includeAcuanResep ? ', kartu resep per 500 porsi' : ''}.
+        </footer>
       </div>
     </article>
   );

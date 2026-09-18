@@ -75,6 +75,11 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.rekap[0].qty).toBe(2714);
     expect(built.hidangan[0].lines[0].qtyBesarPart).toBeCloseTo(2713.02, 1);
     expect(built.hidangan[0].lines[0].qtyKecilPart).toBe(0);
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].porsiAcuan).toBe(500);
+    expect(built.acuanResep[0].yieldQty).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(350);
   });
 
   it('campuran 6-key kecil/besar tidak memakai rumus all-besar 2,72 kg', () => {
@@ -187,6 +192,8 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.hidangan[0].error).toMatch(/belum punya bahan/i);
     expect(built.rekap).toEqual([]);
     expect(built.errors[0]).toMatch(/belum punya bahan/i);
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].error).toMatch(/belum punya bahan/i);
   });
 
   it('same SKU same satuan merges; GR vs KG stay separate rekap rows', () => {
@@ -257,5 +264,64 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(acuanKerjaDraftWatermark('RPN-1', 'DRAFT')).toBe(true);
     expect(acuanKerjaDraftWatermark('RPN-1', 'SUBMITTED')).toBe(false);
     expect(acuanKerjaDraftWatermark('RPN-1', 'APPROVED')).toBe(false);
+  });
+
+  it('scales acuan resep cards to 500 porsi without gudang buffer', () => {
+    const half = recipeNasi();
+    half.yieldQty = 250;
+    half.lines = [{
+      productId: 'beras',
+      productKode: 'BRS',
+      productNama: 'Beras',
+      qty: 250,
+      qtyBesar: 250,
+      pctKecil: 70,
+      qtyKecil: 175,
+      satuan: 'GR',
+    }];
+    const built = buildKebutuhanBahanFromWeeklyDay({
+      porsiByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 100 },
+      slots: { KARBOHIDRAT: ['nasi'] },
+      alergi: [{ recipeId: 'nasi', porsi: 2 }],
+    }, recipesMap(half));
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].porsiAcuan).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(350);
+  });
+
+  it('dedupes acuan resep by recipeId and joins slot labels', () => {
+    const built = buildKebutuhanBahanFromWeeklyDay({
+      porsiByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 10 },
+      slots: { KARBOHIDRAT: ['nasi'], SAYUR: ['nasi'] },
+      alergi: [{ recipeId: 'nasi', porsi: 2 }],
+    }, recipesMap(recipeNasi()));
+    expect(built.hidangan).toHaveLength(3);
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].slotLabel).toContain('Karbohidrat');
+    expect(built.acuanResep[0].slotLabel).toContain('Sayur');
+    expect(built.acuanResep[0].slotLabel).toContain('Alergi');
+  });
+
+  it('acuan resep ignores gudang buffer used by hidangan', () => {
+    const built = buildKebutuhanBahanFromWeeklyDay({
+      porsiByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 100 },
+      slots: { KARBOHIDRAT: ['nasi'] },
+      alergi: [],
+    }, recipesMap(recipeNasi()));
+    expect(built.hidangan[0].lines[0].qtyBesarPart).toBeCloseTo(103, 1);
+    expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyBesar).not.toBeCloseTo(515, 0);
+  });
+
+  it('acuan resep cards missing recipes instead of dropping them', () => {
+    const built = buildKebutuhanBahanFromWeeklyDay({
+      porsiByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 10 },
+      slots: { KARBOHIDRAT: ['ghost'] },
+      alergi: [],
+    }, recipesMap());
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].recipeId).toBe('ghost');
+    expect(built.acuanResep[0].error).toMatch(/tidak ditemukan/i);
   });
 });

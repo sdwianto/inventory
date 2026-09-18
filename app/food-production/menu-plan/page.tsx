@@ -19,6 +19,7 @@ import KebutuhanBahanHarianDocument, {
   KEBUTUHAN_BAHAN_HARIAN_PRINT_ID,
 } from '@/components/food-production/KebutuhanBahanHarianDocument';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -276,6 +277,8 @@ export default function MenuPlanPage() {
   const [rpnByDate, setRpnByDate] = useState<Record<string, PlanLite>>({});
   const [acuanOpen, setAcuanOpen] = useState(false);
   const [acuanPrinting, setAcuanPrinting] = useState<'full' | 'bahan' | null>(null);
+  const [includeRekap, setIncludeRekap] = useState(true);
+  const [includeAcuanResep, setIncludeAcuanResep] = useState(true);
   const [acuanDoc, setAcuanDoc] = useState<(KebutuhanBahanHarian & {
     tanggal: string;
     kitchenNama?: string;
@@ -395,7 +398,11 @@ export default function MenuPlanPage() {
 
   const mergeRecipesByIds = useCallback(async (ids: string[]): Promise<Map<string, RecipeOpt>> => {
     const map = new Map(recipesRef.current.map((r) => [r.id, r]));
-    const missing = [...new Set(ids.filter((id) => id && !map.has(id)))];
+    const missing = [...new Set(ids.filter((id) => {
+      if (!id) return false;
+      const row = map.get(id);
+      return !row || !Array.isArray(row.lines);
+    }))];
     if (missing.length) {
       try {
         for (let i = 0; i < missing.length; i += 200) {
@@ -1000,6 +1007,8 @@ export default function MenuPlanPage() {
       productionPlanStatus,
       draftWatermark: acuanKerjaDraftWatermark(productionPlanNo, productionPlanStatus),
     });
+    setIncludeRekap(true);
+    setIncludeAcuanResep(true);
     setAcuanOpen(true);
     if (built.errors.length) toast.message(built.errors[0]);
   }
@@ -1381,9 +1390,31 @@ export default function MenuPlanPage() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground font-normal">
-              Hidangan, porsi, dan total bahan baku (buffer {RECIPE_NEED_BUFFER_PCT}%).
-              Pilih Cetak / PDF lalu &quot;Save as PDF&quot;.
+              Hidangan dan kebutuhan bahan per hidangan selalu dicetak.
+              Uncheck Rekap / Acuan resep agar tidak masuk Cetak / PDF. Pilih Cetak / PDF lalu &quot;Save as PDF&quot;.
             </p>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 pt-2">
+              <div className="flex items-center gap-2 text-sm font-normal">
+                <Checkbox
+                  id="acuan-include-rekap"
+                  checked={includeRekap}
+                  onCheckedChange={(v) => setIncludeRekap(v === true)}
+                />
+                <label htmlFor="acuan-include-rekap" className="cursor-pointer select-none">
+                  Rekap Total Bahan (gudang)
+                </label>
+              </div>
+              <div className="flex items-center gap-2 text-sm font-normal">
+                <Checkbox
+                  id="acuan-include-acuan-resep"
+                  checked={includeAcuanResep}
+                  onCheckedChange={(v) => setIncludeAcuanResep(v === true)}
+                />
+                <label htmlFor="acuan-include-acuan-resep" className="cursor-pointer select-none">
+                  Acuan resep
+                </label>
+              </div>
+            </div>
           </DialogHeader>
           <div className="overflow-y-auto flex-1 bg-slate-100 p-3 sm:p-4">
             {acuanDoc && (
@@ -1400,6 +1431,9 @@ export default function MenuPlanPage() {
                   draftWatermark={acuanDoc.draftWatermark}
                   errors={acuanDoc.errors}
                   fillEmptySlots
+                  includeRekap={includeRekap}
+                  includeAcuanResep={includeAcuanResep}
+                  acuanResep={acuanDoc.acuanResep}
                 />
               </div>
             )}
@@ -1690,7 +1724,7 @@ export default function MenuPlanPage() {
         </DialogContent>
       </Dialog>
 
-      {acuanDoc && (
+      {acuanOpen && acuanDoc && (
         <PrintPortal>
           <div className="doc-print-host">
             {acuanPrinting === 'bahan' ? (
@@ -1714,6 +1748,9 @@ export default function MenuPlanPage() {
                 draftWatermark={acuanDoc.draftWatermark}
                 errors={acuanDoc.errors}
                 fillEmptySlots
+                includeRekap={includeRekap}
+                includeAcuanResep={includeAcuanResep}
+                acuanResep={acuanDoc.acuanResep}
                 printId={MENU_HARIAN_PRINT_ID}
               />
             )}

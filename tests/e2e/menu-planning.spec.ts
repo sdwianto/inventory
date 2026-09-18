@@ -418,8 +418,15 @@ test.describe('Perencanaan Menu — e2e menyeluruh', () => {
 
     await page.getByRole('button', { name: /Unduh PDF acuan kerja/i }).click();
     await expect(page.getByText(/ACUAN KERJA DAPUR/i).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/REKAP TOTAL BAHAN/i).first()).toBeVisible();
+    await expect(page.getByLabel(/Rekap Total Bahan \(gudang\)/i)).toBeChecked();
+    await expect(page.getByLabel(/^Acuan resep$/i)).toBeChecked();
+    await expect(page.getByRole('heading', { name: /REKAP TOTAL BAHAN/i }).first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: /ACUAN RESEP PER 500 PORSI/i }).first()).toBeVisible();
     await expect(page.getByText(/DRAFT/i).first()).toBeVisible();
+    await page.getByLabel(/Rekap Total Bahan \(gudang\)/i).click();
+    await page.getByLabel(/^Acuan resep$/i).click();
+    await expect(page.getByRole('heading', { name: /REKAP TOTAL BAHAN/i })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /ACUAN RESEP PER 500 PORSI/i })).toHaveCount(0);
     await page.getByRole('button', { name: /^Tutup$/i }).click();
 
     const giziChip = page.getByText(/Tanpa data TKPI|kkal|Menghitung gizi|Gizi…/i).first();
