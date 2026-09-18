@@ -324,4 +324,45 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.acuanResep[0].recipeId).toBe('ghost');
     expect(built.acuanResep[0].error).toMatch(/tidak ditemukan/i);
   });
+
+  it('susu pengecualian PCS: 2610 porsi × buffer 3% tanpa waste masak', () => {
+    const susu: KebutuhanRecipeRef = {
+      id: 'susu',
+      kode: 'RSP-0010',
+      nama: 'Susu Pasteurisasi 125 ml',
+      aktif: true,
+      kategoriMenu: 'SUSU',
+      yieldQty: 500,
+      wastePct: 1,
+      lines: [{
+        productId: 'susu-p',
+        productKode: 'SUSU-125',
+        productNama: 'Susu Pasteurisasi 125 ml',
+        qty: 500,
+        qtyBesar: 500,
+        pctKecil: 70,
+        qtyKecil: 350,
+        satuan: 'PCS',
+      }],
+    };
+    const built = buildKebutuhanBahanFromWeeklyDay({
+      porsiByKategori: {
+        ...emptyPortionTargets(),
+        PORSI_BESAR: 1210,
+        PORSI_KECIL: 1400,
+      },
+      slots: { SUSU: ['susu'] },
+      alergi: [],
+    }, recipesMap(susu), undefined, new Set(['SUSU-125']));
+
+    expect(built.errors).toEqual([]);
+    expect(built.hidangan[0].targetPorsi).toBe(2610);
+    expect(built.hidangan[0].lines[0].qtyBesarPart).toBeCloseTo(1246.3, 1);
+    expect(built.hidangan[0].lines[0].qtyKecilPart).toBeCloseTo(1442, 1);
+    expect(built.rekap[0].qtyExact).toBeCloseTo(2688.3, 1);
+    expect(built.rekap[0].qty).toBe(2689);
+    expect(built.acuanResep).toHaveLength(1);
+    expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
+    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(500);
+  });
 });

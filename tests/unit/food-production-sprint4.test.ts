@@ -12,7 +12,11 @@ import {
 import { recipeIngredientNeeds, formatRecipeNeedFormula, recipeYieldOneWarning, buildRencanaKebutuhanLines } from '@/lib/food-production/rencana-kebutuhan';
 import { FP_DOC_PREFIX, FP_DOC_TYPES } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
-import { applyFullPortionExceptions, type RecipeDoc } from '@/lib/food-production/recipe';
+import {
+  applyFullPortionExceptions,
+  recipeWastePctForLine,
+  type RecipeDoc,
+} from '@/lib/food-production/recipe';
 
 describe('food-production sprint 4 — MRP', () => {
   it('uses KBH document prefix', () => {
@@ -108,6 +112,171 @@ describe('food-production sprint 4 — MRP', () => {
     expect(withExc[0].qtyKecilPart).toBe(1200); // 500 × 1200/500
     expect(withExc[0].qty).toBe(1200);
     expect(withExc[0].formula).toBe('500 PCS × 1200 porsi / 500 hasil = 1200 PCS');
+  });
+
+  it('item pengecualian PCS tidak kena waste masak (kasus susu 2610)', () => {
+    const line = {
+      productId: 'susu',
+      productKode: 'SUSU-125',
+      productNama: 'Susu Pasteurisasi 125 ml',
+      qty: 500,
+      qtyBesar: 500,
+      pctKecil: 70,
+      qtyKecil: 350,
+      satuan: 'PCS',
+    };
+    const acuan = { PORSI_BESAR: 1210, PORSI_KECIL: 1400 };
+    const fixed = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 1, lines: [line] },
+      menuTargetPorsi: 2610,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: acuan,
+      bufferPct: 3,
+      fullPortionKeys: new Set(['SUSU-125']),
+    });
+    expect(fixed[0].qtyBesarPart).toBeCloseTo(1246.3, 1); // 1210 × 1,03
+    expect(fixed[0].qtyKecilPart).toBeCloseTo(1442, 1); // 1400 × 1,03
+    expect(fixed[0].qtyBesarPart! + fixed[0].qtyKecilPart!).toBeCloseTo(2688.3, 1);
+    expect(fixed[0].qty).toBe(2689);
+  });
+
+  it('baris PCS yang sudah pctKecil 100 skip waste tanpa keys (jalur GET resep)', () => {
+    const patched = applyFullPortionExceptions([{
+      productId: 'susu',
+      productKode: 'SUSU-125',
+      productNama: 'Susu Pasteurisasi 125 ml',
+      qty: 500,
+      qtyBesar: 500,
+      pctKecil: 70,
+      qtyKecil: 350,
+      satuan: 'PCS',
+    }], new Set(['SUSU-125']));
+    expect(patched[0].pctKecil).toBe(100);
+    const needs = recipeIngredientNeeds({
+      recipe: { yieldQty: 500, wastePct: 1, lines: patched },
+      menuTargetPorsi: 2610,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: { PORSI_BESAR: 1210, PORSI_KECIL: 1400 },
+      bufferPct: 3,
+    });
+    expect(needs[0].qty).toBe(2689);
+  });
+
+  it('resep campur: PCS pengecualian skip waste, KG tetap kena waste', () => {
+    const lines = recipeIngredientNeeds({
+      recipe: {
+        yieldQty: 500,
+        wastePct: 1,
+        lines: [
+          {
+            productId: 'susu',
+            productKode: 'SUSU-125',
+            productNama: 'Susu Pasteurisasi 125 ml',
+            qty: 500,
+            qtyBesar: 500,
+            pctKecil: 70,
+            qtyKecil: 350,
+            satuan: 'PCS',
+          },
+          {
+            productId: 'anggur',
+            productKode: 'BGRAPE',
+            productNama: 'Anggur Merah',
+            qty: 12,
+            qtyBesar: 12,
+            pctKecil: 70,
+            qtyKecil: 8.4,
+            satuan: 'KG',
+          },
+        ],
+      },
+      menuTargetPorsi: 2610,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: { PORSI_BESAR: 1210, PORSI_KECIL: 1400 },
+      bufferPct: 3,
+      fullPortionKeys: new Set(['SUSU-125']),
+    });
+    const susu = lines.find((l) => l.productKode === 'SUSU-125');
+    const anggur = lines.find((l) => l.productKode === 'BGRAPE');
+    expect(susu?.qty).toBe(2689);
+    expect((anggur?.qtyBesarPart || 0) + (anggur?.qtyKecilPart || 0)).toBeCloseTo(54.678552, 3);
+  });
+
+  it('recipeWastePctForLine: COUNT pengecualian skip waste, KG tetap kena waste', () => {
+    expect(recipeWastePctForLine(1, { pctKecil: 100, satuan: 'PCS' })).toBe(0);
+    expect(recipeWastePctForLine(1, { pctKecil: 70, satuan: 'PCS' })).toBe(1);
+    expect(recipeWastePctForLine(1, {
+      productKode: 'SUSU-125',
+      pctKecil: 70,
+      satuan: 'PCS',
+    }, new Set(['SUSU-125']))).toBe(0);
+    expect(recipeWastePctForLine(1, { pctKecil: 100, satuan: 'KG' })).toBe(1);
+  });
+
+  it('computeRecipeLineContributions skip waste COUNT pengecualian', () => {
+    const line = {
+      productId: 'susu',
+      productKode: 'SUSU-125',
+      productNama: 'Susu',
+      qty: 1,
+      qtyBesar: 1,
+      pctKecil: 70,
+      qtyKecil: 0.7,
+      satuan: 'PCS',
+      qtyBaseBesar: 1,
+      qtyBaseKecil: 0.7,
+      baseSatuan: 'PCS',
+    };
+    const withWaste = computeRecipeLineContributions({
+      recipe: { id: 'r1', yieldQty: 1, wastePct: 1, lines: [line] },
+      recipeFactor: 1,
+      porsiBesar: 100,
+      porsiKecil: 0,
+      excludedKeys: new Set(),
+      overrideQtyByKey: new Map(),
+    });
+    expect(withWaste[0].qty).toBeCloseTo(101);
+
+    const skipped = computeRecipeLineContributions({
+      recipe: { id: 'r1', yieldQty: 1, wastePct: 1, lines: [line] },
+      recipeFactor: 1,
+      porsiBesar: 100,
+      porsiKecil: 0,
+      excludedKeys: new Set(),
+      overrideQtyByKey: new Map(),
+      fullPortionKeys: new Set(['SUSU-125']),
+    });
+    expect(skipped[0].qty).toBeCloseTo(100);
+  });
+
+  it('bahan KG non-pengecualian tetap kena waste + buffer', () => {
+    const lines = recipeIngredientNeeds({
+      recipe: {
+        yieldQty: 500,
+        wastePct: 1,
+        lines: [{
+          productId: 'anggur',
+          productKode: 'BGRAPE',
+          productNama: 'Anggur Merah',
+          qty: 12,
+          qtyBesar: 12,
+          pctKecil: 70,
+          qtyKecil: 8.4,
+          satuan: 'KG',
+        }],
+      },
+      menuTargetPorsi: 2610,
+      recipePerMenuPorsi: 1,
+      kategoriPorsiList: ['PORSI_BESAR', 'PORSI_KECIL'],
+      acuanByKategori: { PORSI_BESAR: 1210, PORSI_KECIL: 1400 },
+      bufferPct: 3,
+    });
+    expect(lines[0].qtyBesarPart).toBeCloseTo(30.210312, 3);
+    expect(lines[0].qtyKecilPart).toBeCloseTo(24.46824, 3);
+    expect(lines[0].qtyBesarPart! + lines[0].qtyKecilPart!).toBeCloseTo(54.678552, 3);
   });
 
   it('recipeIngredientNeeds memakai qty kecil + satuan dapur GR, bukan ceil ke 1 KG', () => {

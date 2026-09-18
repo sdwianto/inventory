@@ -4,6 +4,7 @@ import {
   KATEGORI_PORSI_LEGACY,
   type KategoriPorsi,
 } from '@/lib/food-production/production-plan';
+import { recipeUomFamily } from '@/lib/food-production/recipe-uom';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -193,6 +194,36 @@ export function applyFullPortionExceptions<T extends {
     }
     return next;
   });
+}
+
+export function isFullPortionExceptionLine(
+  line: { productId?: string; productKode?: string; pctKecil?: number },
+  keys?: Set<string> | null,
+): boolean {
+  if (keys?.size && isFullPortionProduct(line, keys)) return true;
+  return Number(line.pctKecil) === 100;
+}
+
+/**
+ * Waste masak tidak berlaku untuk item pengecualian porsi penuh yang dihitung per unit utuh (PCS/COUNT).
+ * Buffer gudang tetap diterapkan di pemanggil.
+ */
+export function recipeWastePctForLine(
+  recipeWastePct: number,
+  line: {
+    productId?: string;
+    productKode?: string;
+    pctKecil?: number;
+    satuan?: string;
+    baseSatuan?: string;
+  },
+  fullPortionKeys?: Set<string> | null,
+): number {
+  const waste = Math.max(0, Number(recipeWastePct) || 0);
+  if (!(waste > 0)) return 0;
+  if (!isFullPortionExceptionLine(line, fullPortionKeys)) return waste;
+  if (recipeUomFamily(line.satuan || line.baseSatuan) !== 'COUNT') return waste;
+  return 0;
 }
 
 /** Resolve dual-qty fields from legacy or new payload. */

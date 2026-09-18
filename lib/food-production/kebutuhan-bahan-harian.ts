@@ -7,6 +7,7 @@ import { ceilProcurementQty, roundQty } from '@/lib/food-production/material-req
 import { normalizeRecipeSatuan } from '@/lib/food-production/recipe-uom';
 import {
   KATEGORI_MENU_OPTIONS,
+  applyFullPortionExceptions,
   isKategoriMenu,
   kategoriMenuLabel,
   recipeQtyForFamily,
@@ -121,6 +122,7 @@ function explodeHidangan(
   recipe: KebutuhanRecipeRef | undefined,
   acuan: PortionTargetMap,
   bufferMap?: Record<string, number> | null,
+  fullPortionKeys?: Set<string> | null,
 ): KebutuhanBahanHidangan {
   const base: KebutuhanBahanHidangan = {
     recipeId: row.recipeId,
@@ -150,6 +152,7 @@ function explodeHidangan(
     kategoriPorsiList: row.kategoriPorsiList,
     acuanByKategori: acuan,
     bufferPct: recipeBufferPct(row.recipeId, bufferMap),
+    fullPortionKeys,
   });
   return { ...base, lines };
 }
@@ -278,6 +281,7 @@ export function buildKebutuhanBahanHarian(input: {
   recipesById: Map<string, KebutuhanRecipeRef>;
   acuanByKategori: PortionTargetMap;
   recipeBufferPct?: Record<string, number> | null;
+  fullPortionKeys?: Set<string> | null;
 }): KebutuhanBahanHarian {
   const errors: string[] = [];
   const hidangan = input.hidangan.map((row) => {
@@ -286,6 +290,7 @@ export function buildKebutuhanBahanHarian(input: {
       input.recipesById.get(row.recipeId),
       input.acuanByKategori,
       input.recipeBufferPct,
+      input.fullPortionKeys,
     );
     if (dish.error) errors.push(dish.error);
     return dish;
@@ -293,7 +298,7 @@ export function buildKebutuhanBahanHarian(input: {
   return {
     hidangan,
     rekap: aggregateRekap(hidangan),
-    acuanResep: buildAcuanResepCards(hidangan, input.recipesById),
+    acuanResep: buildAcuanResepCards(hidangan, input.recipesById, ACUAN_RESEP_PORSI, input.fullPortionKeys),
     errors: [...new Set(errors)],
   };
 }
@@ -303,6 +308,7 @@ export function buildAcuanResepCards(
   hidangan: Array<{ recipeId: string; slotLabel: string; recipeKode?: string; recipeNama?: string }>,
   recipesById: Map<string, KebutuhanRecipeRef>,
   porsiAcuan = ACUAN_RESEP_PORSI,
+  fullPortionKeys?: Set<string> | null,
 ): AcuanResepCard[] {
   const seen = new Set<string>();
   const cards: AcuanResepCard[] = [];
@@ -338,7 +344,10 @@ export function buildAcuanResepCards(
       cards.push({ ...base, error: `Resep ${recipe.kode || id} belum punya bahan` });
       continue;
     }
-    base.lines = recipe.lines.map((line) => ({
+    const sourceLines = fullPortionKeys?.size
+      ? applyFullPortionExceptions(recipe.lines, fullPortionKeys)
+      : recipe.lines;
+    base.lines = sourceLines.map((line) => ({
       productId: String(line.productId || ''),
       productKode: line.productKode,
       productNama: line.productNama,
@@ -355,6 +364,7 @@ export function buildKebutuhanBahanFromWeeklyDay(
   day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi'>,
   recipesById: Map<string, KebutuhanRecipeRef>,
   recipeBufferPct?: Record<string, number> | null,
+  fullPortionKeys?: Set<string> | null,
 ): KebutuhanBahanHarian {
   const acuan = { ...emptyPortionTargets(), ...(day.porsiByKategori || {}) };
   return buildKebutuhanBahanHarian({
@@ -362,6 +372,7 @@ export function buildKebutuhanBahanFromWeeklyDay(
     recipesById,
     acuanByKategori: acuan,
     recipeBufferPct,
+    fullPortionKeys,
   });
 }
 

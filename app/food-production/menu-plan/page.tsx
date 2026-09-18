@@ -97,6 +97,7 @@ import {
 import { printDocument } from '@/lib/doc-print';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import { planHref } from '@/lib/food-production/fp-flow';
+import { fetchPortionExceptionMatchSet } from '@/lib/food-production/recipe-portion-exception';
 
 type RecipeOpt = RecipeSearchOption & {
   kategoriMenu?: string | null;
@@ -274,6 +275,7 @@ export default function MenuPlanPage() {
   const [selectedTanggal, setSelectedTanggal] = useState(initialMenuWeekStart);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recipes, setRecipes] = useState<RecipeOpt[]>([]);
+  const [fullPortionKeys, setFullPortionKeys] = useState<Set<string>>(() => new Set());
   const [rpnByDate, setRpnByDate] = useState<Record<string, PlanLite>>({});
   const [acuanOpen, setAcuanOpen] = useState(false);
   const [acuanPrinting, setAcuanPrinting] = useState<'full' | 'bahan' | null>(null);
@@ -378,9 +380,13 @@ export default function MenuPlanPage() {
 
   const loadRecipes = useCallback(async () => {
     try {
-      const res = await fetch('/api/recipes?aktif=1', { headers: fpHeaders() });
+      const [res, keys] = await Promise.all([
+        fetch('/api/recipes?aktif=1', { headers: fpHeaders() }),
+        fetchPortionExceptionMatchSet(fpHeaders()),
+      ]);
       const data = await res.json();
       if (res.ok && Array.isArray(data)) setRecipes(data as RecipeOpt[]);
+      setFullPortionKeys(keys);
     } catch {
       /* ignore */
     }
@@ -992,10 +998,15 @@ export default function MenuPlanPage() {
     const rpn = rpnByDate[day.tanggal];
     const productionPlanNo = rpn?.noDokumen || day.productionPlanNo;
     const productionPlanStatus = rpn?.status;
-    const recipeMap = await mergeRecipesByIds(dayRecipeIds(day));
+    const [recipeMap, fullPortionKeys] = await Promise.all([
+      mergeRecipesByIds(dayRecipeIds(day)),
+      fetchPortionExceptionMatchSet(fpHeaders()),
+    ]);
     const built = buildKebutuhanBahanFromWeeklyDay(
       day,
       recipeMap as Map<string, KebutuhanRecipeRef>,
+      undefined,
+      fullPortionKeys,
     );
     setAcuanDoc({
       ...built,
@@ -1042,6 +1053,7 @@ export default function MenuPlanPage() {
       rpn={selectedRpn}
       recipes={recipes}
       recipesById={recipesById}
+      fullPortionKeys={fullPortionKeys}
       weekDates={weekDates}
       onPorsi={(key, val) => setPorsi(selected.tanggal, key, val)}
       onNote={(note) => patchDay(selected.tanggal, { note })}
@@ -1820,6 +1832,7 @@ function DayInspector({
   rpn,
   recipes,
   recipesById,
+  fullPortionKeys,
   weekDates,
   onPorsi,
   onNote,
@@ -1839,6 +1852,7 @@ function DayInspector({
   rpn?: PlanLite;
   recipes: RecipeOpt[];
   recipesById: Map<string, RecipeOpt>;
+  fullPortionKeys: Set<string>;
   weekDates: string[];
   onPorsi: (key: keyof PortionTargetMap, val: string) => void;
   onNote: (note: string) => void;
@@ -1862,6 +1876,8 @@ function DayInspector({
     const built = buildKebutuhanBahanFromWeeklyDay(
       day,
       recipesById as Map<string, KebutuhanRecipeRef>,
+      undefined,
+      fullPortionKeys,
     );
     return {
       lines: built.rekap.map((n) => ({
@@ -1871,7 +1887,7 @@ function DayInspector({
       })),
       hint: built.errors[0],
     };
-  }, [day, recipesById]);
+  }, [day, recipesById, fullPortionKeys]);
 
   return (
     <div className="rounded-lg border bg-white p-3 space-y-3">

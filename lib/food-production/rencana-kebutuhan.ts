@@ -2,8 +2,10 @@
 
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
-  splitPorsiByKategoriFamily,
+  applyFullPortionExceptions,
   recipeQtyForFamily,
+  recipeWastePctForLine,
+  splitPorsiByKategoriFamily,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
 import {
@@ -71,6 +73,7 @@ export function buildRencanaKebutuhanLines(input: {
     aktif?: boolean;
   }>;
   acuanByKategori?: Partial<Record<string, number>> | null;
+  fullPortionKeys?: Set<string> | null;
 }): { lines: RencanaKebutuhanLine[]; errors: string[] } {
   const acc = new Map<string, RencanaKebutuhanLine>();
   const errors: string[] = [];
@@ -117,6 +120,7 @@ export function buildRencanaKebutuhanLines(input: {
           overrideQtyByKey,
           overrideSatuanByKey,
           recipeBufferPct: plan.recipeBufferPct,
+          fullPortionKeys: input.fullPortionKeys,
         });
         for (const c of contributions) {
           const prev = acc.get(c.productId) || {
@@ -212,6 +216,8 @@ export function recipeIngredientNeeds(input: {
   acuanByKategori?: Partial<Record<string, number>> | null;
   /** Buffer persen (mis. 3) — diterapkan ke qty hitungan. */
   bufferPct?: number;
+  /** SKU pengecualian porsi penuh — kecil = 100% dan waste masak di-skip untuk COUNT. */
+  fullPortionKeys?: Set<string> | null;
 }): RecipeIngredientNeedRow[] {
   const menuFactor = Number(input.recipePerMenuPorsi) || 1;
   const bufferPct = Number(input.bufferPct) || 0;
@@ -224,12 +230,17 @@ export function recipeIngredientNeeds(input: {
   const porsiBesarNeeded = split.porsiBesar * menuFactor;
   const porsiKecilNeeded = split.porsiKecil * menuFactor;
   const yieldQty = Number(input.recipe.yieldQty) > 0 ? Number(input.recipe.yieldQty) : 1;
-  const wastePct = Number(input.recipe.wastePct) || 0;
-  return (input.recipe.lines || [])
+  const recipeWastePct = Number(input.recipe.wastePct) || 0;
+  const keys = input.fullPortionKeys;
+  const lines = keys?.size
+    ? applyFullPortionExceptions(input.recipe.lines, keys)
+    : (input.recipe.lines || []);
+  return lines
     .map((rLine) => {
       const kitchenSatuan = rLine.satuan || rLine.baseSatuan;
       const qtyResepBesar = recipeQtyForFamily(rLine, 'BESAR');
       const qtyResepKecil = recipeQtyForFamily(rLine, 'KECIL');
+      const wastePct = recipeWastePctForLine(recipeWastePct, rLine, keys);
       const qtyBesarPart = roundQty(applyRecipeBufferQty(scaleRecipeIngredientQty(
         qtyResepBesar,
         porsiBesarNeeded,

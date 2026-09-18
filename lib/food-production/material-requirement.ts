@@ -11,6 +11,8 @@ import {
   recipeUomFamily,
 } from '@/lib/food-production/recipe-uom';
 import {
+  applyFullPortionExceptions,
+  recipeWastePctForLine,
   splitPorsiByKategoriFamily,
   type RecipeDoc,
 } from '@/lib/food-production/recipe';
@@ -56,14 +58,20 @@ export function computeRecipeLineContributions(input: {
   /** Satuan qty override (dapur atau stok). Jika beda dengan resep, override diabaikan. */
   overrideSatuanByKey?: Map<string, string>;
   recipeBufferPct?: Record<string, number>;
+  fullPortionKeys?: Set<string> | null;
 }): RecipeLineContribution[] {
   const factor = Number(input.recipeFactor) || 1;
   const porsiBesarNeeded = input.porsiBesar * factor;
   const porsiKecilNeeded = input.porsiKecil * factor;
   const yieldQty = Number(input.recipe.yieldQty) > 0 ? Number(input.recipe.yieldQty) : 1;
-  const wastePct = Number(input.recipe.wastePct) || 0;
+  const recipeWastePct = Number(input.recipe.wastePct) || 0;
+  const keys = input.fullPortionKeys;
+  const sourceLines = keys?.size
+    ? applyFullPortionExceptions(input.recipe.lines, keys)
+    : (input.recipe.lines || []);
   const out: RecipeLineContribution[] = [];
-  for (const rLine of input.recipe.lines || []) {
+  for (const rLine of sourceLines) {
+    const wastePct = recipeWastePctForLine(recipeWastePct, rLine, keys);
     const addBesar = scaleRecipeIngredientQty(
       recipeBaseQtyForFamily(rLine, 'BESAR'),
       porsiBesarNeeded,
@@ -313,6 +321,7 @@ export type ExplodeMrpInput = {
   warehouseKode: string;
   /** Optional acuan porsi per kategori (tanggal/dapur) untuk pecah besar vs kecil. */
   acuanByKategori?: Partial<Record<string, number>> | null;
+  fullPortionKeys?: Set<string> | null;
 };
 
 export type ExplodeMrpResult =
@@ -321,7 +330,7 @@ export type ExplodeMrpResult =
 
 /** Pure explosion — unit-tested without Mongo. */
 export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpResult {
-  const { plan, menusById, recipesById, onHandByProduct, warehouseKode, acuanByKategori } = input;
+  const { plan, menusById, recipesById, onHandByProduct, warehouseKode, acuanByKategori, fullPortionKeys } = input;
   if (!plan.lines?.length) return { ok: false, error: 'Rencana tidak punya baris resep' };
   if (!warehouseKode) return { ok: false, error: 'Gudang dapur wajib untuk MRP' };
 
@@ -395,6 +404,7 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         overrideQtyByKey,
         overrideSatuanByKey,
         recipeBufferPct: plan.recipeBufferPct,
+        fullPortionKeys,
       });
       for (const c of contributions) {
         const prev = acc.get(c.productId) || {

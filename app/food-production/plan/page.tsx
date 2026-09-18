@@ -116,6 +116,7 @@ import {
   type KebutuhanBahanHarian,
   type KebutuhanRecipeRef,
 } from '@/lib/food-production/kebutuhan-bahan-harian';
+import { fetchPortionExceptionMatchSet } from '@/lib/food-production/recipe-portion-exception';
 import { formatNumber } from '@/lib/format';
 import {
   parseQtyInput,
@@ -316,6 +317,7 @@ function FoodProductionPlanPageContent() {
   const [kitchens, setKitchens] = useState<KitchenOpt[]>([]);
   const [menus, setMenus] = useState<MenuOpt[]>([]);
   const [recipesById, setRecipesById] = useState<Record<string, RecipeOpt>>({});
+  const [fullPortionKeys, setFullPortionKeys] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -525,13 +527,14 @@ function FoodProductionPlanPageContent() {
       const to = format(addDays(new Date(`${monthRange.to}T12:00:00`), 10), 'yyyy-MM-dd');
       const params = new URLSearchParams({ from, to });
       if (filterStatus) params.set('status', filterStatus);
-      const [pRes, kRes, mRes, rRes] = await Promise.all([
+      const [pRes, kRes, mRes, rRes, exceptionKeys] = await Promise.all([
         fetch(`/api/production-plans?${params}`, {
           headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
         }),
         fetch('/api/kitchens?aktif=1', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/menus', { headers: { ...actingTenantHeaders() } }),
         fetch('/api/recipes', { headers: { ...actingTenantHeaders() } }),
+        fetchPortionExceptionMatchSet({ ...actingTenantHeaders() }),
       ]);
       const pData = await pRes.json();
       const kData = await kRes.json();
@@ -548,6 +551,7 @@ function FoodProductionPlanPageContent() {
         }
       }
       setRecipesById(recipeMap);
+      setFullPortionKeys(exceptionKeys);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat rencana');
     } finally {
@@ -557,7 +561,10 @@ function FoodProductionPlanPageContent() {
 
   const refreshRecipes = useCallback(async () => {
     try {
-      const rRes = await fetch('/api/recipes', { headers: { ...actingTenantHeaders() } });
+      const [rRes, keys] = await Promise.all([
+        fetch('/api/recipes', { headers: { ...actingTenantHeaders() } }),
+        fetchPortionExceptionMatchSet({ ...actingTenantHeaders() }),
+      ]);
       const rData = await rRes.json();
       if (!rRes.ok) return;
       const recipeMap: Record<string, RecipeOpt> = {};
@@ -567,6 +574,7 @@ function FoodProductionPlanPageContent() {
         }
       }
       setRecipesById(recipeMap);
+      setFullPortionKeys(keys);
     } catch {
       /* biarkan resep yang sudah ter-load */
     }
@@ -1646,6 +1654,7 @@ function FoodProductionPlanPageContent() {
       menusById: menusMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['menusById'],
       recipesById: recipesMap as Parameters<typeof buildRencanaKebutuhanLines>[0]['recipesById'],
       acuanByKategori: portionTargets,
+      fullPortionKeys,
     });
     if (built.errors.length && !built.lines.length) {
       toast.error(built.errors[0] || 'Gagal hitung kebutuhan');
@@ -1728,9 +1737,10 @@ function FoodProductionPlanPageContent() {
       toast.error('Rencana ini belum punya baris resep');
       return;
     }
-    const [recipesMap, acuan] = await Promise.all([
+    const [recipesMap, acuan, fullPortionKeys] = await Promise.all([
       fetchRecipesForIds(recipeIds),
       fetchPlanAcuan(row),
+      fetchPortionExceptionMatchSet({ ...actingTenantHeaders() }),
     ]);
     const fallbackKp = row.kategoriPorsiList?.length
       ? row.kategoriPorsiList.map(String)
@@ -1745,6 +1755,7 @@ function FoodProductionPlanPageContent() {
       recipesById: recipesMap,
       acuanByKategori: acuan,
       recipeBufferPct: row.recipeBufferPct,
+      fullPortionKeys,
     });
     if (built.errors.length && !built.rekap.length && !built.hidangan.length) {
       toast.error(built.errors[0] || 'Gagal hitung acuan kerja');
@@ -2501,6 +2512,7 @@ function FoodProductionPlanPageContent() {
                                     kategoriPorsiList: lineKp,
                                     acuanByKategori: acuanForPlan(row),
                                     bufferPct,
+                                    fullPortionKeys,
                                   })
                                   : [];
                                 return (
@@ -2724,6 +2736,7 @@ function FoodProductionPlanPageContent() {
                                         kategoriPorsiList: lineKp,
                                         acuanByKategori: acuanForPlan(row),
                                         bufferPct,
+                                        fullPortionKeys,
                                       })
                                       : [];
                                     return (

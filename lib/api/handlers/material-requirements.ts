@@ -247,6 +247,7 @@ async function buildExplosion(
     onHandByProduct,
     warehouseKode,
     acuanByKategori,
+    fullPortionKeys: exceptionKeys,
   });
   if (!exploded.ok) return { error: exploded.error };
   const lines = exploded.lines.map((l) => ({
