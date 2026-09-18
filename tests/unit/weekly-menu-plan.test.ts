@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RECIPE_NEED_BUFFER_PCT } from '@/lib/food-production/production-plan';
-import { emptyPortionTargets } from '@/lib/food-production/portion-target';
+import { emptyPortionTargets, sumAllPorsi } from '@/lib/food-production/portion-target';
 import {
   applyMenuPackageToDay,
   assertDayReadyToPublish,
@@ -11,6 +11,8 @@ import {
   copyPorsiOntoDays,
   copyPorsiToDays,
   copyWeekDays,
+  clearWeeklyMenuDayContent,
+  dayHasMenuContent,
   draftNutritionLinesFromDay,
   emptyWeeklyDays,
   formatCopyPorsiDayLabel,
@@ -333,6 +335,37 @@ describe('weekly menu plan — slots & publish lines', () => {
     expect(indexed['2026-09-22']?.status).toBe('APPROVED');
     expect(indexed['2026-09-23']?.status).toBe('DRAFT');
     expect(indexed['2026-09-21']).toBeUndefined();
+  });
+
+  it('clears hidangan and porsi but keeps the RPN link', () => {
+    const day = emptyWeeklyDays(WEEK_START)[0];
+    day.porsiByKategori.PORSI_KECIL = 100;
+    day.slots = { KARBOHIDRAT: ['nasi'] };
+    day.alergi = [{ recipeId: 'tahu', porsi: 2 }];
+    day.note = 'catatan';
+    day.productionPlanId = 'rpn-1';
+    day.productionPlanNo = 'RPN2609000018';
+    expect(dayHasMenuContent(day)).toBe(true);
+    const cleared = clearWeeklyMenuDayContent(day);
+    expect(cleared.slots).toEqual({});
+    expect(cleared.alergi).toEqual([]);
+    expect(cleared.note).toBe('');
+    expect(cleared.porsiByKategori.PORSI_KECIL).toBe(0);
+    expect(sumAllPorsi(cleared.porsiByKategori)).toBe(0);
+    expect(cleared.productionPlanId).toBe('rpn-1');
+    expect(cleared.productionPlanNo).toBe('RPN2609000018');
+    expect(cleared.tanggal).toBe(WEEK_START);
+    expect(dayHasMenuContent(cleared)).toBe(false);
+
+    const restored = normalizeWeeklyDay(cleared, WEEK_START, day);
+    expect(restored).not.toHaveProperty('error');
+    if ('error' in restored) return;
+    expect(restored.slots).toEqual({});
+    expect(restored.alergi).toEqual([]);
+    expect(restored.note).toBeUndefined();
+    expect(sumAllPorsi(restored.porsiByKategori)).toBe(0);
+    expect(restored.productionPlanId).toBe('rpn-1');
+    expect(dayHasMenuContent({ ...restored, note: 'hanya catatan', porsiByKategori: emptyPortionTargets(), slots: {}, alergi: [] })).toBe(true);
   });
 
   it('rejects the same recipe across two slots or duplicate alergi', () => {

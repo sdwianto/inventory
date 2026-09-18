@@ -204,6 +204,23 @@ export function emptyWeeklyMenuDay(tanggal: string): WeeklyMenuDay {
   };
 }
 
+/** Kosongkan hidangan + porsi + alergi + catatan; tautan RPN tetap. */
+export function clearWeeklyMenuDayContent(day: WeeklyMenuDay): WeeklyMenuDay {
+  return {
+    tanggal: day.tanggal,
+    porsiByKategori: emptyPortionTargets(),
+    slots: {},
+    alergi: [],
+    note: '',
+    ...(day.productionPlanId ? { productionPlanId: day.productionPlanId } : {}),
+    ...(day.productionPlanNo ? { productionPlanNo: day.productionPlanNo } : {}),
+  };
+}
+
+export function dayHasMenuContent(day: WeeklyMenuDay): boolean {
+  return dayHasSlotContent(day) || sumAllPorsi(day.porsiByKategori) > 0;
+}
+
 export function emptyWeeklyDays(weekStart: string): WeeklyMenuDay[] {
   return isoWeekdays(weekStart).map((tanggal) => emptyWeeklyMenuDay(tanggal));
 }

@@ -141,6 +141,10 @@ describe('food-production enterprise gate', () => {
     expect(menuPlan).toContain('Kebutuhan bahan saja');
     expect(menuPlan).toContain('fillEmptySlots');
     expect(menuPlan).toContain('Terapkan paket');
+    expect(menuPlan).toContain('Kosongkan');
+    expect(menuPlan).toContain('clearWeeklyMenuDayContent');
+    expect(menuPlan).toContain('requestClearDay');
+    expect(menuPlan).toContain('clearConfirmTanggal');
     expect(menuPlan).toContain('Salin minggu lalu');
     expect(menuPlan).toContain('Isi PM dari titik layanan');
     expect(menuPlan).toContain('analyze-draft');

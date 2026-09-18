@@ -55,8 +55,10 @@ import {
   akgKeyForDay,
   applyMenuPackageToDay,
   applyMenuPackageWarnings,
+  clearWeeklyMenuDayContent,
   copyPorsiOntoDays,
   copyWeekDays,
+  dayHasMenuContent,
   dayHasSlotContent,
   dayPorsiSummary,
   dayRecipeIds,
@@ -312,8 +314,11 @@ export default function MenuPlanPage() {
   const queryApplied = useRef(false);
   const copyWeekReq = useRef(0);
   const copyTargetWeekRef = useRef(weekStart);
+  const daysRef = useRef<WeeklyMenuDay[]>([]);
+  const [clearConfirmTanggal, setClearConfirmTanggal] = useState<string | null>(null);
   const boardScrollRef = useRef<HTMLDivElement>(null);
   recipesRef.current = recipes;
+  daysRef.current = days;
   useHorizontalDragScroll(boardScrollRef, !loading);
 
   const weekDates = useMemo(() => isoWeekdays(weekStart), [weekStart]);
@@ -473,8 +478,11 @@ export default function MenuPlanPage() {
       });
       const data = await res.json() as WeeklyDoc & { error?: string };
       if (!res.ok) throw new Error(data.error || 'Gagal menyimpan');
+      if (data.id) setPlanId(data.id);
+      if (JSON.stringify(daysRef.current) !== payload) {
+        return { ok: true, id: data.id };
+      }
       lastSaved.current = JSON.stringify(data.days || nextDays);
-      setPlanId(data.id);
       if (Array.isArray(data.days)) setDays(data.days);
       return { ok: true, id: data.id };
     } catch (e) {
@@ -601,6 +609,46 @@ export default function MenuPlanPage() {
     patchDay(tanggal, {
       porsiByKategori: { ...(day.porsiByKategori || emptyPortionTargets()), [key]: n },
     });
+  }
+
+  function requestClearDay(tanggal: string) {
+    if (!canManage) return;
+    if (dayLocked(rpnByDate[tanggal]?.status)) {
+      toast.error('RPN hari ini terkunci — tidak bisa diubah dari papan minggu');
+      return;
+    }
+    const day = daysRef.current.find((d) => d.tanggal === tanggal);
+    if (!day) return;
+    if (!dayHasMenuContent(day)) {
+      toast.message('Hari ini sudah kosong');
+      return;
+    }
+    setSelectedTanggal(tanggal);
+    setClearConfirmTanggal(tanggal);
+  }
+
+  function confirmClearDay() {
+    const tanggal = clearConfirmTanggal;
+    if (!tanggal || !canManage) return;
+    if (dayLocked(rpnByDate[tanggal]?.status)) {
+      toast.error('RPN hari ini terkunci — tidak bisa diubah dari papan minggu');
+      setClearConfirmTanggal(null);
+      return;
+    }
+    const day = daysRef.current.find((d) => d.tanggal === tanggal);
+    if (!day || !dayHasMenuContent(day)) {
+      setClearConfirmTanggal(null);
+      return;
+    }
+    const hari = WEEKLY_MENU_WEEKDAYS[weekDates.indexOf(tanggal)] || 'hari ini';
+    const hadRpn = Boolean(day.productionPlanId || rpnByDate[tanggal]);
+    setDays((prev) => prev.map((d) => (d.tanggal === tanggal ? clearWeeklyMenuDayContent(d) : d)));
+    setClearConfirmTanggal(null);
+    toast.success(
+      hadRpn
+        ? `Isian ${hari} dikosongkan. Terbitkan ulang agar RPN ikut berubah.`
+        : `Isian ${hari} dikosongkan`,
+    );
   }
 
   function recipesAsRefs(map: Map<string, RecipeOpt>): Map<string, WeeklyRecipeRef> {
@@ -1002,6 +1050,7 @@ export default function MenuPlanPage() {
       onPublishDay={() => void publish(selected.tanggal)}
       onOpenAcuan={() => void openAcuan(selected)}
       onApplyPackage={() => setPackageOpen(true)}
+      onClearDay={() => requestClearDay(selected.tanggal)}
       gizi={giziByDate[selected.tanggal]}
       giziLoading={giziLoading}
       publishing={publishing}
@@ -1175,16 +1224,31 @@ export default function MenuPlanPage() {
                           )}
                         </button>
                         {canManage && !dayLocked(rpn?.status) && (
-                          <button
-                            type="button"
-                            className="mt-1 text-[10px] text-orange-700 hover:underline"
-                            onClick={() => {
-                              setSelectedTanggal(tanggal);
-                              setPackageOpen(true);
-                            }}
-                          >
-                            Terapkan paket
-                          </button>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              className="text-[10px] text-orange-700 hover:underline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedTanggal(tanggal);
+                                setPackageOpen(true);
+                              }}
+                            >
+                              Terapkan paket
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="menu-day-clear"
+                              aria-label={`Kosongkan isian ${WEEKLY_MENU_WEEKDAYS[i]}`}
+                              className="text-[10px] text-slate-500 hover:text-red-700 hover:underline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                requestClearDay(tanggal);
+                              }}
+                            >
+                              Kosongkan
+                            </button>
+                          </div>
                         )}
                       </th>
                     );
@@ -1539,6 +1603,27 @@ export default function MenuPlanPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={Boolean(clearConfirmTanggal)} onOpenChange={(open) => { if (!open) setClearConfirmTanggal(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kosongkan isian hari</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Hidangan, porsi penerima manfaat, alergi, dan catatan{' '}
+            <span className="font-medium text-slate-800">
+              {clearConfirmTanggal
+                ? `${WEEKLY_MENU_WEEKDAYS[weekDates.indexOf(clearConfirmTanggal)] || ''} ${shortDate(clearConfirmTanggal)}`
+                : 'hari ini'}
+            </span>
+            {' '}akan dihapus. Tautan RPN (jika ada) tetap — terbitkan ulang supaya RPN ikut kosong.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearConfirmTanggal(null)}>Batal</Button>
+            <Button variant="destructive" onClick={confirmClearDay}>Kosongkan hari</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={prefillOpen} onOpenChange={setPrefillOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -1706,6 +1791,7 @@ function DayInspector({
   onPublishDay,
   onOpenAcuan,
   onApplyPackage,
+  onClearDay,
   gizi,
   giziLoading,
   publishing,
@@ -1724,6 +1810,7 @@ function DayInspector({
   onPublishDay: () => void;
   onOpenAcuan: () => void;
   onApplyPackage: () => void;
+  onClearDay: () => void;
   gizi?: DayGizi | null;
   giziLoading?: boolean;
   publishing: boolean;
@@ -1763,10 +1850,23 @@ function DayInspector({
       </div>
       <DayGiziChip gizi={gizi} loading={giziLoading} />
       {canManage && !locked && (
-        <Button type="button" variant="outline" size="sm" className="w-full" onClick={onApplyPackage}>
-          <Package className="h-4 w-4 mr-1" />
-          Terapkan paket
-        </Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onApplyPackage}>
+            <Package className="h-4 w-4 mr-1" />
+            Terapkan paket
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="menu-day-clear-inspector"
+            aria-label="Kosongkan isian hari"
+            onClick={onClearDay}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            Kosongkan
+          </Button>
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-2">
