@@ -77,6 +77,48 @@ describe('food-production sprint 5 — Purchase Requirement', () => {
     expect(summary.qtyNetTotal).toBe(5);
   });
 
+  it('merges PR shortages with the same kode and satuan from different catalog copies', () => {
+    const lines = buildPurchaseLinesFromMrp([
+      {
+        productId: 'serai-ani',
+        productKode: 'B298819',
+        productNama: 'Batang Serai',
+        satuan: 'ONS',
+        qtyGross: 14,
+        qtyOnHand: 0,
+        qtyNet: 14,
+        shortage: true,
+      },
+      {
+        productId: 'serai-uddawam',
+        productKode: 'B298819',
+        productNama: 'Batang Serai',
+        satuan: 'ONS',
+        qtyGross: 14,
+        qtyOnHand: 0,
+        qtyNet: 14,
+        shortage: true,
+      },
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].qtyNet).toBe(28);
+    expect(lines[0].productKode).toBe('B298819');
+  });
+
+  it('merges every duplicate kode in a mixed MRP, not a single SKU', () => {
+    const lines = buildPurchaseLinesFromMrp([
+      { productId: 'x1', productKode: 'SKU-X', productNama: 'X', satuan: 'KG', qtyGross: 1, qtyOnHand: 0, qtyNet: 1, shortage: true },
+      { productId: 'x2', productKode: 'sku-x', productNama: 'X', satuan: 'kg', qtyGross: 4, qtyOnHand: 0, qtyNet: 4, shortage: true },
+      { productId: 'y1', productKode: 'SKU-Y', productNama: 'Y', satuan: 'PCS', qtyGross: 9, qtyOnHand: 0, qtyNet: 9, shortage: true },
+      { productId: 'z1', productKode: 'SKU-Z', productNama: 'Z', satuan: 'GR', qtyGross: 2, qtyOnHand: 0, qtyNet: 2, shortage: true },
+      { productId: 'z2', productKode: 'SKU-Z', productNama: 'Z', satuan: 'GR', qtyGross: 3, qtyOnHand: 0, qtyNet: 3, shortage: true },
+    ]);
+    expect(lines).toHaveLength(3);
+    expect(lines.find((l) => l.productKode === 'SKU-X')?.qtyNet).toBe(5);
+    expect(lines.find((l) => l.productKode === 'SKU-Y')?.qtyNet).toBe(9);
+    expect(lines.find((l) => l.productKode === 'SKU-Z')?.qtyNet).toBe(5);
+  });
+
   it('maps PR lines to Draft CPO payloads', () => {
     const payloads = toDraftCpoItemPayloads([
       {

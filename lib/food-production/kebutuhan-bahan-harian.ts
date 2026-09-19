@@ -4,7 +4,7 @@
  */
 
 import { ceilProcurementQty, roundQty } from '@/lib/food-production/material-requirement';
-import { normalizeRecipeSatuan } from '@/lib/food-production/recipe-uom';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import {
   KATEGORI_MENU_OPTIONS,
   applyFullPortionExceptions,
@@ -161,8 +161,7 @@ function aggregateRekap(hidangan: KebutuhanBahanHidangan[]): KebutuhanBahanRekap
   const acc = new Map<string, KebutuhanBahanRekapLine>();
   for (const dish of hidangan) {
     for (const line of dish.lines) {
-      const satKey = normalizeRecipeSatuan(line.satuan) || String(line.satuan || '');
-      const key = `${line.productId}::${satKey}`;
+      const key = procurementLineKey(line);
       const exact = roundQty((Number(line.qtyBesarPart) || 0) + (Number(line.qtyKecilPart) || 0));
       if (!(exact > 0)) continue;
       const prev = acc.get(key) || {

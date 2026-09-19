@@ -33,6 +33,16 @@ describe('buildPoOrderedReceivedMap', () => {
     ]);
     expect(map.get('p1')).toEqual({ qtyOrdered: 9, qtyReceived: 9 });
   });
+
+  it('sums qty for the same kode across catalog copies and still indexes productId', () => {
+    const map = buildPoOrderedReceivedMap([
+      { localStokId: 'copy-a', kode: 'SKU-X', satuan: 'ONS', qty: 14, qtyReceived: 2 },
+      { localStokId: 'copy-b', kode: 'SKU-X', satuan: 'ons', qty: 14, qtyReceived: 1 },
+    ]);
+    expect(map.get('copy-a')).toEqual({ qtyOrdered: 14, qtyReceived: 2 });
+    expect(map.get('copy-b')).toEqual({ qtyOrdered: 14, qtyReceived: 1 });
+    expect(map.get('kode:SKU-X::ONS')).toEqual({ qtyOrdered: 28, qtyReceived: 3 });
+  });
 });
 
 function versionMatches(filter: Record<string, unknown>, current: Record<string, unknown>): boolean {

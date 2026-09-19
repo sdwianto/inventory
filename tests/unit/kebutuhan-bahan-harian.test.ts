@@ -255,6 +255,68 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(split.rekap.map((r) => r.satuan).sort()).toEqual(['GR', 'KG']);
   });
 
+  it('merges rekap when the same kode comes from different recipe catalog copies', () => {
+    const a: KebutuhanRecipeRef = {
+      id: 'soto',
+      kode: 'SOTO',
+      nama: 'Soto',
+      aktif: true,
+      kategoriMenu: 'LAUK_HEWANI',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'serai-ani',
+        productKode: 'B298819',
+        productNama: 'Batang Serai',
+        qty: 14,
+        qtyBesar: 14,
+        pctKecil: 100,
+        qtyKecil: 14,
+        satuan: 'ONS',
+      }],
+    };
+    const b: KebutuhanRecipeRef = {
+      id: 'tumis',
+      kode: 'TUMIS',
+      nama: 'Tumis',
+      aktif: true,
+      kategoriMenu: 'SAYUR',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'serai-uddawam',
+        productKode: 'B298819',
+        productNama: 'Batang Serai',
+        qty: 14,
+        qtyBesar: 14,
+        pctKecil: 100,
+        qtyKecil: 14,
+        satuan: 'ONS',
+      }],
+    };
+    const built = buildKebutuhanBahanHarian({
+      hidangan: [
+        {
+          recipeId: 'soto',
+          slotLabel: 'Lauk',
+          targetPorsi: 1,
+          kategoriPorsiList: ['PORSI_BESAR'],
+        },
+        {
+          recipeId: 'tumis',
+          slotLabel: 'Sayur',
+          targetPorsi: 1,
+          kategoriPorsiList: ['PORSI_BESAR'],
+        },
+      ],
+      recipesById: recipesMap(a, b),
+      acuanByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 1 },
+    });
+    expect(built.rekap).toHaveLength(1);
+    expect(built.rekap[0].productKode).toBe('B298819');
+    expect(built.rekap[0].sources).toHaveLength(2);
+  });
+
   it('names the PDF file and watermarks unpublished drafts', () => {
     expect(acuanKerjaFileName('Dapur Pusat', TANGGAL)).toBe('Acuan-Kerja-Dapur-Pusat-2026-09-22');
     expect(acuanKerjaFileName('Dapur Pusat', TANGGAL, 'bahan')).toBe('Kebutuhan-Bahan-Dapur-Pusat-2026-09-22');

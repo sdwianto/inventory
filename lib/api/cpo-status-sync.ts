@@ -5,9 +5,14 @@ import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems } from '@/lib/ap
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 
 export type CpoLine = JsonObject & {
   localStokId?: string;
+  kode?: string;
+  vendorKode?: string;
+  satuan?: string;
+  uomId?: string;
   qty?: number | string;
   qtyShipped?: number;
   qtyReceived?: number;
@@ -61,14 +66,29 @@ export function buildPoOrderedReceivedMap(
   items: CpoLine[],
 ): Map<string, { qtyOrdered: number; qtyReceived: number }> {
   const map = new Map<string, { qtyOrdered: number; qtyReceived: number }>();
+  const add = (key: string, qtyOrdered: number, qtyReceived: number) => {
+    if (!key) return;
+    const prev = map.get(key) || { qtyOrdered: 0, qtyReceived: 0 };
+    map.set(key, {
+      qtyOrdered: prev.qtyOrdered + qtyOrdered,
+      qtyReceived: prev.qtyReceived + qtyReceived,
+    });
+  };
   for (const item of items || []) {
     if (!item.localStokId || item.cancelled) continue;
     const qtyOrdered = lineQtyTarget(item);
     if (qtyOrdered <= 0) continue;
-    map.set(String(item.localStokId), {
-      qtyOrdered,
-      qtyReceived: Number(item.qtyReceived) || 0,
+    const qtyReceived = Number(item.qtyReceived) || 0;
+    const id = String(item.localStokId);
+    add(id, qtyOrdered, qtyReceived);
+    const ident = procurementLineKey({
+      productId: id,
+      localStokId: id,
+      kode: item.kode || item.vendorKode,
+      satuan: item.satuan,
+      uomId: item.uomId,
     });
+    if (ident !== id) add(ident, qtyOrdered, qtyReceived);
   }
   return map;
 }

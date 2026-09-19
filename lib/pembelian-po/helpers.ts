@@ -1,4 +1,4 @@
-import { lineUomKey } from '@/lib/uom/line-ui';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import type { JsonObject } from '@/types/json';
 import { str, asObject, asArray } from '@/types/json';
 
@@ -30,13 +30,25 @@ export function mergeFormLinesFromPo(
   for (const it of items) {
     const id = String(it.localStokId || '');
     if (!id) continue;
-    const mergeKey = lineUomKey(id, str(it.uomId) || undefined);
+    const mergeKey = procurementLineKey({
+      localStokId: id,
+      kode: str(it.kode || it.vendorKode),
+      satuan: str(it.satuan),
+      uomId: str(it.uomId),
+    });
     const prev = map.get(mergeKey);
     if (prev) {
       prev.qty = (parseFloat(String(prev.qty)) || 0) + (parseFloat(String(it.qty)) || 0);
+      if (!(parseFloat(String(prev.estimasiHarga)) > 0) && it.estimasiHarga) {
+        prev.estimasiHarga = it.estimasiHarga;
+        prev.localStokId = id;
+        prev.uomId = it.uomId;
+        prev.satuan = it.satuan || prev.satuan;
+      }
     } else {
       map.set(mergeKey, {
         localStokId: id,
+        kode: str(it.kode || it.vendorKode) || undefined,
         qty: it.qty,
         uomId: it.uomId,
         satuan: it.satuan,

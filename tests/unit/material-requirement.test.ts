@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyLinkedPoTargets, type MaterialRequirementLine } from '@/lib/food-production/material-requirement';
+import { buildPoOrderedReceivedMap } from '@/lib/api/cpo-status-sync';
 
 function line(overrides: Partial<MaterialRequirementLine> = {}): MaterialRequirementLine {
   return {
@@ -54,5 +55,19 @@ describe('applyLinkedPoTargets', () => {
     expect(result.lines[1].shortage).toBe(true);
     expect(result.summary.shortageCount).toBe(1);
     expect(result.summary.qtyNetTotal).toBe(3);
+  });
+
+  it('covers a merged MRP line from all PO catalog copies of the same kode', () => {
+    const poMap = buildPoOrderedReceivedMap([
+      { localStokId: 'copy-a', kode: 'SKU-X', satuan: 'ONS', qty: 14, qtyReceived: 14 },
+      { localStokId: 'copy-b', kode: 'SKU-X', satuan: 'ONS', qty: 14, qtyReceived: 14 },
+    ]);
+    const result = applyLinkedPoTargets(
+      [line({ productId: 'copy-a', productKode: 'SKU-X', satuan: 'ONS', qtyGross: 28, qtyNet: 28 })],
+      poMap,
+    );
+    expect(result.lines[0].shortage).toBe(false);
+    expect(result.lines[0].poQtyOrdered).toBe(28);
+    expect(result.lines[0].poQtyReceived).toBe(28);
   });
 });

@@ -196,7 +196,7 @@ async function buildExplosion(
     for (const line of recipe.lines || []) {
       const p = productById.get(line.productId);
       if (!p) continue;
-      if (!line.productKode && p.kode != null) line.productKode = String(p.kode);
+      if (p.kode != null) line.productKode = String(p.kode);
       if (!line.productNama && p.nama != null) line.productNama = String(p.nama);
       if (!line.satuan && p.satuan != null) line.satuan = String(p.satuan);
     }

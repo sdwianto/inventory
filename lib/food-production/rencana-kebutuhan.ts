@@ -23,6 +23,7 @@ import {
   resolvePlanLineRecipeSlots,
   type PlanMaterialOverride,
 } from '@/lib/food-production/production-plan';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 
 export type RencanaKebutuhanSource = {
   planNo?: string;
@@ -123,7 +124,8 @@ export function buildRencanaKebutuhanLines(input: {
           fullPortionKeys: input.fullPortionKeys,
         });
         for (const c of contributions) {
-          const prev = acc.get(c.productId) || {
+          const key = procurementLineKey(c);
+          const prev = acc.get(key) || {
             productId: c.productId,
             productKode: c.productKode,
             productNama: c.productNama,
@@ -142,7 +144,7 @@ export function buildRencanaKebutuhanLines(input: {
             recipeKode: recipe.kode || planLine.recipeKode,
             qty: roundQty(c.qty),
           });
-          acc.set(c.productId, prev);
+          acc.set(key, prev);
         }
       }
     }

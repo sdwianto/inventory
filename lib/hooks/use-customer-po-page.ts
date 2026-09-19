@@ -20,6 +20,7 @@ import {
   PO_CAN_REQUEST,
 } from '@/lib/pembelian-po/constants';
 import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cancelled';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import {
   toDateInputValue,
   mergeFormLinesFromPo,
@@ -505,12 +506,24 @@ export function useCustomerPoPage() {
       const qty = num(l.qty);
       const uomId = str(l.uomId);
       const productId = str(p.id);
-      const key = uomId ? `${productId}::${uomId}` : productId;
+      const satuan = str(l.satuan) || str(p.satuan);
+      const key = procurementLineKey({
+        localStokId: productId,
+        kode: p.kode,
+        satuan,
+        uomId,
+      });
       const estimasiHarga = parseEstimasiHargaInput(l.estimasiHarga as string | number | null | undefined);
       const prev = map.get(key);
       if (prev) {
         prev.qty = num(prev.qty) + qty;
         if (l.estimasiManual && estimasiHarga) prev.estimasiHarga = estimasiHarga;
+        if (!(num(prev.estimasiHarga) > 0) && estimasiHarga) {
+          prev.estimasiHarga = estimasiHarga;
+          prev.localStokId = productId;
+          prev.uomId = uomId || prev.uomId;
+          prev.satuan = satuan || prev.satuan;
+        }
       } else {
         map.set(key, {
           localStokId: productId,
@@ -519,7 +532,7 @@ export function useCustomerPoPage() {
           vendorKode: p.kode,
           kode: p.kode,
           nama: p.nama,
-          satuan: str(l.satuan) || p.satuan,
+          satuan,
           uomId: uomId || undefined,
           qty,
           estimasiHarga,
@@ -554,9 +567,6 @@ export function useCustomerPoPage() {
     const defaultUom = await fetchDefaultProductUom(id);
     const uomId = defaultUom?.id || '';
     const satuan = defaultUom?.satuan || '';
-    const existingIdx = lines.findIndex(
-      (l, idx) => idx !== i && l.localStokId === id && str(l.uomId) === uomId,
-    );
     let p: JsonObject | null | undefined = picked || productCache[id];
     if (!p) {
       try {
@@ -566,6 +576,22 @@ export function useCustomerPoPage() {
         p = null;
       }
     }
+    const pickedKode = str(p?.kode);
+    const existingIdx = lines.findIndex((l, idx) => {
+      if (idx === i) return false;
+      const other = productCache[str(l.localStokId)];
+      return procurementLineKey({
+        localStokId: id,
+        kode: pickedKode,
+        satuan,
+        uomId,
+      }) === procurementLineKey({
+        localStokId: str(l.localStokId),
+        kode: str(l.kode) || str(other?.kode),
+        satuan: str(l.satuan),
+        uomId: str(l.uomId),
+      });
+    });
     if (existingIdx >= 0) {
       const addQty = num(lines[i].qty, 1);
       const mergedQty = num(lines[existingIdx].qty) + addQty;
@@ -578,6 +604,7 @@ export function useCustomerPoPage() {
     }
     updateLine(i, {
       localStokId: id,
+      kode: pickedKode || undefined,
       uomId,
       satuan,
       factorToBase: defaultUom?.factorToBase,
@@ -589,9 +616,21 @@ export function useCustomerPoPage() {
   const updateFormItemUom = (i: number, uom: ProductUom) => {
     const line = lines[i];
     if (!line?.localStokId) return;
-    const dupIdx = lines.findIndex(
-      (l, idx) => idx !== i && l.localStokId === line.localStokId && str(l.uomId) === uom.id,
-    );
+    const dupIdx = lines.findIndex((l, idx) => {
+      if (idx === i) return false;
+      const other = productCache[str(l.localStokId)];
+      return procurementLineKey({
+        localStokId: str(line.localStokId),
+        kode: str(line.kode) || str(productCache[str(line.localStokId)]?.kode),
+        satuan: uom.satuan,
+        uomId: uom.id,
+      }) === procurementLineKey({
+        localStokId: str(l.localStokId),
+        kode: str(l.kode) || str(other?.kode),
+        satuan: str(l.satuan),
+        uomId: str(l.uomId),
+      });
+    });
     if (dupIdx >= 0) {
       const mergedQty = num(lines[dupIdx].qty) + num(line.qty, 1);
       const next = lines

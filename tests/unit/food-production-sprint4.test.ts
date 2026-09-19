@@ -487,6 +487,70 @@ describe('food-production sprint 4 — MRP', () => {
     expect(result.summary.lineCount).toBe(2);
   });
 
+  it('merges recipe ingredients that share kode + satuan across different catalog copies', () => {
+    const rSoto: RecipeDoc = {
+      id: 'r-soto',
+      tenantId: 't1',
+      kode: 'SOTO',
+      nama: 'Soto',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'serai-ani', productKode: 'B298819', productNama: 'Batang Serai',
+        qty: 14, qtyBesar: 14, pctKecil: 100, qtyKecil: 14, satuan: 'ONS',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const rTumis: RecipeDoc = {
+      id: 'r-tumis',
+      tenantId: 't1',
+      kode: 'TUMIS',
+      nama: 'Tumis',
+      finishedGoodProductId: 'fg2',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 100,
+      wastePct: 0,
+      lines: [{
+        productId: 'serai-uddawam', productKode: 'B298819', productNama: 'Batang Serai',
+        qty: 14, qtyBesar: 14, pctKecil: 100, qtyKecil: 14, satuan: 'ONS',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-09-20',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        lines: [
+          { recipeId: 'r-soto', targetPorsi: 100, kategoriPorsiList: ['PORSI_BESAR'] },
+          { recipeId: 'r-tumis', targetPorsi: 100, kategoriPorsiList: ['PORSI_BESAR'] },
+        ],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r-soto', rSoto], ['r-tumis', rTumis]]),
+      onHandByProduct: new Map(),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const serai = result.lines.filter((l) => l.productKode === 'B298819');
+    expect(serai).toHaveLength(1);
+    expect(serai[0].qtyGross).toBe(28);
+    expect(serai[0].sources).toHaveLength(2);
+  });
+
   it('MRP uses qtyBase* when kitchen satuan is GR (product base KG)', () => {
     const recipe: RecipeDoc = {
       id: 'r1',

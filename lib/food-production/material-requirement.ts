@@ -10,6 +10,7 @@ import {
   recipeBaseQtyForFamily,
   recipeUomFamily,
 } from '@/lib/food-production/recipe-uom';
+import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import {
   applyFullPortionExceptions,
   recipeWastePctForLine,
@@ -28,7 +29,7 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 
-/** Sisi resep tunggal → kontribusi qty bahan (belum di-round, belum diagregasi ke productId). */
+/** Sisi resep tunggal → kontribusi qty bahan (belum di-round, belum diagregasi ke kode+satuan). */
 export type RecipeLineContribution = {
   productId: string;
   productKode?: string;
@@ -335,6 +336,8 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
   if (!warehouseKode) return { ok: false, error: 'Gudang dapur wajib untuk MRP' };
 
   type Acc = {
+    productId: string;
+    productIds: string[];
     productKode?: string;
     productNama?: string;
     satuan?: string;
@@ -407,13 +410,17 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         fullPortionKeys,
       });
       for (const c of contributions) {
-        const prev = acc.get(c.productId) || {
+        const key = procurementLineKey(c);
+        const prev = acc.get(key) || {
+          productId: c.productId,
+          productIds: [],
           productKode: c.productKode,
           productNama: c.productNama,
           satuan: c.satuan,
           qtyGross: 0,
           sources: [],
         };
+        if (!prev.productIds.includes(c.productId)) prev.productIds.push(c.productId);
         prev.qtyGross += c.qty;
         prev.productKode = prev.productKode || c.productKode;
         prev.productNama = prev.productNama || c.productNama;
@@ -425,17 +432,21 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
           recipeKode: recipe.kode,
           qty: roundQty(c.qty),
         });
-        acc.set(c.productId, prev);
+        acc.set(key, prev);
       }
     }
   }
 
-  const lines: MaterialRequirementLine[] = [...acc.entries()]
-    .map(([productId, row]) => {
+  const lines: MaterialRequirementLine[] = [...acc.values()]
+    .map((row) => {
       // Gross/net pengadaan = bilangan bulat ke atas (satu kali di agregat produk).
       const qtyGross = ceilProcurementQty(row.qtyGross, row.satuan);
-      const qtyOnHand = roundQty(Number(onHandByProduct.get(productId) || 0));
+      const qtyOnHand = roundQty(
+        row.productIds.reduce((s, id) => s + Number(onHandByProduct.get(id) || 0), 0),
+      );
       const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand), row.satuan);
+      const productId = row.productIds.find((id) => Number(onHandByProduct.get(id) || 0) > 0)
+        || row.productId;
       return {
         productId,
         productKode: row.productKode,
@@ -480,7 +491,8 @@ export function applyLinkedPoTargets(
   poItemsByProductId: Map<string, { qtyOrdered: number; qtyReceived: number }>,
 ): { lines: MaterialRequirementLine[]; summary: { shortageCount: number; qtyNetTotal: number } } {
   const overridden = lines.map((line) => {
-    const po = poItemsByProductId.get(line.productId);
+    const ident = procurementLineKey(line);
+    const po = poItemsByProductId.get(ident) || poItemsByProductId.get(line.productId);
     if (!po) return line;
     const poShortfall = roundQty(Math.max(0, po.qtyOrdered - po.qtyReceived));
     return {

@@ -5,6 +5,7 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
+import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
 
 export const PURCHASE_REQUIREMENTS_COLLECTION = 'purchase_requirements';
 
@@ -78,6 +79,47 @@ export function isLinkedCpoSupersedable(status?: string | null): boolean {
   return status === 'DRAFT' || status === 'CANCELLED';
 }
 
+function sortPurchaseLines(lines: PurchaseRequirementLine[]): PurchaseRequirementLine[] {
+  return [...lines].sort((a, b) =>
+    String(a.productNama || a.productKode || a.productId).localeCompare(
+      String(b.productNama || b.productKode || b.productId),
+      'id',
+    ),
+  );
+}
+
+/** Gabung baris PR dengan kode + satuan sama (salinan katalog / resep berbeda). */
+export function mergePurchaseLinesByKode(lines: PurchaseRequirementLine[]): PurchaseRequirementLine[] {
+  const map = new Map<string, PurchaseRequirementLine>();
+  for (const l of lines) {
+    const key = procurementLineKey(l);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, { ...l });
+      continue;
+    }
+    map.set(key, mergePurchaseLineQty(prev, l));
+  }
+  foldEmptySatuanMap(map, mergePurchaseLineQty);
+  return sortPurchaseLines([...map.values()]);
+}
+
+function mergePurchaseLineQty(
+  prev: PurchaseRequirementLine,
+  l: PurchaseRequirementLine,
+): PurchaseRequirementLine {
+  return {
+    ...prev,
+    qtyNet: Number(prev.qtyNet) + Number(l.qtyNet),
+    qtyGross: prev.qtyGross != null || l.qtyGross != null
+      ? Number(prev.qtyGross || 0) + Number(l.qtyGross || 0)
+      : undefined,
+    qtyOnHand: prev.qtyOnHand != null || l.qtyOnHand != null
+      ? Number(prev.qtyOnHand || 0) + Number(l.qtyOnHand || 0)
+      : undefined,
+  };
+}
+
 /** Pure: shortage lines from MRP → PR lines (qtyNet > 0, finite). */
 export function buildPurchaseLinesFromMrp(
   mrpLines: Pick<
@@ -85,7 +127,7 @@ export function buildPurchaseLinesFromMrp(
     'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyNet' | 'qtyGross' | 'qtyOnHand' | 'shortage'
   >[],
 ): PurchaseRequirementLine[] {
-  return (mrpLines || [])
+  const lines = (mrpLines || [])
     .filter((l) => {
       const qty = Number(l.qtyNet);
       return (
@@ -107,13 +149,8 @@ export function buildPurchaseLinesFromMrp(
       qtyOnHand: l.qtyOnHand != null && Number.isFinite(Number(l.qtyOnHand))
         ? Number(l.qtyOnHand)
         : undefined,
-    }))
-    .sort((a, b) =>
-      String(a.productNama || a.productKode || a.productId).localeCompare(
-        String(b.productNama || b.productKode || b.productId),
-        'id',
-      ),
-    );
+    }));
+  return mergePurchaseLinesByKode(lines);
 }
 
 export function summarizePurchaseLines(lines: PurchaseRequirementLine[]): PurchaseRequirementDoc['summary'] {
