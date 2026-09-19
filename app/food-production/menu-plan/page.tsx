@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  CalendarRange, Copy, FileText, Loader2, Package,
+  CalendarRange, Copy, FilePenLine, FileText, Loader2, Package,
   Plus, Printer, Send, Trash2, Users, UtensilsCrossed, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -26,7 +26,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet';
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { actingKitchenHeaders, getActingKitchenId, setActingKitchenId } from '@/lib/acting-kitchen-client';
@@ -96,7 +96,13 @@ import {
 } from '@/lib/food-production/kebutuhan-bahan-harian';
 import { printDocument } from '@/lib/doc-print';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
-import { planHref } from '@/lib/food-production/fp-flow';
+import {
+  canReviseApprovedMenu,
+  planHref,
+  reviseMenuProcureWarningLines,
+  reviseMenuReasonError,
+  type ReviseMenuProcureImpact,
+} from '@/lib/food-production/fp-flow';
 import { fetchPortionExceptionMatchSet } from '@/lib/food-production/recipe-portion-exception';
 
 type RecipeOpt = RecipeSearchOption & {
@@ -312,6 +318,13 @@ export default function MenuPlanPage() {
   const [republishOpen, setRepublishOpen] = useState(false);
   const [republishTanggal, setRepublishTanggal] = useState<string | undefined>();
   const [republishNos, setRepublishNos] = useState<string[]>([]);
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [revisePlan, setRevisePlan] = useState<PlanLite | null>(null);
+  const [reviseReason, setReviseReason] = useState('');
+  const [reviseBusy, setReviseBusy] = useState(false);
+  const [reviseImpactLoading, setReviseImpactLoading] = useState(false);
+  const [reviseWarnings, setReviseWarnings] = useState<string[]>([]);
+  const [reviseBlockedReason, setReviseBlockedReason] = useState<string | null>(null);
   const lastSaved = useRef('');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutosave = useRef(true);
@@ -929,6 +942,77 @@ export default function MenuPlanPage() {
     toast.success('Porsi diisi dari titik layanan');
   }
 
+  async function openReviseMenu(plan: PlanLite) {
+    if (!canManage || !canReviseApprovedMenu(plan.status)) return;
+    setRevisePlan(plan);
+    setReviseReason('');
+    setReviseWarnings(reviseMenuProcureWarningLines({}));
+    setReviseBlockedReason(null);
+    setReviseOpen(true);
+    setReviseImpactLoading(true);
+    try {
+      const res = await fetch(`/api/production-plans/${encodeURIComponent(plan.id)}/revise-menu`, {
+        headers: fpHeaders(),
+      });
+      const data = await res.json() as {
+        error?: string;
+        canRevise?: boolean;
+        blockedReason?: string | null;
+        impact?: ReviseMenuProcureImpact;
+        warnings?: string[];
+      };
+      if (!res.ok) throw new Error(data.error || 'Gagal memuat dampak revisi');
+      setReviseBlockedReason(data.canRevise === false ? (data.blockedReason || data.error || 'Tidak bisa revisi menu') : null);
+      setReviseWarnings(
+        Array.isArray(data.warnings) && data.warnings.length
+          ? data.warnings
+          : reviseMenuProcureWarningLines(data.impact || {}),
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat dampak revisi');
+    } finally {
+      setReviseImpactLoading(false);
+    }
+  }
+
+  async function submitReviseMenu() {
+    if (!revisePlan) return;
+    if (reviseBlockedReason) {
+      toast.error(reviseBlockedReason);
+      return;
+    }
+    const reasonErr = reviseMenuReasonError(reviseReason);
+    if (reasonErr) {
+      toast.error(reasonErr);
+      return;
+    }
+    setReviseBusy(true);
+    try {
+      const res = await fetch(`/api/production-plans/${encodeURIComponent(revisePlan.id)}/revise-menu`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...fpHeaders() },
+        body: JSON.stringify({ reason: reviseReason }),
+      });
+      const data = await res.json() as { error?: string; status?: string };
+      if (!res.ok) throw new Error(data.error || 'Gagal membuka revisi menu');
+      setReviseOpen(false);
+      setRevisePlan(null);
+      setReviseReason('');
+      toast.success(
+        `${revisePlan.noDokumen} dibuka untuk revisi. Ubah resep/porsi, terbitkan hari ini, lalu setujui ulang.`,
+        {
+          description: 'Setujui tanpa terbit ulang akan ditolak. Setelah disetujui ulang, hitung ulang kebutuhan bahan. PO vendor yang sudah jalan tidak diubah otomatis.',
+          duration: 9000,
+        },
+      );
+      await loadWeek({ silent: true });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal membuka revisi menu');
+    } finally {
+      setReviseBusy(false);
+    }
+  }
+
   async function publish(tanggal?: string, opts?: { confirmSubmitted?: boolean }) {
     if (!canManage) return;
     if (!kitchenId) {
@@ -1072,6 +1156,9 @@ export default function MenuPlanPage() {
       onOpenAcuan={() => void openAcuan(selected)}
       onApplyPackage={() => setPackageOpen(true)}
       onClearDay={() => requestClearDay(selected.tanggal)}
+      onReviseMenu={selectedRpn && canReviseApprovedMenu(selectedRpn.status)
+        ? () => void openReviseMenu(selectedRpn)
+        : undefined}
       gizi={giziByDate[selected.tanggal]}
       giziLoading={giziLoading}
       publishing={publishing}
@@ -1270,6 +1357,20 @@ export default function MenuPlanPage() {
                               Kosongkan
                             </button>
                           </div>
+                        )}
+                        {canManage && rpn && canReviseApprovedMenu(rpn.status) && (
+                          <button
+                            type="button"
+                            data-testid={`menu-day-revise-${tanggal}`}
+                            className="mt-1 text-[10px] text-orange-800 hover:underline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTanggal(tanggal);
+                              void openReviseMenu(rpn);
+                            }}
+                          >
+                            Revisi menu
+                          </button>
                         )}
                       </th>
                     );
@@ -1544,6 +1645,76 @@ export default function MenuPlanPage() {
               }}
             >
               Terbit ulang
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={reviseOpen}
+        onOpenChange={(open) => {
+          if (reviseBusy) return;
+          setReviseOpen(open);
+          if (!open) {
+            setRevisePlan(null);
+            setReviseReason('');
+            setReviseBlockedReason(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revisi menu {revisePlan?.noDokumen || ''}</DialogTitle>
+            <DialogDescription>
+              Hari tetap dokumen kerja yang sama. Persetujuan lama tercatat; setelah ubah resep
+              harus terbitkan dan setujui ulang. Status jadi Diajukan — bukan Draft.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="revise-menu-reason">Alasan revisi *</Label>
+            <textarea
+              id="revise-menu-reason"
+              data-testid="revise-menu-reason"
+              className="w-full min-h-[5rem] rounded-md border px-2 py-1.5 text-sm"
+              placeholder="Contoh: bahan serai habis di pasar, ganti menu sayur"
+              value={reviseReason}
+              onChange={(e) => setReviseReason(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">Minimal 8 karakter.</p>
+            {reviseBlockedReason ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[12px] text-red-950">
+                {reviseBlockedReason}
+              </div>
+            ) : null}
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[12px] text-amber-950 space-y-1">
+              {reviseImpactLoading ? (
+                <p className="flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Memuat dampak pengadaan…
+                </p>
+              ) : (
+                reviseWarnings.map((line) => <p key={line}>{line}</p>)
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={reviseBusy}
+              onClick={() => {
+                setReviseOpen(false);
+                setRevisePlan(null);
+                setReviseReason('');
+                setReviseBlockedReason(null);
+              }}
+            >
+              Batal
+            </Button>
+            <Button
+              data-testid="revise-menu-submit"
+              disabled={reviseBusy || Boolean(reviseBlockedReason) || Boolean(reviseMenuReasonError(reviseReason))}
+              onClick={() => void submitReviseMenu()}
+            >
+              {reviseBusy ? 'Membuka…' : 'Buka revisi'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1842,6 +2013,7 @@ function DayInspector({
   onOpenAcuan,
   onApplyPackage,
   onClearDay,
+  onReviseMenu,
   gizi,
   giziLoading,
   publishing,
@@ -1862,6 +2034,7 @@ function DayInspector({
   onOpenAcuan: () => void;
   onApplyPackage: () => void;
   onClearDay: () => void;
+  onReviseMenu?: () => void;
   gizi?: DayGizi | null;
   giziLoading?: boolean;
   publishing: boolean;
@@ -1902,6 +2075,19 @@ function DayInspector({
         </p>
       </div>
       <DayGiziChip gizi={gizi} loading={giziLoading} />
+      {canManage && onReviseMenu && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-full"
+          data-testid="menu-day-revise-inspector"
+          onClick={onReviseMenu}
+        >
+          <FilePenLine className="h-4 w-4 mr-1" />
+          Revisi menu
+        </Button>
+      )}
       {canManage && !locked && (
         <div className="grid grid-cols-2 gap-2">
           <Button type="button" variant="outline" size="sm" onClick={onApplyPackage}>

@@ -441,6 +441,13 @@ describe('weekly menu plan — slots & publish lines', () => {
       ['rpn-1', { status: 'APPROVED', noDokumen: 'RPN-9' }],
     ]))).toBeNull();
     expect(weeklyDayContentEqual(previous[0], previous[0])).toBe(true);
+    expect(lockedDayEditError(previous, incoming, new Map([
+      ['rpn-1', { status: 'SUBMITTED', noDokumen: 'RPN-9' }],
+    ]))).toBeNull();
+    expect(lockedDayEditError(previous, incoming, new Map([
+      ['rpn-1', { status: 'PROCESSING', noDokumen: 'RPN-9' }],
+    ]))).toMatch(/terkunci/i);
+    expect(rpnPublishBlockedReason('APPROVED')).toMatch(/terkunci/i);
   });
 
   it('builds the same publish payload twice (idempotent lines)', () => {

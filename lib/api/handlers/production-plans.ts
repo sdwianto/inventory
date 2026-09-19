@@ -32,10 +32,19 @@ import {
   activeWeeklyLinkedPlanQuery,
   adHocCreateBlockedError,
   formatAdHocCatatan,
+  formatMenuReviseHistoryNote,
   isAdHocCatatan,
   isWeeklyLinkedPlan,
+  menuReviseNeedsRepublish,
+  MENU_REVISE_REPUBLISH_REQUIRED,
   productionPlanBodyTouchesComposition,
+  reviseMenuKitchenScopeError,
+  reviseMenuOperationalBlockError,
+  reviseMenuProcureWarningLines,
+  reviseMenuReasonError,
   weeklyLinkedCompositionLockedError,
+  weeklyLinkedDraftRevertError,
+  type ReviseMenuProcureImpact,
 } from '@/lib/food-production/fp-flow';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
@@ -92,6 +101,7 @@ interface PlanBody extends Record<string, unknown> {
   tanggalKedatangan?: string;
   status?: string;
   note?: string;
+  reason?: string;
   recipeId?: string;
   productId?: string;
   qty?: number | null;
@@ -209,6 +219,63 @@ function projectPlan(doc: Record<string, unknown> | null) {
     ...presented,
     totalTargetPorsi: totalTargetPorsi(lines),
   });
+}
+
+type LinkedProcureLite = {
+  noDokumen?: string;
+  noPO?: string;
+  status?: string;
+} | null;
+
+const LATEST_OPEN_DOC = {
+  sort: { createdAt: -1 as const },
+  projection: { noDokumen: 1, noPO: 1, status: 1 },
+};
+
+async function loadReviseMenuContext(
+  db: HandlerContext['db'],
+  scopeAuth: HandlerContext['auth'],
+  productionPlanId: string,
+): Promise<{
+  impact: ReviseMenuProcureImpact;
+  issueNo: string | null;
+  resultNo: string | null;
+}> {
+  const notCancelled = { status: { $nin: ['CANCELLED'] } };
+  const [mrp, pr, po, issue, result] = await Promise.all([
+    db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, ...notCancelled }),
+      LATEST_OPEN_DOC,
+    ) as Promise<LinkedProcureLite>,
+    db.collection(PURCHASE_REQUIREMENTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, ...notCancelled }),
+      LATEST_OPEN_DOC,
+    ) as Promise<LinkedProcureLite>,
+    db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, ...notCancelled }),
+      LATEST_OPEN_DOC,
+    ) as Promise<LinkedProcureLite>,
+    db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, ...notCancelled }),
+      LATEST_OPEN_DOC,
+    ) as Promise<LinkedProcureLite>,
+    db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { productionPlanId, ...notCancelled }),
+      LATEST_OPEN_DOC,
+    ) as Promise<LinkedProcureLite>,
+  ]);
+  return {
+    impact: {
+      mrpNo: mrp?.noDokumen || null,
+      mrpStatus: mrp?.status || null,
+      prNo: pr?.noDokumen || null,
+      prStatus: pr?.status || null,
+      poNo: po?.noPO || po?.noDokumen || null,
+      poStatus: po?.status || null,
+    },
+    issueNo: issue?.noDokumen || null,
+    resultNo: result?.noDokumen || null,
+  };
 }
 
 export async function handleProductionPlans({
@@ -814,6 +881,106 @@ export async function handleProductionPlans({
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
+  // GET /production-plans/:id/revise-menu — dampak MRP/PR/PO (tanpa mengubah dokumen)
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'revise-menu' && method === 'GET') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const existing = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!existing) return err('Rencana tidak ditemukan', 404);
+    const kitchenErr = reviseMenuKitchenScopeError(
+      existing.kitchenId,
+      resolveKitchenIdFilter(url, request),
+    );
+    if (kitchenErr) return err(kitchenErr, 409);
+
+    const ctxRevise = await loadReviseMenuContext(db, scopeAuth, id);
+    const blockedReason = reviseMenuOperationalBlockError({
+      status: existing.status,
+      issueNo: ctxRevise.issueNo,
+      resultNo: ctxRevise.resultNo,
+    });
+    return ok({
+      canRevise: !blockedReason,
+      blockedReason,
+      plan: {
+        id: existing.id,
+        noDokumen: existing.noDokumen,
+        status: existing.status,
+        tanggal: existing.tanggal,
+      },
+      impact: ctxRevise.impact,
+      warnings: reviseMenuProcureWarningLines(ctxRevise.impact),
+    });
+  }
+
+  // POST /production-plans/:id/revise-menu — change order APPROVED → SUBMITTED (bukan DRAFT)
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'revise-menu' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: planBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const id = path[1];
+    const reasonErr = reviseMenuReasonError(planBody.reason);
+    if (reasonErr) return err(reasonErr, 400);
+
+    const existing = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!existing) return err('Rencana tidak ditemukan', 404);
+    const kitchenErr = reviseMenuKitchenScopeError(
+      existing.kitchenId,
+      resolveKitchenIdFilter(url, request),
+    );
+    if (kitchenErr) return err(kitchenErr, 409);
+
+    const ops = await loadReviseMenuContext(db, scopeAuth, id);
+    const blocked = reviseMenuOperationalBlockError({
+      status: existing.status,
+      issueNo: ops.issueNo,
+      resultNo: ops.resultNo,
+    });
+    if (blocked) return err(blocked, 409);
+
+    const actor = actorFields(auth);
+    const now = new Date();
+    const reasonNote = formatMenuReviseHistoryNote(String(planBody.reason || ''));
+    const history = appendDocHistory(existing.history, {
+      at: now,
+      fromStatus: existing.status,
+      toStatus: 'SUBMITTED',
+      userId: actor.userId,
+      userName: actor.userName,
+      note: reasonNote,
+    });
+
+    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, { id }),
+      { $set: { status: 'SUBMITTED' as ProductionPlanStatus, history, updatedAt: now } },
+    );
+    const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
+    const reasonSummary = String(planBody.reason || '').trim().slice(0, 120);
+    await writeAuditLog(db, {
+      tenantId: existing.tenantId,
+      action: 'PRODUCTION_PLAN_MENU_REVISE',
+      entityType: 'production_plan',
+      entityId: id,
+      summary: `Revisi menu ${existing.noDokumen}: APPROVED → SUBMITTED — ${reasonSummary}`,
+      ...auditActor(auth),
+    });
+    return ok(projectPlan(saved as Record<string, unknown>));
+  }
+
   // POST /production-plans/:id/status — { status, note? }
   if (path[0] === 'production-plans' && path[1] && path[2] === 'status' && method === 'POST') {
     const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
@@ -834,6 +1001,14 @@ export async function handleProductionPlans({
 
     const transitionErr = assertStatusTransition(existing.status, toStatus);
     if (transitionErr) return err(transitionErr, 400);
+
+    if (toStatus === 'DRAFT') {
+      const draftErr = weeklyLinkedDraftRevertError(existing);
+      if (draftErr) return err(draftErr, 409);
+    }
+    if (toStatus === 'APPROVED' && menuReviseNeedsRepublish(existing.history)) {
+      return err(MENU_REVISE_REPUBLISH_REQUIRED, 409);
+    }
 
     // Gate naik status: dapur & menu masih valid.
     if (toStatus === 'SUBMITTED' || toStatus === 'APPROVED') {

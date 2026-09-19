@@ -316,6 +316,11 @@ describe('food-production enterprise gate', () => {
     const handler = readFileSync(resolve(ROOT, 'lib/api/handlers/production-plans.ts'), 'utf8');
     expect(handler).toContain('adHocCreateBlockedError');
     expect(handler).toContain('weeklyLinkedCompositionLockedError');
+    expect(handler).toContain('revise-menu');
+    expect(handler).toContain('PRODUCTION_PLAN_MENU_REVISE');
+    expect(handler).toContain('menuReviseNeedsRepublish');
+    expect(handler).toContain('reviseMenuOperationalBlockError');
     expect(handler).toContain('409');
+    expect(menuPlan).toContain('Revisi menu');
   });
 });

@@ -105,8 +105,11 @@ import {
   fpFlowStepForPlanStatus,
   isAdHocCatatan,
   isAdHocReasonValid,
+  isMenuReviseHistoryNote,
   isWeeklyLinkedPlan,
   menuPlanHref,
+  menuReviseNeedsRepublish,
+  weeklyLinkedDraftRevertError,
 } from '@/lib/food-production/fp-flow';
 import {
   acuanKerjaDraftWatermark,
@@ -1851,7 +1854,9 @@ function FoodProductionPlanPageContent() {
       if (status === 'APPROVED') {
         const ready = await fetchReadiness(row.id);
         setExpandedId(row.id);
-        if (ready?.materialsReady) {
+        if ((row.history || []).some((h) => isMenuReviseHistoryNote(h.note))) {
+          toast.message('Menu hasil revisi — hitung ulang kebutuhan bahan', { duration: 8000 });
+        } else if (ready?.materialsReady) {
           toast.message('Bahan lengkap — silakan Ambil Bahan');
         } else if (ready && ready.shortageCount > 0) {
           toast.message(`Ada ${ready.shortageCount} item kurang — buat Draft Belanja`);
@@ -3194,7 +3199,7 @@ function FoodProductionPlanPageContent() {
                             </Button>
                           )
                         )}
-                        {canManage && next && (
+                        {canManage && next && !menuReviseNeedsRepublish(row.history) && (
                           row.status === 'DRAFT'
                           || row.status === 'SUBMITTED'
                           || (row.status === 'APPROVED'
@@ -3217,6 +3222,18 @@ function FoodProductionPlanPageContent() {
                             onClick={() => void changeStatus(row, next)}
                           >
                             {STATUS_NEXT_LABEL[row.status] || 'Lanjut'}
+                          </Button>
+                        )}
+                        {canManage && row.status === 'SUBMITTED' && menuReviseNeedsRepublish(row.history) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => router.push(menuPlanHref({
+                              kitchenId: row.kitchenId,
+                              tanggal: row.tanggal,
+                            }))}
+                          >
+                            Terbitkan ulang menu
                           </Button>
                         )}
                         {canManage && row.status === 'APPROVED' && readinessById[row.id]
@@ -3243,7 +3260,12 @@ function FoodProductionPlanPageContent() {
                               : 'Catat Hasil Produksi dulu sebelum Selesai'}
                           </span>
                         )}
-                        {canManage && row.status === 'SUBMITTED' && (
+                        {canManage && row.status === 'SUBMITTED' && menuReviseNeedsRepublish(row.history) && (
+                          <span className="text-xs text-amber-800 px-1">
+                            Terbitkan ulang dari Perencanaan Menu dulu
+                          </span>
+                        )}
+                        {canManage && row.status === 'SUBMITTED' && !weeklyLinkedDraftRevertError(row) && (
                           <Button
                             variant="ghost"
                             size="sm"

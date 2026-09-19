@@ -45,6 +45,7 @@ import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
+import { WEEKLY_MENU_PUBLISH_NOTE } from '@/lib/food-production/fp-flow';
 import { FP_DOC_TYPES, appendDocHistory, type DocHistoryEntry } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
@@ -494,7 +495,7 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
               toStatus: job.target.status,
               userId: actor.userId,
               userName: actor.userName,
-              note: 'Diperbarui dari perencanaan menu mingguan',
+              note: WEEKLY_MENU_PUBLISH_NOTE,
             } as DocHistoryEntry);
             const updated = await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
               withTenantFilter(scopeAuth, {
