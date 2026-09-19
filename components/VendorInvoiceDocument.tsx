@@ -145,12 +145,7 @@ type InternalSignStamp = {
   at?: string | Date | null;
 };
 
-function roleLabelHidden(jabatan: string | undefined, lineLabel: string) {
-  const extra = (jabatan || '').trim();
-  return extra && extra.toLowerCase() !== lineLabel.toLowerCase() ? extra : '';
-}
-
-/** Satu kolom stempel: judul → Terverifikasi → nama/NIK → garis → jabatan. */
+/** Satu kolom stempel: judul → Terverifikasi → nama → NIK → garis → keterangan posisi. */
 function InternalSignColumn({
   title,
   stamp,
@@ -168,7 +163,7 @@ function InternalSignColumn({
   const gap = compact ? 'mb-6' : 'mb-10';
   const nameClass = compact ? 'text-[10px] font-semibold text-slate-900' : 'text-sm font-semibold text-slate-900';
   const metaClass = compact ? 'text-[9px] text-slate-600' : 'text-[11px] text-slate-600';
-  const jabatanAbove = roleLabelHidden(stamp?.jabatan, lineLabel);
+  const posisi = (stamp?.jabatan || '').trim() || lineLabel;
   return (
     <div>
       <div className={`font-medium ${stamped ? (compact ? 'mb-2' : 'mb-3') : gap}`}>{title}</div>
@@ -177,13 +172,12 @@ function InternalSignColumn({
           <SystemVerificationSeal compact={compact} approvedAt={stamp?.at} tone={tone} />
           {stamp?.userName ? <div className={nameClass}>{stamp.userName}</div> : null}
           {stamp?.nik ? <div className={metaClass}>NIK {stamp.nik}</div> : null}
-          {jabatanAbove ? <div className={metaClass}>{jabatanAbove}</div> : null}
         </div>
       ) : (
         <div className={`${compact ? 'h-6' : 'h-8'}`} aria-hidden />
       )}
       <div className="border-t border-slate-400 pt-1 text-[10px] text-slate-500">
-        {stamped ? lineLabel : '\u00a0'}
+        {stamped ? posisi : '\u00a0'}
       </div>
     </div>
   );

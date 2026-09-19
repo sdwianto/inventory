@@ -25,17 +25,20 @@ describe('vendor invoice system auth footer', () => {
     expect(src).toContain('Penerima gudang');
     expect(src).toContain('Petugas Gudang');
     expect(src).toContain('Pengawas Keuangan');
-    // Kedua slot memakai kolom yang sama: judul → stempel → nama/NIK → garis → jabatan
+    // Kedua slot memakai kolom yang sama: judul → stempel → nama → NIK → garis → posisi
     expect(src).toContain('title="Penerima gudang"');
     expect(src).toContain('title="Mengetahui"');
     expect(src).toContain('lineLabel="Petugas Gudang"');
     expect(src).toContain('lineLabel="Pengawas Keuangan"');
     expect(src).toContain('stamp?.userName || stamp?.nik || stamp?.at');
+    expect(src).toContain('(stamp?.jabatan || \'\').trim() || lineLabel');
+    expect(src).not.toContain('jabatanAbove');
+    expect(src).not.toContain('roleLabelHidden');
+    expect(src).not.toContain('showJabatanAbove');
     // Label polos di slot Mengetahui sudah diganti stempel verifikasi
     expect(src).not.toContain('>{/* autentikasi sistem */}');
     expect(src).not.toMatch(/metaClass\} text-slate-500 mb-0\.5`\}>autentikasi sistem/);
     expect(src).not.toContain('( dari penerimaan GRN )');
-    expect(src).not.toContain('showJabatanAbove');
     expect(src).not.toContain('penerimaStamped');
     expect(src).toContain('data-testid="vendor-invoice-system-auth"');
     expect(src).toContain('data-testid="vendor-invoice-internal-signs"');
