@@ -38,7 +38,7 @@ export function sameProcurementIdentity(
  * gabungkan yang kosong ke satuan itu (mapping UOM kadang kehilangan label).
  * Jangan gabung jika kode yang sama sudah punya dua satuan berbeda.
  */
-export function foldEmptySatuanMap<T>(
+export function foldEmptySatuanMap<T extends object>(
   map: Map<string, T>,
   merge: (a: T, b: T) => T,
 ): Map<string, T> {
@@ -57,11 +57,11 @@ export function foldEmptySatuanMap<T>(
     if (!empty.length || filled.length !== 1) continue;
     const target = filled[0];
     const base = map.get(target);
-    if (!base) continue;
-    let acc = base;
+    if (base === undefined) continue;
+    let acc: T = base;
     for (const e of empty) {
       const extra = map.get(e);
-      if (!extra) continue;
+      if (extra === undefined) continue;
       acc = merge(acc, extra);
       map.delete(e);
     }

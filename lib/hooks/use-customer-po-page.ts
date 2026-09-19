@@ -509,7 +509,7 @@ export function useCustomerPoPage() {
       const satuan = str(l.satuan) || str(p.satuan);
       const key = procurementLineKey({
         localStokId: productId,
-        kode: p.kode,
+        kode: str(p.kode),
         satuan,
         uomId,
       });
