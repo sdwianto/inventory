@@ -81,6 +81,138 @@ export function recipeUomFamily(satuan: string | null | undefined): RecipeUomFam
   return 'UNKNOWN';
 }
 
+const MASS_CANON_ORDER = ['KG', 'KILOGRAM', 'ONS', 'GR', 'G', 'GRAM'];
+const VOLUME_CANON_ORDER = ['L', 'LT', 'LTR', 'LITER', 'ML'];
+
+/** Konversi qty antar satuan sefamili (GR↔KG, ML↔L). Null jika keluarga beda / tidak dikenal. */
+export function convertQtySameFamily(
+  qty: number,
+  fromSatuan: string | null | undefined,
+  toSatuan: string | null | undefined,
+): number | null {
+  const n = Number(qty);
+  if (!Number.isFinite(n)) return null;
+  const from = normalizeRecipeSatuan(fromSatuan);
+  const to = normalizeRecipeSatuan(toSatuan);
+  if (!from || !to) return null;
+  if (from === to) return n;
+  const fromFam = recipeUomFamily(from);
+  const toFam = recipeUomFamily(to);
+  if (fromFam !== toFam) return null;
+  if (fromFam === 'MASS') {
+    const a = MASS_TO_GRAM[from];
+    const b = MASS_TO_GRAM[to];
+    if (!(a > 0) || !(b > 0)) return null;
+    return n * (a / b);
+  }
+  if (fromFam === 'VOLUME') {
+    const a = VOLUME_TO_ML[from];
+    const b = VOLUME_TO_ML[to];
+    if (!(a > 0) || !(b > 0)) return null;
+    return n * (a / b);
+  }
+  return null;
+}
+
+/**
+ * Satuan tampil untuk gabungan rekap: utamakan satuan stok jika sefamili,
+ * else satuan "lebih besar" yang muncul (KG > ONS > GR, L > ML).
+ */
+export function pickCanonicalSatuan(
+  satuans: Array<string | null | undefined>,
+  preferredBase?: string | null,
+): string | null {
+  const norms = [...new Set(satuans.map(normalizeRecipeSatuan).filter(Boolean))];
+  if (!norms.length) return null;
+  const families = new Set(norms.map((s) => recipeUomFamily(s)));
+  if (families.size !== 1) return null;
+  const fam = [...families][0];
+  if (fam !== 'MASS' && fam !== 'VOLUME') {
+    return norms.length === 1 ? norms[0] : null;
+  }
+  const pref = normalizeRecipeSatuan(preferredBase);
+  if (pref && recipeUomFamily(pref) === fam) {
+    if (norms.every((s) => convertQtySameFamily(1, s, pref) != null)) return pref;
+  }
+  const order = fam === 'MASS' ? MASS_CANON_ORDER : VOLUME_CANON_ORDER;
+  for (const label of order) {
+    if (norms.includes(label)) return label;
+  }
+  return norms[0];
+}
+
+function sameFamilyFoldGroupKey(row: {
+  productKode?: string | null;
+  kode?: string | null;
+  productId?: string | null;
+  satuan?: string | null;
+}): string {
+  const kode = String(row.productKode || row.kode || '').trim().toUpperCase();
+  const id = String(row.productId || '').trim();
+  const fam = recipeUomFamily(row.satuan);
+  if (fam === 'MASS' || fam === 'VOLUME') {
+    if (kode) return `kode:${kode}::${fam}`;
+    if (id) return `id:${id}::${fam}`;
+  }
+  return `raw:${kode || id}::${normalizeRecipeSatuan(row.satuan)}`;
+}
+
+/**
+ * Gabung baris kode (atau productId) yang sama jika satuan sefamili SI.
+ * Berlaku umum — bukan SKU tertentu. COUNT / lintas dimensi tetap terpisah.
+ */
+export function foldSameFamilyQtyLines<T extends {
+  productKode?: string | null;
+  kode?: string | null;
+  productId?: string | null;
+  satuan?: string | null;
+}>(
+  lines: T[],
+  getQty: (row: T) => number,
+  apply: (row: T, qty: number, satuan: string) => T,
+  merge: (a: T, b: T) => T,
+  preferredBase?: (row: T) => string | null | undefined,
+): T[] {
+  const groups = new Map<string, T[]>();
+  for (const row of lines) {
+    const key = sameFamilyFoldGroupKey(row);
+    const list = groups.get(key);
+    if (list) list.push(row);
+    else groups.set(key, [row]);
+  }
+  const out: T[] = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      out.push(list[0]);
+      continue;
+    }
+    const preferred = preferredBase
+      ? list.map(preferredBase).find((s) => String(s || '').trim())
+      : undefined;
+    const canon = pickCanonicalSatuan(list.map((r) => r.satuan), preferred);
+    if (!canon) {
+      out.push(...list);
+      continue;
+    }
+    const converted: T[] = [];
+    let ok = true;
+    for (const row of list) {
+      const q = convertQtySameFamily(getQty(row), row.satuan, canon);
+      if (q == null) {
+        ok = false;
+        break;
+      }
+      converted.push(apply(row, q, canon));
+    }
+    if (!ok || !converted.length) {
+      out.push(...list);
+      continue;
+    }
+    out.push(converted.reduce((acc, row) => merge(acc, row)));
+  }
+  return out;
+}
+
 export type RecipeKitchenOpts = {
   recipeBaseGrams?: number | null;
   recipeBaseMl?: number | null;

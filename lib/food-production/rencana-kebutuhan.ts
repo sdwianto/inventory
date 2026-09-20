@@ -23,7 +23,11 @@ import {
   resolvePlanLineRecipeSlots,
   type PlanMaterialOverride,
 } from '@/lib/food-production/production-plan';
-import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import {
+  convertQtySameFamily,
+  foldSameFamilyQtyLines,
+} from '@/lib/food-production/recipe-uom';
 
 export type RencanaKebutuhanSource = {
   planNo?: string;
@@ -150,7 +154,35 @@ export function buildRencanaKebutuhanLines(input: {
     }
   }
 
-  const lines = [...acc.values()]
+  foldEmptySatuanMap(acc, (a, b) => ({
+    ...a,
+    productKode: a.productKode || b.productKode,
+    productNama: a.productNama || b.productNama,
+    satuan: a.satuan || b.satuan,
+    qty: roundQty(a.qty + b.qty),
+    sources: [...a.sources, ...b.sources],
+  }));
+  const folded = foldSameFamilyQtyLines(
+    [...acc.values()],
+    (row) => row.qty,
+    (row, qty, satuan) => ({
+      ...row,
+      qty: roundQty(qty),
+      satuan,
+      sources: row.sources.map((s) => ({
+        ...s,
+        qty: roundQty(convertQtySameFamily(s.qty, row.satuan, satuan) ?? s.qty),
+      })),
+    }),
+    (a, b) => ({
+      ...a,
+      productKode: a.productKode || b.productKode,
+      productNama: a.productNama || b.productNama,
+      qty: roundQty(a.qty + b.qty),
+      sources: [...a.sources, ...b.sources],
+    }),
+  );
+  const lines = folded
     .map((line) => ({ ...line, qty: ceilProcurementQty(line.qty, line.satuan) }))
     .filter((line) => line.qty > 0)
     .sort((a, b) =>
@@ -196,6 +228,7 @@ export type RecipeIngredientNeedRow = {
   productKode?: string;
   productNama?: string;
   satuan?: string;
+  baseSatuan?: string;
   qty: number;
   qtyBesarPart?: number;
   qtyKecilPart?: number;
@@ -275,6 +308,7 @@ export function recipeIngredientNeeds(input: {
         productKode: rLine.productKode,
         productNama: rLine.productNama,
         satuan: kitchenSatuan,
+        baseSatuan: rLine.baseSatuan,
         qty,
         qtyBesarPart,
         qtyKecilPart,

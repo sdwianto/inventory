@@ -6,11 +6,13 @@
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
+  convertQtySameFamily,
+  foldSameFamilyQtyLines,
   normalizeRecipeSatuan,
   recipeBaseQtyForFamily,
   recipeUomFamily,
 } from '@/lib/food-production/recipe-uom';
-import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import {
   applyFullPortionExceptions,
   recipeWastePctForLine,
@@ -437,12 +439,43 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
     }
   }
 
-  const lines: MaterialRequirementLine[] = [...acc.values()]
+  foldEmptySatuanMap(acc, (a, b) => ({
+    ...a,
+    productIds: [...new Set([...a.productIds, ...b.productIds])],
+    productKode: a.productKode || b.productKode,
+    productNama: a.productNama || b.productNama,
+    satuan: a.satuan || b.satuan,
+    qtyGross: a.qtyGross + b.qtyGross,
+    sources: [...a.sources, ...b.sources],
+  }));
+  const folded = foldSameFamilyQtyLines(
+    [...acc.values()],
+    (row) => row.qtyGross,
+    (row, qty, satuan) => ({
+      ...row,
+      qtyGross: qty,
+      satuan,
+      sources: row.sources.map((s) => ({
+        ...s,
+        qty: roundQty(convertQtySameFamily(s.qty, row.satuan, satuan) ?? s.qty),
+      })),
+    }),
+    (a, b) => ({
+      ...a,
+      productIds: [...new Set([...a.productIds, ...b.productIds])],
+      productKode: a.productKode || b.productKode,
+      productNama: a.productNama || b.productNama,
+      qtyGross: a.qtyGross + b.qtyGross,
+      sources: [...a.sources, ...b.sources],
+    }),
+  );
+  const lines: MaterialRequirementLine[] = folded
     .map((row) => {
       // Gross/net pengadaan = bilangan bulat ke atas (satu kali di agregat produk).
       const qtyGross = ceilProcurementQty(row.qtyGross, row.satuan);
+      // Stok gudang sudah dalam satuan produk — jangan konversi pakai satuan dapur explode.
       const qtyOnHand = roundQty(
-        row.productIds.reduce((s, id) => s + Number(onHandByProduct.get(id) || 0), 0),
+        [...new Set(row.productIds)].reduce((s, id) => s + Number(onHandByProduct.get(id) || 0), 0),
       );
       const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand), row.satuan);
       const productId = row.productIds.find((id) => Number(onHandByProduct.get(id) || 0) > 0)

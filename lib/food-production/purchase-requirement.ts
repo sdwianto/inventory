@@ -6,6 +6,7 @@
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
 import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import { convertQtySameFamily, foldSameFamilyQtyLines } from '@/lib/food-production/recipe-uom';
 
 export const PURCHASE_REQUIREMENTS_COLLECTION = 'purchase_requirements';
 
@@ -101,7 +102,23 @@ export function mergePurchaseLinesByKode(lines: PurchaseRequirementLine[]): Purc
     map.set(key, mergePurchaseLineQty(prev, l));
   }
   foldEmptySatuanMap(map, mergePurchaseLineQty);
-  return sortPurchaseLines([...map.values()]);
+  const folded = foldSameFamilyQtyLines(
+    [...map.values()],
+    (row) => Number(row.qtyNet) || 0,
+    (row, qty, satuan) => ({
+      ...row,
+      satuan,
+      qtyNet: qty,
+      qtyGross: row.qtyGross != null
+        ? (convertQtySameFamily(Number(row.qtyGross), row.satuan, satuan) ?? Number(row.qtyGross))
+        : undefined,
+      qtyOnHand: row.qtyOnHand != null
+        ? (convertQtySameFamily(Number(row.qtyOnHand), row.satuan, satuan) ?? Number(row.qtyOnHand))
+        : undefined,
+    }),
+    mergePurchaseLineQty,
+  );
+  return sortPurchaseLines(folded);
 }
 
 function mergePurchaseLineQty(

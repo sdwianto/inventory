@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  convertQtySameFamily,
   convertRecipeLineQtys,
   defaultKitchenSatuan,
   factorKitchenToBase,
+  foldSameFamilyQtyLines,
   kitchenSatuanOptionsForBase,
+  pickCanonicalSatuan,
   recipeBaseQtyForFamily,
   recipeUomFamily,
   toBaseRecipeQty,
@@ -22,6 +25,97 @@ describe('recipe-uom — keluarga satuan', () => {
     expect(recipeUomFamily('RTG')).toBe('COUNT');
     expect(recipeUomFamily('RENTENG')).toBe('COUNT');
     expect(recipeUomFamily('XYZ')).toBe('UNKNOWN');
+  });
+});
+
+describe('recipe-uom — fold satuan sefamili (semua kode)', () => {
+  it('mengkonversi GR ↔ KG dan ML ↔ L', () => {
+    expect(convertQtySameFamily(1369, 'GR', 'KG')).toBeCloseTo(1.369);
+    expect(convertQtySameFamily(1.369, 'KG', 'GR')).toBeCloseTo(1369);
+    expect(convertQtySameFamily(500, 'ML', 'L')).toBeCloseTo(0.5);
+    expect(convertQtySameFamily(10, 'GR', 'PCS')).toBeNull();
+  });
+
+  it('pilih KG jika ada campuran GR/KG; utamakan satuan stok sefamili', () => {
+    expect(pickCanonicalSatuan(['GR', 'KG'])).toBe('KG');
+    expect(pickCanonicalSatuan(['ML', 'L'])).toBe('L');
+    expect(pickCanonicalSatuan(['GR', 'KG'], 'GR')).toBe('GR');
+    expect(pickCanonicalSatuan(['GR', 'PCS'])).toBeNull();
+  });
+
+  it('gabung Gula Pasir-like 1.369 GR + 9.125 KG jadi satu KG untuk kode mana pun', () => {
+    const folded = foldSameFamilyQtyLines(
+      [
+        { productKode: 'B387463', productId: 'a', satuan: 'GR', qty: 1.369 },
+        { productKode: 'B387463', productId: 'b', satuan: 'KG', qty: 9.125 },
+        { productKode: 'B999', productId: 'c', satuan: 'GR', qty: 10 },
+        { productKode: 'B999', productId: 'c', satuan: 'PCS', qty: 2 },
+      ],
+      (r) => r.qty,
+      (r, qty, satuan) => ({ ...r, qty, satuan }),
+      (a, b) => ({ ...a, qty: a.qty + b.qty }),
+    );
+    const gula = folded.find((r) => r.productKode === 'B387463');
+    expect(gula?.satuan).toBe('KG');
+    expect(gula?.qty).toBeCloseTo(9.126369, 6);
+    expect(folded.filter((r) => r.productKode === 'B999')).toHaveLength(2);
+  });
+
+  it('ONS + KG → satu KG; KILOGRAM alias; LITER + ML → L', () => {
+    const mass = foldSameFamilyQtyLines(
+      [
+        { productKode: 'X', satuan: 'ONS', qty: 16.6 },
+        { productKode: 'X', satuan: 'KG', qty: 1 },
+      ],
+      (r) => r.qty,
+      (r, qty, satuan) => ({ ...r, qty, satuan }),
+      (a, b) => ({ ...a, qty: a.qty + b.qty }),
+    );
+    expect(mass).toHaveLength(1);
+    expect(mass[0].satuan).toBe('KG');
+    expect(mass[0].qty).toBeCloseTo(2.66);
+
+    const alias = foldSameFamilyQtyLines(
+      [
+        { productKode: 'Y', satuan: 'KILOGRAM', qty: 2 },
+        { productKode: 'Y', satuan: 'KG', qty: 0.5 },
+      ],
+      (r) => r.qty,
+      (r, qty, satuan) => ({ ...r, qty, satuan }),
+      (a, b) => ({ ...a, qty: a.qty + b.qty }),
+    );
+    expect(alias).toHaveLength(1);
+    expect(alias[0].satuan).toBe('KG');
+    expect(alias[0].qty).toBeCloseTo(2.5);
+
+    const vol = foldSameFamilyQtyLines(
+      [
+        { productKode: 'Z', satuan: 'ML', qty: 250 },
+        { productKode: 'Z', satuan: 'LITER', qty: 1 },
+      ],
+      (r) => r.qty,
+      (r, qty, satuan) => ({ ...r, qty, satuan }),
+      (a, b) => ({ ...a, qty: a.qty + b.qty }),
+    );
+    expect(vol).toHaveLength(1);
+    expect(vol[0].satuan).toBe('LITER');
+    expect(vol[0].qty).toBeCloseTo(1.25);
+  });
+
+  it('utamakan satuan stok preferredBase meski ada satuan lebih besar', () => {
+    const folded = foldSameFamilyQtyLines(
+      [
+        { productKode: 'W', satuan: 'GR', qty: 500, baseSatuan: 'GR' },
+        { productKode: 'W', satuan: 'KG', qty: 1, baseSatuan: 'GR' },
+      ],
+      (r) => r.qty,
+      (r, qty, satuan) => ({ ...r, qty, satuan }),
+      (a, b) => ({ ...a, qty: a.qty + b.qty }),
+      (r) => r.baseSatuan,
+    );
+    expect(folded).toHaveLength(1);
+    expect(folded[0].satuan).toBe('GR');
+    expect(folded[0].qty).toBeCloseTo(1500);
   });
 });
 

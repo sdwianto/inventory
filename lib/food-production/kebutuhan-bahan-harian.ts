@@ -4,7 +4,11 @@
  */
 
 import { ceilProcurementQty, roundQty } from '@/lib/food-production/material-requirement';
-import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
+import {
+  convertQtySameFamily,
+  foldSameFamilyQtyLines,
+} from '@/lib/food-production/recipe-uom';
 import {
   KATEGORI_MENU_OPTIONS,
   applyFullPortionExceptions,
@@ -62,6 +66,7 @@ export type KebutuhanBahanRekapLine = {
   productKode?: string;
   productNama?: string;
   satuan?: string;
+  baseSatuan?: string;
   qty: number;
   qtyExact: number;
   sources: Array<{ recipeKode?: string; recipeNama?: string; qty: number }>;
@@ -169,6 +174,7 @@ function aggregateRekap(hidangan: KebutuhanBahanHidangan[]): KebutuhanBahanRekap
         productKode: line.productKode,
         productNama: line.productNama,
         satuan: line.satuan,
+        baseSatuan: line.baseSatuan,
         qty: 0,
         qtyExact: 0,
         sources: [],
@@ -177,6 +183,7 @@ function aggregateRekap(hidangan: KebutuhanBahanHidangan[]): KebutuhanBahanRekap
       prev.productKode = prev.productKode || line.productKode;
       prev.productNama = prev.productNama || line.productNama;
       prev.satuan = prev.satuan || line.satuan;
+      prev.baseSatuan = prev.baseSatuan || line.baseSatuan;
       prev.sources.push({
         recipeKode: dish.recipeKode,
         recipeNama: dish.recipeNama,
@@ -185,7 +192,37 @@ function aggregateRekap(hidangan: KebutuhanBahanHidangan[]): KebutuhanBahanRekap
       acc.set(key, prev);
     }
   }
-  return [...acc.values()]
+  foldEmptySatuanMap(acc, (a, b) => ({
+    ...a,
+    productKode: a.productKode || b.productKode,
+    productNama: a.productNama || b.productNama,
+    baseSatuan: a.baseSatuan || b.baseSatuan,
+    qtyExact: roundQty(a.qtyExact + b.qtyExact),
+    sources: [...a.sources, ...b.sources],
+  }));
+  const folded = foldSameFamilyQtyLines(
+    [...acc.values()],
+    (row) => row.qtyExact,
+    (row, qty, satuan) => ({
+      ...row,
+      qtyExact: roundQty(qty),
+      satuan,
+      sources: row.sources.map((s) => ({
+        ...s,
+        qty: roundQty(convertQtySameFamily(s.qty, row.satuan, satuan) ?? s.qty),
+      })),
+    }),
+    (a, b) => ({
+      ...a,
+      productKode: a.productKode || b.productKode,
+      productNama: a.productNama || b.productNama,
+      baseSatuan: a.baseSatuan || b.baseSatuan,
+      qtyExact: roundQty(a.qtyExact + b.qtyExact),
+      sources: [...a.sources, ...b.sources],
+    }),
+    (row) => row.baseSatuan,
+  );
+  return folded
     .map((row) => ({
       ...row,
       qty: ceilProcurementQty(row.qtyExact, row.satuan),

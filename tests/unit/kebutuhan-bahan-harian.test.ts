@@ -196,7 +196,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.acuanResep[0].error).toMatch(/belum punya bahan/i);
   });
 
-  it('same SKU same satuan merges; GR vs KG stay separate rekap rows', () => {
+  it('same SKU same satuan merges; GR vs KG fold to one KG rekap row', () => {
     const nasi2: KebutuhanRecipeRef = {
       ...recipeNasi(),
       id: 'nasi-2',
@@ -251,8 +251,53 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
       recipesById: recipesMap(recipeNasi(), nasiKg),
       acuanByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 500 },
     });
-    expect(split.rekap).toHaveLength(2);
-    expect(split.rekap.map((r) => r.satuan).sort()).toEqual(['GR', 'KG']);
+    expect(split.rekap).toHaveLength(1);
+    expect(split.rekap[0].satuan).toBe('KG');
+    expect(split.rekap[0].qtyExact).toBeCloseTo(515 + 515 / 1000, 3);
+    expect(split.hidangan).toHaveLength(2);
+    expect(split.hidangan.map((h) => h.lines[0]?.satuan).sort()).toEqual(['GR', 'KG']);
+    expect(split.acuanResep.every((c) => c.lines.every((l) => l.satuan === 'GR' || l.satuan === 'KG'))).toBe(true);
+  });
+
+  it('does not fold GR with PCS even when kode matches', () => {
+    const garamGr: KebutuhanRecipeRef = {
+      id: 'a',
+      kode: 'A',
+      nama: 'A',
+      aktif: true,
+      kategoriMenu: 'GARNISH',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'x',
+        productKode: 'B1',
+        productNama: 'Item',
+        qty: 10,
+        qtyBesar: 10,
+        pctKecil: 100,
+        qtyKecil: 10,
+        satuan: 'GR',
+      }],
+    };
+    const garamPcs: KebutuhanRecipeRef = {
+      ...garamGr,
+      id: 'b',
+      kode: 'B',
+      lines: [{
+        ...garamGr.lines![0],
+        satuan: 'PCS',
+      }],
+    };
+    const built = buildKebutuhanBahanHarian({
+      hidangan: [
+        { recipeId: 'a', slotLabel: 'Garnish', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+        { recipeId: 'b', slotLabel: 'Garnish', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+      ],
+      recipesById: recipesMap(garamGr, garamPcs),
+      acuanByKategori: { ...emptyPortionTargets(), PORSI_BESAR: 1 },
+    });
+    expect(built.rekap).toHaveLength(2);
+    expect(built.rekap.map((r) => r.satuan).sort()).toEqual(['GR', 'PCS']);
   });
 
   it('merges rekap when the same kode comes from different recipe catalog copies', () => {

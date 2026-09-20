@@ -119,6 +119,47 @@ describe('food-production sprint 5 — Purchase Requirement', () => {
     expect(lines.find((l) => l.productKode === 'SKU-Z')?.qtyNet).toBe(5);
   });
 
+  it('folds leftover PR GR + KG of the same kode; keeps GR vs PCS separate', () => {
+    const folded = buildPurchaseLinesFromMrp([
+      {
+        productId: 'gula-a',
+        productKode: 'B387463',
+        productNama: 'Gula Pasir 1kg',
+        satuan: 'GR',
+        qtyGross: 1.369,
+        qtyOnHand: 0,
+        qtyNet: 1.369,
+        shortage: true,
+      },
+      {
+        productId: 'gula-b',
+        productKode: 'B387463',
+        productNama: 'Gula Pasir 1kg',
+        satuan: 'KG',
+        qtyGross: 9.125,
+        qtyOnHand: 0,
+        qtyNet: 9.125,
+        shortage: true,
+      },
+    ]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].satuan).toBe('KG');
+    expect(folded[0].qtyNet).toBeCloseTo(9.126369, 6);
+    expect(folded[0].qtyGross).toBeCloseTo(9.126369, 6);
+
+    const split = buildPurchaseLinesFromMrp([
+      {
+        productId: 'x', productKode: 'B1', productNama: 'Item',
+        satuan: 'GR', qtyGross: 10, qtyOnHand: 0, qtyNet: 10, shortage: true,
+      },
+      {
+        productId: 'x', productKode: 'B1', productNama: 'Item',
+        satuan: 'PCS', qtyGross: 2, qtyOnHand: 0, qtyNet: 2, shortage: true,
+      },
+    ]);
+    expect(split).toHaveLength(2);
+  });
+
   it('maps PR lines to Draft CPO payloads', () => {
     const payloads = toDraftCpoItemPayloads([
       {

@@ -380,6 +380,59 @@ describe('food-production sprint 4 — MRP', () => {
     expect(built.lines[0].qty).toBe(500);
   });
 
+  it('buildRencanaKebutuhanLines folds GR + KG of the same kode into one KG line', () => {
+    const rGr = {
+      id: 'r-gr',
+      kode: 'GULA-GR',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'gula-a',
+        productKode: 'B387463',
+        productNama: 'Gula Pasir 1kg',
+        qty: 1.369,
+        qtyBesar: 1.369,
+        pctKecil: 100,
+        qtyKecil: 1.369,
+        satuan: 'GR',
+      }],
+    };
+    const rKg = {
+      id: 'r-kg',
+      kode: 'GULA-KG',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'gula-b',
+        productKode: 'B387463',
+        productNama: 'Gula Pasir 1kg',
+        qty: 9.125,
+        qtyBesar: 9.125,
+        pctKecil: 100,
+        qtyKecil: 9.125,
+        satuan: 'KG',
+      }],
+    };
+    const built = buildRencanaKebutuhanLines({
+      plans: [{
+        noDokumen: 'RPN1',
+        status: 'DRAFT',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        acuanByKategori: { PORSI_BESAR: 1 },
+        lines: [
+          { recipeId: 'r-gr', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+          { recipeId: 'r-kg', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+        ],
+      }],
+      menusById: new Map(),
+      recipesById: new Map([['r-gr', rGr], ['r-kg', rKg]]),
+    });
+    expect(built.errors).toEqual([]);
+    expect(built.lines).toHaveLength(1);
+    expect(built.lines[0].satuan).toBe('KG');
+    expect(built.lines[0].qty).toBe(9.127);
+  });
+
   it('recipeIngredientNeeds ceils total qty for rencana menu card', () => {
     const lines = recipeIngredientNeeds({
       recipe: {
@@ -549,6 +602,125 @@ describe('food-production sprint 4 — MRP', () => {
     expect(serai).toHaveLength(1);
     expect(serai[0].qtyGross).toBe(28);
     expect(serai[0].sources).toHaveLength(2);
+  });
+
+  it('folds GR + KG of the same kode into one KG line; on-hand unique per productId', () => {
+    const rGr: RecipeDoc = {
+      id: 'r-gr',
+      tenantId: 't1',
+      kode: 'GULA-GR',
+      nama: 'Gula GR',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'gula-a', productKode: 'B387463', productNama: 'Gula Pasir 1kg',
+        qty: 1.369, qtyBesar: 1.369, pctKecil: 100, qtyKecil: 1.369, satuan: 'GR',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const rKg: RecipeDoc = {
+      id: 'r-kg',
+      tenantId: 't1',
+      kode: 'GULA-KG',
+      nama: 'Gula KG',
+      finishedGoodProductId: 'fg2',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'gula-a', productKode: 'B387463', productNama: 'Gula Pasir 1kg',
+        qty: 9.125, qtyBesar: 9.125, pctKecil: 100, qtyKecil: 9.125, satuan: 'KG',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-09-21',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        lines: [
+          { recipeId: 'r-gr', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+          { recipeId: 'r-kg', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+        ],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r-gr', rGr], ['r-kg', rKg]]),
+      onHandByProduct: new Map([['gula-a', 5]]),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const gula = result.lines.filter((l) => l.productKode === 'B387463');
+    expect(gula).toHaveLength(1);
+    expect(gula[0].satuan).toBe('KG');
+    expect(gula[0].qtyGross).toBe(9.127);
+    expect(gula[0].qtyOnHand).toBe(5);
+    expect(gula[0].qtyNet).toBe(4.127);
+  });
+
+  it('does not fold GR with PCS on MRP explode', () => {
+    const rGr: RecipeDoc = {
+      id: 'r-gr',
+      tenantId: 't1',
+      kode: 'A',
+      nama: 'A',
+      finishedGoodProductId: 'fg1',
+      version: 1,
+      effectiveDate: '2026-07-01',
+      yieldQty: 1,
+      wastePct: 0,
+      lines: [{
+        productId: 'x', productKode: 'B1', productNama: 'Item',
+        qty: 10, qtyBesar: 10, pctKecil: 100, qtyKecil: 10, satuan: 'GR',
+      }],
+      aktif: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const rPcs: RecipeDoc = {
+      ...rGr,
+      id: 'r-pcs',
+      kode: 'B',
+      lines: [{
+        productId: 'x', productKode: 'B1', productNama: 'Item',
+        qty: 2, qtyBesar: 2, pctKecil: 100, qtyKecil: 2, satuan: 'PCS',
+      }],
+    };
+    const result = explodeMaterialRequirements({
+      plan: {
+        id: 'p1',
+        noDokumen: 'RPN1',
+        tanggal: '2026-09-21',
+        kitchenId: 'k1',
+        kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED',
+        kategoriPorsiList: ['PORSI_BESAR'],
+        lines: [
+          { recipeId: 'r-gr', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+          { recipeId: 'r-pcs', targetPorsi: 1, kategoriPorsiList: ['PORSI_BESAR'] },
+        ],
+      },
+      menusById: new Map(),
+      recipesById: new Map([['r-gr', rGr], ['r-pcs', rPcs]]),
+      onHandByProduct: new Map(),
+      warehouseKode: 'GKERING',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.lines).toHaveLength(2);
+    expect(result.lines.map((l) => l.satuan).sort()).toEqual(['GR', 'PCS']);
   });
 
   it('MRP uses qtyBase* when kitchen satuan is GR (product base KG)', () => {
