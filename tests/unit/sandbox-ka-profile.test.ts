@@ -10,6 +10,7 @@ vi.mock('@/lib/food-production/food-safety-program-seed', () => ({
 
 import {
   SANDBOX_KA_COLLECTIONS,
+  SANDBOX_KEEP_HINT,
   SANDBOX_TRANSACTION_COLLECTIONS,
   collectionsForSandboxProfile,
   keepHintForSandboxProfile,
@@ -83,6 +84,14 @@ describe('sandbox purge profile kitchen-assurance', () => {
     expect(full).toContain('audit_log');
     expect(full).toContain('execution_outbox');
     expect(full).not.toContain('warehouse_bins');
+    expect(full).toEqual(expect.arrayContaining([
+      'people',
+      'kitchen_people',
+      'person_payments',
+      'bank_txn_inbox',
+    ]));
+    expect(SANDBOX_KEEP_HINT).not.toContain('people');
+    expect(SANDBOX_KEEP_HINT).not.toContain('kitchen_people');
   });
 
   it('KA keep hint documents stok and GRN retention', () => {

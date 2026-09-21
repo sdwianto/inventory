@@ -24,6 +24,12 @@ const MIME: Record<string, string> = {
 
 const INLINE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'mp4', 'webm']);
 
+/** File HR (prefix kdp / kperson) hanya lewat handler personel ber-auth. */
+export function isRestrictedPublicMediaFilename(filename: string): boolean {
+  const fn = String(filename || '').trim().toLowerCase();
+  return fn.startsWith('kdp-') || fn.startsWith('kperson-');
+}
+
 export async function handleMedia({
   method,
   path,
@@ -32,6 +38,9 @@ export async function handleMedia({
 
   const tenantId = decodeURIComponent(path[1]);
   const filename = decodeURIComponent(path[2]);
+  if (isRestrictedPublicMediaFilename(filename)) {
+    return err('File tidak ditemukan', 404);
+  }
   try {
     const buf = await readMediaFile(tenantId, filename);
     const ext = filename.split('.').pop()?.toLowerCase() || 'png';

@@ -36,6 +36,10 @@ export const OPERATIONAL_COLLECTIONS = [
   'maintenance_requests',
   'maintenance_service_orders',
   'inventory_releases',
+  'kitchen_people',
+  'people',
+  'person_payments',
+  'bank_txn_inbox',
 ];
 
 let operationalMigrated = false;

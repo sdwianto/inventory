@@ -131,6 +131,7 @@ const NAV: NavEntry[] = [
     type: 'group', key: 'master', label: 'Master Data', icon: Database,
     items: [
       { href: '/produk', label: 'Produk', icon: Package },
+      { href: '/people', label: 'Personel', icon: Users },
     ],
   },
   {
@@ -213,6 +214,11 @@ const FP_MGMT_ROUTES = [
   '/food-production/recommendations', '/food-production/dashboard', '/food-production/price-book',
 ] as const;
 
+/** Shared supporting domain — Personel (bukan Food Production, bukan GUDANG). */
+const PEOPLE_ROUTES = [
+  '/people',
+] as const;
+
 const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
@@ -236,12 +242,14 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
     ...LOGISTICS_ROUTES,
+    ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
+          ...PEOPLE_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
@@ -249,6 +257,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
+          ...PEOPLE_ROUTES,
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],

@@ -1,5 +1,6 @@
 const nextConfig = {
   output: 'standalone',
+  allowedDevOrigins: ['127.0.0.1'],
   transpilePackages: [
     '@sdwianto/contracts',
     '@sdwianto/events',
@@ -39,6 +40,11 @@ const nextConfig = {
   onDemandEntries: {
     maxInactiveAge: 10000,
     pagesBufferLength: 2,
+  },
+  async redirects() {
+    return [
+      { source: '/food-production/people', destination: '/people', permanent: false },
+    ];
   },
   async headers() {
     const isProd = process.env.NODE_ENV === 'production';

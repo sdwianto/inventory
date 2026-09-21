@@ -7,6 +7,7 @@ import {
 } from '@/lib/api/sandbox-purge-sales-remote';
 import { DEFAULT_FOOD_SAFETY_STATUS } from '@/lib/food-production/production-batch';
 import { ensureFoodSafetyProgramsSeeded } from '@/lib/food-production/food-safety-program-seed';
+import { purgePersonMedia } from '@/lib/people/purge-media';
 
 /** Profil reset sandbox — `full` = perilaku lama; `kitchen-assurance` = uji KA saja. */
 export type SandboxPurgeProfile = 'full' | 'kitchen-assurance';
@@ -100,6 +101,10 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'production_plans',
   'portion_targets',
   'weekly_menu_plans',
+  'kitchen_people',
+  'people',
+  'person_payments',
+  'bank_txn_inbox',
   // Food Production — master/simulasi (ikut di-reset)
   'menus',
   'supplier_price_book',
@@ -328,6 +333,10 @@ export async function purgeSandboxDatabase(
   );
   // KA profile never drop-collection (always deleteMany) — avoid nuking unrelated data if mis-scoped.
   const fastDrop = confirm && profile === 'full' && isFullTenantPurge(filter);
+
+  if (confirm && profile === 'full') {
+    await purgePersonMedia(db, tenantId);
+  }
 
   const collectionFilter = (name: string): Record<string, unknown> => {
     if (name === 'bg_jobs' && preserveBgJobIds.length) {

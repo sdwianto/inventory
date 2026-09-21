@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 // Hapus semua data operasional + master data untuk satu tenantId.
 
 import { OPERATIONAL_COLLECTIONS } from './tenant-operational';
+import { purgePersonMedia } from '@/lib/people/purge-media';
 
 const MASTER_COLLECTIONS = [
   'products',
@@ -33,6 +34,10 @@ const EXTRA_COLLECTIONS = [
   'maintenance_service_orders',
   'maintenance_schedules',
   'inventory_releases',
+  'kitchen_people',
+  'people',
+  'person_payments',
+  'bank_txn_inbox',
   'integration_settings',
   'webhook_inbox',
   'webhook_subscriptions',
@@ -47,6 +52,7 @@ export async function purgeTenantData(db: Db, tenantId, { deleteUsers = true } =
   if (tid === 'master') return { error: 'Tenant master tidak boleh dihapus' };
 
   const counts: Record<string, unknown> = {};
+  counts.person_media = await purgePersonMedia(db, tid);
   for (const name of [
     ...MASTER_COLLECTIONS,
     ...OPERATIONAL_COLLECTIONS,

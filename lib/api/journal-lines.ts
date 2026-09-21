@@ -9,12 +9,14 @@ import type {
 export const COA = {
   KAS: { kode: '10010', nama: 'Kas' },
   BANK_MANDIRI: { kode: '10110', nama: 'Bank Mandiri' },
+  BANK_BNI: { kode: '10130', nama: 'Bank BNI' },
   PERSEDIAAN: { kode: '10310', nama: 'Persediaan Barang Dagangan' },
   /** ADR-005 — qty OUT di Post RTV, clear saat CN accept / vendor reject. */
   BARANG_DALAM_RETUR: { kode: '10315', nama: 'Barang dalam Retur' },
   PPN_MASUKAN: { kode: '10410', nama: 'PPN Masukan' },
   HUTANG: { kode: '20010', nama: 'Hutang Usaha' },
   GRNI: { kode: '20020', nama: 'Penerimaan Belum Ditagih' },
+  BEBAN_GAJI: { kode: '40010', nama: 'Beban Gaji' },
   PENYESUAIAN: { kode: '40060', nama: 'Penyesuaian Persediaan' },
 } as const;
 
@@ -298,6 +300,41 @@ export function buildPaidExternalJournalLines({
     amount,
     metode: 'TUNAI',
   });
+}
+
+/** Dr Beban Gaji / Cr Bank (default BNI 10130) — transfer honor/gaji personel. */
+export function buildPersonPaymentJournalLines(opts: {
+  noDoc: string;
+  amount: number;
+  kasRekeningKode?: string;
+  kasRekeningNama?: string;
+  personNama?: string;
+}): JournalDetail[] {
+  const amt = Math.round(Number(opts.amount) || 0);
+  if (amt <= 0) return [];
+  const bank = {
+    kode: opts.kasRekeningKode || COA.BANK_BNI.kode,
+    nama: opts.kasRekeningNama || (opts.kasRekeningKode && opts.kasRekeningKode !== COA.BANK_BNI.kode
+      ? opts.kasRekeningKode
+      : COA.BANK_BNI.nama),
+  };
+  const who = opts.personNama ? ` ${opts.personNama}` : '';
+  return [
+    {
+      rekeningKode: COA.BEBAN_GAJI.kode,
+      rekeningNama: COA.BEBAN_GAJI.nama,
+      debet: amt,
+      kredit: 0,
+      keterangan: `Transfer gaji${who} ${opts.noDoc}`,
+    },
+    {
+      rekeningKode: bank.kode,
+      rekeningNama: bank.nama,
+      debet: 0,
+      kredit: amt,
+      keterangan: `Transfer gaji${who} ${opts.noDoc}`,
+    },
+  ];
 }
 
 /** Balik debet/kredit tiap baris — untuk membatalkan jurnal auto yang sudah terlanjur posting. */

@@ -111,6 +111,15 @@ export const queryKeys = {
     all: ['users'] as const,
     list: ['users', 'list'] as const,
   },
+  people: {
+    all: ['people'] as const,
+    list: (params: { q?: string; kitchenId?: string; jenis?: string } = {}) =>
+      ['people', 'list', params] as const,
+    detail: (id: string) => ['people', 'detail', id] as const,
+    payments: (id: string, params: { from?: string; to?: string; status?: string } = {}) =>
+      ['people', 'payments', id, params] as const,
+    bankTxn: (status = 'NEW') => ['people', 'bank-txn', status] as const,
+  },
   sandbox: {
     all: ['sandbox'] as const,
     status: ['sandbox', 'status'] as const,

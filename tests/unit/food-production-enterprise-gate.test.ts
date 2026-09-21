@@ -82,6 +82,7 @@ const REQUIRED_DISPATCH = [
   'food-forecasts',
   'fp-public',
   'kitchen-transfers',
+  'people',
   'production-calendar',
   'production-batches',
   'weekly-menu-plans',
@@ -120,16 +121,48 @@ describe('food-production enterprise gate', () => {
     expect(src).toContain("/food-production/service-point");
     expect(src).toContain("/food-production/distribution");
     expect(src).toContain("/food-production/price-book");
+    expect(src).toContain("/people");
+    expect(src).not.toContain("/food-production/people");
     expect(src).not.toContain("/food-production/mobile");
     expect(src).toContain("/utiliti/api-keys");
     expect(src).toContain('FP_OPS_ROUTES');
     expect(src).toContain('FP_MGMT_ROUTES');
+    expect(src).toContain('PEOPLE_ROUTES');
     // GUDANG ops-only (no management FP routes in GUDANG list block before SUPERVISOR).
     const gudangBlock = src.slice(src.indexOf('GUDANG:'), src.indexOf('SUPERVISOR:'));
     expect(gudangBlock).toContain('FP_OPS_ROUTES');
     expect(gudangBlock).not.toContain('FP_MGMT_ROUTES');
+    expect(gudangBlock).not.toContain('PEOPLE_ROUTES');
     expect(gudangBlock).not.toContain('/food-production/recommendations');
     expect(gudangBlock).not.toContain('/food-production/price-book');
+    expect(gudangBlock).not.toContain('/people');
+  });
+
+  it('hosts Personel as shared master outside Food Production', () => {
+    const missing = [
+      'lib/people/person.ts',
+      'lib/people/roles.ts',
+      'lib/api/handlers/people.ts',
+      'app/people/page.tsx',
+    ].filter((rel) => !existsSync(resolve(ROOT, rel)));
+    expect(missing).toEqual([]);
+    expect(readFileSync(resolve(ROOT, 'lib/food-production/kitchen-person.ts'), 'utf8')).toContain('@/lib/people/person');
+    expect(readFileSync(resolve(ROOT, 'app/food-production/people/page.tsx'), 'utf8')).toContain("redirect('/people')");
+    const dispatch = readFileSync(resolve(ROOT, 'lib/api/route-dispatch.ts'), 'utf8');
+    expect(dispatch).toContain("'people': async");
+    const shell = readFileSync(resolve(ROOT, 'components/AppShell.tsx'), 'utf8');
+    const masterBlock = shell.slice(shell.indexOf("key: 'master'"), shell.indexOf("key: 'stok'"));
+    expect(masterBlock).toContain("/people");
+    const fpNav = shell.slice(shell.indexOf("key: 'foodProduction'"), shell.indexOf("key: 'kitchenAssurance'"));
+    expect(fpNav).not.toContain("label: 'Personel'");
+    const prefetch = readFileSync(resolve(ROOT, 'lib/prefetch-route.ts'), 'utf8');
+    expect(prefetch).toContain('/api/people?aktif=1');
+    const media = readFileSync(resolve(ROOT, 'lib/api/handlers/media.ts'), 'utf8');
+    expect(media).toContain('isRestrictedPublicMediaFilename');
+    const ops = readFileSync(resolve(ROOT, 'lib/api/tenant-operational.ts'), 'utf8');
+    expect(ops).toContain("'people'");
+    expect(ops).toContain("'person_payments'");
+    expect(ops).toContain("'bank_txn_inbox'");
   });
 
   it('menu-plan and RPN expose PDF acuan kerja dapur', () => {

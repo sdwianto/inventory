@@ -66,6 +66,8 @@ const FP_MGMT_ROUTES = [
   '/food-production/recommendations', '/food-production/dashboard', '/food-production/price-book',
 ] as const;
 
+const PEOPLE_ROUTES = ['/people'] as const;
+
 const FP_ROUTES = [...FP_OPS_ROUTES, ...FP_MGMT_ROUTES] as const;
 
 const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
@@ -83,17 +85,20 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
   SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
+    ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
   ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
+    ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
     '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
   OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/pengeluaran-pengadaan', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
+    ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
     '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],

@@ -64,6 +64,10 @@ export function prefetchRouteData(queryClient: QueryClient, href: string) {
     case '/food-production/kitchen':
       prefetch(['food-production', 'kitchens'], '/api/kitchens');
       break;
+    case '/people':
+      prefetch(['people', 'list'], '/api/people?aktif=1');
+      prefetch(['food-production', 'kitchens'], '/api/kitchens?aktif=1');
+      break;
     case '/food-production/recipe':
       prefetch(['food-production', 'recipes'], '/api/recipes');
       break;

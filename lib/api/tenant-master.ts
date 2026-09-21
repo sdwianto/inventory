@@ -14,6 +14,7 @@ export const REKENING_DEFAULTS = [
   { kode: '10010', nama: 'Kas', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10110', nama: 'Bank Mandiri', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10120', nama: 'Bank BCA', tipe: 'ASET', posisi: 'DEBET' },
+  { kode: '10130', nama: 'Bank BNI', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10210', nama: 'Piutang Dagang', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10230', nama: 'Piutang EDC', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10310', nama: 'Persediaan Barang Dagangan', tipe: 'ASET', posisi: 'DEBET' },

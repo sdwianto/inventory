@@ -7,6 +7,7 @@ import {
   buildCreditNoteHutangJournalLines,
   buildVendorReturnTransitOutJournalLines,
   buildVendorReturnTransitRestoreJournalLines,
+  buildPersonPaymentJournalLines,
   reverseJournalDetails,
 } from '@/lib/api/journal-lines';
 
@@ -160,5 +161,31 @@ describe('buildVendorReturnTransitRestoreJournalLines', () => {
     const lines = buildVendorReturnTransitRestoreJournalLines({ noDoc: 'RTV1', amount: 25000, lineLabel: 'B1' });
     expect(lines[0]).toMatchObject({ rekeningKode: '10310', debet: 25000 });
     expect(lines[1]).toMatchObject({ rekeningKode: '10315', kredit: 25000 });
+  });
+});
+
+describe('buildPersonPaymentJournalLines', () => {
+  it('Dr Beban Gaji 40010 / Cr Bank BNI 10130 and stays balanced', () => {
+    const lines = buildPersonPaymentJournalLines({
+      noDoc: 'HNR0001',
+      amount: 1_500_000,
+      personNama: 'Siti Aminah',
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ rekeningKode: '40010', debet: 1_500_000, kredit: 0 });
+    expect(lines[1]).toMatchObject({ rekeningKode: '10130', debet: 0, kredit: 1_500_000 });
+    expect(lines.reduce((s, l) => s + l.debet, 0)).toBe(lines.reduce((s, l) => s + l.kredit, 0));
+  });
+
+  it('credits the override kas rekening when provided', () => {
+    const lines = buildPersonPaymentJournalLines({
+      noDoc: 'HNR0002',
+      amount: 750_000,
+      kasRekeningKode: '10110',
+      kasRekeningNama: 'Bank Mandiri',
+    });
+    expect(lines[1].rekeningKode).toBe('10110');
+    expect(lines[1].rekeningNama).toBe('Bank Mandiri');
+    expect(lines[1].kredit).toBe(750_000);
   });
 });
