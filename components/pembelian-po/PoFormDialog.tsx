@@ -96,8 +96,14 @@ export default function PoFormDialog({
               type="date"
               className="mt-1 bg-white max-w-xs"
               value={toDateInputValue(createDate)}
-              onChange={(e) => onCreateDateChange(e.target.value ? new Date(`${e.target.value}T12:00:00`) : null)}
+              disabled={Boolean(str(editingPo?.productionPlanId))}
+              onChange={(e) => onCreateDateChange(e.target.value ? new Date(`${e.target.value}T12:00:00.000Z`) : null)}
             />
+            {str(editingPo?.productionPlanId) ? (
+              <p className="mt-1.5 text-[11px] text-slate-600">
+                Mengikuti rencana produksi: barang datang H-1 (sehari sebelum menu). Tidak bisa diubah di form ini.
+              </p>
+            ) : null}
           </div>
 
           <div className="space-y-2">

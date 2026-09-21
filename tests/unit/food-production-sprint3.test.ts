@@ -170,6 +170,6 @@ describe('food-production sprint 3 — production plan', () => {
     expect(shiftIsoDate('2026-08-01', -1)).toBe('2026-07-31');
     expect(resolveProcureArrivalDate('2026-08-18')).toBe('2026-08-17');
     expect(resolveProcureArrivalDate('2026-08-18', '2026-08-18')).toBe('2026-08-17');
-    expect(resolveProcureArrivalDate('2026-08-18', '2026-08-16')).toBe('2026-08-16');
+    expect(resolveProcureArrivalDate('2026-08-18', '2026-08-16')).toBe('2026-08-17');
   });
 });

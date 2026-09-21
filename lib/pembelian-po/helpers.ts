@@ -1,14 +1,10 @@
+import { calendarDateKey } from '@/lib/calendar-date';
 import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import type { JsonObject } from '@/types/json';
 import { str, asObject, asArray } from '@/types/json';
 
 export function toDateInputValue(d: string | Date | null | undefined): string {
-  if (!d) return '';
-  const x = new Date(d);
-  const y = x.getFullYear();
-  const m = String(x.getMonth() + 1).padStart(2, '0');
-  const day = String(x.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return calendarDateKey(d);
 }
 
 export function poCreatorLabel(po: JsonObject | null | undefined): string {

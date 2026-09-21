@@ -1,5 +1,6 @@
-import { format, isSameDay, startOfDay } from 'date-fns';
+import { format } from 'date-fns';
 import { id as localeId } from 'date-fns/locale';
+import { calendarDateAtUtcNoon, calendarDateKey } from '@/lib/calendar-date';
 
 export type PoStatusVisualVariant = 'solid' | 'ring' | 'ring-thick' | 'striped';
 
@@ -74,14 +75,14 @@ export interface PoArrivalFields {
 type DateInput = string | Date | null | undefined;
 
 export function getPoArrivalDate(po: PoArrivalFields | null | undefined): Date | null {
-  const raw = po?.tanggalKedatangan || po?.tanggal;
-  if (!raw) return null;
-  return startOfDay(new Date(raw));
+  const key = calendarDateKey(po?.tanggalKedatangan || po?.tanggal);
+  if (!key) return null;
+  const d = calendarDateAtUtcNoon(key);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 export function dateKey(d: DateInput): string {
-  if (!d) return '';
-  return format(startOfDay(new Date(d)), 'yyyy-MM-dd');
+  return calendarDateKey(d);
 }
 
 export function groupPosByArrivalDate<T extends PoArrivalFields>(
@@ -103,14 +104,14 @@ export function statusesOnDay(dayPos: PoArrivalFields[] | null | undefined): PoS
 }
 
 export function formatArrivalLabel(d: DateInput): string {
-  if (!d) return '';
-  return format(new Date(d), 'EEEE, d MMMM yyyy', { locale: localeId });
+  const key = calendarDateKey(d);
+  if (!key) return '';
+  return format(calendarDateAtUtcNoon(key), 'EEEE, d MMMM yyyy', { locale: localeId });
 }
 
 export function isSameArrivalDay(a: DateInput, b: DateInput): boolean {
   if (!a || !b) return false;
-  return isSameDay(
-    getPoArrivalDate({ tanggalKedatangan: a }) || new Date(a),
-    getPoArrivalDate({ tanggalKedatangan: b }) || new Date(b),
-  );
+  const ka = calendarDateKey(a);
+  const kb = calendarDateKey(b);
+  return Boolean(ka && kb && ka === kb);
 }

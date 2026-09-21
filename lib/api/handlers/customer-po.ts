@@ -43,6 +43,7 @@ import { findProductUomsByIds } from '@/lib/api/product-uom';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
+import { resolveTanggalKedatanganForWrite } from '@/lib/api/po-arrival-date';
 import { enrichPoListWithSoCancelState, pullSoCancelStateForPo, backfillPoVendorSoFromSales } from '@/lib/api/cpo-so-pull-sync';
 import { poHasVendorSoNumbers } from '@/lib/api/customer-po-so-extract';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
@@ -59,6 +60,7 @@ interface CustomerPoBody extends Record<string, unknown> {
   maintenanceRequestId?: string | null;
   assetId?: string | null;
   vendorReturnId?: string | null;
+  productionPlanId?: string | null;
 }
 
 /** RTV pengganti hanya sah kalau sudah posting dan minimal 1 baris diterima vendor. */
@@ -550,9 +552,12 @@ export async function handleCustomerPo({
     }
 
     const now = new Date();
-    const tanggalKedatangan = poBody.tanggalKedatangan
-      ? new Date(poBody.tanggalKedatangan)
-      : (poBody.tanggal ? new Date(poBody.tanggal) : now);
+    const arrival = await resolveTanggalKedatanganForWrite(db, {
+      productionPlanId: poBody.productionPlanId,
+      raw: poBody.tanggalKedatangan || poBody.tanggal || now,
+    });
+    if (!arrival.ok) return err(arrival.error, 400);
+    const tanggalKedatangan = arrival.date;
     const locked = await guardPosting(db, scopeAuth, poBody, tanggalKedatangan);
     if (locked) return locked;
 
@@ -633,9 +638,13 @@ export async function handleCustomerPo({
 
     const tenantId = po.tenantId || 'default';
     const now = new Date();
-    const tanggalKedatangan = poBody.tanggalKedatangan
-      ? new Date(poBody.tanggalKedatangan)
-      : po.tanggalKedatangan;
+    const arrival = await resolveTanggalKedatanganForWrite(db, {
+      productionPlanId: po.productionPlanId,
+      raw: poBody.tanggalKedatangan,
+      existing: po.tanggalKedatangan,
+    });
+    if (!arrival.ok) return err(arrival.error, 400);
+    const tanggalKedatangan = arrival.date;
 
     const editor = await actorSnapshot(db, scopeAuth);
     const poItems = await mapPoItems(db, tenantId, poBody.items);
@@ -905,7 +914,21 @@ export async function handleCustomerPo({
 
     const tenantId = String(source.tenantId || tenantIdForWrite(scopeAuth, poBody) || 'default');
     const now = new Date();
-    const locked = await guardPosting(db, scopeAuth, poBody, source.tanggalKedatangan || source.tanggal);
+    const lineagePreview = foodProductionLineageFromPo(source as {
+      purchaseRequirementId?: unknown;
+      purchaseRequirementNo?: unknown;
+      materialRequirementId?: unknown;
+      productionPlanId?: unknown;
+      maintenanceRequestId?: unknown;
+      assetId?: unknown;
+    });
+    const arrival = await resolveTanggalKedatanganForWrite(db, {
+      productionPlanId: lineagePreview.productionPlanId || source.productionPlanId,
+      raw: source.tanggalKedatangan,
+      existing: source.tanggalKedatangan || now,
+    });
+    if (!arrival.ok) return err(arrival.error, 400);
+    const locked = await guardPosting(db, scopeAuth, poBody, arrival.date);
     if (locked) return locked;
 
     const { runInTransactionOrFallback, txOpts } = await import('@/lib/api/transaction');
@@ -930,7 +953,7 @@ export async function handleCustomerPo({
           tenantId,
           noPO,
           tanggal: now,
-          tanggalKedatangan: source.tanggalKedatangan || now,
+          tanggalKedatangan: arrival.date,
           status: 'DRAFT',
           items: poItems,
           estimasiTotal: sumPoEstimasi(poItems),

@@ -456,18 +456,14 @@ export function procureDateFromPlanTanggal(tanggal: string): string {
 }
 
 /**
- * Default kedatangan PO = H-1.
- * Jika caller masih mengirim tanggal menu (sama dengan plan.tanggal), pakai H-1.
+ * Kedatangan PO dari rencana = H-1 tanggal menu.
+ * Override diabaikan — edit draft tidak boleh menggeser hari datang.
  */
 export function resolveProcureArrivalDate(
   planTanggal: string,
-  override?: string | null,
+  _override?: string | null,
 ): string {
-  const derived = procureDateFromPlanTanggal(planTanggal);
-  const raw = String(override || '').trim().slice(0, 10);
-  if (!raw || !isIsoDate(raw)) return derived;
-  if (raw === String(planTanggal || '').trim().slice(0, 10)) return derived;
-  return raw;
+  return procureDateFromPlanTanggal(planTanggal);
 }
 
 export function planLineDedupeKey(line: Pick<ProductionPlanLine, 'menuId' | 'recipeId'>): string {

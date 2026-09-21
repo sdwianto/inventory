@@ -13,6 +13,7 @@ import { nextDocNumber } from '@/lib/api/document-sequence';
 import { guardPosting } from '@/lib/api/period-lock';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
+import { resolveTanggalKedatanganForWrite } from '@/lib/api/po-arrival-date';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
 import { vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
@@ -364,12 +365,12 @@ async function prepareDraftCpo(
   const rawItems = toDraftCpoItemPayloads(opts.pr.lines);
   if (!rawItems.length) return { error: 'Tidak ada baris kekurangan untuk Draft CPO' };
 
-  const tanggalKedatangan = opts.body.tanggalKedatangan
-    ? new Date(String(opts.body.tanggalKedatangan))
-    : new Date(opts.pr.tanggal || Date.now());
-  if (Number.isNaN(tanggalKedatangan.getTime())) {
-    return { error: 'tanggalKedatangan tidak valid' };
-  }
+  const arrival = await resolveTanggalKedatanganForWrite(db, {
+    productionPlanId: opts.pr.productionPlanId,
+    raw: opts.body.tanggalKedatangan || opts.pr.tanggal,
+  });
+  if (!arrival.ok) return { error: arrival.error };
+  const tanggalKedatangan = arrival.date;
   const locked = await guardPosting(db, opts.scopeAuth, opts.body, tanggalKedatangan);
   if (locked) return { locked };
 
