@@ -13,6 +13,8 @@ import {
   normalizeRecipeNama,
   todayIsoDate,
   applyFullPortionExceptions,
+  applySppgPortionStandards,
+  sppgStandardBaseFromKitchen,
   isKategoriMenu,
   type RecipeDoc,
   type RecipeLine,
@@ -169,6 +171,7 @@ async function enrichLines(
   db: HandlerContext['db'],
   tenantFilter: Record<string, unknown>,
   lines: RecipeLine[],
+  yieldQty = 0,
 ): Promise<RecipeLine[] | { error: string }> {
   const ids = [...new Set(lines.map((l) => l.productId))];
   const products = await db.collection('products')
@@ -220,6 +223,26 @@ async function enrichLines(
         : undefined,
     };
     const baseSatuan = normalizeRecipeSatuan(productConv.satuan);
+    const namedLine: RecipeLine = {
+      ...line,
+      productNama: line.productNama || (p.nama != null ? String(p.nama) : undefined),
+      productKode: line.productKode || (p.kode != null ? String(p.kode) : undefined),
+    };
+    const standardBase = sppgStandardBaseFromKitchen(namedLine, baseSatuan);
+    if (standardBase) {
+      out.push({
+        ...namedLine,
+        productId: String(p.id || line.productId),
+        productKode: p.kode != null ? String(p.kode) : namedLine.productKode,
+        productNama: p.nama != null ? String(p.nama) : namedLine.productNama,
+        satuan: standardBase.satuan,
+        qtyBaseBesar: standardBase.qtyBaseBesar,
+        qtyBaseKecil: standardBase.qtyBaseKecil,
+        factorToBase: standardBase.factorToBase,
+        baseSatuan: standardBase.baseSatuan,
+      });
+      continue;
+    }
     const allowed = kitchenSatuanOptionsForBase(baseSatuan, {
       recipeBaseGrams: productConv.recipeBaseGrams,
       recipeBaseMl: productConv.recipeBaseMl,
@@ -269,7 +292,10 @@ async function enrichLines(
     });
   }
   const exceptionKeys = await loadRecipePortionExceptionSet(db, tenantFilter);
-  return applyFullPortionExceptions(out, exceptionKeys);
+  return applySppgPortionStandards(
+    applyFullPortionExceptions(out, exceptionKeys),
+    yieldQty,
+  );
 }
 
 async function allocateRecipeKode(
@@ -380,7 +406,12 @@ async function commitRecipeImports(
       skipped.push(`${draft.nama}: ${linesRaw.error}`);
       continue;
     }
-    const lines = await enrichLines(db, tenantFilter, linesRaw);
+    const lines = await enrichLines(
+      db,
+      tenantFilter,
+      applySppgPortionStandards(linesRaw, draft.yieldQty),
+      draft.yieldQty,
+    );
     if ('error' in lines) {
       skipped.push(`${draft.nama}: ${lines.error}`);
       continue;
@@ -554,7 +585,10 @@ export async function handleRecipes({
     const liveMap = await loadLiveProductMap(db, tenantId, productIds);
     return ok(list.map((doc) => {
       const recipe = doc as unknown as RecipeDoc;
-      const lines = applyFullPortionExceptions(recipe.lines, exceptionKeys).map((line) => {
+      const lines = applySppgPortionStandards(
+        applyFullPortionExceptions(recipe.lines, exceptionKeys),
+        recipe.yieldQty,
+      ).map((line) => {
         const live = liveMap.get(line.productId);
         if (!live?.id || live.id === line.productId) return line;
         return {
@@ -616,7 +650,12 @@ export async function handleRecipes({
       fgKode = fg.kode;
       fgNama = fg.nama;
     }
-    const lines = await enrichLines(db, tenantFilter, linesRaw);
+    const lines = await enrichLines(
+      db,
+      tenantFilter,
+      applySppgPortionStandards(linesRaw, yieldQty),
+      yieldQty,
+    );
     if ('error' in lines) return err(lines.error, 400);
 
     let wastePct: number | undefined;
@@ -757,7 +796,15 @@ export async function handleRecipes({
         finishedGoodProductId: fgForLines || undefined,
       });
       if ('error' in linesRaw) return err(linesRaw.error, 400);
-      const lines = await enrichLines(db, tenantFilter, linesRaw);
+      const yieldForLines = Number(
+        recipeBody.yieldQty != null ? recipeBody.yieldQty : existing.yieldQty,
+      );
+      const lines = await enrichLines(
+        db,
+        tenantFilter,
+        applySppgPortionStandards(linesRaw, yieldForLines),
+        yieldForLines,
+      );
       if ('error' in lines) return err(lines.error, 400);
       update.lines = lines;
     }

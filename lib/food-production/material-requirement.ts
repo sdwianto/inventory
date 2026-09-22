@@ -15,6 +15,7 @@ import {
 import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import {
   applyFullPortionExceptions,
+  applySppgPortionStandards,
   recipeWastePctForLine,
   splitPorsiByKategoriFamily,
   type RecipeDoc,
@@ -69,9 +70,10 @@ export function computeRecipeLineContributions(input: {
   const yieldQty = Number(input.recipe.yieldQty) > 0 ? Number(input.recipe.yieldQty) : 1;
   const recipeWastePct = Number(input.recipe.wastePct) || 0;
   const keys = input.fullPortionKeys;
-  const sourceLines = keys?.size
-    ? applyFullPortionExceptions(input.recipe.lines, keys)
-    : (input.recipe.lines || []);
+  const sourceLines = applySppgPortionStandards(
+    applyFullPortionExceptions(input.recipe.lines, keys || new Set()),
+    yieldQty,
+  );
   const out: RecipeLineContribution[] = [];
   for (const rLine of sourceLines) {
     const wastePct = recipeWastePctForLine(recipeWastePct, rLine, keys);

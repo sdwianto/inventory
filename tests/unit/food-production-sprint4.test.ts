@@ -83,7 +83,7 @@ describe('food-production sprint 4 — MRP', () => {
     const line = {
       productId: 'kelengkeng',
       productKode: 'B203740',
-      productNama: 'Kelengkeng',
+      productNama: 'Kerupuk',
       qty: 500,
       qtyBesar: 500,
       pctKecil: 70,
@@ -96,8 +96,8 @@ describe('food-production sprint 4 — MRP', () => {
       recipePerMenuPorsi: 1,
       kategoriPorsiList: ['PORSI_KECIL'],
     });
-    expect(without[0].qtyKecilPart).toBe(840); // 350 × 1200/500
-    expect(without[0].qty).toBe(840);
+    expect(without[0].qtyKecilPart).toBe(1200);
+    expect(without[0].qty).toBe(1200);
 
     const excepted = applyFullPortionExceptions([line], new Set(['B203740']));
     expect(excepted[0].qtyKecil).toBe(500);
@@ -183,7 +183,7 @@ describe('food-production sprint 4 — MRP', () => {
           {
             productId: 'anggur',
             productKode: 'BGRAPE',
-            productNama: 'Anggur Merah',
+            productNama: 'Minyak Goreng',
             qty: 12,
             qtyBesar: 12,
             pctKecil: 70,
@@ -202,7 +202,7 @@ describe('food-production sprint 4 — MRP', () => {
     const susu = lines.find((l) => l.productKode === 'SUSU-125');
     const anggur = lines.find((l) => l.productKode === 'BGRAPE');
     expect(susu?.qty).toBe(2689);
-    expect((anggur?.qtyBesarPart || 0) + (anggur?.qtyKecilPart || 0)).toBeCloseTo(54.678552, 3);
+    expect((anggur?.qtyBesarPart || 0) + (anggur?.qtyKecilPart || 0)).toBeCloseTo(65.164392, 3);
   });
 
   it('recipeWastePctForLine: COUNT pengecualian skip waste, KG tetap kena waste', () => {
@@ -223,12 +223,12 @@ describe('food-production sprint 4 — MRP', () => {
       productNama: 'Susu',
       qty: 1,
       qtyBesar: 1,
-      pctKecil: 70,
-      qtyKecil: 0.7,
-      satuan: 'PCS',
+      pctKecil: 80,
+      qtyKecil: 0.8,
+      satuan: 'KG',
       qtyBaseBesar: 1,
-      qtyBaseKecil: 0.7,
-      baseSatuan: 'PCS',
+      qtyBaseKecil: 0.8,
+      baseSatuan: 'KG',
     };
     const withWaste = computeRecipeLineContributions({
       recipe: { id: 'r1', yieldQty: 1, wastePct: 1, lines: [line] },
@@ -241,7 +241,12 @@ describe('food-production sprint 4 — MRP', () => {
     expect(withWaste[0].qty).toBeCloseTo(101);
 
     const skipped = computeRecipeLineContributions({
-      recipe: { id: 'r1', yieldQty: 1, wastePct: 1, lines: [line] },
+      recipe: {
+        id: 'r1',
+        yieldQty: 1,
+        wastePct: 1,
+        lines: [{ ...line, satuan: 'PCS', baseSatuan: 'PCS' }],
+      },
       recipeFactor: 1,
       porsiBesar: 100,
       porsiKecil: 0,
@@ -260,7 +265,7 @@ describe('food-production sprint 4 — MRP', () => {
         lines: [{
           productId: 'anggur',
           productKode: 'BGRAPE',
-          productNama: 'Anggur Merah',
+          productNama: 'Minyak Goreng',
           qty: 12,
           qtyBesar: 12,
           pctKecil: 70,
@@ -275,8 +280,8 @@ describe('food-production sprint 4 — MRP', () => {
       bufferPct: 3,
     });
     expect(lines[0].qtyBesarPart).toBeCloseTo(30.210312, 3);
-    expect(lines[0].qtyKecilPart).toBeCloseTo(24.46824, 3);
-    expect(lines[0].qtyBesarPart! + lines[0].qtyKecilPart!).toBeCloseTo(54.678552, 3);
+    expect(lines[0].qtyKecilPart).toBeCloseTo(34.95408, 3);
+    expect(lines[0].qtyBesarPart! + lines[0].qtyKecilPart!).toBeCloseTo(65.164392, 3);
   });
 
   it('recipeIngredientNeeds memakai qty kecil + satuan dapur GR, bukan ceil ke 1 KG', () => {
@@ -302,9 +307,9 @@ describe('food-production sprint 4 — MRP', () => {
     });
     expect(needs[0].satuan).toBe('GR');
     expect(needs[0].qtyResepBesar).toBe(10);
-    expect(needs[0].qtyKecilPart).toBeCloseTo(16.8); // 7 × 1200/500
-    expect(needs[0].qty).toBe(17); // ceil gram
-    expect(needs[0].formula).toBe('7 GR × 1200 porsi / 500 hasil = 16,8 GR');
+    expect(needs[0].qtyKecilPart).toBeCloseTo(24);
+    expect(needs[0].qty).toBe(24);
+    expect(needs[0].formula).toBe('10 GR × 1200 porsi / 500 hasil = 24 GR');
   });
 
   it('recipeIngredientNeeds memecah besar 100% dan kecil 70% sesuai kategori', () => {
@@ -327,8 +332,8 @@ describe('food-production sprint 4 — MRP', () => {
       acuanByKategori: { PORSI_BESAR: 300, PORSI_KECIL: 200 },
     });
     expect(lines[0].qtyBesarPart).toBeCloseTo(0.6); // 1 × 300/500
-    expect(lines[0].qtyKecilPart).toBeCloseTo(0.28); // 0.7 × 200/500
-    expect(lines[0].qty).toBe(1); // ceil(0.88)
+    expect(lines[0].qtyKecilPart).toBeCloseTo(0.4);
+    expect(lines[0].qty).toBe(1);
   });
 
   it('formatRecipeNeedFormula dan peringatan hasil 1 porsi', () => {
@@ -479,7 +484,7 @@ describe('food-production sprint 4 — MRP', () => {
       wastePct: 0,
       lines: [
         {
-          productId: 'beras', productKode: 'B001', productNama: 'Beras',
+          productId: 'beras', productKode: 'B001', productNama: 'Tepung',
           qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
         },
         {
@@ -909,7 +914,7 @@ describe('food-production sprint 4 — MRP', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    // 100 besar + 100 kecil → need = scale(10,100) + scale(5,100) = 10 + 5 = 15
+    // 100 besar + 100 kecil, porsi kecil 100% → 10 + 10 = 20
     const result = explodeMaterialRequirements({
       plan: {
         id: 'p1',
@@ -933,7 +938,7 @@ describe('food-production sprint 4 — MRP', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.lines[0].qtyGross).toBe(15);
+    expect(result.lines[0].qtyGross).toBe(20);
   });
 
   it('skips excluded materials from plan overrides', () => {
@@ -948,7 +953,7 @@ describe('food-production sprint 4 — MRP', () => {
       yieldQty: 100,
       wastePct: 0,
       lines: [{
-        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        productId: 'beras', productKode: 'B001', productNama: 'Tepung',
         qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
       }],
       aktif: true,
@@ -993,7 +998,7 @@ describe('food-production sprint 4 — MRP', () => {
       yieldQty: 100,
       wastePct: 0,
       lines: [{
-        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        productId: 'beras', productKode: 'B001', productNama: 'Tepung',
         qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
       }],
       aktif: true,
@@ -1038,7 +1043,7 @@ describe('food-production sprint 4 — MRP', () => {
       yieldQty: 100,
       wastePct: 0,
       lines: [{
-        productId: 'beras', productKode: 'B001', productNama: 'Beras',
+        productId: 'beras', productKode: 'B001', productNama: 'Tepung',
         qty: 10, qtyBesar: 10, pctKecil: 70, qtyKecil: 7, satuan: 'KG',
       }],
       aktif: true,
@@ -1144,7 +1149,7 @@ describe('food-production sprint 4 — MRP', () => {
       overrideQtyByKey: new Map([['r1::semangka', 1]]),
       overrideSatuanByKey: new Map([['r1::semangka', 'KG']]),
     });
-    expect(contrib[0].qty).toBeCloseTo(0.0168);
+    expect(contrib[0].qty).toBeCloseTo(0.024);
     expect(contrib[0].satuan).toBe('KG');
   });
 });

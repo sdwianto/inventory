@@ -436,8 +436,9 @@ describe('food-production phase 3', () => {
       akgProfile: 'PORSI_KECIL',
     });
 
+    expect(DEFAULT_PCT_KECIL).toBe(100);
     expect(besar.perPorsi.energiKcal).toBe(100); // 10×1000/100
-    expect(kecil.perPorsi.energiKcal).toBeCloseTo(70, 5); // 70% of besar
+    expect(kecil.perPorsi.energiKcal).toBeCloseTo(100, 5);
     expect(kecil.perPorsi.energiKcal / besar.perPorsi.energiKcal).toBeCloseTo(pctKecil / 100, 5);
     expect(kecil.akgProfile).toBe('PORSI_KECIL');
     expect(besar.akgProfile).toBe('PORSI_BESAR');

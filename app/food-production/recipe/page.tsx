@@ -20,6 +20,8 @@ import {
   computeQtyKecil,
   clampPctKecil,
   isFullPortionProduct,
+  isSppgBerasLine,
+  isSppgBuahKecilLine,
   portionExceptionMatchSet,
   KATEGORI_MENU_OPTIONS,
   kategoriMenuLabel,
@@ -205,6 +207,19 @@ function basePreview(
     text: `= ${formatNumber(r.qtyBase)} ${r.baseSatuan}`,
     ok: true,
   };
+}
+
+function allowsCustomPortionPct(nama: string | undefined): boolean {
+  return isSppgBerasLine({ productNama: nama }) || isSppgBuahKecilLine({ productNama: nama });
+}
+
+function portionPctForSave(
+  line: RecipeLineForm,
+  catalog: Array<{ id: string; nama?: string }>,
+): number {
+  const product = catalog.find((p) => p.id === line.productId);
+  if (!allowsCustomPortionPct(product?.nama)) return 100;
+  return clampPctKecil(line.pctKecil);
 }
 
 const emptyLine = (): RecipeLineForm => ({
@@ -820,9 +835,7 @@ export default function FoodProductionRecipePage() {
           productId: l.productId,
           qtyBesar: Number(l.qtyBesar),
           qty: Number(l.qtyBesar),
-          pctKecil: productIsFullPortion(l.productId, products.find((p) => p.id === l.productId)?.kode)
-            ? 100
-            : clampPctKecil(l.pctKecil),
+          pctKecil: portionPctForSave(l, products),
           satuan: l.satuan || undefined,
           notes: l.notes.trim() || undefined,
         })),
@@ -1259,7 +1272,7 @@ export default function FoodProductionRecipePage() {
               <div>
                 <Label>Bahan</Label>
                 <p className="text-[11px] text-muted-foreground">
-                  Porsi besar (sekolah, bumil, busui, organoleptik) = 100%; porsi kecil sekolah &amp; balita = % dari qty besar.
+                  Porsi kecil = 100% porsi besar. Beras 55 g / 45 g, buah kecil 4 / 3 pcs.
                 </p>
               </div>
               <Button
@@ -1286,7 +1299,9 @@ export default function FoodProductionRecipePage() {
                 {lines.map((line, idx) => {
                   const product = products.find((p) => p.id === line.productId);
                   const fullPortion = productIsFullPortion(line.productId, product?.kode);
-                  const qtyKecilPreview = fullPortion
+                  const customPortion = allowsCustomPortionPct(product?.nama);
+                  const pctLocked = fullPortion || !customPortion;
+                  const qtyKecilPreview = pctLocked
                     ? (Number(line.qtyBesar) || 0)
                     : computeQtyKecil(
                       Number(line.qtyBesar) || 0,
@@ -1458,15 +1473,15 @@ export default function FoodProductionRecipePage() {
                         min={1}
                         max={100}
                         step="any"
-                        value={fullPortion ? '100' : line.pctKecil}
-                        disabled={fullPortion}
+                        value={pctLocked ? '100' : line.pctKecil}
+                        disabled={pctLocked}
                         aria-label={`Persen kecil baris ${idx + 1}`}
-                        title={fullPortion ? 'Pengecualian porsi: tetap 100%' : undefined}
+                        title={pctLocked ? 'Porsi kecil = 100% porsi besar' : undefined}
                         onChange={(e) => setLines((prev) => prev.map((l, i) => (
                           i === idx ? { ...l, pctKecil: e.target.value } : l
                         )))}
                       />
-                      {fullPortion && (
+                      {pctLocked && (
                         <span className="mt-0.5 block text-[10px] text-amber-800">Tetap 100%</span>
                       )}
                     </div>

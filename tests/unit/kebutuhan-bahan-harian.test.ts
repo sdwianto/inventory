@@ -25,7 +25,7 @@ function recipeNasi(): KebutuhanRecipeRef {
     lines: [{
       productId: 'beras',
       productKode: 'BRS',
-      productNama: 'Beras',
+      productNama: 'Tepung',
       qty: 500,
       qtyBesar: 500,
       pctKecil: 70,
@@ -68,7 +68,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.hidangan[0].slot).toBe('KARBOHIDRAT');
     expect(built.hidangan[0].yieldQty).toBe(500);
     expect(built.rekap).toHaveLength(1);
-    expect(built.rekap[0].productNama).toBe('Beras');
+    expect(built.rekap[0].productNama).toBe('Tepung');
     expect(built.rekap[0].satuan).toBe('GR');
     expect(built.rekap[0].qtyExact).toBeCloseTo(2713.02, 1);
     expect(built.rekap[0].qtyExact / 1000).toBeCloseTo(2.713, 2);
@@ -79,7 +79,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.acuanResep[0].porsiAcuan).toBe(500);
     expect(built.acuanResep[0].yieldQty).toBe(500);
     expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
-    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(350);
+    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(500);
   });
 
   it('campuran 6-key kecil/besar tidak memakai rumus all-besar 2,72 kg', () => {
@@ -96,10 +96,9 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.hidangan[0].targetPorsi).toBe(2634);
     const line = built.hidangan[0].lines[0];
     expect(line.qtyBesarPart).toBeCloseTo(1030, 2);
-    expect(line.qtyKecilPart).toBeCloseTo(1178.114, 2);
-    expect(built.rekap[0].qtyExact).toBeCloseTo(2208.114, 2);
-    expect(built.rekap[0].qtyExact).not.toBeCloseTo(2713.02, 0);
-    expect(built.rekap[0].qty).toBe(2209);
+    expect(line.qtyKecilPart).toBeCloseTo(1683.02, 2);
+    expect(built.rekap[0].qtyExact).toBeCloseTo(2713.02, 2);
+    expect(built.rekap[0].qty).toBe(2714);
   });
 
   it('alergi adds extra SKU qty and does not reduce slot PM', () => {
@@ -214,7 +213,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
       lines: [{
         productId: 'beras',
         productKode: 'BRS',
-        productNama: 'Beras',
+        productNama: 'Tepung',
         qty: 1,
         qtyBesar: 1,
         pctKecil: 70,
@@ -379,7 +378,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     half.lines = [{
       productId: 'beras',
       productKode: 'BRS',
-      productNama: 'Beras',
+      productNama: 'Tepung',
       qty: 250,
       qtyBesar: 250,
       pctKecil: 70,
@@ -394,7 +393,7 @@ describe('kebutuhan bahan harian — rumus Excel lembar 2', () => {
     expect(built.acuanResep).toHaveLength(1);
     expect(built.acuanResep[0].porsiAcuan).toBe(500);
     expect(built.acuanResep[0].lines[0].qtyBesar).toBe(500);
-    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(350);
+    expect(built.acuanResep[0].lines[0].qtyKecil).toBe(500);
   });
 
   it('dedupes acuan resep by recipeId and joins slot labels', () => {

@@ -4,7 +4,7 @@ import {
   KATEGORI_PORSI_LEGACY,
   type KategoriPorsi,
 } from '@/lib/food-production/production-plan';
-import { recipeUomFamily } from '@/lib/food-production/recipe-uom';
+import { normalizeRecipeSatuan, recipeUomFamily } from '@/lib/food-production/recipe-uom';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -32,8 +32,28 @@ export function kategoriMenuLabel(v: string | undefined | null): string {
   return KATEGORI_MENU_OPTIONS.find((o) => o.value === v)?.label || v;
 }
 
-/** Default % untuk porsi kecil / balita relatif terhadap qty besar (100%). */
-export const DEFAULT_PCT_KECIL = 70;
+/** Default % untuk porsi kecil / balita relatif terhadap qty besar. */
+export const DEFAULT_PCT_KECIL = 100;
+
+/** Beras: gram per penerima, porsi besar / porsi kecil. */
+export const SPPG_BERAS_GRAM_BESAR = 55;
+export const SPPG_BERAS_GRAM_KECIL = 45;
+/** Buah kecil (kelengkeng, anggur, kurma): butir per penerima. */
+export const SPPG_BUAH_BUTIR_BESAR = 4;
+export const SPPG_BUAH_BUTIR_KECIL = 3;
+/** Catatan stok: 100 butir = 1 kg. */
+export const SPPG_BUTIR_PER_KG = 100;
+/** Ayam potong: 1 potong = 100 g supaya basis ons/kg tetap 1 potong per penerima. */
+export const SPPG_AYAM_GRAM_PER_POTONG = 100;
+
+const MASS_GRAMS: Record<string, number> = {
+  G: 1,
+  GR: 1,
+  GRAM: 1,
+  ONS: 100,
+  KG: 1000,
+  KILOGRAM: 1000,
+};
 
 /** Kategori yang memakai qty besar (100%). */
 export const KATEGORI_PORSI_BESAR_FAMILY = new Set<KategoriPorsi>([
@@ -204,6 +224,269 @@ export function isFullPortionExceptionLine(
   return Number(line.pctKecil) === 100;
 }
 
+function portionLineLabel(line: { productNama?: string | null }): string {
+  return String(line.productNama || '').toLowerCase();
+}
+
+export function isSppgBerasLine(line: { productNama?: string | null }): boolean {
+  return portionLineLabel(line).includes('beras');
+}
+
+export function isSppgBuahKecilLine(line: { productNama?: string | null }): boolean {
+  const name = portionLineLabel(line);
+  return name.includes('kelengkeng')
+    || name.includes('klengkeng')
+    || name.includes('anggur')
+    || name.includes('kurma');
+}
+
+/** Daging ayam potongan. Bumbu, kaldu, dan knoor tidak ikut aturan 1 potong. */
+export function isSppgAyamPotongLine(line: { productNama?: string | null }): boolean {
+  const name = portionLineLabel(line);
+  if (!name.includes('ayam')) return false;
+  if (/(bumbu|kaldu|knoor|knorr|desaku|penyedap|royco)/.test(name)) return false;
+  return name.includes('potong');
+}
+
+function roundPortionQty(n: number): number {
+  return Math.round((n + Number.EPSILON) * 1e6) / 1e6;
+}
+
+function roundBaseQty(n: number): number {
+  return Math.round((n + Number.EPSILON) * 1e9) / 1e9;
+}
+
+function massUnitOf(satuan: string | null | undefined): string | null {
+  const key = normalizeRecipeSatuan(satuan);
+  return MASS_GRAMS[key] ? key : null;
+}
+
+function isAlreadyFullPortion(line: {
+  qty?: number;
+  qtyBesar?: number;
+  qtyKecil?: number;
+  pctKecil?: number;
+}): boolean {
+  const besar = Number(line.qtyBesar ?? line.qty) || 0;
+  const kecil = Number(line.qtyKecil);
+  const pct = Number(line.pctKecil);
+  const qtyFull = besar > 0 && Number.isFinite(kecil)
+    && Math.abs(kecil - besar) <= Math.max(1e-6, besar * 1e-6);
+  const pctFull = Number.isFinite(pct) && Math.abs(pct - 100) <= 0.05;
+  if (qtyFull && (pctFull || !Number.isFinite(pct))) return true;
+  return pctFull && (!Number.isFinite(kecil) || qtyFull);
+}
+
+function rebaseSameFactor(line: {
+  qty?: number;
+  qtyBesar?: number;
+  qtyBaseBesar?: number;
+  factorToBase?: number;
+}, qtyBesar: number, qtyKecil: number): {
+  factorToBase?: number;
+  qtyBaseBesar?: number;
+  qtyBaseKecil?: number;
+} {
+  const oldBesar = Number(line.qtyBesar ?? line.qty) || 0;
+  let factor = line.factorToBase != null && Number.isFinite(Number(line.factorToBase))
+    ? Number(line.factorToBase)
+    : null;
+  if (factor == null && oldBesar > 0 && line.qtyBaseBesar != null && Number.isFinite(Number(line.qtyBaseBesar))) {
+    factor = Number(line.qtyBaseBesar) / oldBesar;
+  }
+  if (factor == null) return {};
+  return {
+    factorToBase: factor,
+    qtyBaseBesar: roundBaseQty(qtyBesar * factor),
+    qtyBaseKecil: roundBaseQty(qtyKecil * factor),
+  };
+}
+
+type PortionLine = {
+  productNama?: string;
+  qty?: number;
+  qtyBesar?: number;
+  qtyKecil?: number;
+  pctKecil?: number;
+  satuan?: string;
+  qtyBaseBesar?: number;
+  qtyBaseKecil?: number;
+  factorToBase?: number;
+  baseSatuan?: string;
+};
+
+function applyBerasStandard<T extends PortionLine>(line: T, yieldQty: number): T {
+  const unit = massUnitOf(line.satuan) || massUnitOf(line.baseSatuan) || 'KG';
+  const grams = MASS_GRAMS[unit];
+  const qtyBesar = roundPortionQty(SPPG_BERAS_GRAM_BESAR * yieldQty / grams);
+  const qtyKecil = roundPortionQty(SPPG_BERAS_GRAM_KECIL * yieldQty / grams);
+  return {
+    ...line,
+    satuan: line.satuan && massUnitOf(line.satuan) ? line.satuan : unit,
+    qty: qtyBesar,
+    qtyBesar,
+    pctKecil: clampPctKecil((SPPG_BERAS_GRAM_KECIL / SPPG_BERAS_GRAM_BESAR) * 100),
+    qtyKecil,
+    ...rebaseSameFactor(line, qtyBesar, qtyKecil),
+  };
+}
+
+function isBuahPieceSatuan(satuan: string | null | undefined): boolean {
+  const key = normalizeRecipeSatuan(satuan);
+  return key === 'PCS' || key === 'PC' || key === 'BUTIR';
+}
+
+function applyBuahStandard<T extends PortionLine>(line: T, yieldQty: number): T {
+  const qtyBesar = SPPG_BUAH_BUTIR_BESAR * yieldQty;
+  const qtyKecil = SPPG_BUAH_BUTIR_KECIL * yieldQty;
+  const pctKecil = clampPctKecil((SPPG_BUAH_BUTIR_KECIL / SPPG_BUAH_BUTIR_BESAR) * 100);
+  const baseUnit = massUnitOf(line.baseSatuan);
+  if (baseUnit) {
+    const factorToBase = (1000 / SPPG_BUTIR_PER_KG) / MASS_GRAMS[baseUnit];
+    return {
+      ...line,
+      satuan: 'PCS',
+      qty: qtyBesar,
+      qtyBesar,
+      pctKecil,
+      qtyKecil,
+      factorToBase,
+      qtyBaseBesar: roundBaseQty(qtyBesar * factorToBase),
+      qtyBaseKecil: roundBaseQty(qtyKecil * factorToBase),
+      baseSatuan: line.baseSatuan,
+    };
+  }
+  return {
+    ...line,
+    satuan: 'PCS',
+    qty: qtyBesar,
+    qtyBesar,
+    pctKecil,
+    qtyKecil,
+    factorToBase: 1,
+    qtyBaseBesar: qtyBesar,
+    qtyBaseKecil: qtyKecil,
+    baseSatuan: line.baseSatuan || 'PCS',
+  };
+}
+
+function applyAyamStandard<T extends PortionLine>(line: T, yieldQty: number): T {
+  const qty = yieldQty;
+  const baseUnit = massUnitOf(line.baseSatuan);
+  if (baseUnit) {
+    const factorToBase = SPPG_AYAM_GRAM_PER_POTONG / MASS_GRAMS[baseUnit];
+    const qtyBase = roundBaseQty(qty * factorToBase);
+    return {
+      ...line,
+      satuan: 'Potong',
+      qty,
+      qtyBesar: qty,
+      pctKecil: 100,
+      qtyKecil: qty,
+      factorToBase,
+      qtyBaseBesar: qtyBase,
+      qtyBaseKecil: qtyBase,
+    };
+  }
+  return {
+    ...line,
+    satuan: 'Potong',
+    qty,
+    qtyBesar: qty,
+    pctKecil: 100,
+    qtyKecil: qty,
+    qtyBaseBesar: qty,
+    qtyBaseKecil: qty,
+    factorToBase: 1,
+    baseSatuan: line.baseSatuan || 'POTONG',
+  };
+}
+
+function liftLegacySeventy<T extends PortionLine>(line: T): T {
+  const qtyBesar = Number(line.qtyBesar ?? line.qty) || 0;
+  const next: T = {
+    ...line,
+    qty: qtyBesar,
+    qtyBesar,
+    pctKecil: 100,
+    qtyKecil: qtyBesar,
+  };
+  if (line.qtyBaseBesar != null && Number.isFinite(Number(line.qtyBaseBesar))) {
+    next.qtyBaseKecil = Number(line.qtyBaseBesar);
+  }
+  return next;
+}
+
+/**
+ * Standar porsi SPPG pada salinan baris resep (per yield).
+ * Selain beras, buah kecil, dan ayam potong, porsi kecil = 100% porsi besar.
+ * Beras 55 g / 45 g, buah kecil 4 / 3 pcs, ayam potong 1 per penerima.
+ */
+export function applySppgPortionStandards<T extends PortionLine>(
+  lines: T[] | undefined | null,
+  yieldQty: number,
+): T[] {
+  const batch = Number(yieldQty) > 0 ? Number(yieldQty) : 1;
+  return (lines || []).map((line) => {
+    if (isSppgBerasLine(line)) return applyBerasStandard(line, batch);
+    if (isSppgBuahKecilLine(line)) return applyBuahStandard(line, batch);
+    if (isSppgAyamPotongLine(line)) return applyAyamStandard(line, batch);
+    if (isAlreadyFullPortion(line)) return line;
+    return liftLegacySeventy(line);
+  });
+}
+
+/**
+ * Konversi dapur PCS/Potong ke basis stok untuk buah kecil dan ayam potong.
+ * Dipakai saat simpan resep, karena satuan itu lintas dimensi dengan KG/ONS.
+ */
+export function sppgStandardBaseFromKitchen(line: PortionLine & { satuan?: string }, baseSatuan: string): {
+  satuan: string;
+  factorToBase: number;
+  qtyBaseBesar: number;
+  qtyBaseKecil: number;
+  baseSatuan: string;
+} | null {
+  const kitchen = normalizeRecipeSatuan(line.satuan);
+  const base = normalizeRecipeSatuan(baseSatuan);
+  const qtyBesar = Number(line.qtyBesar ?? line.qty) || 0;
+  const qtyKecil = Number(line.qtyKecil);
+  const kecil = Number.isFinite(qtyKecil) ? qtyKecil : qtyBesar;
+  if (isSppgBuahKecilLine(line) && isBuahPieceSatuan(kitchen)) {
+    const grams = MASS_GRAMS[base];
+    if (!grams) return null;
+    const factorToBase = (1000 / SPPG_BUTIR_PER_KG) / grams;
+    return {
+      satuan: 'PCS',
+      factorToBase,
+      qtyBaseBesar: roundBaseQty(qtyBesar * factorToBase),
+      qtyBaseKecil: roundBaseQty(kecil * factorToBase),
+      baseSatuan: base,
+    };
+  }
+  if (isSppgAyamPotongLine(line) && (kitchen === 'POTONG' || kitchen === 'PTG')) {
+    const grams = MASS_GRAMS[base];
+    if (!grams) {
+      return {
+        satuan: 'Potong',
+        factorToBase: 1,
+        qtyBaseBesar: roundBaseQty(qtyBesar),
+        qtyBaseKecil: roundBaseQty(kecil),
+        baseSatuan: base || 'POTONG',
+      };
+    }
+    const factorToBase = SPPG_AYAM_GRAM_PER_POTONG / grams;
+    return {
+      satuan: 'Potong',
+      factorToBase,
+      qtyBaseBesar: roundBaseQty(qtyBesar * factorToBase),
+      qtyBaseKecil: roundBaseQty(kecil * factorToBase),
+      baseSatuan: base,
+    };
+  }
+  return null;
+}
+
 /**
  * Waste masak tidak berlaku untuk item pengecualian porsi penuh yang dihitung per unit utuh (PCS/COUNT).
  * Buffer gudang tetap diterapkan di pemanggil.
@@ -213,6 +496,7 @@ export function recipeWastePctForLine(
   line: {
     productId?: string;
     productKode?: string;
+    productNama?: string;
     pctKecil?: number;
     satuan?: string;
     baseSatuan?: string;
@@ -221,8 +505,10 @@ export function recipeWastePctForLine(
 ): number {
   const waste = Math.max(0, Number(recipeWastePct) || 0);
   if (!(waste > 0)) return 0;
+  const family = recipeUomFamily(line.satuan || line.baseSatuan);
+  if (family === 'COUNT' && (isSppgBuahKecilLine(line) || isSppgAyamPotongLine(line))) return 0;
   if (!isFullPortionExceptionLine(line, fullPortionKeys)) return waste;
-  if (recipeUomFamily(line.satuan || line.baseSatuan) !== 'COUNT') return waste;
+  if (family !== 'COUNT') return waste;
   return 0;
 }
 

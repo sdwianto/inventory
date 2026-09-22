@@ -12,6 +12,7 @@ import {
 import {
   KATEGORI_MENU_OPTIONS,
   applyFullPortionExceptions,
+  applySppgPortionStandards,
   isKategoriMenu,
   kategoriMenuLabel,
   recipeQtyForFamily,
@@ -380,9 +381,10 @@ export function buildAcuanResepCards(
       cards.push({ ...base, error: `Resep ${recipe.kode || id} belum punya bahan` });
       continue;
     }
-    const sourceLines = fullPortionKeys?.size
-      ? applyFullPortionExceptions(recipe.lines, fullPortionKeys)
-      : recipe.lines;
+    const sourceLines = applySppgPortionStandards(
+      applyFullPortionExceptions(recipe.lines, fullPortionKeys || new Set()),
+      yieldQty,
+    );
     base.lines = sourceLines.map((line) => ({
       productId: String(line.productId || ''),
       productKode: line.productKode,

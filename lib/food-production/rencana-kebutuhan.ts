@@ -3,6 +3,7 @@
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
   applyFullPortionExceptions,
+  applySppgPortionStandards,
   recipeQtyForFamily,
   recipeWastePctForLine,
   splitPorsiByKategoriFamily,
@@ -267,9 +268,10 @@ export function recipeIngredientNeeds(input: {
   const yieldQty = Number(input.recipe.yieldQty) > 0 ? Number(input.recipe.yieldQty) : 1;
   const recipeWastePct = Number(input.recipe.wastePct) || 0;
   const keys = input.fullPortionKeys;
-  const lines = keys?.size
-    ? applyFullPortionExceptions(input.recipe.lines, keys)
-    : (input.recipe.lines || []);
+  const lines = applySppgPortionStandards(
+    applyFullPortionExceptions(input.recipe.lines, keys || new Set()),
+    yieldQty,
+  );
   return lines
     .map((rLine) => {
       const kitchenSatuan = rLine.satuan || rLine.baseSatuan;
