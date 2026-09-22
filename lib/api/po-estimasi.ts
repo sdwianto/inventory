@@ -12,6 +12,7 @@ export type PoEstimasiLine = Record<string, unknown> & {
   vendorKode?: string;
   vendorStokId?: string;
   kode?: string;
+  nama?: string;
   satuan?: string;
   uomId?: string;
 };
