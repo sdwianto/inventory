@@ -65,6 +65,7 @@ export type AuditAction =
   | 'PR_DRAFT_CPO'
   | 'PR_STATUS'
   | 'PR_CANCEL'
+  | 'CUSTOMER_PO_EDIT'
   | 'ISSUE_CREATE'
   | 'ISSUE_STATUS'
   | 'ISSUE_COMPLETE'

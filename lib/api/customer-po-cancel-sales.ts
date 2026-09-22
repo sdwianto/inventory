@@ -22,6 +22,7 @@ export async function notifySalesPoCancelled(
   db: Db,
   po: Record<string, unknown>,
   reason = 'Dibatalkan customer',
+  opts: { editRevision?: number } = {},
 ) {
   const tenantId = String(po.tenantId || 'default');
   const noPO = String(po.noPO || '');
@@ -30,6 +31,7 @@ export async function notifySalesPoCancelled(
     || integrationCorrelationId(customerPoId, noPO);
   const submissions = vendorSubmissionsForPo(po);
   const client = createIntegrationClient(db);
+  const rev = Math.max(0, Math.floor(Number(opts.editRevision ?? po.editRevision) || 0));
 
   const cancelled: JsonObject[] = [];
   const errors: JsonObject[] = [];
@@ -46,11 +48,12 @@ export async function notifySalesPoCancelled(
     }
 
     try {
+      const cancelKeyBase = `cpo-cancel:${customerPoId || noPO}:${vendorTenantId}`;
       const result = await client.cancelSalesOrderFromCustomerPo({
         salesAppUrl: config.salesAppUrl,
         apiKey,
         correlationId,
-        idempotencyKey: `cpo-cancel:${customerPoId || noPO}:${vendorTenantId}`,
+        idempotencyKey: rev > 0 ? `${cancelKeyBase}:r${rev}` : cancelKeyBase,
         customerPoId,
         body: {
           customerTenantId: tenantId,

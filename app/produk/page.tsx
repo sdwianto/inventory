@@ -347,7 +347,12 @@ export default function ProdukPage() {
     try {
       let payload: JsonObject;
       if (vendorLocked) {
+        if (!str(form.nama).trim()) {
+          toast.error('Nama produk wajib diisi');
+          return;
+        }
         payload = {
+          nama: str(form.nama).trim(),
           hargaBeli: num(form.hargaBeli),
           minStok: num(form.minStok),
           gudangKode: str(form.gudangKode, 'GKERING'),
@@ -980,8 +985,8 @@ export default function ProdukPage() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           {editing && isVendorSynced(editing) && (
             <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-              Kode, nama, grup, dan satuan dikelola di sales.app. Di inventory: gudang, stok minimum, harga beli,
-              serta faktor resep dapur (recipeBaseGrams / recipeBaseMl) yang bisa diubah.
+              Kode, grup, dan satuan dikelola di sales.app. Di inventory boleh ubah: nama produk, detail, foto,
+              gudang, stok minimum, harga beli, serta faktor resep dapur (recipeBaseGrams / recipeBaseMl).
             </p>
           )}
           <DialogHeader>
@@ -1106,8 +1111,12 @@ export default function ProdukPage() {
                       : { itemRole: inferred.itemRole, gudangKode: inferred.gudangKode, classificationSource: 'inferred' }),
                   });
                 }}
-                disabled={Boolean(editing && isVendorSynced(editing))}
               />
+              {editing && isVendorSynced(editing) && (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Boleh dikoreksi di Inventory — disimpan ke master & disinkron ke sales.app (sama seperti detail/foto).
+                </p>
+              )}
             </div>
             <div className="col-span-2">
               <Label>Detail produk</Label>

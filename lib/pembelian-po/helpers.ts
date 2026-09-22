@@ -44,6 +44,7 @@ export function mergeFormLinesFromPo(
     } else {
       map.set(mergeKey, {
         localStokId: id,
+        lineId: it.lineId != null ? String(it.lineId) : undefined,
         kode: str(it.kode || it.vendorKode) || undefined,
         qty: it.qty,
         uomId: it.uomId,

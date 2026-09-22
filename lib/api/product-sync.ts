@@ -14,6 +14,17 @@ import {
 } from '@/lib/api/product-uom';
 import { materializeInboundProductFotos } from '@/lib/api/product-media';
 import { rematchOpenDocsAfterProductUomSync, rematchOpenDocsAfterBulkProductUomSync } from '@/lib/api/rematch-open-po-uoms';
+import {
+  preserveManualLocalNama,
+  shouldApplyEnrichmentFields,
+  salesEnrichmentAllowsOverwrite,
+} from '@/lib/api/product-enrichment-lww';
+
+export {
+  preserveManualLocalNama,
+  shouldApplyEnrichmentFields,
+  salesEnrichmentAllowsOverwrite,
+} from '@/lib/api/product-enrichment-lww';
 
 function parseVendorPrices(product: Record<string, unknown>) {
   return {
@@ -177,20 +188,17 @@ export async function upsertProductFromVendor(
     updatedAt: now,
     ...(incomingEmit != null ? { lastVendorSyncEmittedAt: new Date(incomingEmit) } : { lastVendorSyncEmittedAt: now }),
   };
+  preserveManualLocalNama(syncSet, existing as { namaSource?: unknown; detailFotosUpdatedAt?: unknown; nama?: unknown } | null, snap);
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
   if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
-  // Detail/Foto LWW: hanya percaya detailFotosUpdatedAt (jangan pakai emittedAt/updatedAt —
-  // touch harga/nama di Sales tidak boleh mengalahkan enrichment Inventory).
-  if (snap.hasDetailProduk || snap.hasFotos) {
-    const localDetailAt = parseSyncTime(
-      (existing as { detailFotosUpdatedAt?: unknown } | null)?.detailFotosUpdatedAt,
+  // Detail/Foto/Nama LWW: stamp detailFotosUpdatedAt (jangan pakai emittedAt).
+  // Nama-only enrichment dari Sales juga membawa stamp — advance watermark.
+  if (shouldApplyEnrichmentFields(snap)) {
+    const { allow, salesDetailAt } = salesEnrichmentAllowsOverwrite(
+      existing as { detailFotosUpdatedAt?: unknown } | null,
+      snap,
     );
-    const salesDetailAt = parseSyncTime(
-      snap.hasDetailFotosUpdatedAt ? snap.detailFotosUpdatedAt : null,
-    );
-    const allowDetail = localDetailAt == null
-      || (salesDetailAt != null && salesDetailAt >= localDetailAt);
-    if (allowDetail) {
+    if (allow) {
       if (snap.hasDetailProduk) {
         const incoming = snap.detailProduk ?? '';
         const localDetail = existing ? String((existing as { detailProduk?: string }).detailProduk || '') : '';

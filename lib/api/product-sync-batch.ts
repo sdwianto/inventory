@@ -5,6 +5,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { vendorProductSnapshot, bulkSyncVendorProductUoms, resolveVendorBaseUomId } from '@/lib/api/product-sync';
+import {
+  preserveManualLocalNama,
+  shouldApplyEnrichmentFields,
+  salesEnrichmentAllowsOverwrite,
+} from '@/lib/api/product-enrichment-lww';
 import { materializeInboundProductFotos } from '@/lib/api/product-media';
 import type { JsonObject } from '@/types/json';
 
@@ -26,6 +31,7 @@ type ExistingRow = JsonObject & {
   kode?: string;
   barcode?: string;
   nama?: string;
+  namaSource?: string;
   masterProductId?: string | null;
   detailProduk?: string;
   fotos?: string[];
@@ -76,17 +82,13 @@ export function buildSyncSet(
       ? { lastVendorSyncEmittedAt: new Date(incomingEmit) }
       : { lastVendorSyncEmittedAt: now }),
   };
+  preserveManualLocalNama(syncSet, existing, snap);
   if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
   if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
-  if (snap.hasDetailProduk || snap.hasFotos) {
-    const localDetailAt = parseSyncTime(existing?.detailFotosUpdatedAt);
-    // Hanya detailFotosUpdatedAt — jangan fallback emittedAt (catalog touch harga ≠ detail baru).
-    const salesDetailAt = parseSyncTime(
-      snap.hasDetailFotosUpdatedAt ? snap.detailFotosUpdatedAt : null,
-    );
-    const allowDetail = localDetailAt == null
-      || (salesDetailAt != null && salesDetailAt >= localDetailAt);
-    if (allowDetail) {
+  // Detail/Foto/Nama LWW — advance stamp juga untuk nama-only enrichment.
+  if (shouldApplyEnrichmentFields(snap)) {
+    const { allow, salesDetailAt } = salesEnrichmentAllowsOverwrite(existing, snap);
+    if (allow) {
       if (snap.hasDetailProduk) {
         const incoming = snap.detailProduk ?? '';
         const localDetail = existing ? String(existing.detailProduk || '') : '';

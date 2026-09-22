@@ -61,6 +61,9 @@ function CustomerPoPageContent() {
     lineSummary,
     catatan,
     setCatatan,
+    editReason,
+    setEditReason,
+    requireEditReason,
     saving,
     vendorTierMap,
     defaultTier,
@@ -289,6 +292,9 @@ function CustomerPoPageContent() {
         lineSummary={lineSummary}
         catatan={catatan}
         onCatatanChange={setCatatan}
+        editReason={editReason}
+        onEditReasonChange={setEditReason}
+        requireEditReason={requireEditReason}
         saving={saving}
         vendorTierMap={vendorTierMap}
         defaultTier={defaultTier}

@@ -22,7 +22,9 @@ import { enrichPoItemsForVendor, vendorBaseUomIdIfCompatible } from '@/lib/api/c
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
 import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
 import { orchestrateEnsurePushCancelSoAfterCommit } from '@/lib/api/cpo-cancel-push-integration';
-import { canEditCustomerPo, canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
+import { canEditCustomerPo, canRequestApprovalPoStatus, isPostApprovedPoEditStatus, poHasReceivedQty } from '@/lib/pembelian-po/permissions';
+import { resyncVendorSoAfterPoEdit, cancelVendorSoForPoEdit } from '@/lib/api/customer-po-edit-resync';
+import { writeAuditLog } from '@/lib/api/audit-log';
 import {
   buildRevisedPoItemPayloads,
   buildReviseCatatan,
@@ -57,6 +59,7 @@ interface CustomerPoBody extends Record<string, unknown> {
   catatan?: string;
   paymentTerms?: string;
   reason?: string;
+  editReason?: string;
   maintenanceRequestId?: string | null;
   assetId?: string | null;
   vendorReturnId?: string | null;
@@ -619,7 +622,8 @@ export async function handleCustomerPo({
     return ok(clean(await enrichOnePo(db, po as JsonObject)));
   }
 
-  // PUT /customer-purchase-orders/:id — edit PO (DRAFT / PENDING_APPROVAL)
+  // PUT /customer-purchase-orders/:id — edit PO (draft/pending/rejected ATAU post-approve in-place)
+  // Edit post-approve: noPO tetap; full rewrite items; cancel SO + CreateSO revision bila sudah sync vendor.
   if (path[0] === 'customer-purchase-orders' && path.length === 2 && method === 'PUT') {
     const deniedRole = requireRole(auth, PO_EDIT_ROLES);
     if (deniedRole) return deniedRole;
@@ -628,10 +632,21 @@ export async function handleCustomerPo({
 
     const po = await db.collection('customer_purchase_orders').findOne(withTenantFilter(scopeAuth, { id: path[1] }));
     if (!po) return err('PO tidak ditemukan', 404);
-    if (!canEditPo(scopeAuth!, po)) {
+    if (!canEditPo(scopeAuth!, po as JsonObject)) {
       return err('PO tidak bisa diedit pada status ini atau role tidak diizinkan', 403);
     }
     if (!poBody.items?.length) return err('Minimal satu item');
+
+    const status = String(po.status || '');
+    const postApprovedEdit = isPostApprovedPoEditStatus(status);
+    if (postApprovedEdit && poHasReceivedQty(po as JsonObject)) {
+      return err('PO sudah ada penerimaan barang — tidak bisa diedit. Batalkan/revisi lewat alur yang sesuai.', 400);
+    }
+
+    const editReason = String(poBody.editReason || '').trim();
+    if (postApprovedEdit && editReason.length < 3) {
+      return err('Alasan edit wajib diisi (minimal 3 karakter) untuk PO yang sudah disetujui', 400);
+    }
 
     const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
     if (locked) return locked;
@@ -648,6 +663,38 @@ export async function handleCustomerPo({
 
     const editor = await actorSnapshot(db, scopeAuth);
     const poItems = await mapPoItems(db, tenantId, poBody.items);
+    if (!poItems.length) return err('Minimal satu item valid');
+    for (const it of poItems) {
+      const qty = parseFloat(String(it.qty));
+      if (!qty || qty <= 0) {
+        return err(`Qty harus lebih dari 0 untuk "${it.nama || it.kode || 'item'}"`, 400);
+      }
+    }
+
+    if (postApprovedEdit) {
+      const validation = await validatePoForApproval(db, String(tenantId), poItems as JsonObject[]);
+      if (validation.error) return err(validation.error, 400);
+    }
+
+    const nextRevision = postApprovedEdit
+      ? Math.max(1, (Math.floor(Number(po.editRevision) || 0) + 1))
+      : Math.max(0, Math.floor(Number(po.editRevision) || 0));
+
+    // Cancel SO dulu (sebelum rewrite items) agar gagal cancel tidak meninggalkan items baru + SO lama.
+    if (postApprovedEdit) {
+      const hadVendorSo = poHasVendorSoNumbers(po as JsonObject)
+        || (Array.isArray(po.vendorSubmissions) && po.vendorSubmissions.length > 0);
+      if (hadVendorSo) {
+        const cancelled = await cancelVendorSoForPoEdit(db, po as Record<string, unknown>, {
+          editRevision: nextRevision,
+          editReason,
+        });
+        if (!cancelled.ok) {
+          return err(cancelled.error || 'Gagal batalkan SO vendor', 400);
+        }
+      }
+    }
+
     const patch: Record<string, unknown> = {
       items: poItems,
       estimasiTotal: sumPoEstimasi(poItems),
@@ -657,10 +704,64 @@ export async function handleCustomerPo({
       lastEditedBy: editor,
       lastEditedAt: now,
     };
+    if (poBody.paymentTerms != null) {
+      patch.paymentTerms = poBody.paymentTerms;
+    }
+    if (postApprovedEdit) {
+      patch.editReason = editReason;
+      patch.editRevision = nextRevision;
+    }
 
     await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
+
+    let vendorResync: Awaited<ReturnType<typeof resyncVendorSoAfterPoEdit>> | null = null;
+    if (postApprovedEdit) {
+      const updatedForSync = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+      vendorResync = await resyncVendorSoAfterPoEdit(db, {
+        ...(updatedForSync || po),
+        ...patch,
+        // submissions lama sudah di-cancel; jangan kirim lagi untuk cancel
+        vendorSubmissions: [],
+        vendorSoId: null,
+        vendorNoSO: null,
+      } as Record<string, unknown>, {
+        editRevision: nextRevision,
+        editReason,
+        preserveStatus: status,
+      });
+
+      await writeAuditLog(db, {
+        tenantId: String(tenantId),
+        action: 'CUSTOMER_PO_EDIT',
+        entityType: 'customer_purchase_order',
+        entityId: String(po.id),
+        summary: `Edit PO ${po.noPO || po.id} (rev ${nextRevision}): ${editReason}`,
+        userId: scopeAuth!.userId,
+        userName: scopeAuth!.name || scopeAuth!.email || 'System',
+        metadata: {
+          noPO: po.noPO,
+          editRevision: nextRevision,
+          status,
+          itemCount: poItems.length,
+          vendorSynced: vendorResync?.vendorSynced ?? null,
+          vendorSyncError: vendorResync?.vendorSyncError ?? null,
+        },
+      });
+    }
+
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
-    return ok(clean(updated));
+    const enriched = await enrichOnePo(db, updated);
+    return ok(clean({
+      ...enriched,
+      ...(vendorResync
+        ? {
+            vendorSynced: vendorResync.vendorSynced,
+            vendorSyncPending: vendorResync.vendorSyncPending,
+            vendorSyncError: vendorResync.vendorSyncError,
+            vendorSyncJobId: vendorResync.vendorSyncJobId || null,
+          }
+        : {}),
+    }));
   }
 
   // DELETE /customer-purchase-orders/:id — hapus permanen hanya DRAFT

@@ -72,6 +72,7 @@ export async function runProductEnrichmentSyncJob(
     vendorTenantId: job.payload?.vendorTenantId ? String(job.payload.vendorTenantId) : null,
     vendorStokId: job.payload?.vendorStokId ? String(job.payload.vendorStokId) : null,
     kode: job.payload?.kode ? String(job.payload.kode) : null,
+    nama: job.payload?.nama != null ? String(job.payload.nama) : null,
     detailProduk: job.payload?.detailProduk != null ? String(job.payload.detailProduk) : null,
     fotos: Array.isArray(job.payload?.fotos) ? job.payload!.fotos.map(String) : null,
   });
@@ -108,6 +109,7 @@ export async function sweepPendingProductEnrichment(
       vendorTenantId: p.vendorTenantId ? String(p.vendorTenantId) : null,
       vendorStokId: p.vendorStokId ? String(p.vendorStokId) : null,
       kode: p.kode ? String(p.kode) : null,
+      nama: p.nama != null ? String(p.nama) : null,
       detailProduk: p.detailProduk != null ? String(p.detailProduk) : null,
       fotos: Array.isArray(p.fotos) ? p.fotos.map(String) : null,
     });
@@ -125,6 +127,7 @@ export async function sweepPendingProductEnrichment(
         vendorTenantId: p.vendorTenantId || null,
         vendorStokId: p.vendorStokId || null,
         kode: p.kode || null,
+        nama: p.nama ?? null,
         detailProduk: p.detailProduk ?? null,
         fotos: Array.isArray(p.fotos) ? p.fotos : null,
         recoverOutbox: true,

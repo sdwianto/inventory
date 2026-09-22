@@ -38,6 +38,9 @@ export type PoFormDialogProps = {
   lineSummary: { rows: number; totalQty: number; totalEstimasi: number };
   catatan: string;
   onCatatanChange: (value: string) => void;
+  editReason?: string;
+  onEditReasonChange?: (value: string) => void;
+  requireEditReason?: boolean;
   saving: boolean;
   vendorTierMap: JsonObject;
   defaultTier: string;
@@ -62,6 +65,9 @@ export default function PoFormDialog({
   lineSummary,
   catatan,
   onCatatanChange,
+  editReason = '',
+  onEditReasonChange,
+  requireEditReason = false,
   saving,
   vendorTierMap,
   defaultTier,
@@ -84,12 +90,32 @@ export default function PoFormDialog({
           </DialogTitle>
           <DialogDescription>
             {editingPo
-              ? `Perbarui detail PO sebelum ${str(editingPo.status) === 'PENDING_APPROVAL' ? 'disetujui' : 'diajukan/dikirim'}`
+              ? (requireEditReason
+                ? 'Edit PO yang sudah disetujui — nomor PO tetap. Ubah baris item (produk, qty, harga), lalu simpan. SO vendor akan disinkron ulang.'
+                : `Perbarui detail PO sebelum ${str(editingPo.status) === 'PENDING_APPROVAL' ? 'disetujui' : 'diajukan/dikirim'}`)
               : `Permintaan kedatangan barang: ${createDate ? formatArrivalLabel(createDate) : '—'}`}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
+          {requireEditReason ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/80 p-3 space-y-2">
+              <p className="text-xs text-amber-900">
+                Status: <span className="font-semibold">{str(editingPo?.status)}</span>
+                {' · '}noPO tetap <span className="font-mono font-semibold">{str(editingPo?.noPO)}</span>
+              </p>
+              <div>
+                <Label className="text-xs text-amber-900 uppercase tracking-wide">Alasan edit *</Label>
+                <Input
+                  className="mt-1 bg-white"
+                  value={editReason}
+                  onChange={(e) => onEditReasonChange?.(e.target.value)}
+                  placeholder="Contoh: koreksi qty / ganti item sesuai kebutuhan dapur"
+                  maxLength={500}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="rounded-lg border bg-slate-50/80 p-3">
             <Label className="text-xs text-slate-500 uppercase tracking-wide">Tanggal kedatangan</Label>
             <Input
@@ -306,10 +332,10 @@ export default function PoFormDialog({
           <Button variant="outline" type="button" onClick={onCancel}>Batal</Button>
           <Button
             onClick={onSave}
-            disabled={saving}
+            disabled={saving || (requireEditReason && editReason.trim().length < 3)}
             className="bg-orange-500 hover:bg-orange-600"
           >
-            {saving ? 'Menyimpan...' : editingPo ? 'Simpan Perubahan' : 'Simpan PO (DRAFT)'}
+            {saving ? 'Menyimpan...' : editingPo ? (requireEditReason ? 'Simpan & Sync Vendor' : 'Simpan Perubahan') : 'Simpan PO (DRAFT)'}
           </Button>
         </DialogFooter>
       </DialogContent>

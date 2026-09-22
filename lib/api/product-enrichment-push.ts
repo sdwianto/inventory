@@ -1,4 +1,4 @@
-/** Inventory → Sales: sync detailProduk + fotos for vendor-sourced products. */
+/** Inventory → Sales: sync nama + detailProduk + fotos for vendor-sourced products. */
 
 import type { Db } from 'mongodb';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,6 +11,7 @@ export async function pushProductEnrichmentToSales(
     vendorStokId?: string | null;
     vendorTenantId?: string | null;
     kode?: string | null;
+    nama?: string | null;
     detailProduk?: string | null;
     fotos?: string[] | null;
     detailFotosUpdatedAt?: unknown;
@@ -32,6 +33,7 @@ export async function pushProductEnrichmentToSales(
   }
 
   const correlationId = String(product.correlationId || randomUUID()).trim();
+  const nama = product.nama != null ? String(product.nama).trim() : undefined;
   const detailProduk = product.detailProduk ?? '';
   const fotos = absolutizeMediaUrls(Array.isArray(product.fotos) ? product.fotos.map(String) : []);
   const detailFotosUpdatedAt = product.detailFotosUpdatedAt instanceof Date
@@ -41,13 +43,14 @@ export async function pushProductEnrichmentToSales(
     tenantId: vendorTenantId,
     ...(productId ? { productId } : {}),
     ...(kode ? { kode } : {}),
+    ...(nama ? { nama } : {}),
     detailProduk,
     fotos,
     detailFotosUpdatedAt,
     correlationId,
   };
   const contentRev = createHash('sha256')
-    .update(JSON.stringify({ detailProduk, fotos, detailFotosUpdatedAt }))
+    .update(JSON.stringify({ nama: nama || '', detailProduk, fotos, detailFotosUpdatedAt }))
     .digest('hex')
     .slice(0, 16);
 

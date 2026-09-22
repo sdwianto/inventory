@@ -80,7 +80,11 @@ async function pushPoGroupOnce(
       salesAppUrl: salesUrl,
       apiKey,
       correlationId,
-      idempotencyKey: `cpo-push:${String(po.id)}:${vendorTenantId}`,
+      idempotencyKey: (() => {
+        const rev = Math.max(0, Math.floor(Number(po.editRevision) || 0));
+        const base = `cpo-push:${String(po.id)}:${vendorTenantId}`;
+        return rev > 0 ? `${base}:r${rev}` : base;
+      })(),
       customerPoId: po.id ? String(po.id) : null,
       timeoutMs,
       body: {
@@ -242,7 +246,10 @@ export async function finalizePoSubmission(
   po: Record<string, unknown>,
   submissions: JsonObject[],
   approver: Record<string, unknown> | null | undefined,
-  { partialFailures = [] }: { partialFailures?: JsonObject[] } = {},
+  {
+    partialFailures = [],
+    preserveStatus,
+  }: { partialFailures?: JsonObject[]; preserveStatus?: string | null } = {},
 ) {
   const needsSoLookup = submissions.some((sub) => !submissionHasVendorSo(sub));
   const syncedSubs = needsSoLookup && submissions.length
@@ -252,15 +259,20 @@ export async function finalizePoSubmission(
   const now = new Date();
   const allSubs = [...syncedSubs, ...partialFailures];
   const hasFailures = partialFailures.length > 0;
+  const prevStatus = String(preserveStatus || po.status || '').trim();
+  const keepStatus = syncedSubs.length
+    && (prevStatus === 'CONFIRMED' || prevStatus === 'SUBMITTED')
+    ? prevStatus
+    : (syncedSubs.length ? 'SUBMITTED' : 'APPROVED');
   const patch: Record<string, unknown> = {
-    status: syncedSubs.length ? 'SUBMITTED' : 'APPROVED',
+    status: keepStatus,
     vendorSubmissions: allSubs,
     vendorTenantId: syncedSubs.length === 1 ? primary.vendorTenantId : (syncedSubs.length ? 'multi' : po.vendorTenantId),
     vendorSoId: primary.vendorSoId,
     vendorNoSO: syncedSubs.length === 1
       ? primary.vendorNoSO
       : summarizeVendorNoSo(syncedSubs),
-    submittedAt: syncedSubs.length ? now : po.submittedAt || null,
+    submittedAt: syncedSubs.length ? (po.submittedAt || now) : po.submittedAt || null,
     updatedAt: now,
     vendorSyncPending: hasFailures,
     vendorSyncError: hasFailures

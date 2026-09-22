@@ -492,6 +492,36 @@ export async function ensureCreateSoOutboxPending(
   );
 }
 
+/**
+ * Setelah edit PO: buka ulang outbox CreateSO yang sudah DONE agar recovery/drain
+ * tidak short-circuit tanpa push (SO binding sudah di-clear).
+ */
+export async function reopenEnsureCreateSoOutboxForEdit(
+  db: Db,
+  input: { tenantId: string; poId: string; noPO?: string | null },
+): Promise<void> {
+  const existing = await db.collection(INTEGRATION_OUTBOX_COLLECTION).findOne({
+    type: INTEGRATION_OUTBOX_TYPES.ENSURE_CREATE_SO,
+    aggregateId: input.poId,
+  });
+  if (!existing) {
+    await insertEnsureCreateSoOutbox(db, input);
+    return;
+  }
+  await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+    { id: existing.id },
+    {
+      $set: {
+        status: 'PENDING',
+        lastError: null,
+        updatedAt: new Date(),
+        processedAt: null,
+        ...(input.noPO != null ? { 'payload.noPO': input.noPO } : {}),
+      },
+    },
+  );
+}
+
 async function claimEnsureCreateSoOutbox(
   db: Db,
   poId: string,
@@ -546,13 +576,23 @@ export async function drainEnsureCreateSo(
   const existing = await getEnsureCreateSoOutbox(db, input.poId);
   if (existing?.status === 'DONE') {
     const po = await db.collection('customer_purchase_orders').findOne({ id: input.poId });
-    return {
-      ok: true,
-      outboxId: existing.id,
-      alreadyDone: true,
-      vendorNoSO: po?.vendorNoSO ? String(po.vendorNoSO) : null,
-      vendorSoId: po?.vendorSoId ? String(po.vendorSoId) : null,
-    };
+    const { poHasVendorSoNumbers } = await import('@/lib/api/customer-po-so-extract');
+    // Stale DONE setelah edit (SO di-clear) — jangan short-circuit; buka ulang untuk push.
+    if (po && !poHasVendorSoNumbers(po as import('@/types/json').JsonObject)) {
+      await reopenEnsureCreateSoOutboxForEdit(db, {
+        tenantId: input.tenantId,
+        poId: input.poId,
+        noPO: po.noPO ? String(po.noPO) : null,
+      });
+    } else {
+      return {
+        ok: true,
+        outboxId: existing.id,
+        alreadyDone: true,
+        vendorNoSO: po?.vendorNoSO ? String(po.vendorNoSO) : null,
+        vendorSoId: po?.vendorSoId ? String(po.vendorSoId) : null,
+      };
+    }
   }
 
   await ensureCreateSoOutboxPending(db, {

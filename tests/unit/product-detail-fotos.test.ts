@@ -5,13 +5,22 @@ import { vendorProductSnapshot } from '@/lib/api/product-sync';
 import { normalizeDetailProduk, MAX_PRODUCT_FOTOS } from '@/lib/api/product-media';
 
 describe('inventory product detailProduk + fotos', () => {
-  it('VENDOR_LOCKED_FIELDS does not include detailProduk/fotos', () => {
+  it('VENDOR_LOCKED_FIELDS does not include detailProduk/fotos/nama', () => {
     const src = readFileSync(join(process.cwd(), 'lib/api/handlers/products.ts'), 'utf8');
     expect(src).toMatch(/const VENDOR_LOCKED_FIELDS = \[/);
     const block = src.match(/const VENDOR_LOCKED_FIELDS = \[([\s\S]*?)\];/)?.[1] || '';
     expect(block).not.toMatch(/detailProduk/);
     expect(block).not.toMatch(/fotos/);
+    expect(block).not.toMatch(/['"]nama['"]/);
+    expect(src).toMatch(/namaSource = 'manual'/);
+    expect(src).toMatch(/productBody\.nama !== undefined/);
     expect(src).toMatch(/drainEnsureProductEnrichment/);
+  });
+
+  it('enrichment push includes nama in payload hash', () => {
+    const src = readFileSync(join(process.cwd(), 'lib/api/product-enrichment-push.ts'), 'utf8');
+    expect(src).toMatch(/nama: nama \|\| ''/);
+    expect(src).toMatch(/\.\.\.\(nama \? \{ nama \} : \{\}\)/);
   });
 
   it('normalizeDetailProduk length guard', () => {

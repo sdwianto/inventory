@@ -212,6 +212,87 @@ describe('detail/foto LWW + stale emit + vendorBaseUomId', () => {
     expect(syncSet.vendorBaseUomId).toBe('legacy:vp1');
   });
 
+  it('buildSyncSet tidak overwrite nama lokal bila namaSource=manual dan stamp lokal lebih baru', () => {
+    const older = new Date('2026-01-01T00:00:00Z');
+    const newer = new Date('2026-06-01T00:00:00Z');
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      nama: 'Nama dari Sales',
+      detailFotosUpdatedAt: older.toISOString(),
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      nama: 'Nama Koreksi Inventory',
+      namaSource: 'manual',
+      detailFotosUpdatedAt: newer,
+    });
+    expect(syncSet.nama).toBeUndefined();
+  });
+
+  it('buildSyncSet menerima nama Sales bila enrichment Sales lebih baru/sama', () => {
+    const stamp = new Date('2026-06-01T00:00:00Z');
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      nama: 'Nama dari Sales',
+      detailFotosUpdatedAt: stamp.toISOString(),
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      nama: 'Nama Koreksi Inventory',
+      namaSource: 'manual',
+      detailFotosUpdatedAt: stamp,
+    });
+    expect(syncSet.nama).toBe('Nama dari Sales');
+  });
+
+  it('buildSyncSet menimpa nama bila belum dikoreksi manual', () => {
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      nama: 'Nama dari Sales',
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      nama: 'Nama Lama',
+    });
+    expect(syncSet.nama).toBe('Nama dari Sales');
+  });
+
+  it('buildSyncSet advance stamp untuk nama-only enrichment (tanpa detail/foto konten)', () => {
+    const stamp = new Date('2026-07-01T00:00:00Z');
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      nama: 'Nama Baru dari Sales',
+      detailFotosUpdatedAt: stamp.toISOString(),
+    });
+    expect(snap.hasDetailFotosUpdatedAt).toBe(true);
+    expect(snap.hasDetailProduk).toBe(false);
+    expect(snap.hasFotos).toBe(false);
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      nama: 'Nama Lama',
+      detailFotosUpdatedAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    expect(syncSet.nama).toBe('Nama Baru dari Sales');
+    expect(syncSet.detailFotosUpdatedAt).toEqual(stamp);
+  });
+
+  it('buildSyncSet tidak wipe nama lokal saat inbound nama kosong', () => {
+    const snap = vendorProductSnapshot({
+      id: 'vp1',
+      kode: 'B001',
+      nama: '',
+    });
+    const syncSet = buildSyncSet(snap, 'vendor-a', new Date(), {
+      id: 'local1',
+      nama: 'Nama Lokal Tetap',
+    });
+    expect(syncSet.nama).toBeUndefined();
+  });
+
   it('buildSyncSet tidak overwrite detail lokal yang lebih baru', () => {
     const older = new Date('2026-01-01T00:00:00Z');
     const newer = new Date('2026-06-01T00:00:00Z');

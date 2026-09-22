@@ -1,5 +1,5 @@
 /**
- * ENSURE_PRODUCT_ENRICHMENT — Inventory Detail/Foto → Sales (Category A outbox).
+ * ENSURE_PRODUCT_ENRICHMENT — Inventory Nama/Detail/Foto → Sales (Category A outbox).
  * aggregateId = local inventory product id; reopen DONE on every edit.
  */
 
@@ -90,6 +90,7 @@ export async function ensureProductEnrichmentOutboxPending(
     vendorTenantId: string;
     vendorStokId?: string | null;
     kode?: string | null;
+    nama?: string | null;
     detailProduk?: string | null;
     fotos?: string[] | null;
     correlationId?: string | null;
@@ -102,6 +103,7 @@ export async function ensureProductEnrichmentOutboxPending(
     vendorTenantId: input.vendorTenantId,
     vendorStokId: input.vendorStokId || null,
     kode: input.kode || null,
+    nama: input.nama ?? null,
     detailProduk: input.detailProduk ?? '',
     fotos: Array.isArray(input.fotos) ? input.fotos : [],
   };
@@ -227,6 +229,7 @@ export async function drainEnsureProductEnrichment(
     vendorTenantId?: string | null;
     vendorStokId?: string | null;
     kode?: string | null;
+    nama?: string | null;
     detailProduk?: string | null;
     fotos?: string[] | null;
     correlationId?: string | null;
@@ -244,6 +247,7 @@ export async function drainEnsureProductEnrichment(
       vendorTenantId: String(input.vendorTenantId),
       vendorStokId: input.vendorStokId,
       kode: input.kode,
+      nama: input.nama,
       detailProduk: input.detailProduk,
       fotos: input.fotos,
       correlationId: input.correlationId,
@@ -277,6 +281,7 @@ export async function drainEnsureProductEnrichment(
         vendorStokId: 1,
         vendorTenantId: 1,
         kode: 1,
+        nama: 1,
         detailProduk: 1,
         fotos: 1,
         detailFotosUpdatedAt: 1,
@@ -291,6 +296,9 @@ export async function drainEnsureProductEnrichment(
       live?.vendorTenantId || input.vendorTenantId || p.vendorTenantId || '',
     ),
     kode: String(live?.kode || input.kode || p.kode || ''),
+    nama: live
+      ? String(live.nama ?? '')
+      : String(input.nama !== undefined && input.nama != null ? input.nama : (p.nama ?? '')),
     detailProduk: live
       ? String(live.detailProduk ?? '')
       : String(input.detailProduk !== undefined ? input.detailProduk : (p.detailProduk ?? '')),

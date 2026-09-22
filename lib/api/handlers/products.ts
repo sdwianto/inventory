@@ -29,7 +29,7 @@ import {
 } from '@/lib/api/stock-ledger';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
 import { normalizeDetailProduk, persistProductFotos } from '@/lib/api/product-media';
-import { drainEnsureProductEnrichment } from '@/lib/api/product-enrichment-outbox';
+import { drainEnsureProductEnrichment, ensureProductEnrichmentOutboxPending } from '@/lib/api/product-enrichment-outbox';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
 import { requireRole, PRODUCT_MANAGE_ROLES, STOCK_ADJUST_ROLES } from '@/lib/api/require-auth';
 import { refreshGrnsForProductKode } from '@/lib/api/grn-resolve-products';
@@ -63,8 +63,9 @@ import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 import { isItemRole, normalizeItemRole, type ItemRole } from '@/lib/food-production/item-role';
 
+/** Field identitas vendor yang tidak boleh diubah dari Inventory (kecuali `nama` — boleh koreksi lokal). */
 const VENDOR_LOCKED_FIELDS = [
-  'kode', 'nama', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId', 'baseUomId',
+  'kode', 'satuan', 'grup', 'barcode', 'syncSource', 'vendorStokId', 'vendorTenantId', 'baseUomId',
   // Identitas Master Product — sales.app satu-satunya sumber kebenaran, admin lokal tidak boleh
   // mengubahnya manual (harus selalu lewat sync ulang dari vendor).
   'masterProductId',
@@ -515,6 +516,17 @@ export async function handleProducts({
       if (isVendorSyncedProduct(existing)) {
         VENDOR_PRICE_FIELDS.forEach((k) => delete update[k]);
       }
+      if (productBody.nama !== undefined) {
+        const nextNama = String(productBody.nama || '').trim();
+        if (!nextNama) return err('Nama wajib diisi', 400);
+        update.nama = nextNama;
+        if (nextNama !== String(existing.nama || '').trim()) {
+          // Sama seperti detail/foto: stamp LWW + push enrichment ke Sales.
+          update.namaSource = 'manual';
+          update.namaUpdatedAt = new Date();
+          update.detailFotosUpdatedAt = new Date();
+        }
+      }
       if (update.kode && update.kode !== existing.kode) {
         const dup = await db.collection('products').findOne({
           tenantId: existing.tenantId || 'default',
@@ -701,18 +713,35 @@ export async function handleProducts({
       const enriched = await loadProductWithUoms(db, tid, doc as Record<string, unknown>);
       if (
         isVendorSyncedProduct(existing)
-        && (productBody.detailProduk !== undefined || productBody.fotos !== undefined)
+        && (
+          productBody.nama !== undefined
+          || productBody.detailProduk !== undefined
+          || productBody.fotos !== undefined
+        )
       ) {
         const localId = String(enriched.id || id);
-        drainEnsureProductEnrichment(db, {
+        const enrichInput = {
           tenantId: tid,
           productId: localId,
           vendorStokId: String(enriched.vendorStokId || existing.vendorStokId || ''),
           vendorTenantId: String(enriched.vendorTenantId || existing.vendorTenantId || ''),
           kode: String(enriched.kode || existing.kode || ''),
+          nama: String(enriched.nama || existing.nama || ''),
           detailProduk: String(enriched.detailProduk ?? ''),
           fotos: Array.isArray(enriched.fotos) ? enriched.fotos.map(String) : [],
-        }).then(async (r) => {
+        };
+        // Durability: pastikan outbox PENDING sebelum response — drain async.
+        if (enrichInput.vendorTenantId) {
+          try {
+            await ensureProductEnrichmentOutboxPending(db, enrichInput);
+          } catch (e) {
+            console.warn(
+              '[product-enrichment] ensure outbox failed',
+              e instanceof Error ? e.message : e,
+            );
+          }
+        }
+        void drainEnsureProductEnrichment(db, enrichInput).then(async (r) => {
           if (!r.ok && !r.skipped) {
             console.warn('[product-enrichment] push failed', r.error);
             try {
@@ -723,11 +752,12 @@ export async function handleProducts({
                 payload: {
                   productId: localId,
                   aggregateId: localId,
-                  vendorTenantId: String(enriched.vendorTenantId || existing.vendorTenantId || ''),
-                  vendorStokId: String(enriched.vendorStokId || existing.vendorStokId || ''),
-                  kode: String(enriched.kode || existing.kode || ''),
-                  detailProduk: String(enriched.detailProduk ?? ''),
-                  fotos: Array.isArray(enriched.fotos) ? enriched.fotos.map(String) : [],
+                  vendorTenantId: enrichInput.vendorTenantId,
+                  vendorStokId: enrichInput.vendorStokId,
+                  kode: enrichInput.kode,
+                  nama: enrichInput.nama,
+                  detailProduk: enrichInput.detailProduk,
+                  fotos: enrichInput.fotos,
                   recoverOutbox: true,
                   dedupeKey: `enrich-put:${localId}`,
                 },

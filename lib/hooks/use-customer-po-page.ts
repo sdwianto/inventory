@@ -28,7 +28,7 @@ import {
   formatPoVendorSoDisplay,
   isPendingOptimisticPo,
 } from '@/lib/pembelian-po/helpers';
-import { canEditCustomerPo } from '@/lib/pembelian-po/permissions';
+import { canEditCustomerPo, isPostApprovedPoEditStatus } from '@/lib/pembelian-po/permissions';
 import { useCustomerPoList } from '@/hooks/useCustomerPoData';
 import { fetchDefaultProductUom, primeProductUomsCacheFromProducts } from '@/lib/hooks/use-product-uoms';
 import { usePrimeLineItemUoms } from '@/lib/hooks/use-prime-line-uoms';
@@ -59,6 +59,7 @@ export function useCustomerPoPage() {
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [lines, setLines] = useState<JsonObject[]>([emptyPoLine()]);
   const [catatan, setCatatan] = useState('');
+  const [editReason, setEditReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -437,6 +438,7 @@ export function useCustomerPoPage() {
     setCreateDate(d);
     setLines([emptyPoLine()]);
     setCatatan('');
+    setEditReason('');
     setCreateOpen(true);
   };
 
@@ -445,6 +447,7 @@ export function useCustomerPoPage() {
     setCreateDate(getPoArrivalDate(po) || new Date());
     setLines(mergeFormLinesFromPo(asArray(po.items) as JsonObject[], emptyPoLine));
     setCatatan(str(po.catatan));
+    setEditReason('');
     setCreateOpen(true);
     const itemIds = asArray(po.items)
       .map((it) => str(asObject(it).localStokId || asObject(it).stokId))
@@ -527,6 +530,7 @@ export function useCustomerPoPage() {
       } else {
         map.set(key, {
           localStokId: productId,
+          lineId: str(l.lineId) || undefined,
           vendorStokId: p.vendorStokId,
           vendorTenantId: p.vendorTenantId,
           vendorKode: p.kode,
@@ -728,29 +732,52 @@ export function useCustomerPoPage() {
       toast.error('Tanggal kedatangan wajib');
       return;
     }
+    const postApproved = isPostApprovedPoEditStatus(str(editingPo.status));
+    const reason = editReason.trim();
+    if (postApproved && reason.length < 3) {
+      toast.error('Alasan edit wajib diisi untuk PO yang sudah disetujui');
+      return;
+    }
     setSaving(true);
     try {
       const poId = str(editingPo.id);
-      const payload = {
+      const payload: Record<string, unknown> = {
         items,
         catatan,
         tanggalKedatangan: toDateInputValue(createDate),
       };
+      if (postApproved) payload.editReason = reason;
       const data = await poMutations.updatePO(poId, payload, {
+        status: editingPo.status,
         catatan,
         tanggalKedatangan: toDateInputValue(createDate),
         totalQty: lineSummary.totalQty,
         totalEstimasi: lineSummary.totalEstimasi,
+        ...(postApproved ? { editReason: reason, editRevision: (num(editingPo.editRevision) || 0) + 1 } : {}),
       });
-      toast.success(`PO ${data.noPO} diperbarui`);
+      if (postApproved) {
+        if (data.vendorSynced) {
+          toast.success(`PO ${data.noPO} diperbarui & SO vendor disinkron`);
+        } else if (data.vendorSyncError) {
+          toast.warning(`PO ${data.noPO} disimpan — sync vendor belum selesai`, {
+            description: String(data.vendorSyncError),
+          });
+        } else {
+          toast.success(`PO ${data.noPO} diperbarui`);
+        }
+      } else {
+        toast.success(`PO ${data.noPO} diperbarui`);
+      }
       setCreateOpen(false);
       setEditingPo(null);
+      setEditReason('');
       setExpandedId(poId);
     } catch (e) {
       if (e instanceof OfflineQueuedError) {
         toast.info('Perubahan PO disimpan offline — akan disinkron saat online');
         setCreateOpen(false);
         setEditingPo(null);
+        setEditReason('');
       } else {
         toast.error(e instanceof Error ? e.message : String(e));
       }
@@ -936,6 +963,7 @@ export function useCustomerPoPage() {
   const closeFormDialog = () => {
     setCreateOpen(false);
     setEditingPo(null);
+    setEditReason('');
   };
 
   /** Klik luar / Escape / X: simpan otomatis bila sudah ada baris valid; Batal tetap discard. */
@@ -943,6 +971,11 @@ export function useCustomerPoPage() {
     if (saving) return;
     const items = buildItemsPayload();
     if (!items.length || !createDate) {
+      closeFormDialog();
+      return;
+    }
+    // Post-approve wajib alasan — jangan autosave diam-diam tanpa reason.
+    if (editingPo && isPostApprovedPoEditStatus(str(editingPo.status)) && editReason.trim().length < 3) {
       closeFormDialog();
       return;
     }
@@ -1025,6 +1058,9 @@ export function useCustomerPoPage() {
     lineSummary,
     catatan,
     setCatatan,
+    editReason,
+    setEditReason,
+    requireEditReason: Boolean(editingPo && isPostApprovedPoEditStatus(str(editingPo.status))),
     saving,
     vendorTierMap,
     defaultTier,

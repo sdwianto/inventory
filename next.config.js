@@ -1,6 +1,6 @@
 const nextConfig = {
   output: 'standalone',
-  allowedDevOrigins: ['127.0.0.1'],
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '172.28.184.115'],
   transpilePackages: [
     '@sdwianto/contracts',
     '@sdwianto/events',
