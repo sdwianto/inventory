@@ -7,6 +7,7 @@ import {
 import {
   applyConsumptionToRequirementLines,
   applyReconciliationToLines,
+  isIssueLineMismatch,
   mergeConsumptionLinesForCost,
 } from '@/lib/food-production/material-issue-reconcile';
 import type { MaterialIssueLine } from '@/lib/food-production/material-issue';
@@ -71,6 +72,33 @@ describe('material-issue-reconcile', () => {
     const next = applyReconciliationToLines(issueLines, reconciliation);
     expect(next[0].qtyIssued).toBe(1);
     expect(next[0].qtyPlanned).toBe(10);
+  });
+
+  it('isIssueLineMismatch ignores float dust in on-hand after Sinkron', () => {
+    // Production: Gula Merah stok_lokasi 0.0999… while suggested/qtyIssued = 0.1
+    expect(isIssueLineMismatch({
+      qtyIssued: 0.1,
+      qtyRemaining: 6.079,
+      qtyOnHand: 0.09999999999999953,
+    })).toBe(false);
+
+    expect(isIssueLineMismatch({
+      qtyIssued: 0.1,
+      qtyRemaining: 6.079,
+      qtyOnHand: 0.1,
+    })).toBe(false);
+
+    expect(isIssueLineMismatch({
+      qtyIssued: 0.2,
+      qtyRemaining: 6.079,
+      qtyOnHand: 0.09999999999999953,
+    })).toBe(true);
+
+    expect(isIssueLineMismatch({
+      qtyIssued: 5,
+      qtyRemaining: 4,
+      qtyOnHand: 10,
+    })).toBe(true);
   });
 
   it('mergeConsumptionLinesForCost sums PBL and RL by product', () => {

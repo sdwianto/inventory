@@ -487,6 +487,22 @@ function suggestedQty(
   return roundQty(Math.min(remaining, onHand));
 }
 
+/**
+ * True when qtyIssued exceeds remaining or on-hand.
+ * Always roundQty both sides so float dust in stok_lokasi (e.g. 0.0999…)
+ * does not falsely mismatch after Sinkron wrote suggestedQty (0.1).
+ */
+export function isIssueLineMismatch(opts: {
+  qtyIssued: number;
+  qtyRemaining: number;
+  qtyOnHand: number;
+}): boolean {
+  const issued = roundQty(Number(opts.qtyIssued) || 0);
+  const remaining = roundQty(Number(opts.qtyRemaining) || 0);
+  const onHand = Math.max(0, roundQty(Number(opts.qtyOnHand) || 0));
+  return issued > remaining || issued > onHand;
+}
+
 /** Build reconciliation view for an issue's lines vs plan consumption + on-hand. */
 export async function buildIssueReconciliation(
   db: Db,
@@ -538,13 +554,18 @@ export async function buildIssueReconciliation(
     const qtyAlreadyIssued = roundQty(qtyAlreadyIssuedOperational + qtyAlreadyIssuedPbl);
     const qtyPlanned = roundQty(Number(l.qtyPlanned) || 0);
     const wh = String(l.warehouseKode || '').trim();
-    const qtyOnHand = wh
+    const qtyOnHandRaw = wh
       ? (onHandMap.get(`${l.productId}:${wh}`) ?? 0)
       : 0;
+    const qtyOnHand = roundQty(qtyOnHandRaw);
     const qtyRemaining = Math.max(0, roundQty(qtyPlanned - qtyAlreadyIssued));
-    const suggestedQtyIssued = suggestedQty(qtyPlanned, qtyAlreadyIssued, qtyOnHand);
+    const suggestedQtyIssued = suggestedQty(qtyPlanned, qtyAlreadyIssued, qtyOnHandRaw);
     const currentIssued = roundQty(Number(l.qtyIssued) || 0);
-    const mismatch = currentIssued > qtyRemaining || currentIssued > qtyOnHand;
+    const mismatch = isIssueLineMismatch({
+      qtyIssued: currentIssued,
+      qtyRemaining,
+      qtyOnHand: qtyOnHandRaw,
+    });
 
     return {
       productId: l.productId,
@@ -557,7 +578,7 @@ export async function buildIssueReconciliation(
       qtyAlreadyIssuedPbl,
       qtyAlreadyIssued,
       qtyRemaining,
-      qtyOnHand: roundQty(qtyOnHand),
+      qtyOnHand,
       suggestedQtyIssued,
       operationalRefs: cons?.operationalRefs ?? [],
       pblRefs: cons?.pblRefs ?? [],
