@@ -10,6 +10,8 @@ export type ReleaseFormItem = {
   qty: number;
   stokAvail: number;
   stokByWarehouse: Record<string, unknown>;
+  /** Wajib bila total RL rencana melebihi acuan (flag rlFromPoReference). */
+  overReason?: string;
   /** Key lokal untuk patch UOM setelah add optimistic. */
   clientKey?: string;
 };
@@ -181,6 +183,45 @@ export function catalogFromSaldoRows(rows: JsonObject[]): Map<string, JsonObject
   return map;
 }
 
+export type ReleasePrefillFormLine = {
+  stokId: string;
+  kode?: string;
+  nama?: string;
+  uomId: string;
+  satuan?: string;
+  qty: number;
+  stokAvail: number;
+};
+
+/**
+ * Isi dari acuan rencana: baris produk yang sama (satuan apa pun) diganti qty acuan
+ * dalam satuan dasar; item lain tetap.
+ */
+export function mergePrefillIntoReleaseItems(
+  items: ReleaseFormItem[],
+  lines: ReleasePrefillFormLine[],
+  lokasiKode: string,
+): ReleaseFormItem[] {
+  const prefillIds = new Set(lines.map((l) => l.stokId));
+  const kept = items.filter((it) => !prefillIds.has(it.stokId));
+  const reasonById = new Map(items.filter((it) => it.overReason).map((it) => [it.stokId, it.overReason]));
+  const wh = lokasiKode.trim().toUpperCase();
+  return [
+    ...kept,
+    ...lines.map((l) => ({
+      stokId: l.stokId,
+      kode: str(l.kode),
+      nama: str(l.nama) || str(l.kode) || 'Produk',
+      uomId: str(l.uomId),
+      satuan: str(l.satuan),
+      qty: l.qty,
+      stokAvail: l.stokAvail,
+      stokByWarehouse: { [wh]: l.stokAvail },
+      ...(reasonById.get(l.stokId) ? { overReason: reasonById.get(l.stokId) } : {}),
+    })),
+  ];
+}
+
 export type ReleaseFormState = {
   lokasiKode: string;
   keperluan: string;
@@ -222,6 +263,7 @@ export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
         qty: num(line.qtyEntered ?? line.qty, 1),
         stokAvail: 0,
         stokByWarehouse: {},
+        ...(str(line.overReason) ? { overReason: str(line.overReason) } : {}),
       };
     }),
   };

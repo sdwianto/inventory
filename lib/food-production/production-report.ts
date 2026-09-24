@@ -25,6 +25,10 @@ export interface ProductionReportInput {
     qtyIssuedTotal?: number;
     lineCount?: number;
     stockPostedAt?: Date | string | null;
+    /** REFERENCE: PBL acuan tanpa mutasi stok — qty keluar nyata dari RL. */
+    stockMode?: 'STOCK' | 'REFERENCE';
+    rlPostedTotal?: number;
+    sisaLineCount?: number;
   } | null;
   result?: {
     id: string;
@@ -133,7 +137,9 @@ export function buildProductionReport(input: ProductionReportInput): ProductionR
   );
   const actualPorsi = roundQty(Number(input.result?.actualPorsiTotal ?? 0));
   const wastePorsi = roundQty(Number(input.result?.wastePorsiTotal ?? 0));
-  const qtyIssuedTotal = roundQty(Number(input.issue?.qtyIssuedTotal ?? 0));
+  const qtyIssuedTotal = input.issue?.stockMode === 'REFERENCE'
+    ? roundQty(Number(input.consumption?.qtyTotal ?? input.issue.rlPostedTotal ?? 0))
+    : roundQty(Number(input.issue?.qtyIssuedTotal ?? 0));
   const yieldPct = targetPorsi > 0 ? roundQty((actualPorsi / targetPorsi) * 100) : null;
 
   return {

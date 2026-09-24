@@ -17,6 +17,7 @@ import { getBatchAssuranceTrail } from '@/lib/kitchen-assurance';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { PRODUCTION_RESULTS_COLLECTION } from '@/lib/food-production/production-result';
 import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
+import { INVENTORY_RELEASES_COLLECTION, RL_POSTED_STATUSES } from '@/lib/food-production/material-issue-reconcile';
 import { DISTRIBUTION_ORDERS_COLLECTION } from '@/lib/food-production/distribution';
 import { INGREDIENT_LOTS_COLLECTION } from '@/lib/food-production/ingredient-lot';
 import {
@@ -213,6 +214,41 @@ export async function handleProductionBatches(ctx: HandlerContext): Promise<Next
           entityId: String(iss.id),
           refNo: String(iss.noDokumen || ''),
           summary: `Issue bahan ${iss.noDokumen} (candidate lot inference)`,
+          statusOrAlert: 'CANDIDATE',
+        });
+      }
+
+      const releases = await db.collection(INVENTORY_RELEASES_COLLECTION).find(
+        withTenantFilter(scopeAuth, {
+          productionPlanId: batch.productionPlanId,
+          status: { $in: [...RL_POSTED_STATUSES] },
+        }),
+      ).project({
+        id: 1,
+        noRelease: 1,
+        postedAt: 1,
+        createdAt: 1,
+        ingredientLotConsume: 1,
+      }).limit(100).toArray();
+      for (const rl of releases) {
+        for (const lc of (rl.ingredientLotConsume || []) as Array<{ allocations?: unknown[] }>) {
+          for (const a of lc.allocations || []) {
+            const id = String((a as { batchId?: string }).batchId || '').trim();
+            if (id) lotIds.add(id);
+          }
+        }
+        const at = rl.postedAt instanceof Date
+          ? rl.postedAt.toISOString()
+          : rl.createdAt instanceof Date
+            ? rl.createdAt.toISOString()
+            : '';
+        events.push({
+          at,
+          eventType: 'LOT',
+          entityType: 'inventory_release',
+          entityId: String(rl.id),
+          refNo: String(rl.noRelease || ''),
+          summary: `Release bahan ${rl.noRelease} (candidate lot inference)`,
           statusOrAlert: 'CANDIDATE',
         });
       }

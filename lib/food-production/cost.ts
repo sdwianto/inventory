@@ -28,6 +28,15 @@ export interface CostLineBreakdown {
   unitCost: number;
   amount: number;
   missingPrice?: boolean;
+  /** Sumber harga aktual: kartu stok, kartu + master (sebagian tanpa harga), atau master hargaBeli. */
+  costSource?: 'KARTU' | 'KARTU_MASTER' | 'MASTER';
+}
+
+/** Biaya keluar dari kartu stok per produk (lihat sumOutboundKartuBySource). */
+export interface ActualKartuCost {
+  qtyOut: number;
+  amount: number;
+  zeroCostQty: number;
 }
 
 export interface CostTotals {
@@ -276,10 +285,13 @@ export function analyzeActualCost(input: {
   resultLines: ProductionResultLine[];
   productsById: Map<string, ProductCostRef>;
   standard?: CostTotals;
+  /** Bila diisi: qty yang tercatat di kartu dinilai dengan harga kartu; sisanya harga master. */
+  kartuCostByProduct?: Map<string, ActualKartuCost>;
 }): CostAnalysis {
   const actualLines: CostLineBreakdown[] = [];
   let total = 0;
   let missing = 0;
+  let masterFallbackCount = 0;
   const warnings: string[] = [];
 
   for (const line of input.issueLines || []) {
@@ -287,6 +299,33 @@ export function analyzeActualCost(input: {
     const unit = unitCostOf(product);
     const qty = Number(line.qtyIssued) || 0;
     if (!(qty > 0)) continue;
+    const kartu = input.kartuCostByProduct?.get(line.productId);
+    if (kartu && kartu.qtyOut > 0) {
+      const pricedBase = Math.max(0, roundQty(kartu.qtyOut - kartu.zeroCostQty));
+      const pricedQty = Math.max(0, roundQty(Math.min(qty, kartu.qtyOut) - kartu.zeroCostQty));
+      const pricedAmount = pricedBase > 0 && pricedQty > 0
+        ? kartu.amount * Math.min(1, pricedQty / pricedBase)
+        : 0;
+      const fallbackQty = Math.max(0, roundQty(qty - pricedQty));
+      if (fallbackQty > 0 && unit == null) {
+        missing += 1;
+      }
+      if (fallbackQty > 0) masterFallbackCount += 1;
+      const amount = money(pricedAmount + fallbackQty * (unit ?? 0));
+      total += amount;
+      actualLines.push({
+        productId: line.productId,
+        productKode: line.productKode || product?.productKode,
+        productNama: line.productNama || product?.productNama,
+        qty,
+        satuan: line.satuan || product?.satuan,
+        unitCost: money(amount / qty),
+        amount,
+        costSource: fallbackQty > 0 ? 'KARTU_MASTER' : 'KARTU',
+        ...(fallbackQty > 0 && unit == null ? { missingPrice: true } : {}),
+      });
+      continue;
+    }
     if (unit == null) {
       missing += 1;
       actualLines.push({
@@ -311,7 +350,9 @@ export function analyzeActualCost(input: {
       satuan: line.satuan || product?.satuan,
       unitCost: money(unit),
       amount,
+      ...(input.kartuCostByProduct ? { costSource: 'MASTER' as const } : {}),
     });
+    if (input.kartuCostByProduct) masterFallbackCount += 1;
   }
 
   const actualPorsi = roundQty(
@@ -326,6 +367,11 @@ export function analyzeActualCost(input: {
     missingPriceCount: missing,
   };
   if (missing) warnings.push(`${missing} bahan actual tanpa hargaBeli`);
+  if (masterFallbackCount) {
+    warnings.push(
+      `${masterFallbackCount} bahan dinilai (sebagian) dengan hargaBeli master — kartu stok tidak ditemukan atau tanpa harga`,
+    );
+  }
   if (!(actualPorsi > 0)) warnings.push('Belum ada actual porsi (HSL) — per porsi memakai 1');
 
   let variance: CostAnalysis['variance'];

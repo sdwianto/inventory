@@ -20,7 +20,10 @@ import {
   isIssueEditable,
   isIssueReconcilable,
   buildIssueLinesFromMrp,
+  buildReferenceIssueLines,
+  isReferenceIssue,
   summarizeIssueLines,
+  summarizeReferenceIssueLines,
   normalizeIssueLines,
   postingDateFromIso,
   type MaterialIssueDoc,
@@ -35,11 +38,9 @@ import {
   cookDateFromPlanTanggal,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
-import {
-  aggregatePlanMaterialConsumption,
-  applyConsumptionToRequirementLines,
-} from '@/lib/food-production/material-issue-reconcile';
-import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
+import { buildPlanMaterialExplosion, buildPlanReadiness, planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
+import { RL_PENDING_STATUSES, loadPlanReference, type PlanReference } from '@/lib/food-production/plan-reference';
+import { isPblReferenceModeEnabled, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { isCatalogProductActive, loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
@@ -208,6 +209,43 @@ async function seedLinesFromPlan(
   return { lines, warehouseKode: String(exploded.warehouseKode || warehouseKode) };
 }
 
+/**
+ * Acuan rencana untuk PBL acuan (Fase 1.4): baris dari `loadPlanReference`, qty keluar 0.
+ * `session`: dibaca dalam snapshot transaksi (selesai); tanpa session ikut isi stok untuk tampilan.
+ */
+async function loadIssueReference(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  plan: ProductionPlanDoc,
+  opts: {
+    fallbackWarehouse?: string;
+    session?: ClientSession;
+    fallbackMrpLines?: Awaited<ReturnType<typeof planFallbackMrpLines>>;
+  } = {},
+): Promise<{ reference: PlanReference; lines: MaterialIssueDoc['lines'] }> {
+  const fallbackMrpLines = opts.fallbackMrpLines ?? await planFallbackMrpLines(db, scopeAuth, plan);
+  const reference = await loadPlanReference(db, scopeAuth, plan, {
+    fallbackMrpLines,
+    pendingRl: {},
+    ...(opts.session ? { session: opts.session } : { withStock: true }),
+  });
+  const lines = await enrichIssueLineWarehouses(
+    db,
+    scopeAuth,
+    buildReferenceIssueLines(reference.lines),
+    opts.fallbackWarehouse,
+  );
+  return { reference, lines };
+}
+
+function describeSisaLines(lines: MaterialIssueDoc['lines']): string {
+  const sisa = lines.filter((l) => (Number(l.sisa) || 0) > 0);
+  const head = sisa.slice(0, 5)
+    .map((l) => `${l.productNama || l.productKode || l.productId} sisa ${l.sisa} ${l.satuan || ''}`.trim())
+    .join('; ');
+  return sisa.length > 5 ? `${head}; +${sisa.length - 5} lainnya` : head;
+}
+
 async function assertIssueProductsActive(
   db: HandlerContext['db'],
   tenantId: string,
@@ -358,18 +396,13 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       );
     }
 
-    // Gate bisnis: idealnya bahan sudah lengkap (resep-vs-stok, atau PO-vs-diterima
-    // begitu PO diberlakukan — lihat useLinkedPoAsTarget di buildPlanMaterialExplosion).
+    // Gate bisnis: idealnya bahan sudah lengkap — sumber sama dengan layar kesiapan
+    // rencana (buildPlanReadiness: acuan PO/MRP bila flag rlFromPoReference, selain itu jalur lama).
     // Tapi operasional lapangan tidak selalu bisa 100% lengkap — blokir LUNAK: boleh
     // lanjut kalau admin sadar memilih override + isi alasan (tercatat di riwayat & audit).
-    const readiness = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
-    if ('error' in readiness && readiness.error) return err(readiness.error, 400);
-    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, plan.id, {
-      includeOrphanOperational: true,
-      planMeta: { tanggal: plan.tanggal, kitchenId: plan.kitchenId },
-    });
-    const netReadiness = applyConsumptionToRequirementLines(readiness.lines || [], consumption);
-    const shortageCount = netReadiness.summary.shortageCount;
+    const readiness = await buildPlanReadiness(db, scopeAuth, plan);
+    if ('error' in readiness) return err(readiness.error, 400);
+    const shortageCount = readiness.summary.shortageCount;
     const overrideShortage = issueBody.overrideShortage === true;
     const overrideShortageNote = String(issueBody.overrideShortageNote || '').trim();
     if (shortageCount > 0 && (!overrideShortage || !overrideShortageNote)) {
@@ -391,28 +424,55 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       );
     }
 
-    const seeded = await seedLinesFromPlan(
-      db,
-      scopeAuth,
-      plan,
-      String(issueBody.materialRequirementId || '').trim() || undefined,
-    );
-    if ('error' in seeded) return err(seeded.error, 400);
-
     const tenantId = tenantIdForWrite(scopeAuth, issueBody);
-    let lines = seeded.lines;
-    lines = await seedNetIssueLines(db, scopeAuth, plan.id, tenantId, lines, {
-      tanggal: plan.tanggal,
-      kitchenId: plan.kitchenId,
-    });
-    if (issueBody.lines != null) {
-      const normalized = normalizeIssueLines(issueBody.lines);
-      if ('error' in normalized) return err(normalized.error, 400);
-      lines = normalized;
+    const referenceMode = await isPblReferenceModeEnabled(db, String(plan.tenantId || tenantId));
+    let seeded: Exclude<Awaited<ReturnType<typeof seedLinesFromPlan>>, { error: string }>;
+    let lines: MaterialIssueDoc['lines'];
+    if (referenceMode) {
+      if (issueBody.lines != null) {
+        return err('PBL acuan: baris diisi otomatis dari acuan rencana (PO diterima / MRP), tidak bisa dikirim manual', 400);
+      }
+      const warehouseKode = await resolveWarehouse(db, scopeAuth, plan);
+      if (typeof warehouseKode !== 'string') return err(warehouseKode.error, 400);
+      const loaded = await loadIssueReference(db, scopeAuth, plan, { fallbackWarehouse: warehouseKode });
+      if (!loaded.lines.length) return err('Rencana belum punya acuan bahan (PO diterima / MRP)', 400);
+      const mrpId = loaded.reference.materialRequirementId;
+      const mrp = mrpId
+        ? await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
+          withTenantFilter(scopeAuth, { id: mrpId }),
+          { projection: { noDokumen: 1 } },
+        ) as { noDokumen?: string } | null
+        : null;
+      seeded = {
+        lines: loaded.lines,
+        warehouseKode,
+        ...(mrpId ? { materialRequirementId: mrpId, materialRequirementNo: mrp?.noDokumen } : {}),
+      };
+      lines = loaded.lines;
+    } else {
+      const seededLegacy = await seedLinesFromPlan(
+        db,
+        scopeAuth,
+        plan,
+        String(issueBody.materialRequirementId || '').trim() || undefined,
+      );
+      if ('error' in seededLegacy) return err(seededLegacy.error, 400);
+      seeded = seededLegacy;
+      lines = await seedNetIssueLines(db, scopeAuth, plan.id, tenantId, seeded.lines, {
+        tanggal: plan.tanggal,
+        kitchenId: plan.kitchenId,
+      });
+      if (issueBody.lines != null) {
+        const normalized = normalizeIssueLines(issueBody.lines);
+        if ('error' in normalized) return err(normalized.error, 400);
+        lines = normalized;
+      }
     }
 
-    const productErr = await assertIssueProductsActive(db, tenantId, lines);
-    if (productErr) return err(productErr, 400);
+    if (!referenceMode) {
+      const productErr = await assertIssueProductsActive(db, tenantId, lines);
+      if (productErr) return err(productErr, 400);
+    }
     const now = new Date();
     const actor = actorFields(auth);
     const shortageOverride = shortageCount > 0 ? {
@@ -420,7 +480,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       at: now,
       reason: overrideShortageNote,
       shortageCount,
-      shortageLines: netReadiness.lines.filter((l) => l.shortage).slice(0, 20).map((l) => ({
+      shortageLines: readiness.lines.filter((l) => l.shortage).slice(0, 20).map((l) => ({
         productId: l.productId,
         productKode: l.productKode,
         productNama: l.productNama,
@@ -434,9 +494,10 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       toStatus: 'DRAFT',
       userId: actor.userId,
       userName: actor.userName,
-      note: shortageOverride
+      note: (shortageOverride
         ? `Dari rencana ${plan.noDokumen} — diproses meski kurang ${shortageCount} item: "${overrideShortageNote}"`
-        : `Dari rencana ${plan.noDokumen}`,
+        : `Dari rencana ${plan.noDokumen}`)
+        + (referenceMode ? ' · PBL acuan (tanpa mutasi stok, bahan keluar lewat RL)' : ''),
     });
 
     const doc: MaterialIssueDoc = {
@@ -454,7 +515,8 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       lines,
       status: 'DRAFT',
       history,
-      summary: summarizeIssueLines(lines),
+      summary: referenceMode ? summarizeReferenceIssueLines(lines) : summarizeIssueLines(lines),
+      ...(referenceMode ? { stockMode: 'REFERENCE' as const, referenceSnapshotAt: now } : {}),
       catatan: String(issueBody.catatan || '').trim() || undefined,
       createdAt: now,
       updatedAt: now,
@@ -475,8 +537,12 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
           action: 'ISSUE_CREATE',
           entityType: 'material_issue',
           entityId: doc.id,
-          summary: `Issue ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} item)`,
-          ...(shortageOverride ? { metadata: { shortageOverride: true, shortageCount, reason: overrideShortageNote } } : {}),
+          summary: `Issue ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} item)`
+            + (referenceMode ? ' · acuan' : ''),
+          metadata: {
+            ...(referenceMode ? { stockMode: 'REFERENCE' } : {}),
+            ...(shortageOverride ? { shortageOverride: true, shortageCount, reason: overrideShortageNote } : {}),
+          },
           ...auditActor(auth),
         }),
       });
@@ -521,6 +587,24 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if (!isIssueEditable(existing.status)) {
       return err(`Status ${existing.status} tidak dapat diedit`, 400);
     }
+    if (isReferenceIssue(existing)) {
+      if (issueBody.lines != null) {
+        return err('PBL acuan: baris tidak diedit manual — gunakan Perbarui acuan. Qty keluar dicatat lewat RL.', 400);
+      }
+      const edited = await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, casEditFilter(existing)),
+        {
+          $set: {
+            catatan: issueBody.catatan != null ? String(issueBody.catatan).trim() || undefined : existing.catatan,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      if (edited.matchedCount === 0) return casConflict();
+      return ok(project(await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: path[1] }),
+      ) as Record<string, unknown>));
+    }
     const normalized = normalizeIssueLines(issueBody.lines != null ? issueBody.lines : existing.lines);
     if ('error' in normalized) return err(normalized.error, 400);
     const lines = await enrichIssueLineWarehouses(
@@ -560,17 +644,52 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       withTenantFilter(scopeAuth, { id: path[1] }),
     ) as MaterialIssueDoc | null;
     if (!existing) return err('Pengambilan bahan tidak ditemukan', 404);
+    if (isReferenceIssue(existing)) {
+      const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: existing.productionPlanId }),
+      ) as ProductionPlanDoc | null;
+      if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+      const { reference, lines: live } = await loadIssueReference(db, scopeAuth, plan, {
+        fallbackWarehouse: existing.warehouseKode,
+      });
+      const liveSummary = summarizeReferenceIssueLines(live);
+      return ok({
+        productionPlanId: existing.productionPlanId,
+        issueId: existing.id,
+        mode: 'REFERENCE',
+        lines: [],
+        summary: {
+          lineCount: live.length,
+          qtyPlannedTotal: liveSummary.qtyPlannedTotal,
+          qtyAlreadyIssuedTotal: liveSummary.rlPostedTotal,
+          qtyRemainingTotal: liveSummary.sisaTotal,
+          qtyOnHandTotal: 0,
+          suggestedQtyIssuedTotal: 0,
+          mismatchCount: 0,
+          sisaLineCount: liveSummary.sisaLineCount,
+        },
+        reference,
+      });
+    }
     const lines = await enrichIssueLineWarehouses(
       db,
       scopeAuth,
       existing.lines || [],
       existing.warehouseKode,
     );
-    const reconciliation = await buildIssueReconciliation(db, scopeAuth, {
-      ...existing,
-      lines,
+    const [reconciliation, referenceMode] = await Promise.all([
+      buildIssueReconciliation(db, scopeAuth, { ...existing, lines }),
+      isTenantFeatureEnabled(db, existing.tenantId, 'rlFromPoReference'),
+    ]);
+    if (!referenceMode || !existing.productionPlanId) return ok(reconciliation);
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: existing.productionPlanId }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return ok(reconciliation);
+    const reference = await loadPlanReference(db, scopeAuth, plan, {
+      fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
     });
-    return ok(reconciliation);
+    return ok({ ...reconciliation, reference });
   }
 
   if (path[0] === 'material-issues' && path[1] && path[2] === 'reconcile' && method === 'POST') {
@@ -593,6 +712,59 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     const reason = String(issueBody.reason || issueBody.note || '').trim();
     if (needsReason && !reason) {
       return err('Alasan wajib untuk menyesuaikan PBL yang sudah disetujui', 400);
+    }
+
+    if (isReferenceIssue(existing)) {
+      const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: existing.productionPlanId }),
+      ) as ProductionPlanDoc | null;
+      if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+      const { lines: refreshed } = await loadIssueReference(db, scopeAuth, plan, {
+        fallbackWarehouse: existing.warehouseKode,
+      });
+      if (!refreshed.length) return err('Rencana belum punya acuan bahan (PO diterima / MRP)', 400);
+      const summary = summarizeReferenceIssueLines(refreshed);
+      const actorRef = actorFields(auth);
+      const at = new Date();
+      const refreshConflict = await casUpdateWithAudit({
+        collection: MATERIAL_ISSUES_COLLECTION,
+        filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+        update: {
+          $set: {
+            lines: refreshed,
+            summary,
+            referenceSnapshotAt: at,
+            history: appendDocHistory(existing.history, {
+              at,
+              fromStatus: existing.status,
+              toStatus: existing.status,
+              userId: actorRef.userId,
+              userName: actorRef.userName,
+              note: `Perbarui acuan (sudah RL ${summary.rlPostedTotal}, sisa ${summary.sisaTotal})${reason ? `: ${reason}` : ''}`,
+            }),
+            updatedAt: at,
+          },
+        },
+        audit: {
+          tenantId: existing.tenantId,
+          action: 'ISSUE_RECONCILE',
+          entityType: 'material_issue',
+          entityId: id,
+          summary: `Issue ${existing.noDokumen} — acuan diperbarui (sisa ${summary.sisaLineCount} bahan)`,
+          metadata: {
+            stockMode: 'REFERENCE',
+            rlPostedTotal: summary.rlPostedTotal,
+            sisaTotal: summary.sisaTotal,
+            sisaLineCount: summary.sisaLineCount,
+            reason: reason || undefined,
+          },
+          ...auditActor(auth),
+        },
+      });
+      if (refreshConflict) return refreshConflict;
+      return ok(project(await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id }),
+      ) as Record<string, unknown>));
     }
 
     const enriched = await enrichIssueLineWarehouses(
@@ -679,6 +851,114 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     const actor = actorFields(auth);
     const now = new Date();
 
+    if (toStatus === 'COMPLETED' && isReferenceIssue(existing)) {
+      const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id: existing.productionPlanId }),
+      ) as ProductionPlanDoc | null;
+      if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+      const fallbackMrpLines = await planFallbackMrpLines(db, scopeAuth, plan);
+      const ackNote = String(issueBody.note || issueBody.reason || '').trim();
+      try {
+        await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+          const fresh = await txDb.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+            withTenantFilter(scopeAuth, { id, status: existing.status, stockMode: 'REFERENCE' }),
+            txOpts(session),
+          ) as MaterialIssueDoc | null;
+          if (!fresh) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+
+          // Serialisasi dengan approve RL rencana yang sama: snapshot sisa & RL tertunda tidak boleh basi.
+          await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id: plan.id }),
+            { $inc: { rlPostingSeq: 1 } },
+            txOpts(session),
+          );
+
+          const { lines } = await loadIssueReference(txDb, scopeAuth, plan, {
+            fallbackWarehouse: fresh.warehouseKode,
+            fallbackMrpLines,
+            ...(session ? { session } : {}),
+          });
+          const summary = summarizeReferenceIssueLines(lines);
+          const pendingRlCount = await txDb.collection('inventory_releases').countDocuments(
+            withTenantFilter(scopeAuth, { productionPlanId: plan.id, status: { $in: [...RL_PENDING_STATUSES] } }),
+            txOpts(session),
+          );
+          const sisaLineCount = summary.sisaLineCount || 0;
+          const needsAck = sisaLineCount > 0 || pendingRlCount > 0;
+          if (needsAck && ackNote.length < 5) {
+            const parts = [
+              sisaLineCount ? `${sisaLineCount} bahan belum keluar penuh lewat RL (${describeSisaLines(lines)})` : '',
+              pendingRlCount ? `${pendingRlCount} RL belum diposting (draft/menunggu persetujuan)` : '',
+            ].filter(Boolean).join('; ');
+            throw Object.assign(
+              new Error(`${parts}. Isi catatan konfirmasi (min. 5 karakter) untuk menyelesaikan PBL acuan.`),
+              { httpStatus: 400 },
+            );
+          }
+
+          const history = appendDocHistory(fresh.history, {
+            at: now,
+            fromStatus: fresh.status,
+            toStatus: 'COMPLETED',
+            userId: actor.userId,
+            userName: actor.userName,
+            note: needsAck
+              ? `PBL acuan dikonfirmasi dengan catatan — ${ackNote}`
+              : (ackNote || 'PBL acuan dikonfirmasi — tanpa mutasi stok (bahan keluar lewat RL)'),
+          });
+          const completed = await txDb.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id, status: fresh.status, stockMode: 'REFERENCE' }),
+            {
+              $set: {
+                status: 'COMPLETED',
+                lines,
+                summary,
+                referenceSnapshotAt: now,
+                history,
+                updatedAt: now,
+                ...(needsAck ? {
+                  completionAck: {
+                    by: { userId: actor.userId, userName: actor.userName },
+                    at: now,
+                    reason: ackNote,
+                    sisaLineCount,
+                    pendingRlCount,
+                  },
+                } : {}),
+              },
+            },
+            txOpts(session),
+          );
+          if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+          await writeAuditLog(txDb, {
+            tenantId: existing.tenantId,
+            action: 'ISSUE_COMPLETE',
+            entityType: 'material_issue',
+            entityId: id,
+            summary: `Issue ${existing.noDokumen} selesai — PBL acuan, tanpa mutasi stok`
+              + (needsAck ? ` · sisa ${sisaLineCount} bahan` : ''),
+            metadata: {
+              stockMode: 'REFERENCE',
+              rlPostedTotal: summary.rlPostedTotal,
+              sisaTotal: summary.sisaTotal,
+              sisaLineCount,
+              pendingRlCount,
+              ...(needsAck ? { reason: ackNote } : {}),
+            },
+            ...auditActor(auth),
+          }, session);
+        });
+      } catch (e) {
+        const status = (e as { httpStatus?: number } | null)?.httpStatus;
+        if (status === 400) return err(e instanceof Error ? e.message : 'Gagal selesaikan', 400);
+        if (status === 409) return casConflict();
+        throw e;
+      }
+      return ok(project(await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { id }),
+      ) as Record<string, unknown>));
+    }
+
     if (toStatus === 'COMPLETED') {
       if (existing.stockPostedAt) return err('Stok sudah diposting', 400);
       const productErr = await assertIssueProductsActive(db, existing.tenantId, existing.lines);
@@ -736,6 +1016,15 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             txOpts(session),
           ) as MaterialIssueDoc | null;
           if (!fresh) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+
+          // Serialisasi dengan approve RL rencana yang sama: PBL bermutasi ikut dihitung di kontrol melebihi acuan RL.
+          if (fresh.productionPlanId) {
+            await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+              withTenantFilter(scopeAuth, { id: fresh.productionPlanId }),
+              { $inc: { rlPostingSeq: 1 } },
+              txOpts(session),
+            );
+          }
 
           // Re-check inside tx (TOCTOU): produk bisa dinonaktifkan antara precheck dan post.
           const productErrTx = await assertIssueProductsActive(txDb, fresh.tenantId, fresh.lines);
@@ -849,7 +1138,12 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     if (!existing) return err('Pengambilan bahan tidak ditemukan', 404);
     if (existing.status === 'CANCELLED') return ok({ id: path[1], status: 'CANCELLED' });
     if (existing.status === 'COMPLETED') {
-      return err('Dokumen selesai tidak dapat dibatalkan (stok sudah keluar)', 400);
+      return err(
+        isReferenceIssue(existing)
+          ? 'PBL acuan yang sudah selesai tidak dapat dibatalkan (sudah jadi konfirmasi rencana)'
+          : 'Dokumen selesai tidak dapat dibatalkan (stok sudah keluar)',
+        400,
+      );
     }
     const transitionErr = assertStatusTransition(existing.status, 'CANCELLED', ISSUE_STATUS_TRANSITIONS);
     if (transitionErr) return err(transitionErr, 400);

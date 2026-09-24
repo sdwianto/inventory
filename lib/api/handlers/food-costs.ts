@@ -17,14 +17,7 @@ import {
   collectPlanLineRefs,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
-import {
-  loadOperationalReleaseLinesForPlan,
-  mergeConsumptionLinesForCost,
-} from '@/lib/food-production/material-issue-reconcile';
-import {
-  MATERIAL_ISSUES_COLLECTION,
-  type MaterialIssueDoc,
-} from '@/lib/food-production/material-issue';
+import { loadPlanActualCostInput } from '@/lib/food-production/actual-consumption';
 import {
   PRODUCTION_RESULTS_COLLECTION,
   type ProductionResultDoc,
@@ -124,27 +117,22 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
       if ('error' in standard) return err(standard.error, 400);
       if (scope === 'plan') return ok(standard);
 
-      const issue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
-        { ...tenantFilter, productionPlanId: plan.id, status: 'COMPLETED' },
-        { sort: { createdAt: -1 } },
-      ) as MaterialIssueDoc | null;
       const result = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
         { ...tenantFilter, productionPlanId: plan.id, status: 'COMPLETED' },
         { sort: { createdAt: -1 } },
       ) as ProductionResultDoc | null;
-      const issueProductIds = (issue?.lines || []).map((l) => l.productId);
-      const rlLines = await loadOperationalReleaseLinesForPlan(db, scopeAuth, plan.id);
-      const mergedLines = mergeConsumptionLinesForCost(issue?.lines || [], rlLines);
+      const actualInput = await loadPlanActualCostInput(db, scopeAuth, plan);
       const productsById = await loadProducts(db, scopeAuth, [
-        ...new Set([...productIds, ...issueProductIds, ...rlLines.map((l) => l.productId)]),
+        ...new Set([...productIds, ...actualInput.productIds]),
       ]);
       return ok(analyzeActualCost({
         planId: plan.id,
         planNo: plan.noDokumen,
-        issueLines: mergedLines,
+        issueLines: actualInput.issueLines,
         resultLines: result?.lines || [],
         productsById,
         standard: standard.standard,
+        ...(actualInput.kartuCostByProduct ? { kartuCostByProduct: actualInput.kartuCostByProduct } : {}),
       }));
     }
 

@@ -24,6 +24,8 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'jurnal', index: { tenantId: 1, noJurnal: 1 }, name: 'uniq_jurnal_tenant_no', unique: true },
   { collection: 'stok_kartu', index: { tenantId: 1, stokId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_stok_tgl' },
   { collection: 'stok_kartu', index: { tenantId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_tanggal' },
+  { collection: 'stok_kartu', index: { tenantId: 1, sourceType: 1, sourceId: 1 }, name: 'idx_stok_kartu_tenant_source' },
+  { collection: 'stok_kartu', index: { tenantId: 1, sourceType: 1, noTransaksi: 1 }, name: 'idx_stok_kartu_tenant_source_no' },
   {
     // Idempotensi posting: satu baris dokumen sumber hanya boleh sekali masuk kartu (baris lama tanpa lineRef dikecualikan).
     collection: 'stok_kartu',
@@ -201,6 +203,11 @@ const INDEX_SPECS: IndexSpec[] = [
     collection: 'material_issues',
     index: { tenantId: 1, 'fefoConsume.allocations.batchId': 1 },
     name: 'idx_issue_tenant_lot_alloc',
+  },
+  {
+    collection: 'inventory_releases',
+    index: { tenantId: 1, 'ingredientLotConsume.allocations.batchId': 1 },
+    name: 'idx_inv_release_tenant_lot_alloc',
   },
   { collection: 'production_results', index: { tenantId: 1, id: 1 }, name: 'idx_result_tenant_id' },
   { collection: 'production_results', index: { tenantId: 1, productionPlanId: 1, createdAt: -1 }, name: 'idx_result_tenant_plan' },

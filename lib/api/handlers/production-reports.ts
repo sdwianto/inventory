@@ -9,6 +9,7 @@ import {
 import {
   MATERIAL_ISSUES_COLLECTION,
   ISSUE_OPEN_STATUSES,
+  isReferenceIssue,
   type MaterialIssueDoc,
 } from '@/lib/food-production/material-issue';
 import {
@@ -72,6 +73,13 @@ function reportFromDocs(
           qtyIssuedTotal: latestIssue.summary?.qtyIssuedTotal,
           lineCount: latestIssue.summary?.lineCount ?? latestIssue.lines?.length,
           stockPostedAt: latestIssue.stockPostedAt || null,
+          ...(isReferenceIssue(latestIssue)
+            ? {
+                stockMode: 'REFERENCE' as const,
+                rlPostedTotal: latestIssue.summary?.rlPostedTotal,
+                sisaLineCount: latestIssue.summary?.sisaLineCount,
+              }
+            : {}),
         }
       : null,
     result: latestResult

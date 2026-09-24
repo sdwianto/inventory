@@ -22,7 +22,8 @@ import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { runListExport, type ListExportFormat } from '@/lib/run-list-export';
-import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send, Pencil, Trash2 } from 'lucide-react';
+import { ArrowUpFromLine, BookOpen, Plus, CheckCircle2, XCircle, Send, Pencil, Trash2, Link2 } from 'lucide-react';
+import { UnlinkedReleasesDialog } from '@/components/pengeluaran-stok/UnlinkedReleasesDialog';
 import { useConfirm } from '@/components/ConfirmProvider';
 import LineUomSelect from '@/components/uom/LineUomSelect';
 import { fetchDefaultProductUom } from '@/lib/hooks/use-product-uoms';
@@ -35,6 +36,7 @@ import {
   canUserEditRelease,
   catalogFromSaldoRows,
   EMPTY_RELEASE_FORM,
+  mergePrefillIntoReleaseItems,
   patchReleaseFormItemUom,
   qtyAtLokasi,
   releaseDocToFormState,
@@ -44,6 +46,43 @@ import {
 } from '@/lib/pengeluaran-stok/release-form-items';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import { looksLikeProductionKeperluan } from '@/lib/food-production/production-keperluan';
+import type { ReleasePrefill, ReleasePrefillSkipReason } from '@/lib/food-production/release-prefill';
+import { getClientFeatureFlags } from '@/lib/feature-flags-client';
+
+type OverIssuePreviewLine = {
+  productNama?: string;
+  productKode?: string;
+  satuan?: string;
+  sumber: string;
+  lineIndexes: number[];
+  acuanQty: number;
+  consumedBefore: number;
+  qtyAfter: number;
+  limitQty: number;
+  missingReason: boolean;
+};
+type OverIssuePreview = {
+  enabled: boolean;
+  tolerancePct?: number;
+  overCount: number;
+  missingReasonCount: number;
+  lines: OverIssuePreviewLine[];
+};
+
+function describeOverLine(l: OverIssuePreviewLine): string {
+  const sat = l.satuan ? ` ${l.satuan}` : '';
+  if (l.sumber === 'DI_LUAR_ACUAN') return 'Di luar acuan rencana — wajib alasan';
+  return `Total ${formatNumber(l.qtyAfter)}${sat} melebihi batas ${formatNumber(l.limitQty)}${sat}`
+    + ` (acuan ${l.sumber} ${formatNumber(l.acuanQty)}, sudah keluar ${formatNumber(l.consumedBefore)})`;
+}
+
+const PREFILL_SKIP_LABEL: Record<ReleasePrefillSkipReason, string> = {
+  BELUM_DITERIMA: 'PO belum diterima',
+  SELESAI: 'sudah keluar semua',
+  MENUNGGU_RL: 'menunggu RL lain disetujui',
+  GUDANG_LAIN: 'gudang lain',
+  STOK_KOSONG: 'stok kosong',
+};
 
 const ListExportMenu = dynamic(() => import('@/components/ListExportMenu'), { ssr: false });
 
@@ -77,12 +116,19 @@ export function ModeOperasional() {
   const [form, setForm] = useState<ReleaseFormState>(EMPTY_RELEASE_FORM);
   const searchParams = useSearchParams();
   const wrPrefillDone = useRef(false);
+  const clientKeySeq = useRef(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [showPanduan, setShowPanduan] = useState(false);
   /** Default: semua gudang — tidak mengikuti lokasi aktif header. */
   const [panduanWarehouseKode, setPanduanWarehouseKode] = useState(PANDUAN_WH_ALL);
+  const [prefill, setPrefill] = useState<ReleasePrefill | null>(null);
+  const [prefillLoading, setPrefillLoading] = useState(false);
+  /** stokId → keterangan melebihi acuan dari preview server terakhir. */
+  const [overFlags, setOverFlags] = useState<Record<string, string>>({});
+  const [showUnlinked, setShowUnlinked] = useState(false);
+  const rlFromPoReference = getClientFeatureFlags().rlFromPoReference;
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => it.stokId));
 
@@ -219,9 +265,36 @@ export function ModeOperasional() {
     setEditingNoRelease('');
     setEditingRejectReason('');
     setForm(EMPTY_RELEASE_FORM);
+    setPrefill(null);
+    setOverFlags({});
+  };
+
+  const fillFromPlan = async () => {
+    if (!form.productionPlanId) return;
+    setPrefillLoading(true);
+    try {
+      const qs = new URLSearchParams({ lokasiKode: form.lokasiKode });
+      if (editingReleaseId) qs.set('excludeReleaseId', editingReleaseId);
+      const data = await fetchJson<ReleasePrefill>(
+        `/api/production-plans/${form.productionPlanId}/release-prefill?${qs.toString()}`,
+      );
+      setPrefill(data);
+      setForm((prev) => ({
+        ...prev,
+        items: mergePrefillIntoReleaseItems(prev.items, data.lines, prev.lokasiKode),
+      }));
+      if (!data.lines.length) toast.message('Tidak ada bahan yang bisa diisi dari acuan rencana di gudang ini');
+      else toast.success(`${data.lines.length} bahan diisi dari acuan rencana`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPrefillLoading(false);
+    }
   };
 
   const openCreateForm = () => {
+    setPrefill(null);
+    setOverFlags({});
     setEditingReleaseId(null);
     setEditingNoRelease('');
     setEditingRejectReason('');
@@ -249,6 +322,8 @@ export function ModeOperasional() {
       setEditingNoRelease(str(full.noRelease));
       setEditingRejectReason(str(full.status) === 'REJECTED' ? str(full.rejectReason) : '');
       setForm(releaseDocToFormState(full));
+      setPrefill(null);
+      setOverFlags({});
       setShowForm(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Gagal memuat release');
@@ -312,6 +387,18 @@ export function ModeOperasional() {
 
     const createdBy = asObject(r.createdBy);
     const isOwn = str(createdBy.userId) === str(user?.id);
+    const userId = str(user?.id);
+    const isMaker = !!userId && [r.createdBy, r.lastEditedBy, r.submittedBy]
+      .some((u) => str(asObject(u).userId) === userId);
+    const overCount = asArray(asObject(r.overIssue).lines).length;
+
+    if (isMaker && overCount > 0) {
+      return (
+        <span className="text-xs text-red-700" title="Release melebihi acuan rencana wajib disetujui pengguna lain">
+          Melebihi acuan — perlu penyetuju lain
+        </span>
+      );
+    }
 
     if (isAdminApprover) {
       return (
@@ -367,7 +454,8 @@ export function ModeOperasional() {
   const addItem = async (p: JsonObject) => {
     // Optimistic: tulis nama/kode SEBELUM await UOM — detail langsung tampil,
     // tidak tergantung network / referensi row React Query setelah await.
-    const clientKey = `ck-${str(p.id)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    clientKeySeq.current += 1;
+    const clientKey = `ck-${str(p.id)}-${clientKeySeq.current}`;
     const pending = buildReleaseFormItem({
       product: p,
       lokasiKode: form.lokasiKode,
@@ -427,6 +515,29 @@ export function ModeOperasional() {
     try {
       const items = form.items.map(({ clientKey: _ck, ...rest }) => rest);
       const body = { ...form, items, submit };
+      if (submit && rlFromPoReference && form.productionPlanId) {
+        const preview = await fetchJson<OverIssuePreview>('/api/inventory-releases/over-issue-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const flags: Record<string, string> = {};
+        for (const l of preview.lines || []) {
+          for (const idx of l.lineIndexes) {
+            const stokId = items[idx]?.stokId;
+            if (stokId) flags[stokId] = describeOverLine(l);
+          }
+        }
+        setOverFlags(flags);
+        if (preview.missingReasonCount > 0) {
+          toast.error(
+            `${preview.missingReasonCount} produk melebihi acuan rencana`
+            + ` (toleransi ${formatNumber(preview.tolerancePct ?? 0)}%) — isi alasan di baris bertanda merah`,
+          );
+          setSaving(false);
+          return;
+        }
+      }
       if (editingReleaseId) {
         await saveMutation.mutateAsync({
           url: `/api/inventory-releases/${editingReleaseId}`,
@@ -527,6 +638,11 @@ export function ModeOperasional() {
             >
               <BookOpen className="w-4 h-4 mr-1" /> Panduan Release
             </Button>
+            {rlFromPoReference && canApprove && (
+              <Button variant="outline" onClick={() => setShowUnlinked(true)}>
+                <Link2 className="w-4 h-4 mr-1" /> RL belum tertaut
+              </Button>
+            )}
             {canCreate && (
               <Button onClick={openCreateForm} className="bg-orange-500 hover:bg-orange-600">
                 <Plus className="w-4 h-4 mr-1" /> Buat Release
@@ -632,11 +748,15 @@ export function ModeOperasional() {
                 <Label>Gudang asal *</Label>
                 <Select
                   value={form.lokasiKode}
-                  onValueChange={(v) => setForm((prev) => ({
-                    ...prev,
-                    lokasiKode: v,
-                    items: editingReleaseId ? prev.items : [],
-                  }))}
+                  onValueChange={(v) => {
+                    setPrefill(null);
+                    setOverFlags({});
+                    setForm((prev) => ({
+                      ...prev,
+                      lokasiKode: v,
+                      items: editingReleaseId ? prev.items : [],
+                    }));
+                  }}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -654,7 +774,11 @@ export function ModeOperasional() {
                 <select
                   className="w-full h-10 border rounded-md px-2 text-sm bg-white"
                   value={form.productionPlanId}
-                  onChange={(e) => setForm((prev) => ({ ...prev, productionPlanId: e.target.value }))}
+                  onChange={(e) => {
+                    setPrefill(null);
+                    setOverFlags({});
+                    setForm((prev) => ({ ...prev, productionPlanId: e.target.value }));
+                  }}
                 >
                   <option value="">— Tidak terkait rencana —</option>
                   {productionPlans.map((p) => (
@@ -690,15 +814,50 @@ export function ModeOperasional() {
                 onChange={(e) => setForm((prev) => ({ ...prev, keterangan: e.target.value }))}
               />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <Label>Item barang</Label>
-              <Button type="button" size="sm" variant="outline" onClick={() => setPickerOpen(true)}>
-                <Plus className="w-3 h-3 mr-1" /> Tambah
-              </Button>
+              <div className="flex items-center gap-2">
+                {rlFromPoReference && form.productionPlanId && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={prefillLoading}
+                    onClick={() => { void fillFromPlan(); }}
+                    title="Isi qty dari sisa acuan rencana (PO diterima, atau MRP bila tanpa PO), dibatasi stok gudang ini"
+                  >
+                    {prefillLoading ? 'Memuat…' : 'Isi dari PO rencana'}
+                  </Button>
+                )}
+                <Button type="button" size="sm" variant="outline" onClick={() => setPickerOpen(true)}>
+                  <Plus className="w-3 h-3 mr-1" /> Tambah
+                </Button>
+              </div>
             </div>
+            {prefill && prefill.skipped.length > 0 && (
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
+                <div className="font-medium">Tidak diisi dari acuan:</div>
+                {prefill.skipped.map((s) => (
+                  <div key={s.productId}>
+                    {s.nama || s.kode || s.productId} — {PREFILL_SKIP_LABEL[s.reason]}
+                    {s.reason === 'GUDANG_LAIN' && s.warehouseKode ? ` (${warehouseName(s.warehouseKode)})` : ''}
+                    {s.reason === 'MENUNGGU_RL' ? ` (${formatNumber(s.rlPending)} ${s.satuan || ''})` : ''}
+                    {s.warnings?.map((w) => (
+                      <div key={w} className="text-amber-700">{w}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="space-y-2">
               {form.items.map((it, i) => {
                 const display = resolveReleaseItemDisplay(it, productById, form.lokasiKode);
+                const acuan = prefill?.lines.find((l) => l.stokId === it.stokId);
+                const exceedsAcuan = !!acuan && it.uomId === acuan.uomId
+                  && it.qty > Math.max(0, acuan.sisa - acuan.rlPending);
+                const overFlag = overFlags[it.stokId];
+                const showOverReason = rlFromPoReference && !!form.productionPlanId
+                  && (!!overFlag || exceedsAcuan || !!it.overReason);
                 return (
                   <div
                     key={it.clientKey || `${it.stokId}-${it.uomId}-${i}`}
@@ -712,6 +871,41 @@ export function ModeOperasional() {
                         {display.kode ? `${display.kode} · ` : ''}
                         tersedia: {formatNumber(display.stokAvail)} base
                       </div>
+                      {acuan && (
+                        <div className="text-xs text-slate-600">
+                          Acuan {acuan.sumber} {formatNumber(acuan.acuanQty)} · sudah RL {formatNumber(acuan.rlPosted)}
+                          {acuan.rlPending > 0 ? ` · menunggu ${formatNumber(acuan.rlPending)}` : ''}
+                          {' '}· sisa {formatNumber(acuan.sisa)} {acuan.satuan || ''}
+                          {acuan.display ? ` (≈ ${formatNumber(acuan.display.qty)} ${acuan.display.satuan})` : ''}
+                          {acuan.cappedByStock && (
+                            <span className="text-amber-700"> · dibatasi stok</span>
+                          )}
+                        </div>
+                      )}
+                      {acuan && exceedsAcuan && (
+                        <div className="text-xs text-amber-700">
+                          Melebihi sisa acuan ({formatNumber(Math.max(0, acuan.sisa - acuan.rlPending))} {acuan.satuan || ''})
+                        </div>
+                      )}
+                      {acuan?.warnings?.map((w) => (
+                        <div key={w} className="text-xs text-amber-700">{w}</div>
+                      ))}
+                      {overFlag && <div className="text-xs text-red-700">{overFlag}</div>}
+                      {showOverReason && (
+                        <Input
+                          className={`h-8 text-xs ${overFlag && !it.overReason?.trim() ? 'border-red-400' : ''}`}
+                          maxLength={300}
+                          placeholder="Alasan melebihi acuan (wajib bila melebihi)"
+                          value={it.overReason || ''}
+                          onChange={(e) => {
+                            const overReason = e.target.value;
+                            setForm((prev) => ({
+                              ...prev,
+                              items: prev.items.map((x, idx) => (idx === i ? { ...x, overReason } : x)),
+                            }));
+                          }}
+                        />
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <Input
@@ -833,7 +1027,49 @@ export function ModeOperasional() {
                     <div className="col-span-2">Alasan: <span className="text-slate-900">{str(detail.rejectReason) || '—'}</span></div>
                   </>
                 )}
+                {str(asObject(detail.planLink).source) === 'MANUAL' && (
+                  <div className="col-span-2">
+                    Ditautkan manual oleh {str(asObject(asObject(detail.planLink).linkedBy).userName) || '—'}
+                    {' '}({formatDateTime(str(asObject(detail.planLink).linkedAt))}):{' '}
+                    <span className="text-slate-900">{str(asObject(detail.planLink).reason)}</span>
+                  </div>
+                )}
+                {!!str(detail.planLinkDismissReason) && (
+                  <div className="col-span-2">
+                    Ditandai bukan produksi oleh {str(asObject(detail.planLinkDismissedBy).userName) || '—'}:{' '}
+                    <span className="text-slate-900">{str(detail.planLinkDismissReason)}</span>
+                  </div>
+                )}
               </div>
+              {asArray(asObject(detail.overIssue).lines).length > 0 && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                  <div className="font-medium">
+                    Melebihi acuan rencana (toleransi {formatNumber(num(asObject(detail.overIssue).tolerancePct))}%)
+                    {' '}— wajib disetujui selain pembuat
+                  </div>
+                  {asArray(asObject(detail.overIssue).lines).map((raw, idx) => {
+                    const l = asObject(raw);
+                    return (
+                      <div key={idx}>
+                        <span className="font-medium">{str(l.productNama) || str(l.productKode)}</span>:{' '}
+                        {describeOverLine({
+                          sumber: str(l.sumber),
+                          satuan: str(l.satuan),
+                          lineIndexes: [],
+                          acuanQty: num(l.acuanQty),
+                          consumedBefore: num(l.consumedBefore),
+                          qtyAfter: num(l.qtyAfter),
+                          limitQty: num(l.limitQty),
+                          missingReason: false,
+                        })}
+                        {asArray(l.reasons).length > 0 && (
+                          <div className="text-red-900">Alasan: {asArray(l.reasons).map((x) => str(x)).join('; ')}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="rounded-md border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100 text-xs uppercase text-slate-600">
@@ -850,7 +1086,12 @@ export function ModeOperasional() {
                       return (
                         <tr key={i} className="border-t">
                           <td className="px-3 py-2 font-mono text-xs">{str(line.kode) || '—'}</td>
-                          <td className="px-3 py-2">{str(line.nama).trim() || str(line.kode) || '—'}</td>
+                          <td className="px-3 py-2">
+                            {str(line.nama).trim() || str(line.kode) || '—'}
+                            {!!str(line.overReason) && (
+                              <div className="text-[11px] text-red-700">Alasan lebih: {str(line.overReason)}</div>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatNumber(num(line.qty))}</td>
                           <td className="px-3 py-2">{str(line.satuan)}</td>
                         </tr>
@@ -997,6 +1238,10 @@ export function ModeOperasional() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {rlFromPoReference && canApprove && (
+        <UnlinkedReleasesDialog open={showUnlinked} onOpenChange={setShowUnlinked} />
+      )}
     </>
   );
 }

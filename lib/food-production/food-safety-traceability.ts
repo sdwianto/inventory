@@ -25,6 +25,10 @@ import {
   type DispatchDoc,
 } from '@/lib/food-production/distribution';
 import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
+import {
+  INVENTORY_RELEASES_COLLECTION,
+  RL_POSTED_STATUSES,
+} from '@/lib/food-production/material-issue-reconcile';
 
 export const TRACEABILITY_ATTRIBUTION_DISCLAIMER =
   'Traceability attribution is a candidate-lot inference based on recorded material allocation, not a physical observation.';
@@ -47,6 +51,8 @@ export interface CandidateLotRef {
   weightShare?: number;
   issueId?: string;
   issueNo?: string;
+  releaseId?: string;
+  releaseNo?: string;
 }
 
 export interface CandidateBatchRef {
@@ -70,6 +76,15 @@ export interface TraceabilityResult {
 }
 
 type AllocationLike = { batchId?: string; batchNo?: string; qty?: number; expiryDate?: string };
+
+type ReleaseLotConsumeLite = {
+  id: string;
+  noRelease?: string;
+  productionPlanId?: string;
+  ingredientLotConsume?: Array<{ stokId: string; allocations?: unknown[] }>;
+};
+
+const RELEASE_TRACE_PROJECTION = { id: 1, noRelease: 1, productionPlanId: 1, ingredientLotConsume: 1 };
 
 function parseAllocations(raw: unknown): AllocationLike[] {
   if (!Array.isArray(raw)) return [];
@@ -134,11 +149,18 @@ export async function traceBatchBackward(
   }) as ProductionBatchDoc | null;
   if (!batch) return { error: 'Batch tidak ditemukan' };
 
-  const issues = await db.collection(MATERIAL_ISSUES_COLLECTION).find({
-    tenantId: input.tenantId,
-    productionPlanId: batch.productionPlanId,
-    status: { $nin: ['CANCELLED'] },
-  }).toArray() as unknown as MaterialIssueDoc[];
+  const [issues, releases] = await Promise.all([
+    db.collection(MATERIAL_ISSUES_COLLECTION).find({
+      tenantId: input.tenantId,
+      productionPlanId: batch.productionPlanId,
+      status: { $nin: ['CANCELLED'] },
+    }).toArray() as unknown as Promise<MaterialIssueDoc[]>,
+    db.collection(INVENTORY_RELEASES_COLLECTION).find({
+      tenantId: input.tenantId,
+      productionPlanId: batch.productionPlanId,
+      status: { $in: [...RL_POSTED_STATUSES] },
+    }).project(RELEASE_TRACE_PROJECTION).toArray() as unknown as Promise<ReleaseLotConsumeLite[]>,
+  ]);
 
   const mrp = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne({
     tenantId: input.tenantId,
@@ -205,6 +227,28 @@ export async function traceBatchBackward(
     }
   }
 
+  for (const rl of releases) {
+    for (const lc of rl.ingredientLotConsume || []) {
+      const share = proportionalShareForFinishedGood({
+        mrpLineSources: sourcesByProduct.get(lc.stokId) || [],
+        finishedGoodRecipeIds,
+      });
+      for (const a of parseAllocations(lc.allocations)) {
+        if (!a.batchId) continue;
+        lotIds.add(a.batchId);
+        candidateRaw.push({
+          lotId: a.batchId,
+          lotNo: a.batchNo,
+          productId: lc.stokId,
+          allocatedQty: a.qty || 0,
+          weightShare: share,
+          releaseId: rl.id,
+          releaseNo: rl.noRelease,
+        });
+      }
+    }
+  }
+
   const lots = lotIds.size
     ? await db.collection(INGREDIENT_LOTS_COLLECTION).find({
       tenantId: input.tenantId,
@@ -257,19 +301,29 @@ export async function traceLotForward(
   }) as IngredientLotDoc | null;
   if (!lot) return { error: 'Ingredient lot tidak ditemukan' };
 
-  const issues = await db.collection(MATERIAL_ISSUES_COLLECTION).find({
-    tenantId: input.tenantId,
-    status: { $nin: ['CANCELLED'] },
-    'fefoConsume.allocations.batchId': input.ingredientLotId,
-  }).limit(200).toArray() as unknown as MaterialIssueDoc[];
+  const issueProjection = { id: 1, noDokumen: 1, productionPlanId: 1, fefoConsume: 1 };
+  const [issues, releases] = await Promise.all([
+    db.collection(MATERIAL_ISSUES_COLLECTION).find({
+      tenantId: input.tenantId,
+      status: { $nin: ['CANCELLED'] },
+      'fefoConsume.allocations.batchId': input.ingredientLotId,
+    }).project(issueProjection).limit(200).toArray() as unknown as Promise<MaterialIssueDoc[]>,
+    db.collection(INVENTORY_RELEASES_COLLECTION).find({
+      tenantId: input.tenantId,
+      status: { $in: [...RL_POSTED_STATUSES] },
+      productionPlanId: { $exists: true, $nin: [null, ''] },
+      'ingredientLotConsume.allocations.batchId': input.ingredientLotId,
+    }).project(RELEASE_TRACE_PROJECTION).limit(200).toArray() as unknown as Promise<ReleaseLotConsumeLite[]>,
+  ]);
 
-  // Fallback scan bila index path tidak match nested shape lama.
+  // Fallback scan bila index path tidak match nested shape lama (PBL acuan tidak punya alokasi lot).
   let usedIssues = issues;
-  if (!usedIssues.length) {
+  if (!usedIssues.length && !releases.length) {
     const recent = await db.collection(MATERIAL_ISSUES_COLLECTION).find({
       tenantId: input.tenantId,
       status: { $nin: ['CANCELLED'] },
-    }).sort({ updatedAt: -1 }).limit(300).toArray() as unknown as MaterialIssueDoc[];
+      stockMode: { $ne: 'REFERENCE' },
+    }).project(issueProjection).sort({ updatedAt: -1 }).limit(300).toArray() as unknown as MaterialIssueDoc[];
     usedIssues = recent.filter((iss) =>
       (iss.fefoConsume || []).some((fc) =>
         parseAllocations(fc.allocations).some((a) => a.batchId === input.ingredientLotId),
@@ -277,7 +331,10 @@ export async function traceLotForward(
     );
   }
 
-  const planIds = [...new Set(usedIssues.map((i) => i.productionPlanId).filter(Boolean))];
+  const planIds = [...new Set([
+    ...usedIssues.map((i) => i.productionPlanId),
+    ...releases.map((r) => String(r.productionPlanId || '')),
+  ].filter(Boolean))];
   const batches = planIds.length
     ? await db.collection(PRODUCTION_BATCHES_COLLECTION).find({
       tenantId: input.tenantId,
@@ -321,6 +378,13 @@ export async function traceLotForward(
   for (const iss of usedIssues) {
     for (const fc of iss.fefoConsume || []) {
       for (const a of parseAllocations(fc.allocations)) {
+        if (a.batchId === lot.id) allocatedOnLot += a.qty || 0;
+      }
+    }
+  }
+  for (const rl of releases) {
+    for (const lc of rl.ingredientLotConsume || []) {
+      for (const a of parseAllocations(lc.allocations)) {
         if (a.batchId === lot.id) allocatedOnLot += a.qty || 0;
       }
     }

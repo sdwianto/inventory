@@ -107,6 +107,18 @@ export async function assertMultiUomAllowed(
   return null;
 }
 
+/**
+ * Fase 1.4 — PBL acuan (tanpa mutasi stok) hanya efektif bila RL dari acuan PO juga aktif:
+ * RL dengan kontrol melebihi acuan menjadi satu-satunya pengeluaran aktual.
+ */
+export function isPblReferenceModeActive(flags: Pick<TenantFeatureFlags, 'pblReferenceMode' | 'rlFromPoReference'>): boolean {
+  return flags.pblReferenceMode === true && flags.rlFromPoReference === true;
+}
+
+export async function isPblReferenceModeEnabled(db: Db, tenantId: string): Promise<boolean> {
+  return isPblReferenceModeActive(await getTenantFeatureFlags(db, tenantId));
+}
+
 /** ADR-004 — dipakai jalur keluar (distribusi / release) sebelum FEFO consume. */
 export async function isFoodSafetyHoldEnforced(db: Db, tenantId: string): Promise<boolean> {
   const flags = await getTenantFeatureFlags(db, tenantId);

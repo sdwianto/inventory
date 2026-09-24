@@ -8,6 +8,7 @@ import type { MaterialRequirementLine } from '@/lib/food-production/material-req
 import { roundQty, ceilProcurementQty } from '@/lib/food-production/material-requirement';
 import {
   MATERIAL_ISSUES_COLLECTION,
+  STOCK_ISSUE_FILTER,
   type MaterialIssueDoc,
   type MaterialIssueLine,
 } from '@/lib/food-production/material-issue';
@@ -29,6 +30,7 @@ import {
   planDayWindowWib,
 } from '@/lib/food-production/production-keperluan';
 import { qtyGt } from '@/lib/stock-ledger/precision';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 
 export {
   isExcludedOperationalKeperluan,
@@ -49,14 +51,14 @@ export interface PlanOverlapMatch {
   overlapProductCount: number;
 }
 
-async function loadPlanRecipeProductIds(
+export async function loadPlanRecipeProductIds(
   db: Db,
   scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
   productionPlanId: string,
 ): Promise<Set<string>> {
   const ids = new Set<string>();
   const mrp = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
-    withTenantFilter(scopeAuth, { productionPlanId }),
+    withTenantFilter(scopeAuth, { productionPlanId, status: { $nin: ['CANCELLED'] } }),
     { sort: { createdAt: -1 }, projection: { lines: 1 } },
   ) as { lines?: Array<{ productId?: string }> } | null;
   for (const line of mrp?.lines || []) {
@@ -248,6 +250,7 @@ export async function aggregateOrphanOperationalConsumption(
       { productionPlanId: null },
       { productionPlanId: '' },
     ],
+    planLinkDismissedAt: { $exists: false },
     tanggal: { $gte: start, $lte: end },
   };
 
@@ -298,12 +301,12 @@ export async function loadPlanConsumptionSummary(
   const planId = String(productionPlanId || '').trim();
   const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
     withTenantFilter(scopeAuth, { id: planId }),
-    { projection: { tanggal: 1, kitchenId: 1 } },
-  ) as { tanggal?: string; kitchenId?: string } | null;
+    { projection: { tenantId: 1, tanggal: 1, kitchenId: 1 } },
+  ) as { tenantId?: string; tanggal?: string; kitchenId?: string } | null;
   const map = await aggregatePlanMaterialConsumption(db, scopeAuth, planId, {
     includeOrphanOperational: true,
     planMeta: plan
-      ? { tanggal: plan.tanggal, kitchenId: plan.kitchenId }
+      ? { tenantId: plan.tenantId, tanggal: plan.tanggal, kitchenId: plan.kitchenId }
       : undefined,
   });
   let qtyFromRl = 0;
@@ -327,6 +330,7 @@ export async function loadPlanConsumptionSummary(
       withTenantFilter(scopeAuth, {
         productionPlanId: planId,
         status: 'COMPLETED',
+        ...STOCK_ISSUE_FILTER,
       }),
     ),
   ]);
@@ -422,9 +426,12 @@ export async function aggregatePlanMaterialConsumption(
   productionPlanId: string,
   opts: {
     excludeIssueId?: string;
-    /** Sertakan RL operasional same-day yang belum punya productionPlanId. */
+    /**
+     * Sertakan RL operasional same-day yang belum punya productionPlanId.
+     * Diabaikan bila tenant memakai `rlFromPoReference`: RL tanpa tautan masuk worklist, bukan ditebak.
+     */
     includeOrphanOperational?: boolean;
-    planMeta?: { tanggal?: string; kitchenId?: string };
+    planMeta?: { tenantId?: string; tanggal?: string; kitchenId?: string };
   } = {},
 ): Promise<Map<string, PlanConsumptionEntry>> {
   const map = new Map<string, PlanConsumptionEntry>();
@@ -443,6 +450,7 @@ export async function aggregatePlanMaterialConsumption(
       .find(withTenantFilter(scopeAuth, {
         productionPlanId: planId,
         status: 'COMPLETED',
+        ...STOCK_ISSUE_FILTER,
         ...(opts.excludeIssueId ? { id: { $ne: opts.excludeIssueId } } : {}),
       }))
       .project({ noDokumen: 1, lines: 1 })
@@ -466,7 +474,12 @@ export async function aggregatePlanMaterialConsumption(
     }
   }
 
-  if (opts.includeOrphanOperational && opts.planMeta) {
+  const tenantId = String(opts.planMeta?.tenantId || '').trim();
+  if (
+    opts.includeOrphanOperational
+    && opts.planMeta
+    && !(tenantId && await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))
+  ) {
     const orphan = await aggregateOrphanOperationalConsumption(db, scopeAuth, {
       id: planId,
       tanggal: opts.planMeta.tanggal,
@@ -523,7 +536,7 @@ export async function buildIssueReconciliation(
       excludeIssueId: issue.id,
       includeOrphanOperational: true,
       planMeta: plan
-        ? { tanggal: plan.tanggal, kitchenId: plan.kitchenId }
+        ? { tenantId: issue.tenantId, tanggal: plan.tanggal, kitchenId: plan.kitchenId }
         : undefined,
     },
   );
@@ -632,7 +645,7 @@ export async function seedNetIssueLines(
 ): Promise<MaterialIssueLine[]> {
   const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, productionPlanId, {
     includeOrphanOperational: true,
-    planMeta,
+    planMeta: planMeta ? { ...planMeta, tenantId } : undefined,
   });
 
   const whByProduct = new Map<string, string>();
@@ -737,11 +750,11 @@ export function mergeConsumptionLinesForCost(
 }
 
 /** Recalculate qtyNet/shortage after subtracting plan consumption (RL + completed PBL). */
-export function applyConsumptionToRequirementLines(
-  lines: MaterialRequirementLine[],
+export function applyConsumptionToRequirementLines<T extends MaterialRequirementLine>(
+  lines: T[],
   consumption: Map<string, PlanConsumptionEntry>,
-): { lines: MaterialRequirementLine[]; summary: { shortageCount: number; qtyNetTotal: number } } {
-  const adjusted = lines.map((line) => {
+): { lines: T[]; summary: { shortageCount: number; qtyNetTotal: number } } {
+  const adjusted = lines.map((line): T => {
     const already = consumption.get(line.productId)?.total ?? 0;
     const qtyGross = roundQty(Number(line.qtyGross) || 0);
     const qtyOnHand = roundQty(Number(line.qtyOnHand) || 0);

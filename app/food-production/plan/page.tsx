@@ -218,6 +218,9 @@ interface PlanRow {
 
 interface MaterialReadiness {
   materialsReady: boolean;
+  pblReferenceMode?: boolean;
+  rlFulfilled?: boolean;
+  sisaLineCount?: number;
   shortageCount: number;
   lineCount: number;
   linkedPo?: { id: string; noPO: string; status: string } | null;
@@ -1114,6 +1117,9 @@ function FoodProductionPlanPageContent() {
         ...prev,
         [planId]: {
           materialsReady: Boolean(data.materialsReady),
+          pblReferenceMode: Boolean(data.pblReferenceMode),
+          rlFulfilled: Boolean(data.rlFulfilled),
+          sisaLineCount: Number(data.sisaLineCount || 0),
           shortageCount: Number(data.shortageCount || 0),
           lineCount: Number(data.lineCount || 0),
           linkedPo: data.linkedPo || null,
@@ -1828,7 +1834,9 @@ function FoodProductionPlanPageContent() {
             );
           }
           throw new Error(
-            'Tidak bisa diproses — bahan belum diambil. Klik Ambil Bahan dulu.',
+            ready.pblReferenceMode
+              ? 'Tidak bisa diproses — PBL acuan belum dikonfirmasi. Klik Konfirmasi Bahan (PBL) dulu.'
+              : 'Tidak bisa diproses — bahan belum diambil. Klik Ambil Bahan dulu.',
           );
         }
       }
@@ -3001,7 +3009,8 @@ function FoodProductionPlanPageContent() {
                             if (ready.issueCompleted) {
                               return (
                                 <span className="text-xs text-emerald-600 px-1 ml-auto">
-                                  Bahan sudah diambil{ready.completedIssueNo ? ` (${ready.completedIssueNo})` : ''}
+                                  {ready.pblReferenceMode ? 'PBL dikonfirmasi' : 'Bahan sudah diambil'}
+                                  {ready.completedIssueNo ? ` (${ready.completedIssueNo})` : ''}
                                 </span>
                               );
                             }
@@ -3010,16 +3019,51 @@ function FoodProductionPlanPageContent() {
                                 variant={ready.openIssue ? 'outline' : 'default'}
                                 size="sm"
                                 className="ml-auto"
-                                title={ready.openIssue
-                                  ? 'Lanjutkan pengeluaran bahan'
-                                  : 'Ambil bahan dari gudang untuk produksi'}
+                                title={ready.pblReferenceMode
+                                  ? 'Bahan sudah keluar lewat RL — konfirmasi PBL acuan (tanpa mutasi stok)'
+                                  : ready.openIssue
+                                    ? 'Lanjutkan pengeluaran bahan'
+                                    : 'Ambil bahan dari gudang untuk produksi'}
                                 onClick={() => router.push(`/stok/pengeluaran?mode=produksi&productionPlanId=${row.id}`)}
                               >
                                 <ArrowUpFromLine className="h-4 w-4 mr-1" />
                                 {ready.openIssue
-                                  ? `Lanjutkan Pengeluaran ${ready.openIssue.noDokumen || ''}`
-                                  : 'Ambil Bahan'}
+                                  ? `Lanjutkan ${ready.pblReferenceMode ? 'Konfirmasi' : 'Pengeluaran'} ${ready.openIssue.noDokumen || ''}`
+                                  : ready.pblReferenceMode ? 'Konfirmasi Bahan (PBL)' : 'Ambil Bahan'}
                               </Button>
+                            );
+                          }
+                          if (ready?.pblReferenceMode && !ready.issueCompleted && ready.shortageCount === 0) {
+                            return (
+                              <>
+                                <span
+                                  className="text-xs text-amber-700 px-1 font-medium"
+                                  title="Bahan keluar dari gudang hanya lewat Release (RL). PBL mengonfirmasi acuan."
+                                >
+                                  Sisa RL {ready.sisaLineCount || 0} bahan
+                                </span>
+                                <Button
+                                  variant="default"
+                                  size="sm"
+                                  className="ml-auto"
+                                  onClick={() => router.push('/stok/pengeluaran?mode=operasional')}
+                                >
+                                  <ArrowUpFromLine className="h-4 w-4 mr-1" />
+                                  Keluarkan via RL
+                                </Button>
+                                {canManage && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    title="Konfirmasi PBL meski RL belum memenuhi acuan — wajib catatan"
+                                    onClick={() => router.push(`/stok/pengeluaran?mode=produksi&productionPlanId=${row.id}`)}
+                                  >
+                                    {ready.openIssue
+                                      ? `Lanjutkan Konfirmasi ${ready.openIssue.noDokumen || ''}`
+                                      : 'Konfirmasi PBL'}
+                                  </Button>
+                                )}
+                              </>
                             );
                           }
                           if (ready && ready.shortageCount > 0) {
@@ -3240,7 +3284,9 @@ function FoodProductionPlanPageContent() {
                           && !readinessById[row.id].loading
                           && !readinessById[row.id].materialsReady && (
                           <span className="text-xs text-muted-foreground px-1">
-                            Diproses terkunci sampai bahan lengkap
+                            {readinessById[row.id].pblReferenceMode
+                              ? 'Diproses terkunci sampai PBL acuan dikonfirmasi'
+                              : 'Diproses terkunci sampai bahan lengkap'}
                           </span>
                         )}
                         {canManage && row.status === 'APPROVED' && readinessById[row.id]
@@ -3248,7 +3294,9 @@ function FoodProductionPlanPageContent() {
                           && readinessById[row.id].materialsReady
                           && !readinessById[row.id].issueCompleted && (
                           <span className="text-xs text-muted-foreground px-1">
-                            Tombol Diproses terbuka setelah bahan diambil
+                            {readinessById[row.id].pblReferenceMode
+                              ? 'Tombol Diproses terbuka setelah PBL dikonfirmasi'
+                              : 'Tombol Diproses terbuka setelah bahan diambil'}
                           </span>
                         )}
                         {canManage && row.status === 'PROCESSING' && readinessById[row.id]

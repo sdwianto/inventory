@@ -16,10 +16,9 @@ describe('material-issues POST — blokir lunak shortage (bahan tidak harus 100%
   it('menyimpan jejak shortageOverride (siapa, kapan, alasan, baris kurang) di dokumen', () => {
     expect(src).toMatch(/const shortageOverride = shortageCount > 0 \? \{/);
     expect(src).toMatch(/reason: overrideShortageNote/);
-    // netReadiness (bukan lagi readiness mentah) — commit lain menambahkan
-    // applyConsumptionToRequirementLines() setelah fix ini, memperhitungkan
-    // konsumsi Issue lain yang paralel; shortageLines tetap difilter dari sana.
-    expect(src).toMatch(/shortageLines: netReadiness\.lines\.filter\(\(l\) => l\.shortage\)/);
+    // Kesiapan dari buildPlanReadiness, sumber yang sama dengan layar kesiapan rencana.
+    expect(src).toMatch(/const readiness = await buildPlanReadiness\(db, scopeAuth, plan\)/);
+    expect(src).toMatch(/shortageLines: readiness\.lines\.filter\(\(l\) => l\.shortage\)/);
     expect(src).toMatch(/\.\.\.\(shortageOverride \? \{ shortageOverride \} : \{\}\)/);
   });
 
@@ -28,6 +27,6 @@ describe('material-issues POST — blokir lunak shortage (bahan tidak harus 100%
   });
 
   it('mencatat override ke audit log', () => {
-    expect(src).toMatch(/metadata: \{ shortageOverride: true, shortageCount, reason: overrideShortageNote \}/);
+    expect(src).toMatch(/\.\.\.\(shortageOverride \? \{ shortageOverride: true, shortageCount, reason: overrideShortageNote \} : \{\}\)/);
   });
 });

@@ -68,9 +68,24 @@ interface ReconcileLineView {
   mismatch: boolean;
 }
 
+interface PlanReferenceLineView {
+  productIds: string[];
+  sumber: 'PO' | 'MRP';
+  acuanQty: number;
+  poQtyReceived?: number;
+  rlPosted: number;
+  pblPosted?: number;
+  rlPending?: number;
+  sisa: number;
+  qtyOnHand?: number;
+  satuan?: string;
+}
+
 interface IssueReconciliation {
   lines: ReconcileLineView[];
   summary: { mismatchCount: number; suggestedQtyIssuedTotal: number };
+  /** Hanya bila flag rlFromPoReference aktif. */
+  reference?: { lines: PlanReferenceLineView[] };
 }
 
 interface IssueLine {
@@ -81,6 +96,13 @@ interface IssueLine {
   warehouseKode?: string;
   qtyPlanned: number;
   qtyIssued: number;
+  productIds?: string[];
+  sumber?: 'PO' | 'MRP';
+  acuanQty?: number;
+  poQtyReceived?: number;
+  rlPosted?: number;
+  pblPosted?: number;
+  sisa?: number;
 }
 
 interface IssueHistoryEntry {
@@ -102,10 +124,17 @@ interface IssueRow {
   kitchenNama?: string;
   warehouseKode: string;
   status: MaterialIssueStatus;
-  summary?: { lineCount: number; qtyIssuedTotal: number };
+  summary?: { lineCount: number; qtyIssuedTotal: number; rlPostedTotal?: number; sisaLineCount?: number };
   lines: IssueLine[];
   history?: IssueHistoryEntry[];
   stockPostedAt?: string;
+  /** REFERENCE: PBL acuan — tidak mengurangi stok; bahan keluar lewat RL. */
+  stockMode?: 'STOCK' | 'REFERENCE';
+  referenceSnapshotAt?: string;
+}
+
+function isReferenceRow(row: Pick<IssueRow, 'stockMode'> | null | undefined): boolean {
+  return row?.stockMode === 'REFERENCE';
 }
 
 export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
@@ -131,6 +160,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     shortageLines: Array<{ productKode?: string; productNama?: string; qtyNet?: number; satuan?: string }>;
     issueCompleted?: boolean;
     completedIssueNo?: string | null;
+    pblReferenceMode?: boolean;
+    sisaLineCount?: number;
   } | null>(null);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [overrideShortage, setOverrideShortage] = useState(false);
@@ -227,6 +258,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
           shortageLines: Array.isArray(data.shortageLines) ? data.shortageLines : [],
           issueCompleted: data.issueCompleted === true,
           completedIssueNo: data.completedIssueNo ? String(data.completedIssueNo) : null,
+          pblReferenceMode: data.pblReferenceMode === true,
+          sisaLineCount: Number(data.sisaLineCount || 0),
         });
       } catch {
         if (!cancelled) setPlanReadiness(null);
@@ -292,7 +325,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal sinkron');
-      toast.success('Qty disinkronkan dari stok & release operasional');
+      toast.success(isReferenceRow(detail)
+        ? 'Acuan diperbarui dari PO/MRP & RL terbaru'
+        : 'Qty disinkronkan dari stok & release operasional');
       setDetail(data as IssueRow);
       setEditLines(Array.isArray(data.lines) ? data.lines : []);
       setAdjustReason('');
@@ -307,6 +342,10 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
 
   function reconcileForProduct(productId: string): ReconcileLineView | undefined {
     return reconciliation?.lines.find((l) => l.productId === productId);
+  }
+
+  function referenceForProduct(productId: string): PlanReferenceLineView | undefined {
+    return reconciliation?.reference?.lines.find((l) => l.productIds.includes(productId));
   }
 
   async function createIssue() {
@@ -414,8 +453,83 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     return data as IssueRow;
   }
 
+  async function fetchReconciliation(issueId: string): Promise<IssueReconciliation | null> {
+    try {
+      const res = await fetch(`/api/material-issues/${issueId}/reconciliation`, {
+        headers: { ...actingTenantHeaders(), ...actingKitchenHeaders() },
+      });
+      return res.ok ? await res.json() as IssueReconciliation : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** PBL acuan: konfirmasi selesai tanpa mutasi stok; sisa acuan / RL tertunda wajib catatan. */
+  async function confirmReferenceIssue(row: IssueRow) {
+    const rec = detail?.id === row.id && reconciliation ? reconciliation : await fetchReconciliation(row.id);
+    const sisaLines = (rec?.reference?.lines || []).filter((l) => l.sisa > 0);
+    const askNote = (message: string): string | null => {
+      const typed = (adjustReason.trim() || window.prompt(message)?.trim() || '');
+      if (typed.length < 5) {
+        toast.error('Catatan konfirmasi wajib (min. 5 karakter)');
+        return null;
+      }
+      return typed;
+    };
+    let note = '';
+    if (sisaLines.length) {
+      const asked = askNote(
+        `${sisaLines.length} bahan belum keluar penuh lewat RL. Catatan konfirmasi (min. 5 karakter):`,
+      );
+      if (!asked) return;
+      note = asked;
+    }
+    const okConfirm = await confirm({
+      title: 'Konfirmasi PBL acuan?',
+      description: `${row.noDokumen} — tidak ada stok yang dikurangi. Bahan keluar dari gudang lewat Release (RL); `
+        + 'PBL ini mengonfirmasi acuan rencana.',
+      confirmText: 'Konfirmasi Selesai',
+    });
+    if (!okConfirm) return;
+
+    setSaving(true);
+    try {
+      let current = row;
+      if (current.status === 'DRAFT') current = await postStatus(current.id, 'SUBMITTED');
+      if (current.status === 'SUBMITTED') current = await postStatus(current.id, 'APPROVED');
+      if (current.status === 'APPROVED' || current.status === 'PROCESSING') {
+        try {
+          current = await postStatus(current.id, 'COMPLETED', note ? { note } : {});
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : '';
+          if (note || !msg.includes('catatan konfirmasi')) throw e;
+          const asked = askNote(`${msg}\n\nCatatan konfirmasi:`);
+          if (!asked) {
+            await load();
+            return;
+          }
+          current = await postStatus(current.id, 'COMPLETED', { note: asked });
+        }
+      }
+      toast.success('PBL acuan dikonfirmasi — tanpa mutasi stok');
+      setDetail(null);
+      setAdjustReason('');
+      await load();
+      router.push('/food-production/plan');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal konfirmasi PBL');
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  }
+
   /** Setujui / Keluarkan Stok: dialog konfirmasi → post stok → toast → Rencana Produksi. */
   async function approveAndReleaseStock(row: IssueRow) {
+    if (isReferenceRow(row)) {
+      await confirmReferenceIssue(row);
+      return;
+    }
     const lines = detail?.id === row.id ? editLines : (row.lines || []);
     const qtyTotal = lines.reduce((s, l) => s + (Number(l.qtyIssued) || 0), 0);
     const isClosure = qtyTotal === 0;
@@ -643,7 +757,17 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                     })()}
                   </td>
                   <td className="p-3">{row.summary?.lineCount ?? row.lines?.length ?? 0}</td>
-                  <td className="p-3">{ISSUE_STATUS_LABELS[row.status]}</td>
+                  <td className="p-3">
+                    {ISSUE_STATUS_LABELS[row.status]}
+                    {isReferenceRow(row) && (
+                      <span
+                        className="ml-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-800"
+                        title="PBL acuan — tanpa mutasi stok, bahan keluar lewat RL"
+                      >
+                        Acuan
+                      </span>
+                    )}
+                  </td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-1 justify-end">
                       <Button variant="ghost" size="sm" onClick={() => void openDetail(row)}>
@@ -662,7 +786,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                       </Button>
                       {canManage && next && (
                         <Button variant="outline" size="sm" onClick={() => void changeStatus(row, next)}>
-                          {ISSUE_UI_STATUS_NEXT_LABEL[row.status]}
+                          {isReferenceRow(row) && (next === 'APPROVED' || next === 'COMPLETED')
+                            ? 'Konfirmasi Selesai'
+                            : ISSUE_UI_STATUS_NEXT_LABEL[row.status]}
                         </Button>
                       )}
                       {canManage && row.status !== 'CANCELLED' && row.status !== 'COMPLETED' && (
@@ -707,7 +833,15 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                 Buka detail PBL → <strong>Sinkron</strong> jika ada RL operasional, jangan buat PBL baru.
               </div>
             )}
-            {mrpId && (
+            {planReadiness?.pblReferenceMode && !planReadiness.issueCompleted && (
+              <div className="rounded-md border border-sky-300 bg-sky-50 p-2 text-xs text-sky-900">
+                PBL acuan: baris diisi dari acuan PO/MRP rencana, <strong>tanpa mengurangi stok</strong>.
+                Bahan keluar dari gudang lewat Release (RL).
+                {(planReadiness.sisaLineCount || 0) > 0
+                  && ` Saat ini ${planReadiness.sisaLineCount} bahan belum keluar penuh lewat RL.`}
+              </div>
+            )}
+            {mrpId && !planReadiness?.pblReferenceMode && (
               <p className="text-xs text-muted-foreground">
                 Dari MRP terpilih (seed qtyGross).
               </p>
@@ -795,6 +929,92 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                   gunakan Sinkron sebelum keluarkan stok.
                 </div>
               )}
+              {isReferenceRow(detail) && (() => {
+                const refLines = reconciliation?.reference?.lines;
+                const sisaCount = refLines
+                  ? refLines.filter((l) => l.sisa > 0).length
+                  : Number(detail.summary?.sisaLineCount || 0);
+                return (
+                  <>
+                    <div className="rounded-md border border-sky-300 bg-sky-50 p-2 text-xs text-sky-900 space-y-1">
+                      <p>
+                        <strong>PBL acuan</strong> — tidak mengurangi stok. Bahan keluar dari gudang lewat Release (RL);
+                        dokumen ini mengonfirmasi acuan rencana (PO diterima / MRP) dan membuka tahap Diproses.
+                      </p>
+                      {detail.status !== 'COMPLETED' && sisaCount > 0 && (
+                        <p className="text-amber-800">
+                          {sisaCount} bahan belum keluar penuh lewat RL — buat RL dulu, atau isi catatan saat konfirmasi.
+                        </p>
+                      )}
+                      {!refLines && detail.referenceSnapshotAt && (
+                        <p className="text-muted-foreground">
+                          Snapshot acuan {new Date(detail.referenceSnapshotAt).toLocaleString('id-ID')}
+                        </p>
+                      )}
+                    </div>
+                    <div className="rounded-md border overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/40">
+                          <tr>
+                            <th className="text-left p-2">Produk</th>
+                            <th className="text-left p-2">Gudang</th>
+                            <th className="text-right p-2">Acuan</th>
+                            <th className="text-right p-2">PO diterima</th>
+                            <th className="text-right p-2">Sudah RL</th>
+                            <th className="text-right p-2">PBL lama</th>
+                            <th className="text-right p-2">Sisa</th>
+                            <th className="text-right p-2">Stok</th>
+                            <th className="text-left p-2">Satuan</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(detail.lines || []).map((l) => {
+                            const live = detail.status === 'COMPLETED' ? undefined : referenceForProduct(l.productId);
+                            const sumber = live?.sumber ?? l.sumber;
+                            const acuan = live?.acuanQty ?? l.acuanQty ?? l.qtyPlanned;
+                            const poReceived = live?.poQtyReceived ?? l.poQtyReceived;
+                            const rl = live?.rlPosted ?? l.rlPosted ?? 0;
+                            const pbl = live?.pblPosted ?? l.pblPosted ?? 0;
+                            const sisa = live?.sisa ?? l.sisa ?? 0;
+                            return (
+                              <tr key={l.productId} className={`border-t ${sisa > 0 ? 'bg-amber-50/60' : ''}`}>
+                                <td className="p-2">
+                                  <div>{l.productNama || l.productKode}</div>
+                                  <div className="text-[11px] font-mono text-muted-foreground">{l.productKode}</div>
+                                </td>
+                                <td className="p-2">
+                                  {l.warehouseKode ? (
+                                    <>
+                                      <div>{warehouseLabel(l.warehouseKode)}</div>
+                                      <div className="text-[11px] font-mono text-muted-foreground">{l.warehouseKode}</div>
+                                    </>
+                                  ) : '—'}
+                                </td>
+                                <td className="p-2 text-right">
+                                  {acuan}
+                                  {sumber && <div className="text-[10px] text-muted-foreground">{sumber}</div>}
+                                </td>
+                                <td className="p-2 text-right">{sumber === 'PO' ? (poReceived ?? 0) : '—'}</td>
+                                <td className="p-2 text-right">
+                                  {rl}
+                                  {(live?.rlPending ?? 0) > 0 && (
+                                    <div className="text-[10px] text-amber-700">+{live?.rlPending} menunggu</div>
+                                  )}
+                                </td>
+                                <td className="p-2 text-right text-muted-foreground">{pbl || '—'}</td>
+                                <td className={`p-2 text-right ${sisa > 0 ? 'text-amber-800 font-medium' : ''}`}>{sisa}</td>
+                                <td className="p-2 text-right text-muted-foreground">{live?.qtyOnHand ?? '—'}</td>
+                                <td className="p-2">{l.satuan || '—'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
+              {!isReferenceRow(detail) && (
               <div className="rounded-md border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/40">
@@ -812,6 +1032,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                   <tbody>
                     {(isIssueEditable(detail.status) ? editLines : detail.lines || []).map((l, idx) => {
                       const rec = reconcileForProduct(l.productId);
+                      const ref = referenceForProduct(l.productId);
                       const rowClass = rec?.mismatch ? 'bg-amber-50/60' : '';
                       return (
                       <tr key={l.productId} className={`border-t ${rowClass}`}>
@@ -827,7 +1048,17 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                             </>
                           ) : '—'}
                         </td>
-                        <td className="p-2 text-right">{l.qtyPlanned}</td>
+                        <td className="p-2 text-right">
+                          {l.qtyPlanned}
+                          {ref && (
+                            <div
+                              className="text-[10px] text-muted-foreground"
+                              title={`Acuan ${ref.sumber === 'PO' ? 'PO diterima' : 'MRP'} dikurangi RL yang sudah diposting (${ref.satuan || 'satuan dasar'})`}
+                            >
+                              Acuan {ref.sumber} {ref.acuanQty} · sisa {ref.sisa}
+                            </div>
+                          )}
+                        </td>
                         <td className="p-2 text-right text-muted-foreground">
                           {rec?.qtyAlreadyIssued ?? '—'}
                           {rec && (rec.qtyAlreadyIssuedOperational > 0 || rec.qtyAlreadyIssuedPbl > 0) && (
@@ -889,6 +1120,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 {canManage && isIssueReconcilable(detail.status) && (
                   <>
@@ -907,11 +1139,23 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                       onClick={() => void syncFromOperational(adjustReason)}
                     >
                       <RefreshCw className="h-4 w-4 mr-1" />
-                      Sinkron dari stok & release operasional
+                      {isReferenceRow(detail) ? 'Perbarui acuan' : 'Sinkron dari stok & release operasional'}
                     </Button>
                   </>
                 )}
-                {canManage && isIssueEditable(detail.status) && (
+                {canManage && isReferenceRow(detail)
+                  && (detail.status === 'SUBMITTED' || detail.status === 'APPROVED' || detail.status === 'PROCESSING') && (
+                  <Button
+                    size="sm"
+                    disabled={saving}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                    onClick={() => void confirmReferenceIssue(detail)}
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                    Konfirmasi Selesai
+                  </Button>
+                )}
+                {canManage && isIssueEditable(detail.status) && !isReferenceRow(detail) && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -921,7 +1165,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                     Simpan qty
                   </Button>
                 )}
-                {canManage && detail.status === 'SUBMITTED' && (
+                {canManage && detail.status === 'SUBMITTED' && !isReferenceRow(detail) && (
                   <Button
                     size="sm"
                     disabled={saving}
@@ -932,7 +1176,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                     Setujui
                   </Button>
                 )}
-                {canManage && (detail.status === 'APPROVED' || detail.status === 'PROCESSING') && (
+                {canManage && (detail.status === 'APPROVED' || detail.status === 'PROCESSING') && !isReferenceRow(detail) && (
                   <Button
                     size="sm"
                     disabled={saving}

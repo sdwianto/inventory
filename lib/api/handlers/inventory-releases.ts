@@ -20,17 +20,38 @@ import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
-import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
+import { isFoodSafetyHoldEnforced, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
-import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
+import {
+  PRODUCTION_PLANS_COLLECTION,
+  isIsoDate,
+  shiftIsoDate,
+  type ProductionPlanDoc,
+} from '@/lib/food-production/production-plan';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import {
   inferProductionPlanForRelease,
+  isExcludedOperationalKeperluan,
   looksLikeProductionKeperluan,
 } from '@/lib/food-production/material-issue-reconcile';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { casConflict, casEditFilter, casStatusFilter, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
+import { planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
+import {
+  computeRlOverIssue,
+  rlOverIssueMissingReasonMessage,
+  rlOverIssueSnapshot,
+  sanitizeOverReason,
+  type RlOverIssueInputLine,
+  type RlOverIssueSnapshot,
+} from '@/lib/food-production/rl-over-issue';
+import {
+  RL_LINKABLE_PLAN_STATUSES,
+  RL_UNLINKED_MAX_RANGE_DAYS,
+  listUnlinkedReleases,
+  unlinkedReleaseFilter,
+} from '@/lib/food-production/rl-unlinked';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -38,6 +59,7 @@ interface ReleaseItemInput {
   qty?: number | string;
   uomId?: string;
   satuan?: string;
+  overReason?: string;
 }
 
 interface ReleaseBody extends Record<string, unknown> {
@@ -64,6 +86,7 @@ interface ReleaseLineItem {
   qtyEntered?: number;
   uomId?: string;
   hargaBeli: number;
+  overReason?: string;
 }
 
 interface ReleaseUserRef {
@@ -82,8 +105,75 @@ interface InventoryReleaseDoc extends Record<string, unknown> {
   keperluan?: string;
   items?: ReleaseLineItem[];
   createdBy?: ReleaseUserRef;
+  submittedBy?: ReleaseUserRef | null;
+  lastEditedBy?: ReleaseUserRef;
   productionPlanId?: string;
   productionPlanNo?: string;
+  tanggal?: Date | string;
+  kitchenId?: string;
+  keterangan?: string;
+  planLinkDismissedAt?: Date;
+}
+
+/** Error approve/tautkan dengan status HTTP; dilempar dari dalam transaksi. */
+class ReleaseRuleError extends Error {
+  constructor(message: string, readonly status = 400) {
+    super(message);
+  }
+}
+
+function overIssueItems(items: Array<ReleaseLineItem & { qtyBase?: number }>): RlOverIssueInputLine[] {
+  return items.map((it) => ({
+    stokId: String(it.stokId),
+    qtyBase: Number(it.qtyBase ?? it.qty) || 0,
+    kode: it.kode,
+    nama: it.nama,
+    overReason: it.overReason,
+  }));
+}
+
+/** Rencana harus satu tenant dengan RL (MASTER bisa punya scope lintas tenant). */
+async function loadPlanDoc(
+  db: Db,
+  scopeAuth: AuthContext,
+  planId: string,
+  tenantId: string,
+): Promise<ProductionPlanDoc | null> {
+  return db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+    withTenantFilter(scopeAuth, { id: planId, tenantId }),
+  ) as Promise<ProductionPlanDoc | null>;
+}
+
+/** Pembuat, penyunting terakhir, dan pengaju RL tidak boleh menyetujui/menautkan RL yang melebihi acuan. */
+function isReleaseMaker(doc: InventoryReleaseDoc, userId: string | undefined): boolean {
+  if (!userId) return false;
+  return [doc.createdBy, doc.lastEditedBy, doc.submittedBy].some((u) => u?.userId === userId);
+}
+
+/**
+ * Cek melebihi acuan saat RL diajukan (flag `rlFromPoReference`, RL tertaut rencana).
+ * Tolak bila ada baris melebihi tanpa alasan; snapshot disimpan untuk penyetuju.
+ * Keputusan final tetap di approve (dalam transaksi).
+ */
+async function submitOverIssueCheck(
+  db: Db,
+  scopeAuth: AuthContext,
+  tenantId: string,
+  planId: string | undefined,
+  items: ReleaseLineItem[],
+): Promise<{ snapshot?: RlOverIssueSnapshot } | { error: string }> {
+  const id = String(planId || '').trim();
+  if (!id || !(await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))) return {};
+  const plan = await loadPlanDoc(db, scopeAuth, id, tenantId);
+  if (!plan) return { error: 'Rencana produksi tidak ditemukan' };
+  const result = await computeRlOverIssue(db, scopeAuth, {
+    plan,
+    items: overIssueItems(items),
+    fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
+  });
+  const missing = rlOverIssueMissingReasonMessage(result);
+  if (missing) return { error: missing };
+  return result.overCount ? { snapshot: rlOverIssueSnapshot(result, new Date()) } : {};
 }
 
 async function loadRelease(
@@ -151,6 +241,7 @@ async function buildReleaseLineItems(
       qtyEntered: resolved.qty,
       uomId: resolved.uomId,
       hargaBeli: parseInt(String(prodRow.hargaBeli || 0), 10),
+      ...(sanitizeOverReason(it.overReason) ? { overReason: sanitizeOverReason(it.overReason) } : {}),
     });
   }
   return { lineItems };
@@ -256,6 +347,197 @@ export async function handleInventoryReleases({
     return ok(list.map(clean));
   }
 
+  if (route === '/inventory-releases/unlinked' && method === 'GET') {
+    const deniedRole = requireRole(auth, RELEASE_APPROVE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Unauthorized', 401);
+    const tenantId = tenantIdForWrite(scopeAuth, { tenantId: url.searchParams.get('tenantId') || undefined });
+    if (!(await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))) {
+      return err('Fitur RL dari acuan PO belum aktif untuk tenant ini', 403);
+    }
+    const todayWib = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const to = url.searchParams.get('to') || todayWib;
+    const from = url.searchParams.get('from') || shiftIsoDate(to, -30);
+    if (!isIsoDate(from) || !isIsoDate(to)) return err('Format tanggal wajib YYYY-MM-DD', 400);
+    const rangeDays = (Date.parse(to) - Date.parse(from)) / 86_400_000;
+    if (rangeDays < 0) return err('Tanggal awal melebihi tanggal akhir', 400);
+    if (rangeDays > RL_UNLINKED_MAX_RANGE_DAYS) {
+      return err(`Rentang maksimal ${RL_UNLINKED_MAX_RANGE_DAYS} hari`, 400);
+    }
+    const rows = await listUnlinkedReleases(db, scopeAuth, {
+      from,
+      to,
+      kitchenId: resolveKitchenIdFilter(url, request),
+    });
+    return ok({ from, to, rows });
+  }
+
+  if (route === '/inventory-releases/over-issue-preview' && method === 'POST') {
+    const deniedRole = requireRole(auth, RELEASE_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Unauthorized', 401);
+    const tenantId = tenantIdForWrite(scopeAuth, releaseBody);
+    const planId = String(releaseBody.productionPlanId || '').trim();
+    const empty = { enabled: false, overCount: 0, missingReasonCount: 0, lines: [] };
+    if (!planId) return ok(empty);
+    if (!(await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))) return ok(empty);
+    const lokasiKode = normalizeWarehouseKode(releaseBody.lokasiKode || releaseBody.lokasi);
+    if (!isValidWarehouseKode(lokasiKode)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
+    const built = await buildReleaseLineItems(db, scopeAuth, tenantId, lokasiKode, releaseBody.items || []);
+    if ('error' in built) return err(built.error, built.status || 400);
+    const plan = await loadPlanDoc(db, scopeAuth, planId, tenantId);
+    if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+    const result = await computeRlOverIssue(db, scopeAuth, {
+      plan,
+      items: overIssueItems(built.lineItems),
+      fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
+    });
+    return ok({ enabled: true, ...result });
+  }
+
+  if (path[0] === 'inventory-releases' && path.length === 3
+    && (path[2] === 'link-plan' || path[2] === 'dismiss-link') && method === 'POST') {
+    const deniedRole = requireRole(auth, RELEASE_APPROVE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
+    if (denied) return denied;
+    if (!auth || !scopeAuth) return err('Unauthorized', 401);
+    const doc = await loadRelease(db, scopeAuth, path[1]);
+    if (!doc) return err('Tidak ditemukan', 404);
+    const tenantId = String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody));
+    if (!(await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))) {
+      return err('Fitur RL dari acuan PO belum aktif untuk tenant ini', 403);
+    }
+    if (doc.status !== 'POSTED') return err('Hanya release yang sudah diposting yang bisa ditautkan', 400);
+    if (String(doc.productionPlanId || '').trim()) {
+      return err(`Release sudah tertaut ke ${doc.productionPlanNo || doc.productionPlanId}`, 400);
+    }
+    if (doc.planLinkDismissedAt) return err('Release sudah ditandai bukan untuk produksi', 400);
+    const reason = sanitizeOverReason(releaseBody.reason);
+    if (reason.length < 5) return err('Alasan wajib diisi (minimal 5 karakter)', 400);
+    const locked = await guardPosting(db, scopeAuth, releaseBody, String(doc.tanggal || doc.createdAt || ''));
+    if (locked) return locked;
+    const actor = { userId: auth.userId, userName: auth.name || auth.email, role: auth.role };
+    const now = new Date();
+
+    if (path[2] === 'dismiss-link') {
+      try {
+        await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+          const res = await txDb.collection('inventory_releases').updateOne(
+            withTenantFilter(scopeAuth, unlinkedReleaseFilter({ id: doc.id })),
+            {
+              $set: {
+                planLinkDismissedAt: now,
+                planLinkDismissedBy: actor,
+                planLinkDismissReason: reason,
+                updatedAt: now,
+              },
+            },
+            txOpts(session),
+          );
+          if (res.matchedCount === 0) throw new CasConflictError();
+          await writeAuditLog(txDb, {
+            tenantId,
+            action: 'INVENTORY_RELEASE_LINK_DISMISS',
+            entityType: 'inventory_release',
+            entityId: String(doc.id),
+            summary: `Release ${doc.noRelease} ditandai bukan untuk produksi`,
+            userId: auth.userId,
+            userName: auth.name || auth.email || 'System',
+            metadata: { noRelease: doc.noRelease, reason },
+          }, session);
+        });
+      } catch (e) {
+        if (isCasConflict(e)) return casConflict(e.message);
+        throw e;
+      }
+      return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
+    }
+
+    const planId = String(releaseBody.productionPlanId || '').trim();
+    if (!planId) return err('Pilih Rencana Produksi', 400);
+    const plan = await loadPlanDoc(db, scopeAuth, planId, tenantId);
+    if (!plan) return err('Rencana produksi tidak ditemukan', 404);
+    const planNo = String(plan.noDokumen || plan.id);
+    const linkable = new Set<string>(RL_LINKABLE_PLAN_STATUSES);
+    if (!linkable.has(String(plan.status || ''))) {
+      return err(`Rencana ${planNo} berstatus ${plan.status} — hanya Disetujui/Diproses/Selesai yang bisa ditautkan`, 400);
+    }
+    const rlKitchen = String(doc.kitchenId || '').trim();
+    const planKitchen = String(plan.kitchenId || '').trim();
+    if (rlKitchen && planKitchen && rlKitchen !== planKitchen) {
+      return err(`Rencana ${planNo} milik dapur lain — pilih rencana dari dapur release ini`, 400);
+    }
+    const fallbackMrp = await planFallbackMrpLines(db, scopeAuth, plan);
+    const items = overIssueItems((doc.items || []).map((it) => ({ ...it, overReason: reason })));
+    let snapshot: RlOverIssueSnapshot | undefined;
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        snapshot = undefined;
+        const lock = await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+          withTenantFilter(scopeAuth, { id: planId, tenantId, status: { $in: [...RL_LINKABLE_PLAN_STATUSES] } }),
+          { $inc: { rlPostingSeq: 1 } },
+          txOpts(session),
+        );
+        if (lock.matchedCount === 0) throw new ReleaseRuleError(`Status rencana ${planNo} berubah — muat ulang`);
+        const over = await computeRlOverIssue(txDb, scopeAuth, {
+          plan,
+          items,
+          fallbackMrpLines: fallbackMrp,
+          session,
+        });
+        if (over.overCount && isReleaseMaker(doc, auth.userId)) {
+          throw new ReleaseRuleError(
+            'Penautan membuat rencana melebihi acuan — wajib dilakukan pengguna lain, bukan pembuat/pengaju release.',
+            403,
+          );
+        }
+        if (over.overCount) snapshot = rlOverIssueSnapshot(over, now);
+        const res = await txDb.collection('inventory_releases').updateOne(
+          withTenantFilter(scopeAuth, unlinkedReleaseFilter({ id: doc.id })),
+          {
+            $set: {
+              productionPlanId: planId,
+              productionPlanNo: planNo,
+              planLink: { source: 'MANUAL', reason, linkedBy: actor, linkedAt: now },
+              ...(snapshot ? { overIssue: snapshot } : {}),
+              updatedAt: now,
+            },
+          },
+          txOpts(session),
+        );
+        if (res.matchedCount === 0) throw new CasConflictError();
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'INVENTORY_RELEASE_LINK_PLAN',
+          entityType: 'inventory_release',
+          entityId: String(doc.id),
+          summary: `Release ${doc.noRelease} ditautkan ke ${planNo}`
+            + (snapshot ? ` · melebihi acuan ${snapshot.lines.length} produk` : ''),
+          userId: auth.userId,
+          userName: auth.name || auth.email || 'System',
+          metadata: {
+            noRelease: doc.noRelease,
+            productionPlanId: planId,
+            productionPlanNo: planNo,
+            planStatus: plan.status,
+            reason,
+            ...(snapshot ? { overIssue: snapshot } : {}),
+          },
+        }, session);
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      if (e instanceof ReleaseRuleError) return err(e.message, e.status);
+      throw e;
+    }
+    return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
+  }
+
   if (path[0] === 'inventory-releases' && path.length === 2 && method === 'GET') {
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
@@ -301,6 +583,12 @@ export async function handleInventoryReleases({
     if ('error' in planResolved) return err(planResolved.error, 400);
 
     const submitNow = releaseBody.submit === true;
+    let overIssue: RlOverIssueSnapshot | undefined;
+    if (submitNow) {
+      const over = await submitOverIssueCheck(db, scopeAuth, tenantId, planResolved.productionPlanId, lineItems);
+      if ('error' in over) return err(over.error, 400);
+      overIssue = over.snapshot;
+    }
     const doc = stampTenantId(tenantId, {
       id: uuidv4(),
       noRelease: '',
@@ -323,8 +611,10 @@ export async function handleInventoryReleases({
         productionPlanNo: planResolved.productionPlanNo,
       } : {}),
       items: lineItems,
+      ...(overIssue ? { overIssue } : {}),
       createdBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
       submittedAt: submitNow ? now : null,
+      ...(submitNow ? { submittedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role } } : {}),
       createdAt: now,
     });
     await insertWithAudit({
@@ -404,9 +694,16 @@ export async function handleInventoryReleases({
     if ('error' in planResolved) return err(planResolved.error, 400);
 
     const submitNow = releaseBody.submit === true;
+    let overIssue: RlOverIssueSnapshot | undefined;
     if (submitNow) {
       const locked = await guardPosting(db, scopeAuth, releaseBody, String(doc.tanggal || doc.createdAt || ''));
       if (locked) return locked;
+      const linkedPlanId = releaseBody.productionPlanId !== undefined || planResolved.productionPlanId
+        ? planResolved.productionPlanId
+        : doc.productionPlanId;
+      const over = await submitOverIssueCheck(db, scopeAuth, tenantId, linkedPlanId, built.lineItems);
+      if ('error' in over) return err(over.error, 400);
+      overIssue = over.snapshot;
     }
 
     const now = new Date();
@@ -423,6 +720,8 @@ export async function handleInventoryReleases({
       assetId,
       items: built.lineItems,
       submittedAt: submitNow ? now : null,
+      submittedBy: submitNow ? { userId: auth.userId, userName: auth.name || auth.email, role: auth.role } : null,
+      lastEditedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
       updatedAt: now,
     };
 
@@ -442,6 +741,8 @@ export async function handleInventoryReleases({
       unset.rejectedAt = '';
       unset.rejectReason = '';
     }
+    if (overIssue) patch.overIssue = overIssue;
+    else unset.overIssue = '';
 
     const edited = await db.collection('inventory_releases').updateOne(
       casEditFilter(doc),
@@ -474,10 +775,28 @@ export async function handleInventoryReleases({
         400,
       );
     }
+    if (!scopeAuth) return err('Unauthorized', 401);
+    const over = await submitOverIssueCheck(
+      db,
+      scopeAuth,
+      String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody)),
+      doc.productionPlanId,
+      doc.items || [],
+    );
+    if ('error' in over) return err(over.error, 400);
     const now = new Date();
     const submitted = await db.collection('inventory_releases').updateOne(
       casStatusFilter(doc, 'DRAFT'),
-      { $set: { status: 'PENDING_APPROVAL', submittedAt: now, updatedAt: now } },
+      {
+        $set: {
+          status: 'PENDING_APPROVAL',
+          submittedAt: now,
+          submittedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
+          updatedAt: now,
+          ...(over.snapshot ? { overIssue: over.snapshot } : {}),
+        },
+        ...(over.snapshot ? {} : { $unset: { overIssue: '' } }),
+      },
     );
     if (submitted.matchedCount === 0) return casConflict();
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
@@ -488,7 +807,7 @@ export async function handleInventoryReleases({
     if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: releaseBody, request });
     if (denied) return denied;
-    if (!auth) return err('Unauthorized', 401);
+    if (!auth || !scopeAuth) return err('Unauthorized', 401);
     const locked = await guardPosting(db, scopeAuth, releaseBody);
     if (locked) return locked;
 
@@ -540,8 +859,86 @@ export async function handleInventoryReleases({
       })),
     });
     if (!holdGate.ok) return err(holdGate.error, 400);
+
+    // Fase 1.3 (flag rlFromPoReference): tautan rencana divalidasi ulang, lalu kontrol melebihi acuan.
+    const referenceMode = await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference');
+    let planId = String(doc.productionPlanId || '').trim();
+    let planNo = String(doc.productionPlanNo || '');
+    let autoLinkedAtApprove = false;
+    let planForCheck: ProductionPlanDoc | null = null;
+    let fallbackMrp: Awaited<ReturnType<typeof planFallbackMrpLines>> = [];
+    if (referenceMode) {
+      if (!planId && !isExcludedOperationalKeperluan(String(doc.keperluan || ''))) {
+        const productQtyById: Record<string, number> = {};
+        for (const it of releaseLines) {
+          productQtyById[String(it.stokId)] = (productQtyById[String(it.stokId)] || 0) + it.qtyBase;
+        }
+        const infer = await inferProductionPlanForRelease(db, scopeAuth, {
+          keperluan: String(doc.keperluan || ''),
+          productIds: Object.keys(productQtyById),
+          productQtyById,
+          releaseDate: doc.tanggal ? new Date(String(doc.tanggal)) : now,
+          kitchenId: doc.kitchenId,
+        });
+        if (infer && 'autoLinked' in infer) {
+          planId = infer.productionPlanId;
+          planNo = infer.productionPlanNo;
+          autoLinkedAtApprove = true;
+        } else if (infer && 'ambiguous' in infer) {
+          const list = infer.ambiguous.map((m) => m.productionPlanNo).join(', ');
+          return err(`Barang cocok beberapa rencana produksi (${list}) — edit release dan pilih satu Rencana Produksi.`, 400);
+        } else if (infer && 'planAlreadyCompleted' in infer) {
+          const list = infer.planAlreadyCompleted.map((m) => m.productionPlanNo).join(', ');
+          return err(`Rencana ${list} sudah selesai — tolak release ini atau pilih rencana yang masih berjalan.`, 400);
+        } else if (infer && 'requiresPlan' in infer) {
+          return err('Keperluan terlihat untuk produksi — edit release dan pilih Rencana Produksi.', 400);
+        }
+      }
+      if (planId) {
+        planForCheck = await loadPlanDoc(db, scopeAuth, planId, tenantId);
+        if (!planForCheck) return err('Rencana produksi tertaut tidak ditemukan', 400);
+        planNo = String(planForCheck.noDokumen || planNo || planId);
+        if (!ISSUE_ELIGIBLE_PLAN_STATUSES.has(String(planForCheck.status || ''))) {
+          return err(`Rencana ${planNo} tidak berstatus Disetujui/Diproses — release tidak bisa disetujui`, 400);
+        }
+        const rlKitchen = String(doc.kitchenId || '').trim();
+        const planKitchen = String(planForCheck.kitchenId || '').trim();
+        if (rlKitchen && planKitchen && rlKitchen !== planKitchen) {
+          return err(`Rencana ${planNo} milik dapur lain — edit release dan pilih rencana dapur ini`, 400);
+        }
+        fallbackMrp = await planFallbackMrpLines(db, scopeAuth, planForCheck);
+      }
+    }
+
+    let overSnapshot: RlOverIssueSnapshot | undefined;
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        overSnapshot = undefined;
+        if (planForCheck) {
+          // Operasi pertama transaksi: approve RL lain untuk rencana yang sama bentrok di sini dan diulang,
+          // sehingga total RL POSTED selalu dihitung dari data terbaru.
+          const lock = await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id: planId, tenantId, status: { $in: [...ISSUE_ELIGIBLE_PLAN_STATUSES] } }),
+            { $inc: { rlPostingSeq: 1 } },
+            txOpts(session),
+          );
+          if (lock.matchedCount === 0) {
+            throw new ReleaseRuleError(`Rencana ${planNo} tidak berstatus Disetujui/Diproses — release tidak bisa disetujui`);
+          }
+          const over = await computeRlOverIssue(txDb, scopeAuth, {
+            plan: planForCheck,
+            items: overIssueItems(releaseLines),
+            fallbackMrpLines: fallbackMrp,
+            session,
+          });
+          const missing = rlOverIssueMissingReasonMessage(over);
+          if (missing) throw new ReleaseRuleError(`${missing}. Tolak agar pembuat mengisi alasan.`);
+          if (over.overCount && isReleaseMaker(doc, auth.userId)) {
+            throw new ReleaseRuleError('Release melebihi acuan rencana wajib disetujui pengguna lain, bukan pembuat/pengaju/penyuntingnya.', 403);
+          }
+          if (over.overCount) overSnapshot = rlOverIssueSnapshot(over, now);
+        }
+
         const claim = await txDb.collection('inventory_releases').updateOne(
           { id: doc.id, status: 'PENDING_APPROVAL' },
           {
@@ -551,7 +948,14 @@ export async function handleInventoryReleases({
               approvedAt: now,
               postedAt: now,
               approveNote: releaseBody.note || '',
+              ...(autoLinkedAtApprove ? {
+                productionPlanId: planId,
+                productionPlanNo: planNo,
+                keterangan: [doc.keterangan || '', `[auto-link approve ${planNo}]`].filter(Boolean).join(' ').trim(),
+              } : {}),
+              ...(overSnapshot ? { overIssue: overSnapshot } : {}),
             },
+            ...(planForCheck && !overSnapshot ? { $unset: { overIssue: '' } } : {}),
           },
           session ? { session } : {},
         );
@@ -676,14 +1080,23 @@ export async function handleInventoryReleases({
           action: 'INVENTORY_RELEASE',
           entityType: 'inventory_release',
           entityId: String(doc.id),
-          summary: `Release ${doc.noRelease} disetujui`,
+          summary: `Release ${doc.noRelease} disetujui`
+            + (overSnapshot ? ` · melebihi acuan ${overSnapshot.lines.length} produk` : ''),
           userId: auth.userId,
           userName: auth.name || auth.email || 'System',
-          metadata: { noRelease: doc.noRelease, lokasiKode, itemCount: (doc.items || []).length },
+          metadata: {
+            noRelease: doc.noRelease,
+            lokasiKode,
+            itemCount: (doc.items || []).length,
+            ...(planId ? { productionPlanId: planId, productionPlanNo: planNo } : {}),
+            ...(autoLinkedAtApprove ? { autoLinkedAtApprove: true } : {}),
+            ...(overSnapshot ? { overIssue: overSnapshot } : {}),
+          },
         }, session);
       });
     } catch (e) {
       if (isCasConflict(e)) return casConflict(e.message);
+      if (e instanceof ReleaseRuleError) return err(e.message, e.status);
       const msg = e instanceof Error ? e.message : 'Gagal approve release';
       return err(msg, 400);
     }

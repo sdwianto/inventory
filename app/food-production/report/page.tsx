@@ -167,8 +167,15 @@ function ProductionReportPageContent() {
               <p className="text-xs text-muted-foreground">{detail.cooking.note}</p>
               <div className="grid grid-cols-2 gap-2">
                 <div className="border rounded p-2">
-                  <div className="text-[11px] text-muted-foreground">Qty keluar (PBL doc)</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {detail.issue?.stockMode === 'REFERENCE' ? 'Qty keluar (RL — PBL acuan)' : 'Qty keluar (PBL doc)'}
+                  </div>
                   <div className="font-medium">{detail.summary.qtyIssuedTotal}</div>
+                  {detail.issue?.stockMode === 'REFERENCE' && (detail.issue.sisaLineCount || 0) > 0 && (
+                    <div className="text-[11px] text-amber-700">
+                      Sisa acuan {detail.issue.sisaLineCount} bahan belum keluar
+                    </div>
+                  )}
                 </div>
                 {detail.consumption && (
                   <>

@@ -7,16 +7,9 @@ import {
 } from '@/lib/api/tenant-master';
 import { requireRole } from '@/lib/api/require-auth';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
-import {
-  parseHorizon,
-  buildMaterialForecast,
-  type DailyConsumptionPoint,
-} from '@/lib/food-production/forecast';
+import { parseHorizon, buildMaterialForecast } from '@/lib/food-production/forecast';
 import { FP_MGMT_READ_ROLES } from '@/lib/food-production/roles';
-import {
-  MATERIAL_ISSUES_COLLECTION,
-  type MaterialIssueDoc,
-} from '@/lib/food-production/material-issue';
+import { loadActualConsumption } from '@/lib/food-production/actual-consumption';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleFoodForecasts(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -35,30 +28,12 @@ export async function handleFoodForecasts(ctx: HandlerContext): Promise<NextResp
     since.setUTCDate(since.getUTCDate() - historyWindow);
     const sinceIso = since.toISOString().slice(0, 10);
 
-    const issues = await db.collection(MATERIAL_ISSUES_COLLECTION)
-      .find(withTenantFilter(scopeAuth, {
-        status: 'COMPLETED',
-        tanggal: { $gte: sinceIso },
-      }))
-      .project({ tanggal: 1, lines: 1, warehouseKode: 1 })
-      .limit(500)
-      .toArray() as unknown as MaterialIssueDoc[];
-
-    const points: DailyConsumptionPoint[] = [];
-    const productIds = new Set<string>();
-    const warehouseKodes = new Set<string>();
-    for (const issue of issues) {
-      if (issue.warehouseKode) warehouseKodes.add(issue.warehouseKode);
-      for (const line of issue.lines || []) {
-        if (!(Number(line.qtyIssued) > 0)) continue;
-        productIds.add(line.productId);
-        points.push({
-          tanggal: issue.tanggal,
-          productId: line.productId,
-          qty: Number(line.qtyIssued),
-        });
-      }
-    }
+    const tid = tenantIdForWrite(scopeAuth, {});
+    const { points, productIds, warehouseKodes } = await loadActualConsumption(db, scopeAuth, {
+      tenantId: tid,
+      sinceIso,
+      issueLimit: 500,
+    });
 
     const ids = [...productIds];
     const products = ids.length
@@ -75,7 +50,6 @@ export async function handleFoodForecasts(ctx: HandlerContext): Promise<NextResp
       }]),
     );
 
-    const tid = tenantIdForWrite(scopeAuth, {});
     const stockMap = ids.length ? await getStokByWarehouseBatch(db, tid, ids) : new Map();
     const onHandByProduct = new Map<string, number>();
     for (const pid of ids) {

@@ -6,7 +6,7 @@ import {
   withTenantFilter,
   resolveOperationalScope,
 } from '@/lib/api/tenant-master';
-import { requireRole } from '@/lib/api/require-auth';
+import { RELEASE_CREATE_ROLES, requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import {
   PRODUCTION_PLANS_COLLECTION,
@@ -62,8 +62,12 @@ import { nextDocNumber, nextFpDocNumber } from '@/lib/food-production/document-n
 import { todayIsoDate } from '@/lib/food-production/recipe';
 import {
   MATERIAL_ISSUES_COLLECTION,
+  ISSUE_ELIGIBLE_PLAN_STATUSES,
   ISSUE_OPEN_STATUSES,
 } from '@/lib/food-production/material-issue';
+import { loadReleasePrefill } from '@/lib/food-production/release-prefill';
+import { isPblReferenceModeEnabled, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
+import { isValidWarehouseKode, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import {
   PRODUCTION_RESULTS_COLLECTION,
   RESULT_OPEN_STATUSES,
@@ -79,12 +83,8 @@ import {
 } from '@/lib/food-production/purchase-requirement';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
-import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
-import {
-  aggregatePlanMaterialConsumption,
-  applyConsumptionToRequirementLines,
-  loadPlanConsumptionSummary,
-} from '@/lib/food-production/material-issue-reconcile';
+import { buildPlanReadiness, planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
+import { loadPlanConsumptionSummary } from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
 import { insertWithAudit, CasConflictError, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, isCasConflict } from '@/lib/api/cas';
 
@@ -1046,9 +1046,9 @@ export async function handleProductionPlans({
         withTenantFilter(scopeAuth, { productionPlanId: id, status: 'COMPLETED' }),
       );
       if (!completedIssue) {
-        const readiness = await buildPlanMaterialExplosion(db, scopeAuth, existing, { useLinkedPoAsTarget: true });
-        if ('error' in readiness && readiness.error) return err(readiness.error, 400);
-        const shortageCount = Number(readiness.summary?.shortageCount || 0);
+        const readiness = await buildPlanReadiness(db, scopeAuth, existing);
+        if ('error' in readiness) return err(readiness.error, 400);
+        const shortageCount = readiness.summary.shortageCount;
         if (shortageCount > 0) {
           return err(
             `Tidak bisa mulai proses — masih kurang ${shortageCount} item bahan. Buat Draft Belanja atau lengkapi stok dulu.`,
@@ -1056,7 +1056,9 @@ export async function handleProductionPlans({
           );
         }
         return err(
-          'Tidak bisa mulai proses — barang belum dikeluarkan. Selesaikan Pengeluaran Stok (Keluarkan Stok) dulu.',
+          await isPblReferenceModeEnabled(db, existing.tenantId)
+            ? 'Tidak bisa mulai proses — PBL acuan belum dikonfirmasi. Keluarkan bahan lewat RL, lalu Konfirmasi Selesai PBL.'
+            : 'Tidak bisa mulai proses — barang belum dikeluarkan. Selesaikan Pengeluaran Stok (Keluarkan Stok) dulu.',
           400,
         );
       }
@@ -1124,6 +1126,35 @@ export async function handleProductionPlans({
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
+  // GET /production-plans/:id/release-prefill?lokasiKode=&excludeReleaseId= — baris RL dari acuan PO/MRP
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'release-prefill' && method === 'GET') {
+    const deniedRole = requireRole(auth, RELEASE_CREATE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+
+    const lokasiRaw = url.searchParams.get('lokasiKode');
+    if (!isValidWarehouseKode(lokasiRaw)) return err('Pilih gudang: GKERING, GBASAH, atau GJANITOR', 400);
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return err('Rencana tidak ditemukan', 404);
+    if (!(await isTenantFeatureEnabled(db, plan.tenantId, 'rlFromPoReference'))) {
+      return err('RL dari acuan PO belum diaktifkan untuk tenant ini', 403);
+    }
+    if (!ISSUE_ELIGIBLE_PLAN_STATUSES.has(plan.status)) {
+      return err(`Rencana ${plan.noDokumen || plan.id} belum siap (wajib Disetujui/Diproses)`, 400);
+    }
+
+    const prefill = await loadReleasePrefill(db, scopeAuth, plan, {
+      lokasiKode: normalizeWarehouseKode(lokasiRaw),
+      excludeReleaseId: url.searchParams.get('excludeReleaseId') || undefined,
+      fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
+    });
+    return ok({ ...prefill, productionPlanNo: plan.noDokumen });
+  }
+
   // GET /production-plans/:id/material-readiness — stok lengkap vs kekurangan (live explode)
   if (path[0] === 'production-plans' && path[1] && path[2] === 'material-readiness' && method === 'GET') {
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
@@ -1136,15 +1167,9 @@ export async function handleProductionPlans({
     ) as ProductionPlanDoc | null;
     if (!plan) return err('Rencana tidak ditemukan', 404);
 
-    const built = await buildPlanMaterialExplosion(db, scopeAuth, plan, { useLinkedPoAsTarget: true });
-    if ('error' in built && built.error) return err(built.error, 400);
-
-    const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, id, {
-      includeOrphanOperational: true,
-      planMeta: { tanggal: plan.tanggal, kitchenId: plan.kitchenId },
-    });
-    const netLines = applyConsumptionToRequirementLines(built.lines || [], consumption);
-    const shortageCount = netLines.summary.shortageCount;
+    const built = await buildPlanReadiness(db, scopeAuth, plan);
+    if ('error' in built) return err(built.error, 400);
+    const shortageCount = built.summary.shortageCount;
     const stockReady = shortageCount === 0;
     // After stock is issued, on-hand drops — still treat as ready once PBL COMPLETED.
     const [linkedPo, completedIssue, openIssue, completedResult, openResult] = await Promise.all([
@@ -1180,9 +1205,14 @@ export async function handleProductionPlans({
     ]);
 
     const issueCompleted = Boolean(completedIssue);
-    const materialsReady = stockReady || issueCompleted;
+    const pblReferenceMode = built.mode === 'REFERENCE' && await isPblReferenceModeEnabled(db, plan.tenantId);
+    const sisaLineCount = built.reference.lines.filter((l) => l.sisa > 0).length;
+    const rlFulfilled = built.reference.lines.length > 0 && sisaLineCount === 0;
+    const materialsReady = pblReferenceMode
+      ? rlFulfilled || issueCompleted
+      : stockReady || issueCompleted;
     const resultCompleted = Boolean(completedResult);
-    const shortageLines = netLines.lines
+    const shortageLines = built.lines
       .filter((l) => l.shortage)
       .slice(0, 20)
       .map((l) => ({
@@ -1193,7 +1223,7 @@ export async function handleProductionPlans({
         qtyOnHand: l.qtyOnHand,
         qtyNet: l.qtyNet,
         satuan: l.satuan,
-        stockWarehouseKode: (l as { stockWarehouseKode?: string }).stockWarehouseKode,
+        stockWarehouseKode: l.stockWarehouseKode,
         sourceOfTruth: l.sourceOfTruth,
         poQtyOrdered: l.poQtyOrdered,
         poQtyReceived: l.poQtyReceived,
@@ -1205,10 +1235,15 @@ export async function handleProductionPlans({
       productionPlanId: id,
       productionPlanNo: plan.noDokumen,
       materialsReady,
+      pblReferenceMode,
+      rlFulfilled,
+      sisaLineCount,
       shortageCount: issueCompleted ? 0 : shortageCount,
-      lineCount: Number(built.summary?.lineCount || 0),
+      lineCount: built.summary.lineCount,
       warehouseKode: built.warehouseKode,
       shortageLines: issueCompleted ? [] : shortageLines,
+      readinessMode: built.mode,
+      reference: built.reference,
       consumption: consumptionSummary,
       issueCompleted,
       completedIssueNo: completedIssue ? String(completedIssue.noDokumen || '') : null,

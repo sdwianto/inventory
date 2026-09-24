@@ -31,6 +31,8 @@ export {
 
 export type { StockActor, StockCostSource } from '@/lib/stock-ledger/kartu';
 
+export { sumOutboundKartuBySource, type KartuOutboundCost } from '@/lib/stock-ledger/kartu-read';
+
 export {
   ledgerSaldoForProducts,
   availableQtyAgainstLedger,

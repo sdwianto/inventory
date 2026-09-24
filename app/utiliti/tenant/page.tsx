@@ -25,6 +25,7 @@ export default function TenantSetupPage() {
     showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '', logoUrl: '',
     ppnPercent: 11,
     periodLockedUntil: '' as string,
+    rlOverIssueTolerancePct: 0,
     features: {
       multiUomEnabled: true,
       offlineQueueEnabled: true,
@@ -318,19 +319,50 @@ export default function TenantSetupPage() {
               ['planStockReservation', 'Cadangan stok rencana'],
               ['costingV2', 'Costing v2'],
               ['adjustmentApproval', 'Approval penyesuaian'],
-            ] as const).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={form.features?.[key] === true}
-                  onChange={(e) => setForm({
-                    ...form,
-                    features: { ...form.features, [key]: e.target.checked },
-                  })}
-                />
-                {label}
-              </label>
-            ))}
+            ] as const).map(([key, label]) => {
+              const needsRl = key === 'pblReferenceMode' && form.features?.rlFromPoReference !== true;
+              return (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer"
+                  title={needsRl ? 'Aktifkan "RL dari acuan PO" dulu' : undefined}
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.features?.[key] === true}
+                    disabled={needsRl && form.features?.[key] !== true}
+                    onChange={(e) => setForm({
+                      ...form,
+                      features: {
+                        ...form.features,
+                        [key]: e.target.checked,
+                        ...(key === 'rlFromPoReference' && !e.target.checked ? { pblReferenceMode: false } : {}),
+                      },
+                    })}
+                  />
+                  {label}
+                </label>
+              );
+            })}
+            <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded sm:col-span-2">
+              <span>Toleransi RL melebihi acuan rencana (%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={0.5}
+                value={form.rlOverIssueTolerancePct ?? 0}
+                disabled={form.features?.rlFromPoReference !== true}
+                onChange={(e) => setForm({
+                  ...form,
+                  rlOverIssueTolerancePct: e.target.value === '' ? 0 : Number(e.target.value),
+                })}
+                className="h-8"
+              />
+              <span className="text-xs text-slate-500">
+                0 = RL di atas acuan (PO diterima / MRP) wajib alasan dan disetujui pengguna lain. Berlaku bila &quot;RL dari acuan PO&quot; aktif.
+              </span>
+            </label>
           </CardContent>
         </Card>
       )}

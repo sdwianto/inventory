@@ -20,8 +20,21 @@ export interface MaterialIssueLine {
   /** Product warehouse (GKERING / GBASAH) — where stock is deducted on post. */
   warehouseKode?: string;
   qtyPlanned: number;
+  /** PBL acuan (`stockMode: 'REFERENCE'`): selalu 0 — bahan keluar lewat RL. */
   qtyIssued: number;
+  /** Snapshot acuan (PBL acuan). Semua qty dalam satuan dasar produk. */
+  productIds?: string[];
+  sumber?: 'PO' | 'MRP';
+  acuanQty?: number;
+  poQtyReceived?: number;
+  rlPosted?: number;
+  /** PBL lama yang memutasi stok untuk rencana yang sama. */
+  pblPosted?: number;
+  sisa?: number;
 }
+
+/** `REFERENCE`: PBL sebagai dokumen acuan & konfirmasi, tanpa mutasi stok (Fase 1.4). Kosong = lama (memutasi stok). */
+export type MaterialIssueStockMode = 'STOCK' | 'REFERENCE';
 
 export interface MaterialIssueDoc {
   id: string;
@@ -42,7 +55,23 @@ export interface MaterialIssueDoc {
     lineCount: number;
     qtyPlannedTotal: number;
     qtyIssuedTotal: number;
+    /** PBL acuan. */
+    rlPostedTotal?: number;
+    sisaTotal?: number;
+    sisaLineCount?: number;
   };
+  stockMode?: MaterialIssueStockMode;
+  /** PBL acuan: waktu snapshot acuan terakhir (buat / perbarui / selesai). */
+  referenceSnapshotAt?: Date;
+  /** PBL acuan selesai padahal masih ada sisa acuan atau RL menunggu persetujuan. */
+  completionAck?: {
+    by?: { userId?: string; userName?: string };
+    at: Date;
+    reason: string;
+    sisaLineCount: number;
+    pendingRlCount: number;
+  };
+  /** Hanya PBL lama: waktu stok diposting. PBL acuan tidak pernah mengisi ini. */
   stockPostedAt?: Date;
   /** W2-6: FEFO consume summary per line (ingredient_lots). */
   fefoConsume?: Array<{
@@ -132,6 +161,59 @@ export function summarizeIssueLines(lines: MaterialIssueLine[]): MaterialIssueDo
     lineCount: lines.length,
     qtyPlannedTotal: roundQty(lines.reduce((s, l) => s + (Number(l.qtyPlanned) || 0), 0)),
     qtyIssuedTotal: roundQty(lines.reduce((s, l) => s + (Number(l.qtyIssued) || 0), 0)),
+  };
+}
+
+export function isReferenceIssue(doc: Pick<MaterialIssueDoc, 'stockMode'> | null | undefined): boolean {
+  return doc?.stockMode === 'REFERENCE';
+}
+
+/** Filter Mongo: PBL yang benar-benar memutasi stok (lama). */
+export const STOCK_ISSUE_FILTER = { stockMode: { $ne: 'REFERENCE' } } as const;
+
+type ReferenceLineInput = {
+  productId: string;
+  productIds: string[];
+  productKode?: string;
+  productNama?: string;
+  satuan?: string;
+  sumber: 'PO' | 'MRP';
+  acuanQty: number;
+  poQtyReceived: number;
+  rlPosted: number;
+  pblPosted: number;
+  sisa: number;
+  stockWarehouseKode?: string;
+};
+
+/** Baris PBL acuan dari `loadPlanReference` — qty keluar 0, acuan/RL/sisa sebagai snapshot. */
+export function buildReferenceIssueLines(refLines: ReferenceLineInput[]): MaterialIssueLine[] {
+  return refLines
+    .filter((l) => l.acuanQty > 0 || l.rlPosted > 0 || l.pblPosted > 0)
+    .map((l) => ({
+      productId: l.productId,
+      productIds: l.productIds,
+      productKode: l.productKode,
+      productNama: l.productNama,
+      satuan: l.satuan,
+      ...(l.stockWarehouseKode ? { warehouseKode: l.stockWarehouseKode } : {}),
+      qtyPlanned: roundQty(l.acuanQty),
+      qtyIssued: 0,
+      sumber: l.sumber,
+      acuanQty: roundQty(l.acuanQty),
+      poQtyReceived: roundQty(l.poQtyReceived),
+      rlPosted: roundQty(l.rlPosted),
+      pblPosted: roundQty(l.pblPosted),
+      sisa: roundQty(l.sisa),
+    }));
+}
+
+export function summarizeReferenceIssueLines(lines: MaterialIssueLine[]): MaterialIssueDoc['summary'] {
+  return {
+    ...summarizeIssueLines(lines),
+    rlPostedTotal: roundQty(lines.reduce((s, l) => s + (Number(l.rlPosted) || 0), 0)),
+    sisaTotal: roundQty(lines.reduce((s, l) => s + (Number(l.sisa) || 0), 0)),
+    sisaLineCount: lines.filter((l) => (Number(l.sisa) || 0) > 0).length,
   };
 }
 

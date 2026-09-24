@@ -16,8 +16,15 @@ import {
   decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
   type MaterialRequirementDoc,
+  type MaterialRequirementLine,
   type MaterialRequirementStatus,
 } from '@/lib/food-production/material-requirement';
+import { loadPlanReference, planReferenceReadiness, type PlanReference } from '@/lib/food-production/plan-reference';
+import {
+  aggregatePlanMaterialConsumption,
+  applyConsumptionToRequirementLines,
+} from '@/lib/food-production/material-issue-reconcile';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import {
   PRODUCTION_PLANS_COLLECTION,
   cookDateFromPlanTanggal,
@@ -96,10 +103,20 @@ export async function buildPlanMaterialExplosion(
   const built = await buildExplosion(db, scopeAuth, plan);
   if ('error' in built) return built;
   if (!opts.useLinkedPoAsTarget) return built;
+  return withLatestLinkedPoTarget(db, scopeAuth, plan.id, built);
+}
 
+type BuiltExplosion = Exclude<Awaited<ReturnType<typeof buildExplosion>>, { error: unknown }>;
+
+async function withLatestLinkedPoTarget(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  planId: string,
+  built: BuiltExplosion,
+): Promise<BuiltExplosion> {
   const linkedPo = await db.collection('customer_purchase_orders').findOne(
     withTenantFilter(scopeAuth, {
-      productionPlanId: plan.id,
+      productionPlanId: planId,
       status: { $nin: ['CANCELLED'] },
     }),
     { sort: { createdAt: -1 }, projection: { id: 1, status: 1, items: 1 } },
@@ -115,6 +132,75 @@ export async function buildPlanMaterialExplosion(
     lines: overridden.lines,
     summary: { ...built.summary, ...overridden.summary },
   };
+}
+
+export type PlanReadiness = {
+  mode: 'REFERENCE' | 'LEGACY';
+  warehouseKode?: string;
+  lines: Array<MaterialRequirementLine & { stockWarehouseKode?: string }>;
+  summary: { lineCount: number; shortageCount: number; qtyNetTotal: number };
+  reference: PlanReference;
+};
+
+/**
+ * Kesiapan bahan rencana — satu sumber untuk layar kesiapan, gerbang PROCESSING dan gerbang PBL.
+ * Flag `rlFromPoReference`: acuan dari loadPlanReference (semua PO berlaku + MRP, dikurangi RL/PBL).
+ * Tanpa flag: perilaku lama (PO terakhir menimpa resep, lalu dikurangi konsumsi).
+ */
+export async function buildPlanReadiness(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  plan: ProductionPlanDoc,
+): Promise<PlanReadiness | { error: string }> {
+  const built = await buildExplosion(db, scopeAuth, plan);
+  if ('error' in built) return { error: String(built.error) };
+  const [reference, referenceMode] = await Promise.all([
+    loadPlanReference(db, scopeAuth, plan, { fallbackMrpLines: built.lines, withStock: true }),
+    isTenantFeatureEnabled(db, plan.tenantId, 'rlFromPoReference'),
+  ]);
+
+  if (referenceMode) {
+    const ready = planReferenceReadiness(reference);
+    return {
+      mode: 'REFERENCE',
+      warehouseKode: built.warehouseKode,
+      lines: ready.lines,
+      summary: { lineCount: ready.lines.length, ...ready.summary },
+      reference,
+    };
+  }
+
+  const legacy = await withLatestLinkedPoTarget(db, scopeAuth, plan.id, built);
+  const consumption = await aggregatePlanMaterialConsumption(db, scopeAuth, plan.id, {
+    includeOrphanOperational: true,
+    planMeta: { tenantId: plan.tenantId, tanggal: plan.tanggal, kitchenId: plan.kitchenId },
+  });
+  const net = applyConsumptionToRequirementLines(legacy.lines, consumption);
+  return {
+    mode: 'LEGACY',
+    warehouseKode: built.warehouseKode,
+    lines: net.lines,
+    summary: { lineCount: Number(legacy.summary?.lineCount ?? net.lines.length), ...net.summary },
+    reference,
+  };
+}
+
+/**
+ * Baris MRP live dari resep rencana, dipakai `loadPlanReference` bila rencana belum punya dokumen MRP.
+ * Kosong bila eksplosi gagal (dapur tanpa gudang, menu/resep hilang).
+ */
+export async function planFallbackMrpLines(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof withTenantFilter>[0],
+  plan: ProductionPlanDoc,
+): Promise<MaterialRequirementLine[]> {
+  const hasMrpDoc = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).countDocuments(
+    withTenantFilter(scopeAuth, { productionPlanId: plan.id, status: { $nin: ['CANCELLED'] } }),
+    { limit: 1 },
+  );
+  if (hasMrpDoc) return [];
+  const built = await buildExplosion(db, scopeAuth, plan);
+  return 'error' in built ? [] : built.lines;
 }
 
 async function buildExplosion(

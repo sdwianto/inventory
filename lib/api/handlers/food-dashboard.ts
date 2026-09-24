@@ -8,7 +8,8 @@ import {
 import { requireRole } from '@/lib/api/require-auth';
 import { buildFoodDashboardSnapshot, type FoodDashboardKpis } from '@/lib/food-production/dashboard';
 import { FP_MGMT_READ_ROLES } from '@/lib/food-production/roles';
-import { parseHorizon, buildMaterialForecast, type DailyConsumptionPoint } from '@/lib/food-production/forecast';
+import { parseHorizon, buildMaterialForecast } from '@/lib/food-production/forecast';
+import { loadActualConsumption, loadPlanActualCostInput } from '@/lib/food-production/actual-consumption';
 import { analyzeActualCost, analyzePlanStandardCost, type ProductCostRef } from '@/lib/food-production/cost';
 import {
   PRODUCTION_PLANS_COLLECTION,
@@ -85,23 +86,12 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
     const since = new Date();
     since.setUTCDate(since.getUTCDate() - 14);
     const sinceIso = since.toISOString().slice(0, 10);
-    const issues = await db.collection(MATERIAL_ISSUES_COLLECTION)
-      .find({ ...tf, status: 'COMPLETED', tanggal: { $gte: sinceIso } })
-      .project({ tanggal: 1, lines: 1, warehouseKode: 1 })
-      .limit(300)
-      .toArray() as unknown as MaterialIssueDoc[];
-    const points: DailyConsumptionPoint[] = [];
-    const pids = new Set<string>();
-    const whs = new Set<string>();
-    for (const issue of issues) {
-      if (issue.warehouseKode) whs.add(issue.warehouseKode);
-      for (const line of issue.lines || []) {
-        if (!(Number(line.qtyIssued) > 0)) continue;
-        pids.add(line.productId);
-        points.push({ tanggal: issue.tanggal, productId: line.productId, qty: Number(line.qtyIssued) });
-      }
-    }
     const tid = tenantIdForWrite(scopeAuth, {});
+    const {
+      points,
+      productIds: pids,
+      warehouseKodes: whs,
+    } = await loadActualConsumption(db, scopeAuth, { tenantId: tid, sinceIso, issueLimit: 300 });
     const idList = [...pids];
     const stockMap = idList.length ? await getStokByWarehouseBatch(db, tid, idList) : new Map();
     const onHandByProduct = new Map<string, number>();
@@ -143,7 +133,14 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
           .find({ ...tf, id: { $in: recipeIds } })
           .toArray() as unknown as RecipeDoc[]
         : [];
-      const productIds = recipeDocs.flatMap((r) => (r.lines || []).map((l) => l.productId));
+      const planInput = await loadPlanActualCostInput(db, scopeAuth, plan);
+      const actualInput = planInput.referenceMode ? planInput : null;
+      const productIds = [
+        ...new Set([
+          ...recipeDocs.flatMap((r) => (r.lines || []).map((l) => l.productId)),
+          ...(actualInput?.productIds || []),
+        ]),
+      ];
       const products = productIds.length
         ? await db.collection('products')
           .find({ ...tf, id: { $in: productIds } })
@@ -166,21 +163,29 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
         productsById,
       });
       if ('error' in standard) continue;
-      const issue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
-        { ...tf, productionPlanId: plan.id, status: 'COMPLETED' },
-        { sort: { createdAt: -1 } },
-      ) as MaterialIssueDoc | null;
       const result = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
         { ...tf, productionPlanId: plan.id, status: 'COMPLETED' },
         { sort: { createdAt: -1 } },
       ) as ProductionResultDoc | null;
-      if (!issue) continue;
+      let issueLines: MaterialIssueDoc['lines'];
+      if (actualInput) {
+        if (!actualInput.issueLines.length) continue;
+        issueLines = actualInput.issueLines;
+      } else {
+        const issue = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
+          { ...tf, productionPlanId: plan.id, status: 'COMPLETED' },
+          { sort: { createdAt: -1 } },
+        ) as MaterialIssueDoc | null;
+        if (!issue) continue;
+        issueLines = issue.lines || [];
+      }
       const actual = analyzeActualCost({
         planId: plan.id,
-        issueLines: issue.lines || [],
+        issueLines,
         resultLines: result?.lines || [],
         productsById,
         standard: standard.standard,
+        ...(actualInput?.kartuCostByProduct ? { kartuCostByProduct: actualInput.kartuCostByProduct } : {}),
       });
       if (actual.variance && Math.abs(actual.variance.pct) >= 15) costVarianceAlerts += 1;
     }

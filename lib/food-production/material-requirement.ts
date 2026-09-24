@@ -519,11 +519,11 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
  * shortage/qtyNet untuk baris yang sudah punya acuan PO nyata. Baris tanpa
  * entri PO dibiarkan apa adanya (tetap resep-vs-stok).
  */
-export function applyLinkedPoTargets(
-  lines: MaterialRequirementLine[],
+export function applyLinkedPoTargets<T extends MaterialRequirementLine>(
+  lines: T[],
   poItemsByProductId: Map<string, { qtyOrdered: number; qtyReceived: number }>,
-): { lines: MaterialRequirementLine[]; summary: { shortageCount: number; qtyNetTotal: number } } {
-  const overridden = lines.map((line) => {
+): { lines: T[]; summary: { shortageCount: number; qtyNetTotal: number } } {
+  const overridden = lines.map((line): T => {
     const ident = procurementLineKey(line);
     const po = poItemsByProductId.get(ident) || poItemsByProductId.get(line.productId);
     if (!po) return line;

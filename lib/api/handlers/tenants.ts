@@ -17,6 +17,11 @@ import { ACTING_TENANT_COOKIE, sessionCookieOptions } from '@/lib/api/session';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
+import { writeAuditLog } from '@/lib/api/audit-log';
+import {
+  RL_OVER_TOLERANCE_SETTING,
+  normalizeRlOverIssueTolerancePct,
+} from '@/lib/food-production/rl-over-issue';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 
@@ -139,6 +144,21 @@ export async function handleTenants({
     const update: Record<string, unknown> = { ...settingsBody, tenantId, updatedAt: new Date() };
     delete update.id;
     delete update._id;
+    // Feature flag dan toleransi kontrol hanya diubah MASTER; ADMIN tenant tidak boleh melonggarkan kontrolnya sendiri.
+    if (!userAuth.isMaster) {
+      delete update.features;
+      delete update[RL_OVER_TOLERANCE_SETTING];
+    } else {
+      if (RL_OVER_TOLERANCE_SETTING in update) {
+        const tolerance = normalizeRlOverIssueTolerancePct(update[RL_OVER_TOLERANCE_SETTING]);
+        if (tolerance === null) return err('Toleransi RL melebihi acuan harus angka 0–100 (%)', 400);
+        update[RL_OVER_TOLERANCE_SETTING] = tolerance;
+      }
+      const features = update.features as Record<string, unknown> | undefined;
+      if (features && features.pblReferenceMode === true && features.rlFromPoReference !== true) {
+        return err('PBL acuan wajib bersama "RL dari acuan PO" — aktifkan keduanya', 400);
+      }
+    }
 
     if (update.logoBase64 && String(update.logoBase64).length > 700000) {
       return err('Logo terlalu besar (max 500KB). Coba kompres dulu.', 400);
@@ -151,9 +171,48 @@ export async function handleTenants({
       update.logoBase64 = '';
     }
 
+    const controlKeys = ['features', RL_OVER_TOLERANCE_SETTING].filter((k) => k in update);
+    const before = controlKeys.length
+      ? await db.collection('tenant_settings').findOne(
+        { tenantId },
+        { projection: Object.fromEntries(controlKeys.map((k) => [k, 1])) },
+      )
+      : null;
+
     await db.collection('tenant_settings').updateOne({ tenantId }, { $set: update }, { upsert: true });
     await invalidateDashboardSnapshot(db, tenantId);
     const doc = await db.collection<TenantSettingsDoc>('tenant_settings').findOne({ tenantId });
+
+    // Flag & toleransi mengubah perilaku posting stok — setiap perubahan wajib terlacak.
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    const beforeFeatures = (before?.features || {}) as Record<string, unknown>;
+    const afterFeatures = (doc?.features || {}) as Record<string, unknown>;
+    if (controlKeys.includes('features')) {
+      for (const key of new Set([...Object.keys(beforeFeatures), ...Object.keys(afterFeatures)])) {
+        if (beforeFeatures[key] !== afterFeatures[key]) {
+          changes[`features.${key}`] = { from: beforeFeatures[key] ?? null, to: afterFeatures[key] ?? null };
+        }
+      }
+    }
+    if (controlKeys.includes(RL_OVER_TOLERANCE_SETTING)
+      && before?.[RL_OVER_TOLERANCE_SETTING] !== doc?.[RL_OVER_TOLERANCE_SETTING]) {
+      changes[RL_OVER_TOLERANCE_SETTING] = {
+        from: before?.[RL_OVER_TOLERANCE_SETTING] ?? null,
+        to: doc?.[RL_OVER_TOLERANCE_SETTING] ?? null,
+      };
+    }
+    if (Object.keys(changes).length) {
+      await writeAuditLog(db, {
+        tenantId,
+        action: 'TENANT_CONTROLS_UPDATE',
+        entityType: 'tenant_settings',
+        entityId: tenantId,
+        summary: `Kontrol tenant diubah: ${Object.keys(changes).join(', ')}`,
+        userId: userAuth.userId,
+        userName: userAuth.name || userAuth.email || 'System',
+        metadata: { changes },
+      });
+    }
     return ok(clean(doc));
   }
 

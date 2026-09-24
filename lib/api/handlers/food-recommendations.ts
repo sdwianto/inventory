@@ -10,7 +10,8 @@ import {
   tenantIdForWrite,
 } from '@/lib/api/tenant-master';
 import { requireRole } from '@/lib/api/require-auth';
-import { parseHorizon, buildMaterialForecast, type DailyConsumptionPoint } from '@/lib/food-production/forecast';
+import { parseHorizon, buildMaterialForecast } from '@/lib/food-production/forecast';
+import { loadActualConsumption } from '@/lib/food-production/actual-consumption';
 import {
   buildRecommendations,
   parseRecTypes,
@@ -20,7 +21,6 @@ import {
 import { FP_MGMT_READ_ROLES } from '@/lib/food-production/roles';
 import { analyzePlanStandardCost, type ProductCostRef } from '@/lib/food-production/cost';
 import { PRODUCTION_PLANS_COLLECTION, type ProductionPlanDoc } from '@/lib/food-production/production-plan';
-import { MATERIAL_ISSUES_COLLECTION, type MaterialIssueDoc } from '@/lib/food-production/material-issue';
 import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/food-production/production-result';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
@@ -54,19 +54,14 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
     since.setUTCDate(since.getUTCDate() - historyDays);
     const sinceIso = since.toISOString().slice(0, 10);
 
-    const issueQuery: Record<string, unknown> = {
-      ...tfBase,
-      ...kitchenFilter,
-      status: 'COMPLETED',
-      tanggal: { $gte: sinceIso },
-    };
-
-    const [issues, results, openPlans, menus, products] = await Promise.all([
-      db.collection(MATERIAL_ISSUES_COLLECTION)
-        .find(issueQuery)
-        .project({ tanggal: 1, lines: 1, warehouseKode: 1, noDokumen: 1, kitchenId: 1 })
-        .limit(300)
-        .toArray() as Promise<MaterialIssueDoc[]>,
+    const tid = tenantIdForWrite(scopeAuth, {});
+    const [consumption, results, openPlans, menus, products] = await Promise.all([
+      loadActualConsumption(db, scopeAuth, {
+        tenantId: tid,
+        sinceIso,
+        ...(kitchenId ? { kitchenId } : {}),
+        issueLimit: 300,
+      }),
       db.collection(PRODUCTION_RESULTS_COLLECTION)
         .find({
           ...tfBase,
@@ -98,36 +93,12 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
         .toArray(),
     ]);
 
-    const points: DailyConsumptionPoint[] = [];
-    const pids = new Set<string>();
-    const whs = new Set<string>();
-    const issueWasteLines: Array<{
-      issueNo?: string;
-      productId: string;
-      productNama?: string;
-      qtyPlanned: number;
-      qtyIssued: number;
-    }> = [];
-
-    for (const issue of issues) {
-      if (issue.warehouseKode) whs.add(issue.warehouseKode);
-      for (const line of issue.lines || []) {
-        if (!(Number(line.qtyIssued) > 0)) continue;
-        pids.add(line.productId);
-        points.push({
-          tanggal: issue.tanggal,
-          productId: line.productId,
-          qty: Number(line.qtyIssued),
-        });
-        issueWasteLines.push({
-          issueNo: issue.noDokumen,
-          productId: line.productId,
-          productNama: line.productNama,
-          qtyPlanned: Number(line.qtyPlanned) || 0,
-          qtyIssued: Number(line.qtyIssued) || 0,
-        });
-      }
-    }
+    const {
+      points,
+      productIds: pids,
+      warehouseKodes: whs,
+      wasteLines: issueWasteLines,
+    } = consumption;
 
     const resultWasteLines = (results || []).flatMap((r) =>
       (r.lines || []).map((l) => ({
@@ -139,7 +110,6 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
       })),
     );
 
-    const tid = tenantIdForWrite(scopeAuth, {});
     const idList = [...pids];
     const stockMap = idList.length ? await getStokByWarehouseBatch(db, tid, idList) : new Map();
     const onHandByProduct = new Map<string, number>();
