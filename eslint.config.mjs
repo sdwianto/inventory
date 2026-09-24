@@ -25,6 +25,30 @@ function allowlistGlobs(entries) {
 
 const boundaryAllowlistGlobs = allowlistGlobs(readBoundaryAllowlist());
 
+const MONGO_WRITE_METHODS = '/^(insertOne|insertMany|updateOne|updateMany|replaceOne|findOneAndUpdate|findOneAndReplace|findOneAndDelete|deleteOne|deleteMany|bulkWrite|drop)$/';
+const STOCK_LEDGER_COLLECTIONS = '/^(stok_lokasi|stok_kartu|ingredient_lots|stok_bin)$/';
+const STOCK_LEDGER_CONSTANTS = '/^(STOK_LOKASI|STOK_KARTU|INGREDIENT_LOTS_COLLECTION|STOK_BIN_COLLECTION)$/';
+const STOCK_LEDGER_MESSAGE = 'Tulis stok_lokasi / stok_kartu / ingredient_lots / stok_bin hanya lewat lib/stock-ledger (postStockMovements + lotPolicy, atau operasi yang diekspor modul itu).';
+
+const stockLedgerWriteRules = [
+  {
+    selector: `CallExpression[callee.property.name=${MONGO_WRITE_METHODS}][callee.object.callee.property.name='collection'][callee.object.arguments.0.value=${STOCK_LEDGER_COLLECTIONS}]`,
+    message: STOCK_LEDGER_MESSAGE,
+  },
+  {
+    selector: `CallExpression[callee.property.name=${MONGO_WRITE_METHODS}][callee.object.callee.property.name='collection'][callee.object.arguments.0.name=${STOCK_LEDGER_CONSTANTS}]`,
+    message: STOCK_LEDGER_MESSAGE,
+  },
+  {
+    selector: `VariableDeclarator > CallExpression.init[callee.property.name='collection'][arguments.0.value=${STOCK_LEDGER_COLLECTIONS}]`,
+    message: 'Jangan simpan handle koleksi buku stok ke variabel di luar lib/stock-ledger — panggil langsung agar penulisan terdeteksi lint.',
+  },
+  {
+    selector: `VariableDeclarator > CallExpression.init[callee.property.name='collection'][arguments.0.name=${STOCK_LEDGER_CONSTANTS}]`,
+    message: 'Jangan simpan handle koleksi buku stok ke variabel di luar lib/stock-ledger — panggil langsung agar penulisan terdeteksi lint.',
+  },
+];
+
 export default defineConfig([
   ...nextVitals,
   globalIgnores(['.next/**', 'node_modules/**', 'coverage/**', 'playwright-report/**']),
@@ -83,6 +107,19 @@ export default defineConfig([
           message: 'Handlers use ctx.redis facade (CI-6)',
         }],
       }],
+    },
+  },
+  {
+    files: ['lib/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', ...stockLedgerWriteRules],
+    },
+  },
+  {
+    // lib/stock-ledger: pemilik tulis stok. sandbox-purge: reset tenant sandbox oleh operator.
+    files: ['lib/stock-ledger/**/*.ts', 'lib/api/sandbox-purge.ts'],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
   {

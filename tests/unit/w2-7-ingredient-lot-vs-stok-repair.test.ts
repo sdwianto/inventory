@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { repairIngredientLotMismatches } from '@/lib/api/ingredient-lot-reconcile';
+import { repairIngredientLotMismatches } from '@/lib/stock-ledger/lot-reconcile';
 
 const consumeIngredientLotsFefo = vi.fn();
 
-vi.mock('@/lib/food-production/ingredient-lot-consume', () => ({
+vi.mock('@/lib/stock-ledger/lot-consume', () => ({
   consumeIngredientLotsFefo: (...args: unknown[]) => consumeIngredientLotsFefo(...args),
 }));
 

@@ -50,6 +50,8 @@ import { enrichPoListWithSoCancelState, pullSoCancelStateForPo, backfillPoVendor
 import { poHasVendorSoNumbers } from '@/lib/api/customer-po-so-extract';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc } from '@/types/vendor-return';
+import { CasConflictError, casConflict, casStatusFilter, insertWithAudit, isCasConflict } from '@/lib/api/cas';
+import { txOpts } from '@/lib/api/transaction';
 
 interface CustomerPoBody extends Record<string, unknown> {
   items?: JsonObject[];
@@ -564,13 +566,11 @@ export async function handleCustomerPo({
     const locked = await guardPosting(db, scopeAuth, poBody, tanggalKedatangan);
     if (locked) return locked;
 
-    const noPO = poBody.noPO || await nextDocNumber(db, tenantId, 'CPO', 'CPO');
-
     const poItems = await mapPoItems(db, tenantId, poBody.items);
     const doc = {
       id: uuidv4(),
       tenantId,
-      noPO,
+      noPO: String(poBody.noPO || ''),
       tanggal: now,
       tanggalKedatangan,
       status: 'DRAFT',
@@ -587,7 +587,30 @@ export async function handleCustomerPo({
       createdAt: now,
       updatedAt: now,
     };
-    await db.collection('customer_purchase_orders').insertOne(doc);
+    await insertWithAudit({
+      collection: 'customer_purchase_orders',
+      doc,
+      before: async ({ db: txDb, session }) => {
+        if (!poBody.noPO) doc.noPO = await nextDocNumber(txDb, tenantId, 'CPO', 'CPO', session);
+        if (vendorReturnForPo) {
+          await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+            { id: vendorReturnForPo.id },
+            { $set: { replacementCpoId: doc.id, replacementCpoNo: doc.noPO, replacementCpoAt: now } },
+            txOpts(session),
+          );
+        }
+      },
+      audit: () => ({
+        tenantId,
+        action: 'CUSTOMER_PO_CREATE',
+        entityType: 'customer_purchase_order',
+        entityId: doc.id,
+        summary: `PO ${doc.noPO} dibuat (${poItems.length} item)`,
+        userId: auth?.userId,
+        userName: auth?.name || auth?.email,
+      }),
+    });
+    const noPO = doc.noPO;
 
     if (poBody.maintenanceRequestId) {
       const wr = await loadWrById(db, scopeAuth, String(poBody.maintenanceRequestId));
@@ -599,13 +622,6 @@ export async function handleCustomerPo({
           linkedPoNo: noPO,
         });
       }
-    }
-
-    if (vendorReturnForPo) {
-      await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: vendorReturnForPo.id },
-        { $set: { replacementCpoId: doc.id, replacementCpoNo: noPO, replacementCpoAt: now } },
-      );
     }
 
     return ok(clean(doc));
@@ -1145,35 +1161,41 @@ export async function handleCustomerPo({
       || integrationCorrelationId(String(po.id || ''), String(po.noPO || ''))
       || '';
 
-    await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-      await txDb.collection('customer_purchase_orders').updateOne(
-        { id: po.id },
-        {
-          $set: {
-            status: 'CANCELLED',
-            cancelledBy: canceller,
-            cancelledAt: now,
-            cancelReason: reason,
-            updatedAt: now,
-            ...(cancelCorrelationId ? { correlationId: cancelCorrelationId } : {}),
-          },
-        },
-        txOpts(session),
-      );
-      if (needsPeerPush) {
-        await insertEnsurePushCancelSoOutbox(
-          txDb,
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const casRes = await txDb.collection('customer_purchase_orders').updateOne(
+          casStatusFilter(po),
           {
-            tenantId,
-            poId: String(po.id),
-            noPO: po.noPO ? String(po.noPO) : null,
-            reason,
-            correlationId: cancelCorrelationId || null,
+            $set: {
+              status: 'CANCELLED',
+              cancelledBy: canceller,
+              cancelledAt: now,
+              cancelReason: reason,
+              updatedAt: now,
+              ...(cancelCorrelationId ? { correlationId: cancelCorrelationId } : {}),
+            },
           },
-          session,
+          txOpts(session),
         );
-      }
-    });
+        if (casRes.matchedCount === 0) throw new CasConflictError();
+        if (needsPeerPush) {
+          await insertEnsurePushCancelSoOutbox(
+            txDb,
+            {
+              tenantId,
+              poId: String(po.id),
+              noPO: po.noPO ? String(po.noPO) : null,
+              reason,
+              correlationId: cancelCorrelationId || null,
+            },
+            session,
+          );
+        }
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
 
     let salesNotify: Record<string, unknown> | null = null;
     let cancelPushJobId: string | undefined;
@@ -1212,8 +1234,8 @@ export async function handleCustomerPo({
 
     const now = new Date();
     const rejector = await actorSnapshot(db, auth);
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
+    const casRes = await db.collection('customer_purchase_orders').updateOne(
+      casStatusFilter(po),
       {
         $set: {
           status: 'REJECTED',
@@ -1224,6 +1246,7 @@ export async function handleCustomerPo({
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
     return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }

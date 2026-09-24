@@ -6,7 +6,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import type { NextResponse } from 'next/server';
-import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { auditActor } from '@/lib/api/audit-log';
+import { insertWithAudit } from '@/lib/api/cas';
+import { txOpts } from '@/lib/api/transaction';
 import { tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
 import { handlePurchaseRequirements } from '@/lib/api/handlers/purchase-requirements';
@@ -85,7 +87,7 @@ async function cancelDraftCpo(
   if (!cpo || cpo.status !== 'DRAFT') return;
   const now = new Date();
   await db.collection('customer_purchase_orders').updateOne(
-    { id, tenantId },
+    { id, tenantId, status: 'DRAFT' },
     {
       $set: {
         status: 'CANCELLED',
@@ -116,7 +118,7 @@ async function cancelDraftPrsForPlan(
   for (const pr of prs) {
     await cancelDraftCpo(db, tenantId, String(pr.draftCpoId || ''), reason, actor);
     await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: String(pr.id) }),
+      withTenantFilter(scopeAuth, { id: String(pr.id), status: 'DRAFT' }),
       { $set: { status: 'CANCELLED', updatedAt: now } },
     );
   }
@@ -167,7 +169,6 @@ async function runProcureShortageCore(
   const tenantId = tenantIdForWrite(opts.scopeAuth, {});
   const now = new Date();
   const actor = auditActor(ctx.auth);
-  const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT);
 
   let history: DocHistoryEntry[] = appendDocHistory([], {
     at: now,
@@ -198,18 +199,10 @@ async function runProcureShortageCore(
       : 'Otomatis dari Rencana Produksi (procure)',
   });
 
-  await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
-    withTenantFilter(opts.scopeAuth, {
-      productionPlanId: opts.productionPlanId,
-      status: 'DRAFT',
-    }),
-    { $set: { status: 'CANCELLED', updatedAt: now } },
-  );
-
   const mrp: MaterialRequirementDoc = {
     id: uuidv4(),
     tenantId,
-    noDokumen,
+    noDokumen: '',
     productionPlanId: plan.id,
     productionPlanNo: plan.noDokumen,
     tanggal: cookDateFromPlanTanggal(plan.tanggal),
@@ -227,16 +220,31 @@ async function runProcureShortageCore(
     createdBy: actor.userId,
     createdByName: actor.userName,
   };
-  await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).insertOne(mrp);
-  await writeAuditLog(db, {
-    tenantId,
-    action: opts.refreshed ? 'PROCURE_DRAFT_REFRESH' : 'MRP_CREATE',
-    entityType: 'material_requirement',
-    entityId: mrp.id,
-    summary: opts.refreshed
-      ? `MRP ${mrp.noDokumen} APPROVED (refresh draft) dari ${plan.noDokumen} (${shortageCount} kekurangan)`
-      : `MRP ${mrp.noDokumen} APPROVED (procure) dari ${plan.noDokumen} (${shortageCount} kekurangan)`,
-    ...actor,
+  await insertWithAudit({
+    collection: MATERIAL_REQUIREMENTS_COLLECTION,
+    doc: mrp,
+    db,
+    before: async ({ db: txDb, session }) => {
+      await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
+        withTenantFilter(opts.scopeAuth, {
+          productionPlanId: opts.productionPlanId,
+          status: 'DRAFT',
+        }),
+        { $set: { status: 'CANCELLED', updatedAt: now } },
+        txOpts(session),
+      );
+      mrp.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT, session);
+    },
+    audit: () => ({
+      tenantId,
+      action: opts.refreshed ? 'PROCURE_DRAFT_REFRESH' : 'MRP_CREATE',
+      entityType: 'material_requirement',
+      entityId: mrp.id,
+      summary: opts.refreshed
+        ? `MRP ${mrp.noDokumen} APPROVED (refresh draft) dari ${plan.noDokumen} (${shortageCount} kekurangan)`
+        : `MRP ${mrp.noDokumen} APPROVED (procure) dari ${plan.noDokumen} (${shortageCount} kekurangan)`,
+      ...actor,
+    }),
   });
 
   const prRes = await handlePurchaseRequirements({

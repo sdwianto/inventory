@@ -5,7 +5,8 @@
  */
 
 import type { ClientSession, Db } from 'mongodb';
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
+import { roundStockQty } from '@/lib/stock-ledger/precision';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
 import { isValidWarehouseKode, normalizeWarehouseKode } from '@/lib/api/warehouses';
 
@@ -40,7 +41,7 @@ export async function allocateStokBinSoft(
   qtyNeed: number,
   session?: ClientSession,
 ): Promise<AllocateStokBinSoftResult> {
-  const need = Math.abs(Number(qtyNeed) || 0);
+  const need = Math.abs(roundStockQty(qtyNeed));
   if (!(need > 0) || !stokId) {
     return emptyResult(false);
   }
@@ -78,7 +79,7 @@ export async function softPutawayBinOnWarehouseIn(
   session?: ClientSession,
   allocateFn: SoftAllocateFn = allocateStokBinSoft,
 ): Promise<AllocateStokBinSoftResult> {
-  const need = Math.abs(Number(qty) || 0);
+  const need = Math.abs(roundStockQty(qty));
   try {
     return await allocateFn(db, tenantId, stokId, warehouseKode, need, session);
   } catch {

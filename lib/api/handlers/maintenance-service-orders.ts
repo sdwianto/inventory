@@ -18,6 +18,8 @@ import {
 import { tryAutoCompleteWrFromServiceOrder } from '@/lib/api/maintenance-wr-loop';
 import { WR_PROGRESS_ROLES } from '@/lib/maintenance/constants';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { CasConflictError, casConflict, casStatusFilter, isCasConflict } from '@/lib/api/cas';
 import type { HandlerContext } from '@/types/api/handler';
 import type { MaintenanceServiceOrderDoc } from '@/types/maintenance';
 
@@ -144,53 +146,61 @@ export async function handleMaintenanceServiceOrders({
 
     const tenantId = String(so.tenantId || 'default');
     const now = new Date();
-    const noHutang = await nextDocNumber(db, tenantId, 'HMS', 'HMS');
     const hutangId = uuidv4();
+    let noHutang = '';
 
-    const hutangDoc = stampTenantId(tenantId, {
-      id: hutangId,
-      noHutang,
-      referenceType: 'MAINTENANCE_SERVICE',
-      maintenanceRequestId: so.maintenanceRequestId,
-      maintenanceServiceOrderId: so.id,
-      noWR: so.noWR,
-      supplierName: so.vendorName,
-      keterangan: `${so.noMSO} — ${so.scope}`,
-      total: actualBiaya,
-      terbayar: 0,
-      sisa: actualBiaya,
-      approvalStatus: 'PENDING_REVIEW',
-      status: 'PENDING_REVIEW',
-      tanggal: now,
-      jatuhTempo: now,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.collection('hutang').insertOne(hutangDoc);
-    await db.collection(SERVICE_ORDERS_COLLECTION).updateOne(
-      { id: so.id },
-      {
-        $set: {
-          status: 'COMPLETED',
-          actualBiaya,
-          hutangId,
-          completedAt: now,
-          completedNote: soBody.note || '',
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const claimed = await txDb.collection(SERVICE_ORDERS_COLLECTION).updateOne(
+          casStatusFilter(so, 'OPEN'),
+          {
+            $set: {
+              status: 'COMPLETED',
+              actualBiaya,
+              hutangId,
+              completedAt: now,
+              completedNote: soBody.note || '',
+              updatedAt: now,
+            },
+          },
+          txOpts(session),
+        );
+        if (claimed.matchedCount === 0) throw new CasConflictError('Service order sudah diselesaikan pengguna lain');
+        noHutang = await nextDocNumber(txDb, tenantId, 'HMS', 'HMS', session);
+        const hutangDoc = stampTenantId(tenantId, {
+          id: hutangId,
+          noHutang,
+          referenceType: 'MAINTENANCE_SERVICE',
+          maintenanceRequestId: so.maintenanceRequestId,
+          maintenanceServiceOrderId: so.id,
+          noWR: so.noWR,
+          supplierName: so.vendorName,
+          keterangan: `${so.noMSO} — ${so.scope}`,
+          total: actualBiaya,
+          terbayar: 0,
+          sisa: actualBiaya,
+          approvalStatus: 'PENDING_REVIEW',
+          status: 'PENDING_REVIEW',
+          tanggal: now,
+          jatuhTempo: now,
+          createdAt: now,
           updatedAt: now,
-        },
-      },
-    );
-
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'HUTANG_CREATED',
-      entityType: 'hutang',
-      entityId: hutangId,
-      summary: `Hutang jasa maintenance ${noHutang}`,
-      metadata: { referenceType: 'MAINTENANCE_SERVICE', noMSO: so.noMSO },
-      ...auditActor(auth),
-    });
+        });
+        await txDb.collection('hutang').insertOne(hutangDoc, txOpts(session));
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'HUTANG_CREATED',
+          entityType: 'hutang',
+          entityId: hutangId,
+          summary: `Hutang jasa maintenance ${noHutang}`,
+          metadata: { referenceType: 'MAINTENANCE_SERVICE', noMSO: so.noMSO },
+          ...auditActor(auth),
+        }, session);
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
 
     const updated = await db.collection(SERVICE_ORDERS_COLLECTION).findOne({ id: so.id }) as MaintenanceServiceOrderDoc | null;
     const wrLoop = await tryAutoCompleteWrFromServiceOrder(db, updated || so);

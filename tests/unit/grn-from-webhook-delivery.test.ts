@@ -63,6 +63,7 @@ describe('createGrnFromDelivery', () => {
         findOne: async () => (name === 'goods_receipts' ? existing : null),
         updateOne: async (_f: unknown, patch: { $set: Record<string, unknown> }) => {
           updates.push(patch.$set);
+          return { matchedCount: 1 };
         },
         insertOne: async () => ({}),
         find: () => ({ sort: () => ({ toArray: async () => [] }) }),
@@ -93,6 +94,43 @@ describe('createGrnFromDelivery', () => {
     expect(line?.qtyBase).toBe(20);
     expect(line?.qtyOrdered).toBe(2);
     expect(result.status).toBe('DRAFT');
+  });
+
+  it('GRN yang sedang POSTING: baris & status tidak ditimpa, hanya metadata', async () => {
+    const existing = {
+      id: 'grn-2',
+      tenantId: 'sppg',
+      status: 'POSTING',
+      noGRN: 'GRN-2',
+      vendorDeliveryId: 'do-2',
+      items: [{ lineId: 'l1', qtyOrdered: 1, qtyBase: 1 }],
+    };
+    const calls: Array<{ filter: Record<string, unknown>; set: Record<string, unknown> }> = [];
+    const db = {
+      collection: (name: string) => ({
+        findOne: async () => (name === 'goods_receipts' ? existing : null),
+        updateOne: async (filter: Record<string, unknown>, patch: { $set: Record<string, unknown> }) => {
+          calls.push({ filter, set: patch.$set });
+          const nin = (filter.status as { $nin?: string[] } | undefined)?.$nin;
+          return { matchedCount: nin?.includes(existing.status) ? 0 : 1 };
+        },
+        insertOne: async () => ({}),
+        find: () => ({ sort: () => ({ toArray: async () => [] }) }),
+      }),
+    };
+
+    const result = await createGrnFromDelivery(db as never, 'sppg', {
+      deliveryId: 'do-2',
+      noDO: 'DO-2',
+      items: [{ lineId: 'l1', stokId: 'vp1', kode: 'A1', qty: 9, qtyBase: 9, satuan: 'KG', harga: 1 }],
+    }, 'uddawam', { correlationId: 'corr-p' });
+
+    expect(calls.every((c) => !('items' in c.set) || (c.filter.status as { $nin?: string[] })?.$nin?.includes('POSTING'))).toBe(true);
+    const applied = calls.filter((c) => !c.filter.status);
+    expect(applied.length).toBeGreaterThan(0);
+    expect(applied.every((c) => !('items' in c.set) && !('status' in c.set))).toBe(true);
+    expect(result.status).toBe('POSTING');
+    expect(result.items).toEqual(existing.items);
   });
 
   it('stamps correlationId on insert (CreateGRN)', async () => {

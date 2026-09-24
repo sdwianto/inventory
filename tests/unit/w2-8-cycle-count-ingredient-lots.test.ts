@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { syncLotsOnVariance } from '@/lib/food-production/cycle-count-ingredient-lots';
+import { syncLotsOnVariance } from '@/lib/stock-ledger/lot-cycle-count';
 
 const consumeIngredientLotsFefo = vi.fn();
 
-vi.mock('@/lib/food-production/ingredient-lot-consume', () => ({
+vi.mock('@/lib/stock-ledger/lot-consume', () => ({
   consumeIngredientLotsFefo: (...args: unknown[]) => consumeIngredientLotsFefo(...args),
 }));
 

@@ -10,9 +10,8 @@ import {
 import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
-import { postStockMutation } from '@/lib/api/stock-mutation';
+import { postStockMovements, type StockActor } from '@/lib/stock-ledger';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
 import {
   MATERIAL_ISSUES_COLLECTION,
   ISSUE_ELIGIBLE_PLAN_STATUSES,
@@ -60,6 +59,7 @@ import {
   seedNetIssueLines,
 } from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
+import { insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit } from '@/lib/api/cas';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -235,7 +235,9 @@ async function assertIssueProductsActive(
 async function postIssueStock(
   db: HandlerContext['db'],
   doc: MaterialIssueDoc,
-  session?: ClientSession,
+  session: ClientSession | undefined,
+  actor: StockActor,
+  postingDate: Date,
 ): Promise<{
   error: string;
 } | {
@@ -250,7 +252,7 @@ async function postIssueStock(
   const productIds = [...new Set(doc.lines.map((l) => l.productId).filter(Boolean))];
   const products = productIds.length
     ? await db.collection('products')
-      .find({ tenantId: doc.tenantId, id: { $in: productIds } })
+      .find({ tenantId: doc.tenantId, id: { $in: productIds } }, txOpts(session))
       .project({ id: 1, gudangKode: 1 })
       .toArray()
     : [];
@@ -258,56 +260,44 @@ async function postIssueStock(
     products.map((p) => [String(p.id), resolveProductGudangKode(p as { gudangKode?: string })]),
   );
 
-  const fefoConsume: NonNullable<MaterialIssueDoc['fefoConsume']> = [];
-  const now = new Date();
-
-  for (const line of doc.lines) {
-    if (!(Number(line.qtyIssued) > 0)) continue;
-    // Deduct from line warehouse (product gudang) when set; else resolve from product master.
-    const warehouseKode = line.warehouseKode
-      || gudangById.get(line.productId)
-      || doc.warehouseKode;
-    const needQty = Number(line.qtyIssued);
-    const posted = await postStockMutation(db, {
-      tenantId: doc.tenantId,
+  const movementLines = doc.lines
+    .map((line, idx) => ({ line, idx, needQty: Number(line.qtyIssued) }))
+    .filter(({ needQty }) => needQty > 0)
+    .map(({ line, idx, needQty }) => ({
+      lineRef: `${idx + 1}:${line.productId}`,
       productId: line.productId,
-      warehouseKode,
+      // Deduct from line warehouse (product gudang) when set; else resolve from product master.
+      warehouseKode: line.warehouseKode || gudangById.get(line.productId) || doc.warehouseKode,
       deltaQtyBase: -needQty,
-      sourceType: 'FP_ISSUE',
-      noTransaksi: doc.noDokumen,
-      keterangan: `Pengambilan bahan ${doc.noDokumen} — ${line.productNama || line.productKode || line.productId}`,
       satuan: line.satuan,
       qtyEntered: needQty,
-      session,
-    });
-    if (!posted.ok) {
-      return { error: posted.error || `Gagal post stok ${line.productId}` };
-    }
+      keterangan: `Pengambilan bahan ${doc.noDokumen} — ${line.productNama || line.productKode || line.productId}`,
+      // W2-6: FEFO consume ingredient lots when present (skip legacy stock without lots).
+      lotPolicy: { mode: 'FEFO_CONSUME' as const },
+    }));
+  if (!movementLines.length) return { ok: true, fefoConsume: [] };
 
-    // W2-6: FEFO consume ingredient lots when present (skip legacy stock without lots).
-    const fefo = await consumeIngredientLotsFefo(
-      db,
-      {
-        tenantId: doc.tenantId,
-        stokId: line.productId,
-        warehouseKode,
-        needQty,
-        asOf: now,
-        issueId: doc.id,
-        noDokumen: doc.noDokumen,
-      },
-      session,
-    );
-    fefoConsume.push({
-      stokId: line.productId,
-      warehouseKode,
-      needQty: fefo.needQty,
-      allocated: fefo.allocated,
-      shortfall: fefo.shortfall,
-      skippedNoLots: fefo.skippedNoLots,
-      allocations: fefo.allocations,
-    });
-  }
+  const posted = await postStockMovements(db, session, {
+    tenantId: doc.tenantId,
+    sourceType: 'FP_ISSUE',
+    sourceId: doc.id,
+    noTransaksi: doc.noDokumen,
+    keterangan: `Pengambilan bahan ${doc.noDokumen}`,
+    postingDate,
+    actor,
+    lines: movementLines,
+  });
+  if (!posted.ok) return { error: posted.error };
+
+  const fefoConsume: NonNullable<MaterialIssueDoc['fefoConsume']> = posted.lines.map((line) => ({
+    stokId: line.productId,
+    warehouseKode: line.lokasiKode,
+    needQty: -line.deltaQtyBase,
+    allocated: line.lot?.allocated ?? 0,
+    shortfall: line.lot?.shortfall ?? -line.deltaQtyBase,
+    skippedNoLots: line.lot?.skippedNoLots ?? true,
+    allocations: line.lot?.allocations ?? [],
+  }));
   return { ok: true, fefoConsume };
 }
 
@@ -438,7 +428,6 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
         satuan: l.satuan,
       })),
     } : undefined;
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_ISSUE);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -453,7 +442,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     const doc: MaterialIssueDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
       materialRequirementId: seeded.materialRequirementId,
@@ -475,7 +464,22 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     };
 
     try {
-      await db.collection(MATERIAL_ISSUES_COLLECTION).insertOne(doc);
+      await insertWithAudit({
+        collection: MATERIAL_ISSUES_COLLECTION,
+        doc,
+        before: async ({ db: txDb, session }) => {
+          doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.MATERIAL_ISSUE, session);
+        },
+        audit: () => ({
+          tenantId,
+          action: 'ISSUE_CREATE',
+          entityType: 'material_issue',
+          entityId: doc.id,
+          summary: `Issue ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} item)`,
+          ...(shortageOverride ? { metadata: { shortageOverride: true, shortageCount, reason: overrideShortageNote } } : {}),
+          ...auditActor(auth),
+        }),
+      });
     } catch (e) {
       if (isDuplicateKeyError(e)) {
         return err('Pengambilan untuk rencana ini sedang dibuat — muat ulang', 409);
@@ -483,15 +487,6 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       throw e;
     }
 
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'ISSUE_CREATE',
-      entityType: 'material_issue',
-      entityId: doc.id,
-      summary: `Issue ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} item)`,
-      ...(shortageOverride ? { metadata: { shortageOverride: true, shortageCount, reason: overrideShortageNote } } : {}),
-      ...auditActor(auth),
-    });
     return ok(project(doc as unknown as Record<string, unknown>));
   }
 
@@ -537,8 +532,8 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
     const productErr = await assertIssueProductsActive(db, existing.tenantId, lines);
     if (productErr) return err(productErr, 400);
     const now = new Date();
-    await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const edited = await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casEditFilter(existing)),
       {
         $set: {
           lines,
@@ -550,6 +545,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
         },
       },
     );
+    if (edited.matchedCount === 0) return casConflict();
     const saved = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
@@ -626,9 +622,10 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
         : `Sinkron stok & release operasional (${reconciliation.summary.suggestedQtyIssuedTotal} qty keluar)`,
     });
 
-    await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      {
+    const reconcileConflict = await casUpdateWithAudit({
+      collection: MATERIAL_ISSUES_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: {
         $set: {
           lines,
           summary: summarizeIssueLines(lines),
@@ -636,21 +633,21 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
           updatedAt: now,
         },
       },
-    );
-
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'ISSUE_RECONCILE',
-      entityType: 'material_issue',
-      entityId: id,
-      summary: `Issue ${existing.noDokumen} disinkronkan — ${reconciliation.summary.suggestedQtyIssuedTotal} qty keluar`,
-      metadata: {
-        mismatchCount: reconciliation.summary.mismatchCount,
-        suggestedQtyIssuedTotal: reconciliation.summary.suggestedQtyIssuedTotal,
-        reason: reason || undefined,
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'ISSUE_RECONCILE',
+        entityType: 'material_issue',
+        entityId: id,
+        summary: `Issue ${existing.noDokumen} disinkronkan — ${reconciliation.summary.suggestedQtyIssuedTotal} qty keluar`,
+        metadata: {
+          mismatchCount: reconciliation.summary.mismatchCount,
+          suggestedQtyIssuedTotal: reconciliation.summary.suggestedQtyIssuedTotal,
+          reason: reason || undefined,
+        },
+        ...auditActor(auth),
       },
-      ...auditActor(auth),
     });
+    if (reconcileConflict) return reconcileConflict;
 
     const saved = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
@@ -746,7 +743,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             throw Object.assign(new Error(productErrTx), { httpStatus: 400 });
           }
 
-          const posted = await postIssueStock(txDb, fresh, session);
+          const posted = await postIssueStock(txDb, fresh, session, { ...actor, role: auth?.role }, now);
           if ('error' in posted) {
             throw Object.assign(new Error(posted.error), { httpStatus: 400 });
           }
@@ -761,8 +758,8 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
               ? `Penutupan administratif — ${closureReason}`
               : (String(issueBody.note || '').trim() || 'Stok keluar diposting · FEFO lots'),
           });
-          await txDb.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
-            withTenantFilter(scopeAuth, { id }),
+          const completed = await txDb.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id, status: fresh.status, stockPostedAt: null }),
             {
               $set: {
                 status: 'COMPLETED',
@@ -781,6 +778,15 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             },
             txOpts(session),
           );
+          if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+          await writeAuditLog(txDb, {
+            tenantId: existing.tenantId,
+            action: 'ISSUE_COMPLETE',
+            entityType: 'material_issue',
+            entityId: id,
+            summary: `Issue ${existing.noDokumen} selesai — stok keluar`,
+            ...auditActor(auth),
+          }, session);
           // Plan stays APPROVED — user clicks Diproses on Rencana Produksi after stock out.
         });
       } catch (e) {
@@ -788,7 +794,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
           return err(e instanceof Error ? e.message : 'Gagal selesaikan', 400);
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 409) {
-          return err('Dokumen berubah — muat ulang', 409);
+          return casConflict();
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 503) {
           return err(e instanceof Error ? e.message : 'Transaksi MongoDB wajib', 503);
@@ -799,14 +805,6 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       const saved = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id }),
       );
-      await writeAuditLog(db, {
-        tenantId: existing.tenantId,
-        action: 'ISSUE_COMPLETE',
-        entityType: 'material_issue',
-        entityId: id,
-        summary: `Issue ${existing.noDokumen} selesai — stok keluar`,
-        ...auditActor(auth),
-      });
       return ok(project(saved as Record<string, unknown>));
     }
 
@@ -818,21 +816,23 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       userName: actor.userName,
       note: String(issueBody.note || '').trim() || undefined,
     });
-    await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: toStatus, history, updatedAt: now } },
-    );
+    const statusConflict = await casUpdateWithAudit({
+      collection: MATERIAL_ISSUES_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: toStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'ISSUE_STATUS',
+        entityType: 'material_issue',
+        entityId: id,
+        summary: `Issue ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+        ...auditActor(auth),
+      },
+    });
+    if (statusConflict) return statusConflict;
     const saved = await db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'ISSUE_STATUS',
-      entityType: 'material_issue',
-      entityId: id,
-      summary: `Issue ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(project(saved as Record<string, unknown>));
   }
 
@@ -864,18 +864,20 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
       userName: actor.userName,
       note: 'Dibatalkan',
     });
-    await db.collection(MATERIAL_ISSUES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'ISSUE_CANCEL',
-      entityType: 'material_issue',
-      entityId: path[1],
-      summary: `Issue ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
+    const cancelConflict = await casUpdateWithAudit({
+      collection: MATERIAL_ISSUES_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'ISSUE_CANCEL',
+        entityType: 'material_issue',
+        entityId: path[1],
+        summary: `Issue ${existing.noDokumen} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (cancelConflict) return cancelConflict;
     return ok({ id: path[1], status: 'CANCELLED' });
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
+import { consumeIngredientLotsFefo } from '@/lib/stock-ledger/lot-consume';
 import { allocateFefo } from '@/lib/food-production/fefo-allocate';
 
 describe('W2-6 allocateFefo on ingredient lot candidates', () => {

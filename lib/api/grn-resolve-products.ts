@@ -106,7 +106,7 @@ export async function resolveGrnItemProduct(
 }
 
 export async function refreshGrnProducts(db: Db, grn: GrnDoc, productMaps: ProductMaps | null = null) {
-  if (!grn || grn.status === 'POSTED') return grn;
+  if (!grn || grn.status === 'POSTED' || grn.status === 'POSTING') return grn;
 
   const tenantId = grn.tenantId || 'default';
   const vendorTenantId = grn.vendorTenantId || null;
@@ -133,12 +133,16 @@ export async function refreshGrnProducts(db: Db, grn: GrnDoc, productMaps: Produ
 
   if (!statusChanged && !itemsChanged) return grn;
 
-  await db.collection('goods_receipts').updateOne(
-    { id: grn.id },
-    { $set: { items: uniqueItems, status: newStatus } },
+  const res = await db.collection('goods_receipts').updateOne(
+    { id: grn.id, status: grn.status, linesRev: grn.linesRev ?? null },
+    { $set: { items: uniqueItems, status: newStatus }, $inc: { linesRev: 1 } },
   );
+  if (res.matchedCount === 0) {
+    const fresh = await db.collection('goods_receipts').findOne({ id: grn.id });
+    return (fresh as GrnDoc | null) || grn;
+  }
 
-  return { ...grn, items: uniqueItems, status: newStatus };
+  return { ...grn, items: uniqueItems, status: newStatus, linesRev: Number(grn.linesRev || 0) + 1 };
 }
 
 export async function refreshUnresolvedGrnsForTenant(db: Db, tenantId: string) {

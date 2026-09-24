@@ -2,7 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
-import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { setProductWarehouseStock } from '@/lib/stock-ledger';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { vendorProductSnapshot, bulkSyncVendorProductUoms, resolveVendorBaseUomId } from '@/lib/api/product-sync';
 import {

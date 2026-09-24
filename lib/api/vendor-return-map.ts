@@ -7,7 +7,7 @@ import type { Db } from 'mongodb';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { resolveLineQtyBaseFromUoms } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
-import { peekFefoLotNo } from '@/lib/food-production/ingredient-lot-consume';
+import { peekFefoLotNo } from '@/lib/stock-ledger/lot-consume';
 import { vendorReturnLineKey } from '@/types/vendor-return';
 import type { VendorReturnLine } from '@/types/vendor-return';
 import { buildReturableLines, type HutangLike, type PostedReturnLike } from '@/lib/api/vendor-return-returable';

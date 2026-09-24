@@ -3,7 +3,7 @@
 vi.mock('uuid', () => ({ v4: () => 'stok-bin-uuid-1' }));
 
 import { normalizeBinKode, isValidBinKode } from '@/lib/api/warehouse-bins';
-import { adjustStokBin, STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { adjustStokBin, STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
 import {
   detectStokBinVsLokasi,
   runStokBinDetect,
@@ -41,7 +41,10 @@ describe('W2-17 adjustStokBin', () => {
       warehouseKode: 'GKERING',
       binKode: 'RCV',
     });
-    expect(update.$inc).toEqual({ qty: 5 });
+    // Pipeline update: qty = round(qty + delta, 4).
+    expect(Array.isArray(update)).toBe(true);
+    expect(JSON.stringify(update)).toContain('"$round"');
+    expect(JSON.stringify(update)).toContain('5');
     expect(opts.upsert).toBe(true);
   });
 

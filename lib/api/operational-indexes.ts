@@ -24,7 +24,23 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'jurnal', index: { tenantId: 1, noJurnal: 1 }, name: 'uniq_jurnal_tenant_no', unique: true },
   { collection: 'stok_kartu', index: { tenantId: 1, stokId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_stok_tgl' },
   { collection: 'stok_kartu', index: { tenantId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_tanggal' },
-  { collection: 'stok_lokasi', index: { tenantId: 1, stokId: 1, lokasiKode: 1 }, name: 'idx_stok_lokasi_tenant_stok_gudang' },
+  {
+    // Idempotensi posting: satu baris dokumen sumber hanya boleh sekali masuk kartu (baris lama tanpa lineRef dikecualikan).
+    collection: 'stok_kartu',
+    index: { tenantId: 1, sourceType: 1, sourceId: 1, lineRef: 1 },
+    name: 'uniq_stok_kartu_source_line',
+    unique: true,
+    partialFilterExpression: {
+      sourceId: { $type: 'string', $gt: '' },
+      lineRef: { $type: 'string', $gt: '' },
+    },
+  },
+  {
+    collection: 'stok_lokasi',
+    index: { tenantId: 1, stokId: 1, lokasiKode: 1 },
+    name: 'uniq_stok_lokasi',
+    unique: true,
+  },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_penyesuaian_tenant_tanggal' },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, noPenyesuaian: 1 }, name: 'uniq_penyesuaian_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, supplierId: 1, status: 1 }, name: 'idx_hutang_tenant_supplier' },
@@ -464,6 +480,13 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'integration_settings', index: { tenantId: 1 }, name: 'uniq_integration_settings_tenant', unique: true },
   { collection: 'users', index: { email: 1, tenantId: 1 }, name: 'uniq_users_email_tenant', unique: true },
   { collection: 'tenant_settings', index: { tenantId: 1 }, name: 'uniq_tenant_settings', unique: true },
+  {
+    collection: 'migration_runs',
+    index: { migrationId: 1, tenantId: 1 },
+    name: 'uniq_migration_apply_claim',
+    unique: true,
+    partialFilterExpression: { activeClaim: true },
+  },
   { collection: 'produk_grup', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_grup', unique: true },
   { collection: 'produk_satuan', index: { tenantId: 1, nama: 1 }, name: 'uniq_produk_satuan', unique: true },
   { collection: 'product_uom', index: { tenantId: 1, productId: 1, satuan: 1 }, name: 'uniq_product_uom_tenant_product_satuan', unique: true },
@@ -558,6 +581,8 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   await dropIndexIfExists(db, 'ka_follow_ups', 'uniq_ka_kfu_active_per_case');
   // Draft DST tanpa noDokumen — recreate unique partial.
   await dropIndexIfExists(db, 'distribution_orders', 'uniq_dist_tenant_no');
+  // Index non-unik lama mengalahkan uniq_stok_lokasi (satu key pattern). Tanpa unik, upsert paralel membuat dua baris saldo.
+  await dropIndexIfExists(db, 'stok_lokasi', 'idx_stok_lokasi_tenant_stok_gudang');
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;

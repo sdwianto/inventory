@@ -353,7 +353,10 @@ export async function ensureMissingRekeningDefaults(
 export async function bootstrapTenantMasterData(
   db: Db,
   tenantId: string | null | undefined,
-  { includeProducts = false }: { includeProducts?: boolean } = {},
+  {
+    includeProducts = false,
+    actor = null,
+  }: { includeProducts?: boolean; actor?: import('@/lib/stock-ledger').StockActor | null } = {},
 ): Promise<void> {
   const tid = tenantId || 'default';
 
@@ -399,14 +402,36 @@ export async function bootstrapTenantMasterData(
         createdAt: new Date(),
         updatedAt: new Date(),
       }));
-      await db.collection('products').insertMany(docs);
-      const { setProductWarehouseStock } = await import('@/lib/api/product-warehouse');
+      await db.collection('products').insertMany(docs.map((p) => ({ ...p, stok: 0 })));
+      const { postStockMovements, setProductWarehouseStock } = await import('@/lib/stock-ledger');
+      const { runInTransactionOrFallback } = await import('@/lib/api/transaction');
       for (const p of docs) {
-        await setProductWarehouseStock(db, tid, p.id, p.gudangKode || 'GKERING', p.stok || 0);
+        await setProductWarehouseStock(db, tid, p.id, p.gudangKode || 'GKERING', 0);
+      }
+      const opening = docs.filter((p) => Number(p.stok) > 0);
+      if (opening.length) {
+        await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+          const posted = await postStockMovements(txDb, session, {
+            tenantId: tid,
+            sourceType: 'MASTER_PRODUK',
+            sourceId: `DEMO-${tid}`,
+            noTransaksi: 'INIT-DEMO',
+            keterangan: 'Stok awal produk demo',
+            actor: actor ?? { userId: 'system', userName: 'Sistem (seed demo)', role: 'SYSTEM' },
+            lines: opening.map((p) => ({
+              lineRef: p.id,
+              productId: p.id,
+              warehouseKode: p.gudangKode || 'GKERING',
+              deltaQtyBase: Number(p.stok),
+              unitCost: Number(p.hargaBeli) || 0,
+            })),
+          });
+          if (!posted.ok) throw new Error(posted.error);
+        });
       }
     }
   }
 
-  const { backfillProductGudangForTenant } = await import('@/lib/api/product-warehouse');
+  const { backfillProductGudangForTenant } = await import('@/lib/stock-ledger');
   await backfillProductGudangForTenant(db, tid);
 }

@@ -11,11 +11,9 @@ import {
   stampTenantId,
 } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
-import {
-  ensureStokLokasiRow,
-  transferStokBetweenLokasi,
-} from '@/lib/api/stok-lokasi';
-import { getAvailableQtyAtLokasi } from '@/lib/api/stock-ledger';
+import { parseLokasiKode } from '@/lib/api/stok-lokasi';
+import { isValidWarehouseKode } from '@/lib/api/warehouses';
+import { postStockMovements } from '@/lib/stock-ledger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import { writeAuditLog } from '@/lib/api/audit-log';
@@ -23,11 +21,8 @@ import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback } from '@/lib/api/transaction';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
-import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold } from '@/lib/food-production/food-safety-exit-gate';
-import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
-import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
 
@@ -100,7 +95,7 @@ export async function handleTransfer({
     }
 
     const now = new Date();
-    const noTransfer = await nextDocNumber(db, tenantId, 'TR', 'TR');
+    let noTransfer = '';
     const doc = stampTenantId(tenantId, {
       id: uuidv4(), noTransfer, tanggal: now,
       lokasiAsal: invBody.lokasiAsal, lokasiAsalNama: invBody.lokasiAsalNama || '',
@@ -110,6 +105,8 @@ export async function handleTransfer({
 
     // ADR-004 P0G — gate dokumen transfer sebelum mutasi stok (relocate mewarisi HOLD).
     const enforceFoodSafetyHold = await isFoodSafetyHoldEnforced(db, tenantId);
+    const asalKode = parseLokasiKode(invBody.lokasiAsal);
+    const tujuanKode = parseLokasiKode(invBody.lokasiTujuan);
     const holdGate = await assertFefoExitNotBlockedByHold(db, {
       tenantId,
       enforce: enforceFoodSafetyHold,
@@ -119,7 +116,7 @@ export async function handleTransfer({
       lines: transferLines.map((it) => ({
         stokId: itemStokId(it),
         stokNama: String((it as { nama?: string }).nama || ''),
-        warehouseKode: String(invBody.lokasiAsal),
+        warehouseKode: asalKode,
         needQty: it.qtyBase,
       })),
     });
@@ -127,49 +124,79 @@ export async function handleTransfer({
 
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        noTransfer = await nextDocNumber(txDb, tenantId, 'TR', 'TR', session);
+        doc.noTransfer = noTransfer;
         const fefoRelocate: Array<Record<string, unknown>> = [];
         const lotRelocate: Array<Record<string, unknown>> = [];
+        if (asalKode === tujuanKode) throw new Error('Lokasi asal dan tujuan sama');
+        if (isValidWarehouseKode(asalKode) && isValidWarehouseKode(tujuanKode)) {
+          throw new Error('Produk tidak bisa dipindah antar Gudang Kering dan Basah — item di kedua gudang berbeda');
+        }
+        const posted = await postStockMovements(txDb, session, {
+          tenantId,
+          sourceType: 'TRANSFER',
+          sourceId: String(doc.id),
+          noTransaksi: noTransfer,
+          keterangan: `Transfer ${noTransfer}`,
+          postingDate: now,
+          actor: scopeAuth ? { userId: scopeAuth.userId, userName: scopeAuth.name || scopeAuth.email, role: scopeAuth.role } : null,
+          lines: transferLines.flatMap((it, idx) => {
+            const stokId = itemStokId(it);
+            const common = {
+              productId: stokId,
+              qtyEntered: it.qty,
+              uomId: it.uomId,
+              satuan: it.satuan,
+              unitCost: Number(it.hargaBeli) > 0 ? Number(it.hargaBeli) : undefined,
+            };
+            return [
+              {
+                ...common,
+                lineRef: `${idx + 1}:OUT`,
+                warehouseKode: String(invBody.lokasiAsal),
+                deltaQtyBase: -it.qtyBase,
+                lokasiLabel: String(invBody.lokasiAsal),
+                keterangan: `Transfer keluar ke ${invBody.lokasiTujuanNama || invBody.lokasiTujuan}`,
+                // W2-13: lot bahan pindah FEFO bersama stok.
+                lotPolicy: { mode: 'RELOCATE' as const, toWarehouseKode: tujuanKode },
+              },
+              {
+                ...common,
+                lineRef: `${idx + 1}:IN`,
+                warehouseKode: String(invBody.lokasiTujuan),
+                deltaQtyBase: it.qtyBase,
+                lokasiLabel: String(invBody.lokasiTujuan),
+                keterangan: `Transfer masuk dari ${invBody.lokasiAsalNama || invBody.lokasiAsal}`,
+              },
+            ];
+          }),
+        });
+        if (!posted.ok) throw new Error(posted.error);
+
+        for (const line of posted.lines) {
+          if (!line.lot) continue;
+          lotRelocate.push({
+            stokId: line.productId,
+            fromWarehouseKode: asalKode,
+            toWarehouseKode: tujuanKode,
+            needQty: -line.deltaQtyBase,
+            allocated: line.lot.allocated,
+            shortfall: line.lot.shortfall,
+            skippedNoLots: line.lot.skippedNoLots,
+            allocations: line.lot.allocations,
+          });
+        }
+
         for (const it of transferLines) {
           const stokId = itemStokId(it);
-          await ensureStokLokasiRow(txDb, tenantId, stokId, invBody.lokasiAsal!, session);
-          const available = await getAvailableQtyAtLokasi(
-            txDb, tenantId, stokId, invBody.lokasiAsal!, session,
-          );
-          if (available < it.qtyBase) {
-            throw new Error(
-              `Stok ${String((it as { nama?: string }).nama || stokId)} tidak cukup di asal (sisa: ${available})`,
-            );
-          }
-          const tr = await transferStokBetweenLokasi(
-            txDb, tenantId, stokId, invBody.lokasiAsal!, invBody.lokasiTujuan!, it.qtyBase, session,
-          );
-          if ('error' in tr && tr.error) throw new Error(`Stok ${stokId}: ${tr.error}`);
-          // W2-20: soft bin OUT from source warehouse — never fail transfer on bin shortfall.
-          await softConsumeBinOnWarehouseOut(
-            txDb,
-            tenantId,
-            stokId,
-            String(invBody.lokasiAsal),
-            it.qtyBase,
-            session,
-          );
-          // W2-21: soft bin putaway to destination default bin — never fail transfer if no default.
-          await softPutawayBinOnWarehouseIn(
-            txDb,
-            tenantId,
-            stokId,
-            String(invBody.lokasiTujuan),
-            it.qtyBase,
-            session,
-          );
           // W2-12: relocate FG batches FEFO with the stock move.
           const fefo = await relocateBatchesFefo(
             txDb,
             {
               tenantId,
               stokId,
-              fromWarehouseKode: String(invBody.lokasiAsal),
-              toWarehouseKode: String(invBody.lokasiTujuan),
+              fromWarehouseKode: asalKode,
+              toWarehouseKode: tujuanKode,
               needQty: it.qtyBase,
               asOf: now,
               allowExpired: true,
@@ -189,74 +216,29 @@ export async function handleTransfer({
             skippedNoBatches: fefo.skippedNoBatches,
             allocations: fefo.allocations,
           });
-          // W2-13: relocate ingredient lots FEFO with the stock move.
-          const lots = await relocateLotsFefo(
-            txDb,
-            {
-              tenantId,
-              stokId,
-              fromWarehouseKode: String(invBody.lokasiAsal),
-              toWarehouseKode: String(invBody.lokasiTujuan),
-              needQty: it.qtyBase,
-              asOf: now,
-              allowExpired: true,
-              noTransaksi: noTransfer,
-              transferId: String(doc.id),
-            },
-            session,
-          );
-          lotRelocate.push({
-            stokId: lots.stokId,
-            fromWarehouseKode: lots.fromWarehouseKode,
-            toWarehouseKode: lots.toWarehouseKode,
-            needQty: lots.needQty,
-            allocated: lots.allocated,
-            shortfall: lots.shortfall,
-            skippedNoLots: lots.skippedNoLots,
-            allocations: lots.allocations,
-          });
         }
         (doc as Record<string, unknown>).fefoRelocate = fefoRelocate;
         (doc as Record<string, unknown>).lotRelocate = lotRelocate;
         await txDb.collection('transfer_stok').insertOne(doc, session ? { session } : {});
-        for (const it of transferLines) {
-          const stokId = itemStokId(it);
-          const qtyBase = it.qtyBase;
-          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
-            id: uuidv4(), stokId, lokasi: invBody.lokasiAsal, tanggal: now,
-            noTransaksi: noTransfer, keterangan: `Transfer keluar ke ${invBody.lokasiTujuanNama || invBody.lokasiTujuan}`,
-            sourceType: 'TRANSFER', masuk: 0, keluar: qtyBase,
-            qtyEntered: it.qty, uomId: it.uomId, satuan: it.satuan,
-            hargaSatuan: it.hargaBeli || 0,
-          }), session ? { session } : {});
-          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
-            id: uuidv4(), stokId, lokasi: invBody.lokasiTujuan, tanggal: now,
-            noTransaksi: noTransfer, keterangan: `Transfer masuk dari ${invBody.lokasiAsalNama || invBody.lokasiAsal}`,
-            sourceType: 'TRANSFER', masuk: qtyBase, keluar: 0,
-            qtyEntered: it.qty, uomId: it.uomId, satuan: it.satuan,
-            hargaSatuan: it.hargaBeli || 0,
-          }), session ? { session } : {});
-        }
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'STOCK_TRANSFER',
+          entityType: 'transfer_stok',
+          entityId: String(doc.id),
+          summary: `Transfer ${noTransfer}`,
+          userName: String(invBody.userName || scopeAuth?.name || scopeAuth?.email || 'System'),
+          metadata: {
+            noTransfer,
+            lokasiAsal: invBody.lokasiAsal,
+            lokasiTujuan: invBody.lokasiTujuan,
+            itemCount: items.length,
+          },
+        }, session);
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Gagal menyimpan transfer stok';
       return err(msg, 400);
     }
-
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'STOCK_TRANSFER',
-      entityType: 'transfer_stok',
-      entityId: String(doc.id),
-      summary: `Transfer ${noTransfer}`,
-      userName: String(invBody.userName || scopeAuth?.name || scopeAuth?.email || 'System'),
-      metadata: {
-        noTransfer,
-        lokasiAsal: invBody.lokasiAsal,
-        lokasiTujuan: invBody.lokasiTujuan,
-        itemCount: items.length,
-      },
-    });
     await invalidateDashboardSnapshot(db, tenantId);
     return ok(clean(doc));
   }

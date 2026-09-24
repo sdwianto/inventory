@@ -6,11 +6,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   softPutawayBinOnWarehouseIn,
-} from '@/lib/api/stok-bin-allocate';
+} from '@/lib/stock-ledger/bin-allocate';
 import {
   consumeStokBinSoft,
   softConsumeBinOnWarehouseOut,
-} from '@/lib/api/stok-bin-consume';
+} from '@/lib/stock-ledger/bin-consume';
 import {
   detectStokBinVsLokasi,
   repairStokBinGtMismatches,

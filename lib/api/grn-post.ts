@@ -13,6 +13,7 @@ import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { createJournal } from '@/lib/api/journal';
 import { buildGrnAccrualJournalLines } from '@/lib/api/journal-lines';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { CasConflictError, isCasConflict } from '@/lib/api/cas';
 import { logger } from '@/lib/api/logger';
 import { drainEnsureGrnInvoice, insertEnsureGrnInvoiceOutbox } from '@/lib/api/integration-outbox';
 import type { JsonObject } from '@/types/json';
@@ -68,13 +69,14 @@ export async function postGoodsReceipt(
     txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
     const now = new Date();
     // Klaim atomik dulu — dua post bersamaan tidak boleh keduanya apply stok.
+    // linesRev: baris yang diposting harus sama dengan yang dibaca (webhook/resolve produk menaikkannya).
     const claim = await txDb.collection('goods_receipts').updateOne(
-      { id: grn.id, status: { $nin: ['POSTED', 'POSTING'] } },
+      { id: grn.id, status: { $nin: ['POSTED', 'POSTING'] }, linesRev: grn.linesRev ?? null },
       { $set: { status: 'POSTING', postingStartedAt: now } },
       txOpts(session),
     );
     if (claim.modifiedCount === 0) {
-      throw new Error('GRN sudah diposting');
+      throw new CasConflictError('GRN sudah diposting atau barisnya baru diperbarui — muat ulang lalu coba lagi');
     }
 
     try {
@@ -84,6 +86,7 @@ export async function postGoodsReceipt(
       grn as StockGrnDoc,
       (body?.items ?? undefined) as JsonObject[] | undefined,
       session,
+      receivedBy ? { userId: receivedBy.userId, userName: receivedBy.userName, role: receivedBy.role } : null,
     );
     // Throw agar klaim POSTING ikut rollback (jangan return error yang tetap commit).
     if (stock.error) throw new Error(stock.error);
@@ -192,6 +195,7 @@ export async function postGoodsReceipt(
     }
     });
   } catch (e) {
+    if (isCasConflict(e)) return { error: e.message, conflict: true };
     return { error: e instanceof Error ? e.message : String(e) };
   }
 

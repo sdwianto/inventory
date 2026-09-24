@@ -1,6 +1,6 @@
 // MongoDB multi-document transactions for critical stock & financial writes.
 
-import type { ClientSession, Db } from 'mongodb';
+import type { ClientSession, Db, MongoClient } from 'mongodb';
 import { getMongoClient, connectToMongo } from '@/lib/api/db';
 import {
   isNoTransactionSupportError,
@@ -64,5 +64,33 @@ export async function runInTransactionOrFallback<T>(
       return fn({ db });
     }
     throw e;
+  }
+}
+
+/**
+ * Seperti runInTransactionOrFallback, tetapi memakai client milik `db` yang diberikan (bukan koneksi global).
+ * Dipakai fungsi pustaka yang menerima `db` dari pemanggil agar transaksi selalu di database yang sama.
+ */
+export async function runInTransactionOnDb<T>(
+  db: Db,
+  fn: (ctx: { db: Db; session?: ClientSession }) => Promise<T>,
+): Promise<T> {
+  const client = (db as unknown as { client?: MongoClient }).client;
+  if (!client?.startSession) return fn({ db });
+  const session = client.startSession();
+  try {
+    let result!: T;
+    await session.withTransaction(async () => {
+      result = await fn({ db, session });
+    });
+    return result;
+  } catch (e) {
+    if (isNoTransactionSupportError(e)) {
+      if (requiresMongoTransactions()) throw new MongoTransactionsRequiredError();
+      return fn({ db });
+    }
+    throw e;
+  } finally {
+    await session.endSession();
   }
 }

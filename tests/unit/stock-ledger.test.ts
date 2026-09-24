@@ -10,10 +10,10 @@ import {
 function mockDb(rows: Array<{ masuk?: number; keluar?: number }>): Db {
   return {
     collection: () => ({
-      find: () => ({
-        project: () => ({
-          toArray: async () => rows,
-        }),
+      aggregate: () => ({
+        toArray: async () => (rows.length
+          ? [{ _id: 'prod-1', saldo: rows.reduce((s, r) => s + (r.masuk || 0) - (r.keluar || 0), 0), n: rows.length }]
+          : []),
       }),
     }),
   } as unknown as Db;

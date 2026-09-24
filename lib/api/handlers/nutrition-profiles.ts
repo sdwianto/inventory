@@ -20,6 +20,7 @@ import {
   type ProductNutritionRef,
   type NutritionFacts,
 } from '@/lib/food-production/nutrition';
+import { resolveForeignSkuInTenant } from '@/lib/api/resolve-live-catalog-product';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import {
@@ -410,9 +411,11 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     const tkpiCode = String(bodyRecord.tkpiCode || '').trim();
     if (!tkpiCode) return err('tkpiCode wajib');
 
-    const product = await db.collection('products').findOne(
+    const foundTkpi = await db.collection('products').findOne(
       withTenantFilter(scopeAuth, { id: productId }),
     );
+    const product = foundTkpi
+      ?? await resolveForeignSkuInTenant(db, tenantIdForWrite(scopeAuth, bodyRecord), productId);
     if (!product) return err('Produk tidak ditemukan', 404);
 
     const facts = nutritionFromTkpiCode(tkpiCode, product.satuan != null ? String(product.satuan) : null);
@@ -423,19 +426,20 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
 
     const now = new Date();
     const nutrition = { ...normalized, updatedAt: now };
+    const localId = String(product.id || productId);
     await db.collection('products').updateOne(
-      withTenantFilter(scopeAuth, { id: productId }),
+      withTenantFilter(scopeAuth, { id: localId }),
       { $set: { nutrition, tkpiCode: facts.tkpiCode, updatedAt: now }, $unset: { usdaCode: 1 } },
     );
     await writeAuditLog(db, {
       tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
       action: 'NUTRITION_APPLY_TKPI',
       entityType: 'product_nutrition',
-      entityId: productId,
-      summary: `Gizi ${String(product.kode || product.nama || productId)} dari TKPI ${facts.tkpiCode}`,
+      entityId: localId,
+      summary: `Gizi ${String(product.kode || product.nama || localId)} dari TKPI ${facts.tkpiCode}`,
       ...auditActor(auth),
     });
-    return ok(clean({ productId, tkpiCode: facts.tkpiCode, nutrition }));
+    return ok(clean({ productId: localId, tkpiCode: facts.tkpiCode, nutrition }));
   }
 
   if (
@@ -455,9 +459,11 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
     const usdaCode = String(bodyRecord.usdaCode || '').trim();
     if (!usdaCode) return err('usdaCode wajib');
 
-    const product = await db.collection('products').findOne(
+    const foundUsda = await db.collection('products').findOne(
       withTenantFilter(scopeAuth, { id: productId }),
     );
+    const product = foundUsda
+      ?? await resolveForeignSkuInTenant(db, tenantIdForWrite(scopeAuth, bodyRecord), productId);
     if (!product) return err('Produk tidak ditemukan', 404);
 
     const facts = nutritionFromUsdaCode(usdaCode, product.satuan != null ? String(product.satuan) : null);
@@ -468,19 +474,20 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
 
     const now = new Date();
     const nutrition = { ...normalized, updatedAt: now };
+    const localId = String(product.id || productId);
     await db.collection('products').updateOne(
-      withTenantFilter(scopeAuth, { id: productId }),
+      withTenantFilter(scopeAuth, { id: localId }),
       { $set: { nutrition, usdaCode: facts.usdaCode, updatedAt: now }, $unset: { tkpiCode: 1 } },
     );
     await writeAuditLog(db, {
       tenantId: tenantIdForWrite(scopeAuth, bodyRecord),
       action: 'NUTRITION_APPLY_USDA',
       entityType: 'product_nutrition',
-      entityId: productId,
-      summary: `Gizi ${String(product.kode || product.nama || productId)} dari USDA ${facts.usdaCode}`,
+      entityId: localId,
+      summary: `Gizi ${String(product.kode || product.nama || localId)} dari USDA ${facts.usdaCode}`,
       ...auditActor(auth),
     });
-    return ok(clean({ productId, usdaCode: facts.usdaCode, nutrition }));
+    return ok(clean({ productId: localId, usdaCode: facts.usdaCode, nutrition }));
   }
 
   if (path[0] === 'nutrition-profiles' && path[1] && path[1] !== 'analyze' && path[1] !== 'tkpi' && path[1] !== 'analyze-draft' && method === 'PUT') {

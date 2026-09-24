@@ -86,6 +86,7 @@ import {
   loadPlanConsumptionSummary,
 } from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
+import { insertWithAudit, CasConflictError, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, isCasConflict } from '@/lib/api/cas';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -366,7 +367,6 @@ export async function handleProductionPlans({
 
     const now = new Date();
     const actor = actorFields(auth);
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.PRODUCTION_PLAN);
     const rawCatatan = String(planBody.catatan || '').trim() || undefined;
     const catatan = rawCatatan && isAdHocCatatan(rawCatatan)
       ? formatAdHocCatatan(rawCatatan)
@@ -383,7 +383,7 @@ export async function handleProductionPlans({
     const doc: ProductionPlanDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       tanggal,
       kitchenId,
       kitchenNama: kitchen.nama,
@@ -399,14 +399,20 @@ export async function handleProductionPlans({
       createdBy: actor.userId,
       createdByName: actor.userName,
     };
-    await db.collection(PRODUCTION_PLANS_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'PRODUCTION_PLAN_CREATE',
-      entityType: 'production_plan',
-      entityId: doc.id,
-      summary: `Rencana ${doc.noDokumen} dibuat (${doc.tanggal})`,
-      ...auditActor(auth),
+    await insertWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.PRODUCTION_PLAN, session);
+      },
+      audit: () => ({
+        tenantId,
+        action: 'PRODUCTION_PLAN_CREATE',
+        entityType: 'production_plan',
+        entityId: doc.id,
+        summary: `Rencana ${doc.noDokumen} dibuat (${doc.tanggal})`,
+        ...auditActor(auth),
+      }),
     });
     return ok(projectPlan(doc as unknown as Record<string, unknown>));
   }
@@ -582,8 +588,8 @@ export async function handleProductionPlans({
             userName: actor.userName,
             note: `Digabung ke ${noDokumen}`,
           });
-          await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-            withTenantFilter(scopeAuth, { id: src.id }),
+          const srcRes = await txDb.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, casStatusFilter(src)),
             {
               $set: {
                 status: 'CANCELLED',
@@ -595,13 +601,14 @@ export async function handleProductionPlans({
             },
             txOpts(session),
           );
+          if (srcRes.matchedCount === 0) throw new CasConflictError(`Rencana ${src.noDokumen} sudah berubah — muat ulang`);
         }
 
         const draftMrps = await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION)
           .find(withTenantFilter(scopeAuth, {
             productionPlanId: { $in: sourceIds },
             status: { $in: ['DRAFT', 'SUBMITTED'] },
-          }))
+          }), txOpts(session))
           .toArray();
         for (const mrp of draftMrps) {
           if (!isMrpEditable(String(mrp.status || ''))) continue;
@@ -616,28 +623,30 @@ export async function handleProductionPlans({
               note: `Dibatalkan karena RPN digabung ke ${noDokumen}`,
             },
           );
-          await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-            withTenantFilter(scopeAuth, { id: mrp.id }),
+          const mrpRes = await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, casStatusFilter(mrp)),
             { $set: { status: 'CANCELLED', history: mrpHistory, updatedAt: now } },
             txOpts(session),
           );
+          if (mrpRes.matchedCount === 0) throw new CasConflictError(`MRP ${mrp.noDokumen || mrp.id} sudah berubah — muat ulang`);
         }
 
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'PRODUCTION_PLAN_CONSOLIDATE',
+          entityType: 'production_plan',
+          entityId: doc.id,
+          summary: `Gabung ${sourceNos.join(', ')} → ${noDokumen}`,
+          ...auditActor(auth),
+        }, session);
         return doc;
       });
     } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
       const msg = e instanceof Error ? e.message : 'Gagal menggabungkan rencana';
       return err(msg, 500);
     }
 
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'PRODUCTION_PLAN_CONSOLIDATE',
-      entityType: 'production_plan',
-      entityId: created.id,
-      summary: `Gabung ${sourceNos.join(', ')} → ${created.noDokumen}`,
-      ...auditActor(auth),
-    });
     return ok(projectPlan(created as unknown as Record<string, unknown>));
   }
 
@@ -720,21 +729,23 @@ export async function handleProductionPlans({
       update.materialOverrides = overrides;
     }
 
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: update },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: { $set: update },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_UPDATE',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: `Rencana ${existing.noDokumen} diubah`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_UPDATE',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: `Rencana ${existing.noDokumen} diubah`,
-      ...auditActor(auth),
-    });
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
@@ -784,13 +795,6 @@ export async function handleProductionPlans({
     if ('error' in next) return err(next.error, 400);
 
     const now = new Date();
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { materialOverrides: next, updatedAt: now } },
-    );
-    const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
-      withTenantFilter(scopeAuth, { id }),
-    );
     const auditBit = clear
       ? `override dihapus (${planBody.productId})`
       : planBody.excluded === true
@@ -798,14 +802,23 @@ export async function handleProductionPlans({
         : planBody.excluded === false
           ? `coret dibatalkan (${planBody.productId})`
           : `qty ${planBody.productId}=${planBody.qty}`;
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_MATERIAL_OVERRIDE',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: `${auditBit} pada ${existing.noDokumen}`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: { $set: { materialOverrides: next, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_MATERIAL_OVERRIDE',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: `${auditBit} pada ${existing.noDokumen}`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
+    const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    );
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
@@ -861,23 +874,25 @@ export async function handleProductionPlans({
     else nextMap[recipeId] = pct;
 
     const now = new Date();
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { recipeBufferPct: nextMap, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: { $set: { recipeBufferPct: nextMap, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_RECIPE_BUFFER',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: enabled === false || pct <= 0
+          ? `Buffer resep ${recipeId} dimatikan pada ${existing.noDokumen}`
+          : `Buffer ${pct}% resep ${recipeId} pada ${existing.noDokumen}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_RECIPE_BUFFER',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: enabled === false || pct <= 0
-        ? `Buffer resep ${recipeId} dimatikan pada ${existing.noDokumen}`
-        : `Buffer ${pct}% resep ${recipeId} pada ${existing.noDokumen}`,
-      ...auditActor(auth),
-    });
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
@@ -962,22 +977,24 @@ export async function handleProductionPlans({
       note: reasonNote,
     });
 
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: 'SUBMITTED' as ProductionPlanStatus, history, updatedAt: now } },
-    );
+    const reasonSummary = String(planBody.reason || '').trim().slice(0, 120);
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'SUBMITTED' as ProductionPlanStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_MENU_REVISE',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: `Revisi menu ${existing.noDokumen}: APPROVED → SUBMITTED — ${reasonSummary}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    const reasonSummary = String(planBody.reason || '').trim().slice(0, 120);
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_MENU_REVISE',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: `Revisi menu ${existing.noDokumen}: APPROVED → SUBMITTED — ${reasonSummary}`,
-      ...auditActor(auth),
-    });
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
@@ -1087,21 +1104,23 @@ export async function handleProductionPlans({
       note: String(planBody.note || '').trim() || undefined,
     });
 
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: toStatus, history, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: toStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_STATUS',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: `Rencana ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_STATUS',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: `Rencana ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(projectPlan(saved as Record<string, unknown>));
   }
 
@@ -1293,18 +1312,20 @@ export async function handleProductionPlans({
       note: 'Dibatalkan',
     });
 
-    await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PRODUCTION_PLAN_CANCEL',
-      entityType: 'production_plan',
-      entityId: id,
-      summary: `Rencana ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_PLANS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'PRODUCTION_PLAN_CANCEL',
+        entityType: 'production_plan',
+        entityId: id,
+        summary: `Rencana ${existing.noDokumen} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
     return ok({ id, status: 'CANCELLED' });
   }
 

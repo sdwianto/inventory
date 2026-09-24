@@ -8,6 +8,7 @@ import type {
   VendorInvoiceLine,
   VendorInvoicePayload,
 } from '@/types/integration';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 const DEFAULT_QTY_TOLERANCE_PCT = 0;
 const DEFAULT_PRICE_TOLERANCE_PCT = 2;
@@ -234,9 +235,9 @@ export function matchInvoiceLinesAgainstGrn(
     const claimed = resolveAlreadyInvoicedForLine(invLine, alreadyInvoiced);
     const availableQty = Math.max(0, recQty - claimed.qty);
     const maxQty = availableQty * (1 + qtyTol / 100);
-    if (invQty > maxQty + 0.0001) {
+    if (qtyGt(invQty, maxQty)) {
       const uomLabel = invLine.satuan || invLine.uomId || 'default';
-      if (claimed.qty > 0.0001) {
+      if (qtyGt(claimed.qty, 0)) {
         return {
           ok: false,
           error: `3-way match qty: ${kode} (${uomLabel}) qty ${claimed.qty} sudah ditagih di invoice ${claimed.invoices.join(', ') || 'lain'} — sisa qty GRN yang bisa ditagih ${availableQty} (GRN qty ${recQty})`,

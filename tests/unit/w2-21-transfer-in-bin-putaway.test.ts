@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/api/stok-bin', () => ({
+vi.mock('@/lib/stock-ledger/bin', () => ({
   STOK_BIN_COLLECTION: 'stok_bin',
   adjustStokBin: vi.fn(),
 }));
@@ -11,12 +11,12 @@ vi.mock('@/lib/api/warehouse-bins', () => ({
   resolveDefaultBinKode: vi.fn(),
 }));
 
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
 import {
   allocateStokBinSoft,
   softPutawayBinOnWarehouseIn,
-} from '@/lib/api/stok-bin-allocate';
+} from '@/lib/stock-ledger/bin-allocate';
 
 const adjustMock = vi.mocked(adjustStokBin);
 const resolveDefaultMock = vi.mocked(resolveDefaultBinKode);
@@ -113,27 +113,20 @@ describe('W2-21 softPutawayBinOnWarehouseIn', () => {
 });
 
 describe('W2-21 transfer/stock-mutation call sites', () => {
-  it('transfer POST path wires softPutaway on lokasiTujuan after softConsume asal', () => {
-    const src = readFileSync(
-      resolve(__dirname, '../../lib/api/handlers/inventory-transfer.ts'),
-      'utf8',
-    );
-    expect(src).toContain('softPutawayBinOnWarehouseIn');
-    expect(src).toMatch(
-      /softPutawayBinOnWarehouseIn\(\s*txDb,\s*tenantId,\s*stokId,\s*String\(invBody\.lokasiTujuan\)/,
-    );
-    const consumeIdx = src.indexOf('softConsumeBinOnWarehouseOut');
-    const putawayIdx = src.indexOf('softPutawayBinOnWarehouseIn');
-    expect(consumeIdx).toBeGreaterThan(-1);
-    expect(putawayIdx).toBeGreaterThan(consumeIdx);
+  const read = (rel: string) => readFileSync(resolve(__dirname, '../../', rel), 'utf8');
+
+  it('transfer POST path posts IN on lokasiTujuan after OUT asal, via the ledger', () => {
+    const src = read('lib/api/handlers/inventory-transfer.ts');
+    expect(src).not.toContain('softPutawayBinOnWarehouseIn');
+    const outIdx = src.search(/warehouseKode: String\(invBody\.lokasiAsal\),\s*deltaQtyBase: -it\.qtyBase/);
+    const inIdx = src.search(/warehouseKode: String\(invBody\.lokasiTujuan\),\s*deltaQtyBase: it\.qtyBase/);
+    expect(outIdx).toBeGreaterThan(-1);
+    expect(inIdx).toBeGreaterThan(outIdx);
   });
 
-  it('stock-mutation IN path uses softPutawayBinOnWarehouseIn', () => {
-    const src = readFileSync(
-      resolve(__dirname, '../../lib/api/stock-mutation.ts'),
-      'utf8',
-    );
+  it('stock ledger IN path uses softPutawayBinOnWarehouseIn', () => {
+    const src = read('lib/stock-ledger/post-stock-movements.ts');
     expect(src).toContain('softPutawayBinOnWarehouseIn');
-    expect(src).toMatch(/if \(delta > 0\)/);
+    expect(src).toMatch(/if \(l\.delta < 0\)/);
   });
 });

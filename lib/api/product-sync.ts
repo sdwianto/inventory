@@ -2,7 +2,7 @@ import type { Db } from 'mongodb';
 // Upsert master produk dari sales.app — kode produk sama dengan katalog vendor.
 
 import { v4 as uuidv4 } from 'uuid';
-import { setProductWarehouseStock } from '@/lib/api/product-warehouse';
+import { setProductWarehouseStock } from '@/lib/stock-ledger';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { pickBaseUom, uomInputsFromLegacyProductBody, validateAndNormalizeUomInputs } from '@/lib/uom/conversion';
 import type { NormalizedUomInput } from '@/lib/uom/types';

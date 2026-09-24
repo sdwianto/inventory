@@ -8,7 +8,7 @@ import { postStockMutation } from '@/lib/api/stock-mutation';
 import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildVendorReturnTransitRestoreJournalLines } from '@/lib/api/journal-lines';
 import { planFefoRestore } from '@/lib/food-production/fefo-allocate';
-import { restoreIngredientLotsFromAllocations } from '@/lib/food-production/ingredient-lot-consume';
+import { vendorReturnUnitCostBase } from '@/lib/api/vendor-return-stock';
 import { VENDOR_RETURNS_COLLECTION, aggregateVendorDecision, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 
 /** Cocokkan alokasi FEFO Post ke baris yang ditolak — prioritaskan identity baris, bukan SKU+gudang. */
@@ -188,39 +188,30 @@ export async function applyVendorReturnDecision(
           if (qtyBase <= 0) {
             await markRestored();
           } else {
+            const prior = findLotConsumeForRejectedLine(doc.lotConsume, line);
+            const restores = prior?.allocations?.length ? planFefoRestore(qtyBase, prior.allocations) : [];
             const mut = await postStockMutation(txDb, {
               tenantId,
               productId: line.localStokId,
               warehouseKode: line.gudangKode,
               deltaQtyBase: qtyBase,
               sourceType: 'VENDOR_RETURN_REJECTED',
+              sourceId: doc.id,
+              lineRef: inv || lid || String(line.localStokId),
               noTransaksi: doc.noReturn,
               keterangan: `Vendor tolak retur ${doc.noReturn} baris ${line.localKode || line.localStokId} — stok dikembalikan`,
-              hargaSatuan: line.harga,
+              hargaSatuan: vendorReturnUnitCostBase(line.harga, parseFloat(String(line.qty)) || 0, qtyBase),
               qtyEntered: line.qty,
               uomId: line.uomId,
               satuan: line.satuan,
+              actor: {
+                userId: payload.decidedBy?.userId || 'vendor-decision',
+                userName: payload.decidedBy?.userName || 'vendor-decision',
+              },
+              lotPolicy: restores.length ? { mode: 'RESTORE', restores } : undefined,
               session,
             });
             if (!mut.ok) throw new Error(mut.error);
-
-            const prior = findLotConsumeForRejectedLine(doc.lotConsume, line);
-            if (prior?.allocations?.length) {
-              const restores = planFefoRestore(qtyBase, prior.allocations);
-              if (restores.length) {
-                await restoreIngredientLotsFromAllocations(
-                  txDb,
-                  {
-                    tenantId,
-                    stokId: line.localStokId,
-                    restores,
-                    noDokumen: doc.noReturn,
-                    returnId: doc.id,
-                  },
-                  session,
-                );
-              }
-            }
             await markRestored();
           }
         }
@@ -311,6 +302,19 @@ export async function applyVendorReturnDecision(
         },
         txOpts(session),
       );
+      // Heal-only (keputusan sudah sama, hanya restore stok yang tertunda) — jangan audit ganda.
+      if (changedCount > 0) {
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'VENDOR_RETURN_DECISION_APPLIED',
+          entityType: 'vendor_return',
+          entityId: returnId,
+          summary: `Keputusan vendor diterapkan ke RTV ${doc.noReturn} (${aggregateInTx})`,
+          metadata: { lineDecisions: payload.lineDecisions, vendorDecision: aggregateInTx },
+          userId: payload.decidedBy?.userId,
+          userName: payload.decidedBy?.userName,
+        }, session);
+      }
     });
   } catch (e) {
     return {
@@ -327,20 +331,6 @@ export async function applyVendorReturnDecision(
   const aggregate = String(refreshed?.vendorDecision || aggregateVendorDecision(
     Array.isArray(refreshed?.items) ? refreshed.items : items,
   ));
-
-  // Heal-only (keputusan sudah sama, hanya restore stok yang tertunda) — jangan audit ganda.
-  if (changedCount > 0) {
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'VENDOR_RETURN_DECISION_APPLIED',
-      entityType: 'vendor_return',
-      entityId: returnId,
-      summary: `Keputusan vendor diterapkan ke RTV ${doc.noReturn} (${aggregate})`,
-      metadata: { lineDecisions: payload.lineDecisions, vendorDecision: aggregate },
-      userId: payload.decidedBy?.userId,
-      userName: payload.decidedBy?.userName,
-    });
-  }
 
   return {
     action: changedCount === 0 ? 'already_applied' : 'applied',

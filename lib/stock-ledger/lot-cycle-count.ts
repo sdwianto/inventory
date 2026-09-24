@@ -13,7 +13,8 @@ import {
   isIngredientExpired,
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
+import { consumeIngredientLotsFefo } from '@/lib/stock-ledger/lot-consume';
+import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export type CycleCountLotResult = {
   stokId: string;
@@ -51,7 +52,7 @@ export async function syncLotsOnVariance(
   },
   session?: ClientSession | null,
 ): Promise<CycleCountLotResult> {
-  const delta = Number(input.deltaQty);
+  const delta = roundStockQty(input.deltaQty);
   const base: CycleCountLotResult = {
     stokId: input.stokId,
     warehouseKode: input.warehouseKode,
@@ -146,10 +147,10 @@ export async function syncLotsOnVariance(
 
   const target = rows.find((b) => b.status !== 'CONSUMED') || rows[0];
   const before = effectiveIngredientQtyRemaining(target);
-  const after = before + delta;
-  const qtyCap = Math.max(Number(target.qty) || 0, after);
+  const after = roundStockQty(before + delta);
+  const qtyCap = Math.max(roundStockQty(target.qty), after);
   const expired = isIngredientExpired(target.expiryDate, now);
-  const status = after <= 0 ? 'CONSUMED' : expired ? 'EXPIRED' : 'ACTIVE';
+  const status = after <= 0 || isZeroQty(after) ? 'CONSUMED' : expired ? 'EXPIRED' : 'ACTIVE';
 
   await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
     { id: target.id, tenantId: input.tenantId },

@@ -1,6 +1,8 @@
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { nextDocNumber } from '@/lib/api/document-sequence';
+import { writeAuditLog } from '@/lib/api/audit-log';
+import { runInTransactionOnDb, txOpts } from '@/lib/api/transaction';
 import { resolveVendorTenantName } from '@/lib/api/grn-enrich';
 import { ensureUniqueLineIds } from '@/lib/api/grn-line-ids';
 import { loadProductMaps, resolveFromMaps } from '@/lib/api/grn-resolve-products';
@@ -8,6 +10,9 @@ import { listProductUoms } from '@/lib/api/product-uom';
 import { reconcileLineQtyBase } from '@/lib/uom/line-ui';
 import type { ProductUom } from '@/lib/uom/types';
 import type { JsonObject } from '@/types/json';
+
+/** GRN yang sudah/sedang diposting — baris & status tidak boleh ditimpa webhook. */
+const GRN_LOCKED_STATUSES: readonly string[] = ['POSTED', 'POSTING'];
 
 export async function resolveLocalUomForGrnLine(
   db: Db,
@@ -253,35 +258,54 @@ export async function createGrnFromDelivery(
         existing as JsonObject,
         correlationId,
       ) as Record<string, unknown>;
-      if (existing.status !== 'POSTED') {
+      if (!GRN_LOCKED_STATUSES.includes(String(existing.status || ''))) {
         const { items, hasUnknown } = await buildGrnLinesFromWebhookPayload(
           db,
           tid,
           payload,
           vendorTenantId,
         );
-        patch.items = items;
-        patch.status = hasUnknown ? 'UNKNOWN_PRODUCT' : 'DRAFT';
+        const linesPatch = { ...patch, items, status: hasUnknown ? 'UNKNOWN_PRODUCT' : 'DRAFT' };
+        const res = await db.collection('goods_receipts').updateOne(
+          { id: existing.id, status: { $nin: [...GRN_LOCKED_STATUSES] } },
+          { $set: linesPatch, $inc: { linesRev: 1 } },
+        );
+        if (res.matchedCount > 0) {
+          return { ...existing, ...linesPatch, linesRev: Number(existing.linesRev || 0) + 1 } as JsonObject;
+        }
       }
+      // Sudah/sedang diposting: baris & status terkunci — hanya metadata pengiriman.
       await db.collection('goods_receipts').updateOne(
         { id: existing.id },
         { $set: patch },
       );
-      return { ...existing, ...patch } as JsonObject;
+      const fresh = await db.collection('goods_receipts').findOne({ id: existing.id });
+      return (fresh || { ...existing, ...patch }) as JsonObject;
     }
   }
 
-  const noGRN = await nextDocNumber(db, tenantId, 'GRN', 'GRN');
   const doc = await buildGrnInsertDoc(
     db,
     tenantId,
     payload,
     vendorTenantId,
-    noGRN,
+    '',
     correlationId,
   );
   try {
-    await db.collection('goods_receipts').insertOne(doc);
+    await runInTransactionOnDb(db, async ({ db: txDb, session }) => {
+      doc.noGRN = await nextDocNumber(txDb, tenantId, 'GRN', 'GRN', session);
+      await txDb.collection('goods_receipts').insertOne(doc, txOpts(session));
+      await writeAuditLog(txDb, {
+        tenantId: tid,
+        action: 'GRN_CREATED',
+        entityType: 'goods_receipt',
+        entityId: String(doc.id),
+        summary: `GRN ${doc.noGRN} dari pengiriman vendor ${String(payload.noDO || payload.deliveryId || '')}`.trim(),
+        userName: 'vendor-webhook',
+        metadata: { deliveryId: payload.deliveryId || null, correlationId: correlationId || null },
+      }, session);
+    });
     return doc;
   } catch (e: unknown) {
     // Unique (tenantId, vendorDeliveryId) — race create → kembalikan GRN yang menang.

@@ -24,7 +24,7 @@ import {
   INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION,
   repairIngredientLotMismatches,
   runIngredientLotDetect,
-} from '@/lib/api/ingredient-lot-reconcile';
+} from '@/lib/stock-ledger/lot-reconcile';
 import {
   ISSUE_FEFO_SHORTFALL_REPORTS_COLLECTION,
   runIssueFefoShortfallDetect,

@@ -1,3 +1,4 @@
+import type { ClientSession } from 'mongodb';
 import type { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean } from '@/lib/api/db';
@@ -63,7 +64,7 @@ import {
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import { postStockMutation } from '@/lib/api/stock-mutation';
-import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import {
   consumeBatchesFefo,
@@ -78,6 +79,7 @@ import {
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
 import type { AuthContext } from '@/types/auth';
 import type { HandlerContext } from '@/types/api/handler';
+import { CasConflictError, insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, isCasConflict } from '@/lib/api/cas';
 
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
 const MAX_STATUS_PHOTOS = 3;
@@ -189,6 +191,7 @@ async function loadConsumedDistLinesForSource(
   scopeAuth: ScopeAuth,
   source: { productionPlanId?: string; productionResultId?: string },
   excludeId?: string,
+  session?: ClientSession,
 ): Promise<DispatchLine[]> {
   const sourceFilter: Record<string, unknown> = source.productionResultId
     ? { productionResultId: source.productionResultId }
@@ -204,10 +207,44 @@ async function loadConsumedDistLinesForSource(
   if (excludeId) filter.id = { $ne: excludeId };
 
   const docs = await db.collection(DISTRIBUTION_ORDERS_COLLECTION)
-    .find(withTenantFilter(scopeAuth, filter))
+    .find(withTenantFilter(scopeAuth, filter), txOpts(session))
     .project({ lines: 1 })
     .toArray() as unknown as Pick<DispatchDoc, 'lines'>[];
   return docs.flatMap((d) => d.lines || []);
+}
+
+/**
+ * Validasi alokasi porsi di dalam transaksi. Menulis penanda ke dokumen sumber (HSL/RPN) agar dua transaksi DST
+ * pada sumber yang sama bentrok (write conflict → retry) — tanpa ini snapshot isolation mengizinkan over-alokasi.
+ */
+async function lockSourceAndAssertDistQty(
+  txDb: HandlerContext['db'],
+  session: ClientSession | undefined,
+  scopeAuth: ScopeAuth,
+  input: {
+    source: { productionPlanId?: string; productionResultId?: string };
+    sourceItems: Parameters<typeof assertDistQtyWithinSource>[0]['sourceItems'];
+    newLines: DispatchLine[];
+    excludeId?: string;
+  },
+): Promise<void> {
+  const { source } = input;
+  const lockColl = source.productionResultId ? PRODUCTION_RESULTS_COLLECTION : PRODUCTION_PLANS_COLLECTION;
+  const lockId = source.productionResultId || source.productionPlanId;
+  if (lockId) {
+    await txDb.collection(lockColl).updateOne(
+      withTenantFilter(scopeAuth, { id: lockId }),
+      { $inc: { distAllocRev: 1 } },
+      txOpts(session),
+    );
+  }
+  const consumed = await loadConsumedDistLinesForSource(txDb, scopeAuth, source, input.excludeId, session);
+  const over = assertDistQtyWithinSource({
+    sourceItems: input.sourceItems,
+    newLines: input.newLines,
+    existingConsumedLines: consumed,
+  });
+  if (over) throw new CasConflictError(over);
 }
 
 async function assertServicePointsForKitchen(
@@ -630,16 +667,12 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     // Create-from-HSL: satu transaksi Draft → Terjadwal + nomor DST.
     // Shell / PLAN: Draft tanpa nomor sampai HSL + Jadwalkan.
     const scheduleOnCreate = sourceType === 'RESULT';
-    let noDokumen: string | undefined;
-    if (scheduleOnCreate) {
-      noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.DISTRIBUTION_ORDER);
-    }
     const draftNote = sourceType === 'RESULT'
       ? `Draft dari HSL · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`
       : shellDraft
         ? `Draft packing · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`
         : `Draft dari rencana · ${summarizeDistLines(lines).qtyPorsiTotal} porsi`;
-    let history: DocHistoryEntry[] = appendDocHistory([], {
+    const draftHistory: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
       toStatus: 'DRAFT',
@@ -647,23 +680,11 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       userName: actor.userName,
       note: `${draftNote}${createNote ? ` · ${createNote}` : ''}`,
     });
-    let status: DispatchStatus = 'DRAFT';
-    if (scheduleOnCreate && noDokumen) {
-      history = appendDocHistory(history, {
-        at: now,
-        fromStatus: 'DRAFT',
-        toStatus: 'APPROVED',
-        userId: actor.userId,
-        userName: actor.userName,
-        note: `Terjadwal · ${noDokumen}`,
-      });
-      status = 'APPROVED';
-    }
+    const status: DispatchStatus = scheduleOnCreate ? 'APPROVED' : 'DRAFT';
 
     const doc: DispatchDoc = {
       id: uuidv4(),
       tenantId,
-      ...(noDokumen ? { noDokumen } : {}),
       tanggal: String(distBody.tanggal || plan?.tanggal || '').trim()
         || new Date().toISOString().slice(0, 10),
       kitchenId,
@@ -677,7 +698,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       ...(loadings?.length ? { loadings } : {}),
       ...(armadas?.length ? { armadas } : {}),
       status,
-      history,
+      history: draftHistory,
       summary: summarizeDistLines(lines, { armadas, loadings }),
       catatan: createNote || undefined,
       createdAt: now,
@@ -701,24 +722,48 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     }
 
     try {
-      await db.collection(DISTRIBUTION_ORDERS_COLLECTION).insertOne(doc);
+      await insertWithAudit({
+        collection: DISTRIBUTION_ORDERS_COLLECTION,
+        doc,
+        before: async ({ db: txDb, session }) => {
+          if (!shellDraft) {
+            await lockSourceAndAssertDistQty(txDb, session, scopeAuth, {
+              source: { productionPlanId, productionResultId },
+              sourceItems,
+              newLines: lines,
+            });
+          }
+          if (scheduleOnCreate) {
+            doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.DISTRIBUTION_ORDER, session);
+            doc.history = appendDocHistory(draftHistory, {
+              at: now,
+              fromStatus: 'DRAFT',
+              toStatus: 'APPROVED',
+              userId: actor.userId,
+              userName: actor.userName,
+              note: `Terjadwal · ${doc.noDokumen}`,
+            });
+          }
+        },
+        audit: () => ({
+          tenantId,
+          action: 'DIST_CREATE',
+          entityType: 'distribution_order',
+          entityId: doc.id,
+          summary: doc.noDokumen
+            ? `DST ${doc.noDokumen} terjadwal (${sourceType})`
+            : `DST Draft dibuat (${sourceType})`,
+          ...auditActor(auth),
+        }),
+      });
     } catch (e: unknown) {
+      if (isCasConflict(e)) return casConflict(e.message);
       if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
         return err('Nomor dokumen bentrok — coba lagi', 409);
       }
       throw e;
     }
 
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'DIST_CREATE',
-      entityType: 'distribution_order',
-      entityId: doc.id,
-      summary: noDokumen
-        ? `DST ${noDokumen} terjadwal (${sourceType})`
-        : `DST Draft dibuat (${sourceType})`,
-      ...auditActor(auth),
-    });
     return ok(clean(doc as unknown as Record<string, unknown>));
   }
 
@@ -765,6 +810,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     if (editBlock) return err(editBlock, 400);
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
+    let recheckLines: { sourceItems: DistSourceItem[]; lines: DispatchLine[] } | null = null;
     if (distBody.lines != null) {
       const normalized = normalizeDistLines(distBody.lines);
       if ('error' in normalized) return err(normalized.error, 400);
@@ -810,6 +856,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       if (over) return err(over, 400);
       update.lines = normalized;
       update.summary = summarizeDistLines(normalized);
+      recheckLines = { sourceItems, lines: normalized };
     }
     if (distBody.catatan !== undefined) {
       update.catatan = String(distBody.catatan || '').trim() || null;
@@ -818,10 +865,31 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       update.tanggal = String(distBody.tanggal || '').trim();
     }
 
-    await db.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: update },
-    );
+    const recheck = recheckLines;
+    const conflict = await casUpdateWithAudit({
+      collection: DISTRIBUTION_ORDERS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: { $set: update },
+      before: recheck
+        ? async ({ db: txDb, session }) => {
+          await lockSourceAndAssertDistQty(txDb, session, scopeAuth, {
+            source: { productionPlanId: existing.productionPlanId, productionResultId: existing.productionResultId },
+            sourceItems: recheck.sourceItems,
+            newLines: recheck.lines,
+            excludeId: id,
+          });
+        }
+        : undefined,
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'DIST_STATUS',
+        entityType: 'distribution_order',
+        entityId: id,
+        summary: `DST ${hasDistDokumenNo(existing.noDokumen) ? existing.noDokumen : 'Draft'}: diedit${recheck ? ` (${recheck.lines.length} baris)` : ''}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
@@ -856,6 +924,11 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     // Draft → Terjadwal: wajib HSL, terbitkan nomor DST, tautkan RESULT bila masih PLAN.
     let linkResult: ProductionResultDoc | null = null;
     let assignedNo = existing.noDokumen;
+    let needsDocNumber = false;
+    let scheduleRecheck: {
+      source: { productionPlanId?: string; productionResultId?: string };
+      sourceItems: DistSourceItem[];
+    } | null = null;
     if (toStatus === 'APPROVED') {
       if (existing.sourceType === 'RESULT' && existing.productionResultId) {
         linkResult = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
@@ -905,26 +978,26 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           existingConsumedLines: consumed,
         });
         if (over) return err(over, 400);
+        scheduleRecheck = {
+          source: {
+            productionPlanId: linkResult.productionPlanId || existing.productionPlanId,
+            productionResultId: linkResult.id,
+          },
+          sourceItems: collapsed,
+        };
       }
-
-      if (!hasDistDokumenNo(assignedNo)) {
-        assignedNo = await nextFpDocNumber(
-          db,
-          existing.tenantId,
-          FP_DOC_TYPES.DISTRIBUTION_ORDER,
-        );
-      }
+      needsDocNumber = !hasDistDokumenNo(assignedNo);
     }
 
-    const statusNote = toStatus === 'APPROVED'
-      ? `Terjadwal${assignedNo ? ` · ${assignedNo}` : ''}`
+    const statusNoteFor = (no: string | undefined) => (toStatus === 'APPROVED'
+      ? `Terjadwal${no ? ` · ${no}` : ''}`
       : toStatus === 'PROCESSING'
         ? 'Barang dikirim ke titik layanan'
         : toStatus === 'COMPLETED'
           ? 'Semua titik diselesaikan (diterima / dikembalikan)'
           : toStatus === 'CANCELLED'
             ? 'Packing dibatalkan'
-            : 'Status distribusi diperbarui';
+            : 'Status distribusi diperbarui');
 
     const rawActuals = Array.isArray(distBody.lineActuals) ? distBody.lineActuals : [];
     let nextLines: DispatchLine[];
@@ -984,7 +1057,7 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     const lineNotes = nextLines
       .filter((l) => l.notes)
       .map((l) => `${l.servicePointNama || l.servicePointKode || l.servicePointId}: ${l.notes}`);
-    const historyEntry: DocHistoryEntry & {
+    type DistHistoryEntry = DocHistoryEntry & {
       movementQtyPorsi?: number;
       movementLineCount?: number;
       photoUrls?: string[];
@@ -997,13 +1070,14 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
         qtyDikembalikan?: number;
         notes?: string;
       }>;
-    } = {
+    };
+    const buildHistoryEntry = (no: string | undefined): DistHistoryEntry => ({
       at: now,
       fromStatus: existing.status,
       toStatus: toStatus as FpDocStatus,
       userId: actor.userId,
       userName: actor.userName,
-      note: `${statusNote} · ${movementQty} porsi${
+      note: `${statusNoteFor(no)} · ${movementQty} porsi${
         userNote ? ` · ${userNote}` : ''
       }${lineNotes.length ? ` · ${lineNotes.join('; ')}` : ''}${
         persisted.urls.length ? ` · ${persisted.urls.length} foto` : ''
@@ -1031,8 +1105,8 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           )),
         }),
       ...(persisted.urls.length ? { photoUrls: persisted.urls, photoMediaFiles: persisted.files } : {}),
-    };
-    const history = appendDocHistory(existing.history, historyEntry);
+    });
+    const history = appendDocHistory(existing.history, buildHistoryEntry(assignedNo));
 
     const update: Record<string, unknown> = {
       status: toStatus,
@@ -1124,17 +1198,21 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                 allocations: unknown[];
               }> = [];
 
-              for (const need of needs) {
+              for (const [needIdx, need] of needs.entries()) {
                 const posted = await postStockMutation(txDb, {
                   tenantId: existing.tenantId,
                   productId: need.stokId,
                   warehouseKode: hsl!.warehouseKode,
                   deltaQtyBase: -need.needQty,
                   sourceType: 'FP_DIST',
+                  sourceId: id,
+                  lineRef: `${needIdx + 1}:${need.stokId}`,
                   noTransaksi: docNo,
                   keterangan: `Distribusi ${docNo} — ${need.nama || need.kode || need.stokId}`,
                   satuan: need.satuan,
                   qtyEntered: need.needQty,
+                  postingDate: now,
+                  actor: { ...auditActor(auth), role: auth?.role },
                   session,
                 });
                 if (!posted.ok) {
@@ -1204,6 +1282,14 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                 },
                 session ? { session } : {},
               );
+              await writeAuditLog(txDb, {
+                tenantId: existing.tenantId,
+                action: 'DIST_STATUS',
+                entityType: 'distribution_order',
+                entityId: id,
+                summary: `DST ${hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft'}: ${existing.status} → ${toStatus} · FEFO ship`,
+                ...auditActor(auth),
+              }, session);
             });
           } catch (e: unknown) {
             if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
@@ -1224,15 +1310,6 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
           const savedTx = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
             withTenantFilter(scopeAuth, { id }),
           );
-          const displayNoTx = hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft';
-          await writeAuditLog(db, {
-            tenantId: existing.tenantId,
-            action: 'DIST_STATUS',
-            entityType: 'distribution_order',
-            entityId: id,
-            summary: `DST ${displayNoTx}: ${existing.status} → ${toStatus} · FEFO ship`,
-            ...auditActor(auth),
-          });
           return ok(clean(savedTx as Record<string, unknown>));
         }
       }
@@ -1305,17 +1382,21 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                   allocations: unknown[];
                 }> = [];
 
-                for (const need of needs) {
+                for (const [needIdx, need] of needs.entries()) {
                   const posted = await postStockMutation(txDb, {
                     tenantId: existing.tenantId,
                     productId: need.stokId,
                     warehouseKode,
                     deltaQtyBase: need.needQty,
                     sourceType: 'FP_DIST_RETURN',
+                    sourceId: id,
+                    lineRef: `${needIdx + 1}:${need.stokId}`,
                     noTransaksi: docNo,
                     keterangan: `Retur distribusi ${docNo} — ${need.nama || need.kode || need.stokId}`,
                     satuan: need.satuan,
                     qtyEntered: need.needQty,
+                    postingDate: now,
+                    actor: { ...auditActor(auth), role: auth?.role },
                     session,
                   });
                   if (!posted.ok) {
@@ -1362,6 +1443,14 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
                   },
                   session ? { session } : {},
                 );
+                await writeAuditLog(txDb, {
+                  tenantId: existing.tenantId,
+                  action: 'DIST_COMPLETE',
+                  entityType: 'distribution_order',
+                  entityId: id,
+                  summary: `DST ${hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft'}: ${existing.status} → ${toStatus} · FEFO return`,
+                  ...auditActor(auth),
+                }, session);
               });
             } catch (e: unknown) {
               if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
@@ -1382,26 +1471,47 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
             const savedRet = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
               withTenantFilter(scopeAuth, { id }),
             );
-            const displayNoRet = hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft';
-            await writeAuditLog(db, {
-              tenantId: existing.tenantId,
-              action: 'DIST_COMPLETE',
-              entityType: 'distribution_order',
-              entityId: id,
-              summary: `DST ${displayNoRet}: ${existing.status} → ${toStatus} · FEFO return`,
-              ...auditActor(auth),
-            });
             return ok(clean(savedRet as Record<string, unknown>));
           }
         }
       }
     }
 
+    const recheck = scheduleRecheck;
     try {
-      await db.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id }),
-        { $set: update },
-      );
+      const conflict = await casUpdateWithAudit({
+        collection: DISTRIBUTION_ORDERS_COLLECTION,
+        filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+        update: { $set: update },
+        before: toStatus === 'APPROVED'
+          ? async ({ db: txDb, session }) => {
+            if (recheck) {
+              await lockSourceAndAssertDistQty(txDb, session, scopeAuth, {
+                source: recheck.source,
+                sourceItems: recheck.sourceItems,
+                newLines: existing.lines || [],
+                excludeId: id,
+              });
+            }
+            if (needsDocNumber) {
+              assignedNo = await nextFpDocNumber(txDb, existing.tenantId, FP_DOC_TYPES.DISTRIBUTION_ORDER, session);
+              update.noDokumen = assignedNo;
+              update.history = appendDocHistory(existing.history, buildHistoryEntry(assignedNo));
+            }
+          }
+          : undefined,
+        audit: () => ({
+          tenantId: existing.tenantId,
+          action: toStatus === 'COMPLETED' ? 'DIST_COMPLETE'
+            : toStatus === 'CANCELLED' ? 'DIST_CANCEL'
+              : toStatus === 'APPROVED' ? 'DIST_SCHEDULE' : 'DIST_STATUS',
+          entityType: 'distribution_order',
+          entityId: id,
+          summary: `DST ${hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft'}: ${existing.status} → ${toStatus}`,
+          ...auditActor(auth),
+        }),
+      });
+      if (conflict) return conflict;
     } catch (e: unknown) {
       if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
         return err('Nomor dokumen bentrok — coba lagi', 409);
@@ -1411,17 +1521,6 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
     const saved = await db.collection(DISTRIBUTION_ORDERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    const displayNo = hasDistDokumenNo(assignedNo) ? assignedNo : 'Draft';
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: toStatus === 'COMPLETED' ? 'DIST_COMPLETE'
-        : toStatus === 'CANCELLED' ? 'DIST_CANCEL'
-          : toStatus === 'APPROVED' ? 'DIST_SCHEDULE' : 'DIST_STATUS',
-      entityType: 'distribution_order',
-      entityId: id,
-      summary: `DST ${displayNo}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(clean(saved as Record<string, unknown>));
   }
 
@@ -1454,18 +1553,20 @@ export async function handleDistributionOrders(ctx: HandlerContext): Promise<Nex
       userName: actor.userName,
       note: 'Packing dibatalkan',
     });
-    await db.collection(DISTRIBUTION_ORDERS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'DIST_CANCEL',
-      entityType: 'distribution_order',
-      entityId: path[1],
-      summary: `DST ${existing.noDokumen || 'Draft'} dibatalkan`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: DISTRIBUTION_ORDERS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'DIST_CANCEL',
+        entityType: 'distribution_order',
+        entityId: path[1],
+        summary: `DST ${existing.noDokumen || 'Draft'} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
     return ok({ id: path[1], status: 'CANCELLED' });
   }
 

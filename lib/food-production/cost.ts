@@ -9,6 +9,7 @@ import type { MenuDoc } from '@/lib/food-production/menu';
 import type { ProductionPlanLine } from '@/lib/food-production/production-plan';
 import type { MaterialIssueLine } from '@/lib/food-production/material-issue';
 import type { ProductionResultLine } from '@/lib/food-production/production-result';
+import { roundMoney } from '@/lib/stock-ledger/precision';
 
 export interface ProductCostRef {
   productId: string;
@@ -58,8 +59,7 @@ export interface CostAnalysis {
 }
 
 function money(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.round(n * 100) / 100;
+  return roundMoney(n);
 }
 
 export function unitCostOf(p: ProductCostRef | undefined): number | null {

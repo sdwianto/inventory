@@ -38,6 +38,7 @@ import {
 import { touchScheduleOnWrClosed } from '@/lib/api/maintenance-schedule-engine';
 import type { HandlerContext } from '@/types/api/handler';
 import type { MaintenanceRequestDoc } from '@/types/maintenance';
+import { casConflict, casStatusFilter } from '@/lib/api/cas';
 
 interface WrBody extends Record<string, unknown> {
   assetId?: string;
@@ -296,8 +297,8 @@ export async function handleMaintenanceRequests({
 
     const now = new Date();
     const submitter = await actorSnapshot(db, scopeAuth);
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       {
         $set: {
           status: 'PENDING_APPROVAL',
@@ -307,6 +308,7 @@ export async function handleMaintenanceRequests({
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const updated = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne({ id: wr.id });
     return ok(clean(updated));
   }
@@ -326,8 +328,8 @@ export async function handleMaintenanceRequests({
     const now = new Date();
     const approver = await actorSnapshot(db, auth);
     const tenantId = String(wr.tenantId || 'default');
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       {
         $set: {
           status: 'APPROVED',
@@ -337,6 +339,7 @@ export async function handleMaintenanceRequests({
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await syncAssetStatusFromOpenRequests(db, tenantId, String(wr.assetId));
     await writeAuditLog(db, {
       tenantId,
@@ -365,8 +368,8 @@ export async function handleMaintenanceRequests({
     const now = new Date();
     const rejector = await actorSnapshot(db, auth);
     const tenantId = String(wr.tenantId || 'default');
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       {
         $set: {
           status: 'REJECTED',
@@ -377,6 +380,7 @@ export async function handleMaintenanceRequests({
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await syncAssetStatusFromOpenRequests(db, tenantId, String(wr.assetId));
     const updated = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne({ id: wr.id });
     return ok(clean(updated));
@@ -396,10 +400,11 @@ export async function handleMaintenanceRequests({
 
     const now = new Date();
     const tenantId = String(wr.tenantId || 'default');
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       { $set: { status: 'IN_PROGRESS', startedAt: now, updatedAt: now } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await syncAssetStatusFromOpenRequests(db, tenantId, String(wr.assetId));
     const updated = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne({ id: wr.id });
     return ok(clean(updated));
@@ -420,8 +425,8 @@ export async function handleMaintenanceRequests({
     }
 
     const now = new Date();
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       {
         $set: {
           status: 'COMPLETED',
@@ -431,6 +436,7 @@ export async function handleMaintenanceRequests({
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const updated = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne({ id: wr.id });
     return ok(clean(updated));
   }
@@ -449,10 +455,11 @@ export async function handleMaintenanceRequests({
 
     const now = new Date();
     const tenantId = String(wr.tenantId || 'default');
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       { $set: { status: 'CLOSED', closedAt: now, updatedAt: now } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await syncAssetStatusFromOpenRequests(db, tenantId, String(wr.assetId));
     await touchScheduleOnWrClosed(db, { ...wr, tenantId, closedAt: now });
     await writeAuditLog(db, {
@@ -489,10 +496,11 @@ export async function handleMaintenanceRequests({
     }
 
     const tenantId = String(wr.tenantId || 'default');
-    await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
-      { id: wr.id },
+    const casRes = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+      casStatusFilter(wr),
       { $set: { status: 'CANCELLED', updatedAt: new Date() } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await syncAssetStatusFromOpenRequests(db, tenantId, String(wr.assetId));
     const updated = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne({ id: wr.id });
     return ok(clean(updated));

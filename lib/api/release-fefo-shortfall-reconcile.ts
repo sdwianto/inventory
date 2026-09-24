@@ -6,6 +6,7 @@
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export const INVENTORY_RELEASES_COLLECTION = 'inventory_releases';
 export const RELEASE_FEFO_SHORTFALL_REPORTS_COLLECTION = 'release_fefo_shortfall_reports';
@@ -55,7 +56,7 @@ export type ReleaseFefoShortfallReport = {
 
 function isShortfallLine(row: ReleaseFefoConsumeLine): boolean {
   if (row.skippedNoBatches) return false;
-  return Number(row.shortfall || 0) > 0.001;
+  return qtyGt(Number(row.shortfall || 0), 0);
 }
 
 export async function detectReleaseFefoShortfalls(

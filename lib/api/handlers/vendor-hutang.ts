@@ -35,7 +35,13 @@ import { resolveKasRekening } from '@/lib/api/cash-bank-accounts';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { upsertSupplierPriceBookFromHutang } from '@/lib/api/supplier-price-book-from-invoice';
+import { CasConflictError, casConflict, isCasConflict } from '@/lib/api/cas';
 import type { HandlerContext } from '@/types/api/handler';
+
+/** Status, approvalStatus, dan sisa persis seperti saat dibaca (null cocok dengan field hilang). */
+function hutangStateFilter(h: { id?: unknown; status?: unknown; approvalStatus?: unknown; sisa?: unknown }) {
+  return { id: h.id, status: h.status ?? null, approvalStatus: h.approvalStatus ?? null, sisa: h.sisa ?? null };
+}
 
 const HUTANG_ADMIN_ROLES = ['ADMIN', 'MASTER'];
 
@@ -326,7 +332,8 @@ export async function handleVendorHutang({
       patch.matchOverrideBy = approver;
     }
 
-    await db.collection('hutang').updateOne({ id: hutang.id }, { $set: patch });
+    const res = await db.collection('hutang').updateOne(hutangStateFilter(hutang), { $set: patch });
+    if (res.matchedCount === 0) return casConflict();
     const approved = { ...hutang, ...patch };
     try {
       await upsertSupplierPriceBookFromHutang(db, approved);
@@ -354,41 +361,47 @@ export async function handleVendorHutang({
     const now = new Date();
     const rejector = await actorSnapshot(db, auth);
     const tenantId = String(hutang.tenantId || auth?.tenantId || 'default');
-    await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-      await txDb.collection('hutang').updateOne(
-        { id: hutang.id },
-        {
-          $set: {
-            approvalStatus: 'REJECTED',
-            status: 'REJECTED',
-            rejectedBy: rejector,
-            rejectedAt: now,
-            rejectReason: hutangBody.reason || 'Ditolak admin',
-            updatedAt: now,
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const rejected = await txDb.collection('hutang').updateOne(
+          hutangStateFilter(hutang),
+          {
+            $set: {
+              approvalStatus: 'REJECTED',
+              status: 'REJECTED',
+              rejectedBy: rejector,
+              rejectedAt: now,
+              rejectReason: hutangBody.reason || 'Ditolak admin',
+              updatedAt: now,
+            },
           },
-        },
-        txOpts(session),
-      );
-      // AUTO_HUTANG_VENDOR posting terjadi saat invoice DIBUAT, sebelum review — tolak
-      // harus membalikkannya juga, kalau tidak Hutang Usaha/Persediaan di GL tetap
-      // mencatat tagihan yang sudah ditolak (mis. duplikat GRN yang sama).
-      const accrual = await txDb.collection('jurnal').findOne({
-        tenantId,
-        sourceType: 'AUTO_HUTANG_VENDOR',
-        sourceId: hutang.id,
-      }, txOpts(session));
-      if (accrual?.details?.length) {
-        await createJournalIfNotExists(txDb, {
-          tanggal: now,
-          keterangan: `Tolak tagihan vendor ${hutang.noInvoice || hutang.noHutang}`,
-          sourceType: 'AUTO_HUTANG_VENDOR_VOID',
-          sourceId: hutang.id,
-          details: reverseJournalDetails(accrual.details),
-          userName: rejector.userName,
+          txOpts(session),
+        );
+        if (rejected.matchedCount === 0) throw new CasConflictError();
+        // AUTO_HUTANG_VENDOR posting terjadi saat invoice DIBUAT, sebelum review — tolak
+        // harus membalikkannya juga, kalau tidak Hutang Usaha/Persediaan di GL tetap
+        // mencatat tagihan yang sudah ditolak (mis. duplikat GRN yang sama).
+        const accrual = await txDb.collection('jurnal').findOne({
           tenantId,
-        }, session);
-      }
-    });
+          sourceType: 'AUTO_HUTANG_VENDOR',
+          sourceId: hutang.id,
+        }, txOpts(session));
+        if (accrual?.details?.length) {
+          await createJournalIfNotExists(txDb, {
+            tanggal: now,
+            keterangan: `Tolak tagihan vendor ${hutang.noInvoice || hutang.noHutang}`,
+            sourceType: 'AUTO_HUTANG_VENDOR_VOID',
+            sourceId: hutang.id,
+            details: reverseJournalDetails(accrual.details),
+            userName: rejector.userName,
+            tenantId,
+          }, session);
+        }
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
     await invalidateDashboardSnapshot(db, tenantId);
     const updated = await db.collection('hutang').findOne({ id: hutang.id });
     return ok(clean(updated));
@@ -418,8 +431,8 @@ export async function handleVendorHutang({
     const sisa = Number(hutang.sisa || hutang.total || 0);
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-        await txDb.collection('hutang').updateOne(
-          { id: hutang.id },
+        const marked = await txDb.collection('hutang').updateOne(
+          hutangStateFilter(hutang),
           {
             $set: {
               approvalStatus: 'PAID_EXTERNAL',
@@ -434,6 +447,7 @@ export async function handleVendorHutang({
           },
           txOpts(session),
         );
+        if (marked.matchedCount === 0) throw new CasConflictError();
         const payLines = buildPaidExternalJournalLines({
           noDoc: hutang.noInvoice || hutang.noHutang || String(hutang.id),
           amount: sisa,
@@ -451,6 +465,7 @@ export async function handleVendorHutang({
         }
       });
     } catch (e: unknown) {
+      if (isCasConflict(e)) return casConflict(e.message);
       const msg = e instanceof Error ? e.message : 'Gagal menandai lunas eksternal';
       return err(msg, 400);
     }

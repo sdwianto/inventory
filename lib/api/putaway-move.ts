@@ -4,7 +4,7 @@
  */
 
 import type { ClientSession, Db } from 'mongodb';
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
 import {
   WAREHOUSE_BINS_COLLECTION,
   isValidBinKode,

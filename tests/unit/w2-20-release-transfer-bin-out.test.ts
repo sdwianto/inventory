@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/api/stok-bin', () => ({
+vi.mock('@/lib/stock-ledger/bin', () => ({
   STOK_BIN_COLLECTION: 'stok_bin',
   adjustStokBin: vi.fn(),
 }));
@@ -15,12 +15,12 @@ vi.mock('@/lib/api/transaction', () => ({
   txOpts: (session?: unknown) => (session ? { session } : {}),
 }));
 
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
 import {
   consumeStokBinSoft,
   softConsumeBinOnWarehouseOut,
-} from '@/lib/api/stok-bin-consume';
+} from '@/lib/stock-ledger/bin-consume';
 
 const adjustMock = vi.mocked(adjustStokBin);
 const resolveDefaultMock = vi.mocked(resolveDefaultBinKode);
@@ -118,34 +118,24 @@ describe('W2-20 softConsumeBinOnWarehouseOut', () => {
 });
 
 describe('W2-20 release/transfer call sites', () => {
-  it('release approve path wires softConsumeBinOnWarehouseOut', () => {
-    const src = readFileSync(
-      resolve(__dirname, '../../lib/api/handlers/inventory-releases.ts'),
-      'utf8',
-    );
-    expect(src).toContain('softConsumeBinOnWarehouseOut');
-    expect(src).toContain('it.qtyBase');
+  const read = (rel: string) => readFileSync(resolve(__dirname, '../../', rel), 'utf8');
+
+  it('release approve path posts OUT through the stock ledger (bin consume centralized)', () => {
+    const src = read('lib/api/handlers/inventory-releases.ts');
+    expect(src).toContain('postStockMovements');
+    expect(src).toContain('deltaQtyBase: -it.qtyBase');
+    expect(src).not.toContain('softConsumeBinOnWarehouseOut');
   });
 
-  it('transfer POST path wires softConsumeBinOnWarehouseOut on lokasiAsal only', () => {
-    const src = readFileSync(
-      resolve(__dirname, '../../lib/api/handlers/inventory-transfer.ts'),
-      'utf8',
-    );
-    expect(src).toContain('softConsumeBinOnWarehouseOut');
-    expect(src).toMatch(
-      /softConsumeBinOnWarehouseOut\(\s*txDb,\s*tenantId,\s*stokId,\s*String\(invBody\.lokasiAsal\)/,
-    );
-    expect(src).not.toMatch(
-      /softConsumeBinOnWarehouseOut\([^;]*lokasiTujuan/,
-    );
+  it('transfer POST path posts OUT on lokasiAsal through the ledger, no direct bin calls', () => {
+    const src = read('lib/api/handlers/inventory-transfer.ts');
+    expect(src).toContain('postStockMovements');
+    expect(src).toMatch(/warehouseKode: String\(invBody\.lokasiAsal\),\s*deltaQtyBase: -it\.qtyBase/);
+    expect(src).not.toContain('softConsumeBinOnWarehouseOut');
   });
 
-  it('stock-mutation OUT path uses softConsumeBinOnWarehouseOut', () => {
-    const src = readFileSync(
-      resolve(__dirname, '../../lib/api/stock-mutation.ts'),
-      'utf8',
-    );
+  it('stock ledger OUT path uses softConsumeBinOnWarehouseOut', () => {
+    const src = read('lib/stock-ledger/post-stock-movements.ts');
     expect(src).toContain('softConsumeBinOnWarehouseOut');
     expect(src).not.toContain('consumeStokBinSoft');
   });

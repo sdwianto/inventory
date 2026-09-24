@@ -3,10 +3,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('postVendorReturn', () => {
-  it('klaim POSTING hanya dari PENDING_APPROVAL (SoD)', () => {
+  it('klaim POSTING hanya dari PENDING_APPROVAL (SoD) + CAS updatedAt, audit di sesi', () => {
     const src = readFileSync(join(process.cwd(), 'lib/api/vendor-return-post.ts'), 'utf8');
-    expect(src).toMatch(/status: 'PENDING_APPROVAL'/);
-    expect(src).toMatch(/harus berstatus PENDING_APPROVAL/);
+    expect(src).toMatch(/status: 'PENDING_APPROVAL', updatedAt: doc\.updatedAt \?\? null/);
+    expect(src).toMatch(/throw new CasConflictError\(/);
+    expect(src).toMatch(/action: 'VENDOR_RETURN_POSTED'[\s\S]*?\}, session\)/);
+    expect(src).not.toMatch(/writeAuditLog\(db,/);
   });
 
   it('klaim POSTING di-revert pada fallback non-TX jika stok gagal', () => {

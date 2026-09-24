@@ -17,15 +17,6 @@ vi.mock('@/lib/api/stock-mutation', () => ({
   postStockMutation: (...args: unknown[]) => postStockMutation(...(args as [])),
 }));
 
-const { restoreIngredientLotsFromAllocations } = vi.hoisted(() => ({
-  restoreIngredientLotsFromAllocations: vi.fn(async () => ({
-    stokId: 'p2', needQty: 3, restored: 3, shortfall: 0, allocations: [],
-  })),
-}));
-vi.mock('@/lib/food-production/ingredient-lot-consume', () => ({
-  restoreIngredientLotsFromAllocations,
-}));
-
 import { applyVendorReturnDecision } from '@/lib/api/vendor-return-decision';
 
 function makeDb(doc: Record<string, unknown> | null) {
@@ -191,7 +182,6 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
 
   it('REJECTED dengan lotConsume → restore FEFO lot dari alokasi Post', async () => {
     postStockMutation.mockClear();
-    restoreIngredientLotsFromAllocations.mockClear();
     const withLots = {
       ...baseDoc,
       lotConsume: [{
@@ -217,15 +207,19 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
       ],
     });
     expect('action' in r && r.action).toBe('applied');
-    expect(restoreIngredientLotsFromAllocations).toHaveBeenCalledWith(
+    expect(postStockMutation).toHaveBeenCalledTimes(1);
+    expect(postStockMutation).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        stokId: 'p2',
-        noDokumen: 'RTV1',
-        returnId: 'rtv-1',
-        restores: [expect.objectContaining({ batchId: 'lot-a', qty: 3 })],
+        productId: 'p2',
+        sourceType: 'VENDOR_RETURN_REJECTED',
+        sourceId: 'rtv-1',
+        noTransaksi: 'RTV1',
+        lotPolicy: {
+          mode: 'RESTORE',
+          restores: [expect.objectContaining({ batchId: 'lot-a', qty: 3 })],
+        },
       }),
-      undefined,
     );
   });
 

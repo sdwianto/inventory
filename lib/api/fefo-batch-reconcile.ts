@@ -11,6 +11,7 @@ import {
 } from '@/lib/food-production/production-batch';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export const FEFO_RECONCILE_REPORTS_COLLECTION = 'fefo_batch_reconcile_reports';
 
@@ -75,7 +76,7 @@ export async function detectFefoBatchMismatches(
     const exp = String(b.expiryDate || '').slice(0, 10);
     const past = /^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today;
 
-    if (rem > Number(b.qty || 0) + 1e-9) {
+    if (qtyGt(rem, Number(b.qty || 0))) {
       qtyCorruption += 1;
       mismatches.push({
         kind: 'QTY_REMAINING_GT_QTY',
@@ -133,8 +134,7 @@ export async function detectFefoBatchMismatches(
     const lokasi = await getQtyStokLokasi(db, tid, stokId, warehouseKode);
     const stock = typeof lokasi === 'number' ? lokasi : Number(lokasi);
     if (!Number.isFinite(stock)) continue;
-    // Soft band: batch remaining should not exceed ledger by > 0.001
-    if (sum > stock + 0.001) {
+    if (qtyGt(sum, stock)) {
       batchVsStok += 1;
       mismatches.push({
         kind: 'BATCH_VS_STOK_LOKASI',
@@ -228,7 +228,7 @@ export async function repairFefoBatchMismatches(
 
     if (m.kind === 'BATCH_VS_STOK_LOKASI' && m.stokId && m.warehouseKode) {
       const excess = Number(m.qtyRemaining || 0) - Number(m.stokLokasi || 0);
-      if (!(excess > 0.001)) continue;
+      if (!qtyGt(excess, 0)) continue;
       const fefo = await consumeBatchesFefo(db, {
         tenantId: tid,
         stokId: m.stokId,

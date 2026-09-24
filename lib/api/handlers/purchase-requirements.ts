@@ -19,6 +19,7 @@ import { isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } f
 import { vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { CasConflictError, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, isCasConflict } from '@/lib/api/cas';
 import {
   PURCHASE_REQUIREMENTS_COLLECTION,
   buildPurchaseLinesFromMrp,
@@ -112,8 +113,8 @@ async function cancelDraftCpoIfEligible(
   if (!cpo) return null;
   if (cpo.status !== 'DRAFT') return null;
   const now = new Date();
-  await db.collection('customer_purchase_orders').updateOne(
-    { id: cpoId, tenantId: opts.tenantId },
+  const cancelled = await db.collection('customer_purchase_orders').updateOne(
+    { id: cpoId, tenantId: opts.tenantId, status: 'DRAFT' },
     {
       $set: {
         status: 'CANCELLED',
@@ -128,6 +129,7 @@ async function cancelDraftCpoIfEligible(
     },
     txOpts(opts.session),
   );
+  if (cancelled.matchedCount === 0) return null;
   if (!opts.session) {
     await invalidateDashboardSnapshot(db, opts.tenantId);
   }
@@ -212,7 +214,7 @@ async function supersedeDraftPrsForMrp(
         : 'Digantikan dokumen PR baru',
     });
     await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: old.id }),
+      withTenantFilter(scopeAuth, casStatusFilter(old, 'DRAFT')),
       { $set: { status: 'CANCELLED', history, updatedAt: opts.now } },
       txOpts(opts.session),
     );
@@ -379,12 +381,11 @@ async function prepareDraftCpo(
   if (!mapped.items.length) return { error: 'Gagal memetakan item Draft CPO' };
 
   const now = new Date();
-  const noPO = await nextDocNumber(db, opts.tenantId, 'CPO', 'CPO');
   const actor = actorFields(opts.auth);
   const insertDoc = {
     id: uuidv4(),
     tenantId: opts.tenantId,
-    noPO,
+    noPO: '',
     tanggal: now,
     tanggalKedatangan,
     status: 'DRAFT',
@@ -407,6 +408,17 @@ async function prepareDraftCpo(
   };
 
   return { insertDoc, warnings: mapped.warnings };
+}
+
+/** Nomor CPO diambil di dalam transaksi yang sama dengan insert (tidak ada nomor loncat bila rollback). */
+async function assignDraftCpoNumber(
+  txDb: Db,
+  insertDoc: Record<string, unknown>,
+  session?: ClientSession,
+): Promise<string> {
+  const noPO = await nextDocNumber(txDb, insertDoc.tenantId as string | null | undefined, 'CPO', 'CPO', session);
+  insertDoc.noPO = noPO;
+  return noPO;
 }
 
 export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -483,12 +495,11 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     const tenantId = tenantIdForWrite(scopeAuth, prBody);
     const now = new Date();
     const actor = actorFields(auth);
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.PURCHASE_REQUIREMENT);
     const summary = summarizePurchaseLines(lines);
     const doc: PurchaseRequirementDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       materialRequirementId: mrp.id,
       materialRequirementNo: mrp.noDokumen,
       productionPlanId: mrp.productionPlanId,
@@ -526,19 +537,11 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     if ('error' in prepared) return err(prepared.error, 400);
 
     doc.draftCpoId = String(prepared.insertDoc.id);
-    doc.draftCpoNo = String(prepared.insertDoc.noPO);
     doc.draftCpoStatus = 'DRAFT';
     if (prepared.warnings.length) {
       doc.summary = { ...doc.summary, warnings: prepared.warnings };
     }
-    doc.history = appendDocHistory(doc.history, {
-      at: now,
-      fromStatus: 'DRAFT',
-      toStatus: 'DRAFT',
-      userId: actor.userId,
-      userName: actor.userName,
-      note: `Draft CPO ${doc.draftCpoNo} dibuat`,
-    });
+    const baseHistory = doc.history;
 
     let createCommitted = false;
     let usedNonTxFallback = false;
@@ -572,6 +575,19 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
           session,
         });
 
+        doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.PURCHASE_REQUIREMENT, session);
+        doc.draftCpoNo = await assignDraftCpoNumber(txDb, prepared.insertDoc, session);
+        prepared.insertDoc.catatan = `Dari Kebutuhan Beli ${doc.noDokumen}`;
+        prepared.insertDoc.purchaseRequirementNo = doc.noDokumen;
+        doc.history = appendDocHistory(baseHistory, {
+          at: now,
+          fromStatus: 'DRAFT',
+          toStatus: 'DRAFT',
+          userId: actor.userId,
+          userName: actor.userName,
+          note: `Draft CPO ${doc.draftCpoNo} dibuat`,
+        });
+
         await txDb.collection('customer_purchase_orders').insertOne(
           prepared.insertDoc,
           txOpts(session),
@@ -580,6 +596,14 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
           doc,
           txOpts(session),
         );
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'PR_CREATE',
+          entityType: 'purchase_requirement',
+          entityId: doc.id,
+          summary: `PR ${doc.noDokumen} → Draft CPO ${doc.draftCpoNo} (${doc.summary.lineCount} item)`,
+          ...auditActor(auth),
+        }, session);
         createCommitted = true;
       });
     } catch (e) {
@@ -613,14 +637,6 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     }
 
     await invalidateDashboardSnapshot(db, tenantId);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'PR_CREATE',
-      entityType: 'purchase_requirement',
-      entityId: doc.id,
-      summary: `PR ${doc.noDokumen} → Draft CPO ${doc.draftCpoNo} (${doc.summary.lineCount} item)`,
-      ...auditActor(auth),
-    });
     return ok(projectPr(doc as unknown as Record<string, unknown>));
   }
 
@@ -682,18 +698,18 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     const warnings = prepared.warnings.length
       ? [...new Set([...(existing.summary.warnings || []), ...prepared.warnings])].slice(0, 20)
       : existing.summary.warnings;
-    const history = appendDocHistory(existing.history, {
-      at: now,
-      fromStatus: existing.status,
-      toStatus: existing.status,
-      userId: actor.userId,
-      userName: actor.userName,
-      note: `Draft CPO ${String(prepared.insertDoc.noPO)} dibuat ulang`,
-    });
-
     const previousCpoId = String(existing.draftCpoId || '').trim();
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const noPO = await assignDraftCpoNumber(txDb, prepared.insertDoc, session);
+        const history = appendDocHistory(existing.history, {
+          at: now,
+          fromStatus: existing.status,
+          toStatus: existing.status,
+          userId: actor.userId,
+          userName: actor.userName,
+          note: `Draft CPO ${noPO} dibuat ulang`,
+        });
         await txDb.collection('customer_purchase_orders').insertOne(
           prepared.insertDoc,
           txOpts(session),
@@ -719,7 +735,7 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
           );
         }
         const upd = await txDb.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
-          withTenantFilter(scopeAuth, { id }),
+          withTenantFilter(scopeAuth, casEditFilter(existing)),
           {
             $set: {
               draftCpoId: prepared.insertDoc.id,
@@ -731,9 +747,15 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
           },
           txOpts(session),
         );
-        if (!upd.matchedCount) {
-          throw Object.assign(new Error('PR hilang saat update'), { httpStatus: 404 });
-        }
+        if (!upd.matchedCount) throw new CasConflictError();
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'PR_DRAFT_CPO',
+          entityType: 'purchase_requirement',
+          entityId: id,
+          summary: `PR ${existing.noDokumen} → Draft CPO ${noPO}`,
+          ...auditActor(auth),
+        }, session);
       });
     } catch (e) {
       // Non-tx fallback / failed update: drop orphan Draft CPO if not linked on PR.
@@ -747,9 +769,7 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
           status: 'DRAFT',
         });
       }
-      if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 404) {
-        return err('Kebutuhan beli tidak ditemukan', 404);
-      }
+      if (isCasConflict(e)) return casConflict(e.message);
       throw e;
     }
 
@@ -758,14 +778,6 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     );
     const [enriched] = await enrichDraftCpoStatus(db, [saved as Record<string, unknown>]);
     await invalidateDashboardSnapshot(db, tenantId);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'PR_DRAFT_CPO',
-      entityType: 'purchase_requirement',
-      entityId: id,
-      summary: `PR ${existing.noDokumen} → Draft CPO ${String(prepared.insertDoc.noPO)}`,
-      ...auditActor(auth),
-    });
     return ok(projectPr(enriched));
   }
 
@@ -816,10 +828,20 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
     });
 
     try {
-      await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id }),
-        { $set: { status: toStatus, history, updatedAt: now } },
-      );
+      const conflict = await casUpdateWithAudit({
+        collection: PURCHASE_REQUIREMENTS_COLLECTION,
+        filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+        update: { $set: { status: toStatus, history, updatedAt: now } },
+        audit: {
+          tenantId: existing.tenantId,
+          action: 'PR_STATUS',
+          entityType: 'purchase_requirement',
+          entityId: id,
+          summary: `PR ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+          ...auditActor(auth),
+        },
+      });
+      if (conflict) return conflict;
     } catch (e) {
       if (isDuplicateKeyError(e)) {
         return err('Konflik status PR untuk MRP yang sama — muat ulang', 409);
@@ -830,14 +852,6 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
       withTenantFilter(scopeAuth, { id }),
     );
     const [enriched] = await enrichDraftCpoStatus(db, [saved as Record<string, unknown>]);
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PR_STATUS',
-      entityType: 'purchase_requirement',
-      entityId: id,
-      summary: `PR ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(projectPr(enriched));
   }
 
@@ -862,36 +876,48 @@ export async function handlePurchaseRequirements(ctx: HandlerContext): Promise<N
 
     const actor = actorFields(auth);
     const now = new Date();
-    const cancelledCpoNo = await cancelDraftCpoIfEligible(db, {
-      tenantId: existing.tenantId,
-      cpoId: existing.draftCpoId,
-      reason: `Dibatalkan bersama PR ${existing.noDokumen}`,
-      actor,
-    });
-    const history = appendDocHistory(existing.history, {
-      at: now,
-      fromStatus: existing.status,
-      toStatus: 'CANCELLED',
-      userId: actor.userId,
-      userName: actor.userName,
-      note: cancelledCpoNo
-        ? `Dibatalkan; Draft CPO ${cancelledCpoNo} ikut dibatalkan`
-        : 'Dibatalkan',
-    });
-    await db.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'PR_CANCEL',
-      entityType: 'purchase_requirement',
-      entityId: id,
-      summary: cancelledCpoNo
-        ? `PR ${existing.noDokumen} + Draft CPO ${cancelledCpoNo} dibatalkan`
-        : `PR ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
-    });
+    let cancelledCpoNo: string | null = null;
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        cancelledCpoNo = await cancelDraftCpoIfEligible(txDb, {
+          tenantId: existing.tenantId,
+          cpoId: existing.draftCpoId,
+          reason: `Dibatalkan bersama PR ${existing.noDokumen}`,
+          actor,
+          session,
+        });
+        const history = appendDocHistory(existing.history, {
+          at: now,
+          fromStatus: existing.status,
+          toStatus: 'CANCELLED',
+          userId: actor.userId,
+          userName: actor.userName,
+          note: cancelledCpoNo
+            ? `Dibatalkan; Draft CPO ${cancelledCpoNo} ikut dibatalkan`
+            : 'Dibatalkan',
+        });
+        const res = await txDb.collection(PURCHASE_REQUIREMENTS_COLLECTION).updateOne(
+          withTenantFilter(scopeAuth, casStatusFilter(existing)),
+          { $set: { status: 'CANCELLED', history, updatedAt: now } },
+          txOpts(session),
+        );
+        if (res.matchedCount === 0) throw new CasConflictError();
+        await writeAuditLog(txDb, {
+          tenantId: existing.tenantId,
+          action: 'PR_CANCEL',
+          entityType: 'purchase_requirement',
+          entityId: id,
+          summary: cancelledCpoNo
+            ? `PR ${existing.noDokumen} + Draft CPO ${cancelledCpoNo} dibatalkan`
+            : `PR ${existing.noDokumen} dibatalkan`,
+          ...auditActor(auth),
+        }, session);
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
+    await invalidateDashboardSnapshot(db, existing.tenantId);
     return ok({ id, status: 'CANCELLED', cancelledDraftCpoNo: cancelledCpoNo });
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { peekFefoLotNo } from '@/lib/food-production/ingredient-lot-consume';
+import { peekFefoLotNo } from '@/lib/stock-ledger/lot-consume';
 
 describe('peekFefoLotNo', () => {
   it('mengembalikan lot FEFO pertama yang qtyRemaining > 0', async () => {

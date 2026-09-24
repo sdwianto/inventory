@@ -13,6 +13,9 @@ import {
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import { allocateFefo, type FefoAllocation } from '@/lib/food-production/fefo-allocate';
+import { qtyLt, roundQty } from '@/lib/stock-ledger/precision';
+
+const BATCH_CONFLICT = 'Batch produksi berubah bersamaan — ulangi transaksi';
 
 export type FefoRelocateLineResult = {
   stokId: string;
@@ -129,10 +132,10 @@ export async function relocateBatchesFefo(
     const take = Math.min(a.qty, rem);
     if (!(take > 0)) continue;
 
-    if (take >= rem - 1e-9) {
+    if (!qtyLt(take, rem)) {
       // FULL relocate — same batch id moves warehouse
-      await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
-        { id: batch.id, tenantId: tid, warehouseKode: fromWh },
+      const moved = await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
+        { id: batch.id, tenantId: tid, warehouseKode: fromWh, updatedAt: batch.updatedAt ?? null },
         {
           $set: {
             warehouseKode: toWh,
@@ -142,15 +145,16 @@ export async function relocateBatchesFefo(
         },
         txOpts(session),
       );
+      if (moved.matchedCount === 0) throw new Error(BATCH_CONFLICT);
       batch.warehouseKode = toWh;
       batch.qtyRemaining = rem;
       continue;
     }
 
     // PARTIAL — leave remainder at source; credit dest
-    const afterSource = Math.max(0, rem - take);
-    await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
-      { id: batch.id, tenantId: tid },
+    const afterSource = Math.max(0, roundQty(rem - take));
+    const reduced = await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
+      { id: batch.id, tenantId: tid, updatedAt: batch.updatedAt ?? null },
       {
         $set: {
           qtyRemaining: afterSource,
@@ -161,6 +165,7 @@ export async function relocateBatchesFefo(
       },
       txOpts(session),
     );
+    if (reduced.matchedCount === 0) throw new Error(BATCH_CONFLICT);
     batch.qtyRemaining = afterSource;
 
     // ADR-004: relokasi tidak boleh mengubah disposisi. Hanya gabungkan ke batch
@@ -180,9 +185,9 @@ export async function relocateBatchesFefo(
 
     if (destExisting) {
       const destRem = effectiveQtyRemaining(destExisting);
-      const newRem = destRem + take;
-      await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
-        { id: destExisting.id, tenantId: tid },
+      const newRem = roundQty(destRem + take);
+      const credited = await db.collection(PRODUCTION_BATCHES_COLLECTION).updateOne(
+        { id: destExisting.id, tenantId: tid, updatedAt: destExisting.updatedAt ?? null },
         {
           $set: {
             qtyRemaining: newRem,
@@ -194,6 +199,7 @@ export async function relocateBatchesFefo(
         },
         txOpts(session),
       );
+      if (credited.matchedCount === 0) throw new Error(BATCH_CONFLICT);
     } else {
       const clone: ProductionBatchDoc = {
         id: uuidv4(),

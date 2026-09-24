@@ -7,13 +7,13 @@
 
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
-import { allocateStokBinSoft } from '@/lib/api/stok-bin-allocate';
-import { consumeStokBinSoft } from '@/lib/api/stok-bin-consume';
-import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { allocateStokBinSoft } from '@/lib/stock-ledger/bin-allocate';
+import { consumeStokBinSoft } from '@/lib/stock-ledger/bin-consume';
+import { STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
+import { isZeroQty, qtyGt } from '@/lib/stock-ledger/precision';
 
 export const STOK_BIN_RECONCILE_REPORTS_COLLECTION = 'stok_bin_reconcile_reports';
 
-const EPS = 0.0005;
 
 export type StokBinMismatch = {
   kind: 'BIN_SUM_GT_STOK_LOKASI' | 'BIN_SUM_LT_STOK_LOKASI';
@@ -142,7 +142,7 @@ export async function detectStokBinVsLokasi(
     const binQtySum = binByKey.get(key) || 0;
     const stokLokasiQty = lokByKey.get(key) || 0;
     const delta = Math.round((binQtySum - stokLokasiQty) * 1000) / 1000;
-    if (Math.abs(delta) <= EPS) continue;
+    if (isZeroQty(delta)) continue;
 
     if (delta > 0) {
       binSumGt += 1;
@@ -222,7 +222,7 @@ export async function repairStokBinMismatches(
     if (m.kind !== 'BIN_SUM_LT_STOK_LOKASI') continue;
 
     const residual = Math.round((m.stokLokasiQty - m.binQtySum) * 1000) / 1000;
-    if (!(residual > EPS)) continue;
+    if (!qtyGt(residual, 0)) continue;
 
     const alloc = await allocateStokBinSoft(
       db,
@@ -323,7 +323,7 @@ export async function repairStokBinGtMismatches(
     if (m.kind !== 'BIN_SUM_GT_STOK_LOKASI') continue;
 
     const over = Math.round((m.binQtySum - m.stokLokasiQty) * 1000) / 1000;
-    if (!(over > EPS)) continue;
+    if (!qtyGt(over, 0)) continue;
 
     const consumed = await consumeStokBinSoft(
       db,

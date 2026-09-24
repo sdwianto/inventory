@@ -30,6 +30,7 @@ import { parseCursorPageParams, applyAscDateIdCursor, encodeCursor, sliceCursorP
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import type { HandlerContext } from '@/types/api/handler';
 import type { MaintenanceIntervalUnit, MaintenanceScheduleDoc } from '@/types/maintenance';
+import { casConflict, casStatusFilter } from '@/lib/api/cas';
 
 interface ScheduleBody extends Record<string, unknown> {
   assetId?: string;
@@ -262,10 +263,11 @@ export async function handleMaintenanceSchedules({
     );
     if (!existing) return err('Jadwal tidak ditemukan', 404);
 
-    await db.collection(MAINTENANCE_SCHEDULES_COLLECTION).updateOne(
-      { id: existing.id },
+    const casRes = await db.collection(MAINTENANCE_SCHEDULES_COLLECTION).updateOne(
+      casStatusFilter(existing),
       { $set: { status: 'ARCHIVED', updatedAt: new Date() } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     return ok({ message: 'archived' });
   }
 

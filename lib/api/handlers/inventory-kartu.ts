@@ -38,10 +38,9 @@ export async function handleStokKartu({
       filter.tanggal = tanggal;
     }
     filter = withOperationalFilter(scopeAuth, filter);
-    const coll = db.collection('stok_kartu');
     const mutasiExpr = { $subtract: [{ $ifNull: ['$masuk', 0] }, { $ifNull: ['$keluar', 0] }] };
 
-    const [totals] = await coll.aggregate([
+    const [totals] = await db.collection('stok_kartu').aggregate([
       { $match: filter },
       {
         $group: {
@@ -60,7 +59,7 @@ export async function handleStokKartu({
         stokId: productId,
         tanggal: { $lt: new Date(from) },
       });
-      const [before] = await coll.aggregate([
+      const [before] = await db.collection('stok_kartu').aggregate([
         { $match: beforeFilter },
         { $group: { _id: null, saldo: { $sum: mutasiExpr } } },
       ]).toArray();
@@ -70,7 +69,7 @@ export async function handleStokKartu({
     const skip = Math.max(0, totalRows - limit);
     let saldoAwalHalaman = saldoAwal;
     if (skip > 0) {
-      const [skipped] = await coll.aggregate([
+      const [skipped] = await db.collection('stok_kartu').aggregate([
         { $match: filter },
         { $sort: { tanggal: 1, _id: 1 } },
         { $limit: skip },
@@ -79,7 +78,7 @@ export async function handleStokKartu({
       saldoAwalHalaman += Number(skipped?.saldo || 0);
     }
 
-    const list = await coll
+    const list = await db.collection('stok_kartu')
       .find(filter)
       .project({
         id: 1, stokId: 1, lokasi: 1, tanggal: 1, noTransaksi: 1, keterangan: 1,

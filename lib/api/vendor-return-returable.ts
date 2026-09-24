@@ -3,6 +3,7 @@
  */
 
 import { vendorReturnLineKey, type VendorReturnLine } from '@/types/vendor-return';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export type HutangLike = {
   items?: Array<{
@@ -159,7 +160,7 @@ export function assertReturnQtyWithinMax(
     if (max == null) {
       return `Baris invoice tidak ditemukan untuk ${it.localKode || it.invoiceLineId || it.localStokId}`;
     }
-    if (qty > max + 1e-9) {
+    if (qtyGt(qty, max)) {
       return `Qty retur ${it.localKode || ''} melebihi sisa ${max}`;
     }
   }

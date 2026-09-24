@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/api/stok-bin', () => ({
+vi.mock('@/lib/stock-ledger/bin', () => ({
   STOK_BIN_COLLECTION: 'stok_bin',
   adjustStokBin: vi.fn(),
 }));
@@ -13,9 +13,9 @@ vi.mock('@/lib/api/transaction', () => ({
   txOpts: (session?: unknown) => (session ? { session } : {}),
 }));
 
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
-import { consumeStokBinSoft } from '@/lib/api/stok-bin-consume';
+import { consumeStokBinSoft } from '@/lib/stock-ledger/bin-consume';
 
 const adjustMock = vi.mocked(adjustStokBin);
 const resolveDefaultMock = vi.mocked(resolveDefaultBinKode);

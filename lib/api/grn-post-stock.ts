@@ -1,17 +1,16 @@
+// Posting GRN — mutasi stok + lot bahan lewat buku stok, harga rata-rata produk.
+
 import type { AnyBulkWriteOperation, ClientSession, Db, Document } from 'mongodb';
 import { txOpts } from '@/lib/api/transaction';
-// Posting GRN — batch update stok, kartu stok, produk.
 
 import { v4 as uuidv4 } from 'uuid';
-import { stampTenantId } from '@/lib/api/tenant-operational';
-import { parseLokasiKode, ensureStokLokasiIndexes } from '@/lib/api/stok-lokasi';
+import { ensureStokLokasiIndexes } from '@/lib/api/stok-lokasi';
 import { isValidWarehouseKode, warehouseLabel } from '@/lib/api/warehouses';
 import { assertProductWarehouse, resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { calcWeightedAvgHargaBeli, buildJualPricesAfterBeliChange } from '@/lib/api/inventory-cost';
 import { productFilterById } from '@/lib/api/tenant-operational';
 import { resolveLineQtyBase, unitCostPerBaseFromLine } from '@/lib/uom/resolve-line-qty';
-import { formatStockDualLabel } from '@/lib/uom/display';
-import { listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { listProductUomsByProductIds, persistStokDisplay } from '@/lib/api/product-uom';
 import type { GrnDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 import {
@@ -21,14 +20,15 @@ import {
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
-import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { postStockMovements, roundStockQty, type StockActor, type StockMovementLine } from '@/lib/stock-ledger';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 function lokasiKey(stokId: string, kode: string) {
   return `${stokId}:${kode}`;
 }
 
 /**
- * @returns {{ itemsFull, receivedTotal, lokasiSet, kartuDocs, error? }}
+ * @returns {{ itemsFull, receivedTotal, lokasiSet, lotDocs, error? }}
  */
 export async function applyGrnStockPosting(
   db: Db,
@@ -36,6 +36,7 @@ export async function applyGrnStockPosting(
   grn: GrnDoc,
   bodyItems: JsonObject[] = [],
   session?: ClientSession,
+  actor?: StockActor | null,
 ) {
   const tid = tenantId || 'default';
   const now = new Date();
@@ -78,7 +79,7 @@ export async function applyGrnStockPosting(
 
     if (qty <= 0) {
       if (qtyRejected > 0) {
-        if (orderedBase > 0 && qtyRejectedBase > orderedBase + 1e-6) {
+        if (orderedBase > 0 && qtyGt(qtyRejectedBase, orderedBase)) {
           return { error: `Qty ditolak melebihi qty kirim untuk ${itemLabel}` };
         }
         rejectedOnlyLines.push({ it, qtyRejected, rejectReason });
@@ -87,17 +88,17 @@ export async function applyGrnStockPosting(
     }
     const resolved = await resolveLineQtyBase(db, tid, String(it.localStokId), { qty, ...uomCtx }, uomsCache);
     if ('error' in resolved) return { error: resolved.error };
-    if (orderedBase > 0 && (resolved.qtyBase + qtyRejectedBase) > orderedBase + 1e-6) {
+    if (orderedBase > 0 && qtyGt(resolved.qtyBase + qtyRejectedBase, orderedBase)) {
       return { error: `Qty diterima + ditolak (melebihi qty kirim) untuk ${itemLabel}` };
     }
-    lineInputs.push({ it, qty: resolved.qty, qtyBase: resolved.qtyBase, resolved, lineIndex, qtyRejected, rejectReason });
+    lineInputs.push({ it, qty: resolved.qty, qtyBase: roundStockQty(resolved.qtyBase), resolved, lineIndex, qtyRejected, rejectReason });
   }
 
   if (!lineInputs.length && !rejectedOnlyLines.length) return { error: 'Tidak ada qty diterima' };
 
   const stokIds = [...new Set(lineInputs.map((l) => l.it.localStokId))];
   const products = await db.collection('products')
-    .find({ tenantId: tid, id: { $in: stokIds } })
+    .find({ tenantId: tid, id: { $in: stokIds } }, txOpts(session))
     .toArray();
   const prodById = new Map(products.map((p) => [p.id, p]));
 
@@ -113,11 +114,18 @@ export async function applyGrnStockPosting(
     ? await db.collection('stok_lokasi').find({
       tenantId: tid,
       $or: lokasiKeysPre.map(({ stokId, lokasiKode }) => ({ stokId, lokasiKode })),
-    }).toArray()
+    }, txOpts(session)).toArray()
     : [];
   const lokasiByKey = new Map(existingLokasiPre.map((r) => [lokasiKey(r.stokId, r.lokasiKode), r]));
 
-  const lokasiDeltas = new Map<string, number>();
+  // Idempotent lot stamp: lot tidak dibuat ulang bila GRN ini sudah punya lot (replay-safe).
+  const grnHasLots = grn.id
+    ? (await db.collection(INGREDIENT_LOTS_COLLECTION).countDocuments(
+      { tenantId: tid, grnId: String(grn.id) },
+      { limit: 1, ...txOpts(session) },
+    )) > 0
+    : true;
+
   const productState = new Map<string, {
     oldQty: number;
     oldBeli: number;
@@ -126,13 +134,11 @@ export async function applyGrnStockPosting(
   }>();
   const itemsFull: JsonObject[] = [];
   const lokasiSet = new Set<string>();
-  const kartuDocs: JsonObject[] = [];
+  const movementLines: StockMovementLine[] = [];
   const lotDocs: IngredientLotDoc[] = [];
   const receivedDay = now.toISOString().slice(0, 10);
   /** W2-16: cache default bin per warehouse (null = none). */
   const defaultBinByWh = new Map<string, string | null>();
-  /** W2-17: accumulate qtyBase per (stokId, warehouse, bin) when default bin resolved. */
-  const binDeltas = new Map<string, number>();
 
   for (const { it, qty, qtyBase, resolved, lineIndex, qtyRejected, rejectReason } of lineInputs) {
     const prod = prodById.get(it.localStokId) as Record<string, unknown> | undefined;
@@ -153,19 +159,13 @@ export async function applyGrnStockPosting(
       );
     }
     const binKode = defaultBinByWh.get(lokasiKode) || undefined;
-    if (binKode) {
-      const bk = `${String(it.localStokId)}:${lokasiKode}:${binKode}`;
-      binDeltas.set(bk, (binDeltas.get(bk) || 0) + qtyBase);
-    }
     const unitCost = parseInt(String(it.harga || it.hargaSatuan || 0), 10);
     const unitCostBase = unitCostPerBaseFromLine(resolved, unitCost * qty);
-    const lk = lokasiKey(String(it.localStokId), lokasiKode);
-    lokasiDeltas.set(lk, (lokasiDeltas.get(lk) || 0) + qtyBase);
 
     let state = productState.get(String(it.localStokId));
     const lkInit = lokasiKey(String(it.localStokId), lokasiKode);
     const rowInit = lokasiByKey.get(lkInit);
-    const lokasiQty = parseFloat(String((rowInit as { qty?: unknown })?.qty)) || 0;
+    const lokasiQty = roundStockQty((rowInit as { qty?: number | string } | undefined)?.qty);
     if (!state) {
       state = {
         oldQty: lokasiQty,
@@ -176,26 +176,8 @@ export async function applyGrnStockPosting(
       productState.set(String(it.localStokId), state);
     }
     state.newBeli = calcWeightedAvgHargaBeli(state.oldQty, state.newBeli, qtyBase, unitCostBase);
-    state.oldQty += qtyBase;
+    state.oldQty = roundStockQty(state.oldQty + qtyBase);
 
-    const lokasiLabel = `${lokasiKode} - ${warehouseLabel(lokasiKode)}`;
-    kartuDocs.push(stampTenantId(tid, {
-      id: uuidv4(),
-      stokId: it.localStokId,
-      lokasi: lokasiLabel,
-      lokasiKode,
-      ...(binKode ? { binKode } : {}),
-      tanggal: now,
-      noTransaksi: grn.noGRN,
-      keterangan: `GRN dari ${grn.noDO} (sales.app)`,
-      sourceType: 'GRN',
-      masuk: qtyBase,
-      keluar: 0,
-      qtyEntered: qty,
-      uomId: resolved.uomId,
-      satuan: resolved.satuan,
-      hargaSatuan: unitCostBase,
-    }));
 
     // W2-5: stamp ingredient lot (body override → line → default shelf).
     const bodyLine = bodyItems?.find((b) => (
@@ -243,6 +225,18 @@ export async function applyGrnStockPosting(
     };
     lotDocs.push(lot);
 
+    movementLines.push({
+      lineRef: String(lineIndex),
+      productId: String(it.localStokId),
+      warehouseKode: lokasiKode,
+      deltaQtyBase: qtyBase,
+      unitCost: unitCostBase,
+      qtyEntered: qty,
+      uomId: resolved.uomId,
+      satuan: resolved.satuan,
+      lotPolicy: grnHasLots ? { mode: 'NONE' } : { mode: 'CREATE', lot },
+    });
+
     itemsFull.push({
       ...it,
       qtyReceived: qty,
@@ -262,98 +256,27 @@ export async function applyGrnStockPosting(
     });
   }
 
-  const lokasiKeys = [...lokasiDeltas.keys()].map((k) => {
-    const [stokId, kode] = k.split(':');
-    return { stokId, lokasiKode: kode };
-  });
-
-  const stokLokasiBulk: Record<string, unknown>[] = [];
-  for (const [lk, delta] of lokasiDeltas) {
-    const [stokId, kode] = lk.split(':');
-    const row = lokasiByKey.get(lk);
-    const current = parseFloat(String((row as { qty?: unknown })?.qty)) || 0;
-    const next = current + delta;
-    if (next < 0) {
-      return { error: `Stok di lokasi ${kode} tidak cukup (sisa: ${current})` };
-    }
-    if (row) {
-      stokLokasiBulk.push({
-        updateOne: {
-          filter: { tenantId: tid, stokId, lokasiKode: kode },
-          update: { $set: { qty: next, updatedAt: now } },
-        },
-      });
-    } else {
-      stokLokasiBulk.push({
-        updateOne: {
-          filter: { tenantId: tid, stokId, lokasiKode: kode },
-          update: {
-            $set: { qty: next, updatedAt: now },
-            $setOnInsert: { id: uuidv4(), tenantId: tid, stokId, lokasiKode: kode },
-          },
-          upsert: true,
-        },
-      });
-    }
-  }
-
-  if (stokLokasiBulk.length) {
-    await db.collection('stok_lokasi').bulkWrite(
-      stokLokasiBulk as AnyBulkWriteOperation<Document>[],
-      { ordered: false, ...txOpts(session) },
-    );
-  }
-
-  // W2-17: parallel bin ledger when default bin resolved (same session as stok_lokasi).
-  const stokBinBulk: Record<string, unknown>[] = [];
-  for (const [bk, delta] of binDeltas) {
-    if (!delta) continue;
-    const parts = bk.split(':');
-    const stokId = parts[0];
-    const warehouseKode = parts[1];
-    const binKodePart = parts.slice(2).join(':');
-    if (!stokId || !warehouseKode || !binKodePart) continue;
-    stokBinBulk.push({
-      updateOne: {
-        filter: { tenantId: tid, stokId, warehouseKode, binKode: binKodePart },
-        update: {
-          $inc: { qty: delta },
-          $set: { updatedAt: now },
-          $setOnInsert: {
-            id: uuidv4(),
-            tenantId: tid,
-            stokId,
-            warehouseKode,
-            binKode: binKodePart,
-            createdAt: now,
-          },
-        },
-        upsert: true,
-      },
+  let stokTotalById = new Map<string, number>();
+  if (movementLines.length) {
+    const posted = await postStockMovements(db, session, {
+      tenantId: tid,
+      sourceType: 'GRN',
+      sourceId: String(grn.id || ''),
+      noTransaksi: String(grn.noGRN || grn.id || ''),
+      keterangan: `GRN dari ${grn.noDO} (sales.app)`,
+      postingDate: now,
+      actor,
+      lines: movementLines,
     });
-  }
-  if (stokBinBulk.length) {
-    await db.collection(STOK_BIN_COLLECTION).bulkWrite(
-      stokBinBulk as AnyBulkWriteOperation<Document>[],
-      { ordered: false, ...txOpts(session) },
-    );
-  }
-
-  const allLokasiRows = await db.collection('stok_lokasi')
-    .find({ tenantId: tid, stokId: { $in: stokIds } })
-    .project({ stokId: 1, qty: 1 })
-    .toArray();
-  const stokTotalById = new Map<string, number>();
-  for (const r of allLokasiRows) {
-    const sid = String(r.stokId);
-    stokTotalById.set(sid, (stokTotalById.get(sid) || 0) + (parseFloat(String(r.qty)) || 0));
+    if (!posted.ok) return { error: posted.error };
+    stokTotalById = new Map(Object.entries(posted.productStok));
   }
 
   const uomsByProduct = await listProductUomsByProductIds(db, tid, [...productState.keys()]);
 
+  // stok & stokDisplay sudah dihitung ulang buku stok di sesi ini — di sini hanya harga & jumlah UOM.
   const productBulk: Record<string, unknown>[] = [];
   for (const [stokId, state] of productState) {
-    const newStok = stokTotalById.get(stokId) ?? state.oldQty;
     const pricePatch = buildJualPricesAfterBeliChange(
       parseInt(String(state.prod.hargaBeli || 0), 10),
       state.newBeli,
@@ -361,18 +284,13 @@ export async function applyGrnStockPosting(
     );
     const uoms = uomsByProduct.get(stokId) || [];
     const uomCount = uoms.length || Number(state.prod.uomCount) || 1;
-    const stokDisplay = uomCount <= 1
-      ? `${Number.isInteger(newStok) ? newStok : Math.round(newStok * 1000) / 1000} ${String(state.prod.satuan || 'PCS')}`
-      : formatStockDualLabel(newStok, uoms);
     productBulk.push({
       updateOne: {
         filter: productFilterById(tid, stokId),
         update: {
           $set: {
             hargaBeli: state.newBeli,
-            stok: newStok,
-            stokDisplay,
-            uomCount: uoms.length || uomCount,
+            uomCount,
             ...pricePatch,
             updatedAt: now,
           },
@@ -385,20 +303,8 @@ export async function applyGrnStockPosting(
       productBulk as AnyBulkWriteOperation<Document>[],
       { ordered: false, ...txOpts(session) },
     );
-  }
-
-  if (kartuDocs.length) {
-    await db.collection('stok_kartu').insertMany(kartuDocs, txOpts(session));
-  }
-
-  // Idempotent lot stamp: skip insert if lots already exist for this GRN (replay-safe).
-  if (lotDocs.length && grn.id) {
-    const existingLots = await db.collection(INGREDIENT_LOTS_COLLECTION).countDocuments(
-      { tenantId: tid, grnId: String(grn.id) },
-      txOpts(session),
-    );
-    if (existingLots === 0) {
-      await db.collection(INGREDIENT_LOTS_COLLECTION).insertMany(lotDocs, txOpts(session));
+    for (const stokId of productState.keys()) {
+      await persistStokDisplay(db, tid, stokId, stokTotalById.get(stokId), session);
     }
   }
 
@@ -419,5 +325,5 @@ export async function applyGrnStockPosting(
     return s + Math.round(qty * harga);
   }, 0);
 
-  return { itemsFull, receivedTotal, lokasiSet, kartuDocs, lotDocs };
+  return { itemsFull, receivedTotal, lokasiSet, lotDocs };
 }

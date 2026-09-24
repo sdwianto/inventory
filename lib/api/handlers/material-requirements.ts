@@ -54,6 +54,8 @@ import {
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import { loadRecipePortionExceptionSet } from '@/lib/api/handlers/recipe-portion-exceptions';
 import type { HandlerContext } from '@/types/api/handler';
+import { CasConflictError, insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, isCasConflict } from '@/lib/api/cas';
+import { txOpts } from '@/lib/api/transaction';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -365,7 +367,6 @@ export async function handleMaterialRequirements({
     const tenantId = tenantIdForWrite(scopeAuth, mrpBody);
     const now = new Date();
     const actor = actorFields(auth);
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -375,19 +376,10 @@ export async function handleMaterialRequirements({
       note: `Dihitung dari rencana ${plan.noDokumen}`,
     });
 
-    // Batalkan draft MRP lama untuk plan yang sama (supersede).
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
-      withTenantFilter(scopeAuth, {
-        productionPlanId,
-        status: 'DRAFT',
-      }),
-      { $set: { status: 'CANCELLED', updatedAt: now } },
-    );
-
     const doc: MaterialRequirementDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
       tanggal: cookDateFromPlanTanggal(plan.tanggal),
@@ -405,14 +397,29 @@ export async function handleMaterialRequirements({
       createdBy: actor.userId,
       createdByName: actor.userName,
     };
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'MRP_CREATE',
-      entityType: 'material_requirement',
-      entityId: doc.id,
-      summary: `MRP ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.shortageCount} kekurangan)`,
-      ...auditActor(auth),
+    await insertWithAudit({
+      collection: MATERIAL_REQUIREMENTS_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        // Batalkan draft MRP lama untuk plan yang sama (supersede).
+        await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
+          withTenantFilter(scopeAuth, {
+            productionPlanId,
+            status: 'DRAFT',
+          }),
+          { $set: { status: 'CANCELLED', updatedAt: now } },
+          txOpts(session),
+        );
+        doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT, session);
+      },
+      audit: () => ({
+        tenantId,
+        action: 'MRP_CREATE',
+        entityType: 'material_requirement',
+        entityId: doc.id,
+        summary: `MRP ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.shortageCount} kekurangan)`,
+        ...auditActor(auth),
+      }),
     });
     return ok(projectMrp(doc as unknown as Record<string, unknown>));
   }
@@ -482,9 +489,10 @@ export async function handleMaterialRequirements({
         userName: actor.userName,
         note: `Dihitung ulang ${acuanNote}`,
       });
-      await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id: existing.id }),
-        {
+      const conflict = await casUpdateWithAudit({
+        collection: MATERIAL_REQUIREMENTS_COLLECTION,
+        filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+        update: {
           $set: {
             lines: built.lines,
             summary: built.summary,
@@ -498,18 +506,19 @@ export async function handleMaterialRequirements({
             updatedAt: now,
           },
         },
-      );
+        audit: {
+          tenantId: existing.tenantId,
+          action: 'MRP_REGENERATE',
+          entityType: 'material_requirement',
+          entityId: existing.id,
+          summary: `MRP ${existing.noDokumen} dihitung ulang ${acuanNote}`,
+          ...auditActor(auth),
+        },
+      });
+      if (conflict) return conflict;
       const saved = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id: existing.id }),
       );
-      await writeAuditLog(db, {
-        tenantId: existing.tenantId,
-        action: 'MRP_REGENERATE',
-        entityType: 'material_requirement',
-        entityId: existing.id,
-        summary: `MRP ${existing.noDokumen} dihitung ulang ${acuanNote}`,
-        ...auditActor(auth),
-      });
       return ok({
         mode: 'recalculate',
         mrp: projectMrp(saved as Record<string, unknown>),
@@ -517,32 +526,6 @@ export async function handleMaterialRequirements({
       });
     }
 
-    // create | supersede → dokumen baru DRAFT; supersede batalkan yang lama
-    if (decision.mode === 'supersede' && existing) {
-      const cancelHistory = appendDocHistory(existing.history, {
-        at: now,
-        fromStatus: existing.status,
-        toStatus: 'CANCELLED',
-        userId: actor.userId,
-        userName: actor.userName,
-        note: 'Diganti MRP baru (hitung ulang acuan porsi)',
-      });
-      await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id: existing.id }),
-        { $set: { status: 'CANCELLED', history: cancelHistory, updatedAt: now } },
-      );
-    }
-
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
-      withTenantFilter(scopeAuth, {
-        productionPlanId,
-        status: 'DRAFT',
-        ...(existing ? { id: { $ne: existing.id } } : {}),
-      }),
-      { $set: { status: 'CANCELLED', updatedAt: now } },
-    );
-
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -556,7 +539,7 @@ export async function handleMaterialRequirements({
     const doc: MaterialRequirementDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
       tanggal: cookDateFromPlanTanggal(plan.tanggal),
@@ -574,17 +557,54 @@ export async function handleMaterialRequirements({
       createdBy: actor.userId,
       createdByName: actor.userName,
     };
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'MRP_REGENERATE',
-      entityType: 'material_requirement',
-      entityId: doc.id,
-      summary: existing
-        ? `MRP ${doc.noDokumen} menggantikan ${existing.noDokumen} (${doc.summary.shortageCount} kekurangan)`
-        : `MRP ${doc.noDokumen} dibuat ulang dari ${plan.noDokumen}`,
-      ...auditActor(auth),
-    });
+    try {
+      await insertWithAudit({
+        collection: MATERIAL_REQUIREMENTS_COLLECTION,
+        doc,
+        before: async ({ db: txDb, session }) => {
+          // supersede: batalkan MRP lama (CAS) + draft lain untuk plan yang sama, atomik dengan MRP baru.
+          if (decision.mode === 'supersede' && existing) {
+            const cancelHistory = appendDocHistory(existing.history, {
+              at: now,
+              fromStatus: existing.status,
+              toStatus: 'CANCELLED',
+              userId: actor.userId,
+              userName: actor.userName,
+              note: 'Diganti MRP baru (hitung ulang acuan porsi)',
+            });
+            const superseded = await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
+              withTenantFilter(scopeAuth, casStatusFilter(existing)),
+              { $set: { status: 'CANCELLED', history: cancelHistory, updatedAt: now } },
+              txOpts(session),
+            );
+            if (superseded.matchedCount === 0) throw new CasConflictError();
+          }
+          await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateMany(
+            withTenantFilter(scopeAuth, {
+              productionPlanId,
+              status: 'DRAFT',
+              ...(existing ? { id: { $ne: existing.id } } : {}),
+            }),
+            { $set: { status: 'CANCELLED', updatedAt: now } },
+            txOpts(session),
+          );
+          doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.MATERIAL_REQUIREMENT, session);
+        },
+        audit: () => ({
+          tenantId,
+          action: 'MRP_REGENERATE',
+          entityType: 'material_requirement',
+          entityId: doc.id,
+          summary: existing
+            ? `MRP ${doc.noDokumen} menggantikan ${existing.noDokumen} (${doc.summary.shortageCount} kekurangan)`
+            : `MRP ${doc.noDokumen} dibuat ulang dari ${plan.noDokumen}`,
+          ...auditActor(auth),
+        }),
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
     return ok({
       mode: decision.mode,
       mrp: projectMrp(doc as unknown as Record<string, unknown>),
@@ -644,9 +664,10 @@ export async function handleMaterialRequirements({
       note: `Dihitung ulang ${acuanNote}`,
     });
 
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      {
+    const conflict = await casUpdateWithAudit({
+      collection: MATERIAL_REQUIREMENTS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: {
         $set: {
           lines: built.lines,
           summary: built.summary,
@@ -660,18 +681,19 @@ export async function handleMaterialRequirements({
           updatedAt: now,
         },
       },
-    );
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'MRP_RECALCULATE',
+        entityType: 'material_requirement',
+        entityId: id,
+        summary: `MRP ${existing.noDokumen} dihitung ulang`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'MRP_RECALCULATE',
-      entityType: 'material_requirement',
-      entityId: id,
-      summary: `MRP ${existing.noDokumen} dihitung ulang`,
-      ...auditActor(auth),
-    });
     return ok(projectMrp(saved as Record<string, unknown>));
   }
 
@@ -705,21 +727,23 @@ export async function handleMaterialRequirements({
       note: String(mrpBody.note || '').trim() || undefined,
     });
 
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: toStatus, history, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: MATERIAL_REQUIREMENTS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: toStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'MRP_STATUS',
+        entityType: 'material_requirement',
+        entityId: id,
+        summary: `MRP ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'MRP_STATUS',
-      entityType: 'material_requirement',
-      entityId: id,
-      summary: `MRP ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(projectMrp(saved as Record<string, unknown>));
   }
 
@@ -752,18 +776,20 @@ export async function handleMaterialRequirements({
       userName: actor.userName,
       note: 'Dibatalkan',
     });
-    await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'MRP_CANCEL',
-      entityType: 'material_requirement',
-      entityId: id,
-      summary: `MRP ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: MATERIAL_REQUIREMENTS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'MRP_CANCEL',
+        entityType: 'material_requirement',
+        entityId: id,
+        summary: `MRP ${existing.noDokumen} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
     return ok({ id, status: 'CANCELLED' });
   }
 

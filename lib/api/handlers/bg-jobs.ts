@@ -12,7 +12,7 @@ import {
 } from '@/lib/api/worker-auth';
 import { requireRole } from '@/lib/api/require-auth';
 import { runProcurementRepair } from '@/lib/api/procurement-repair-run';
-import { backfillProductGudangForTenant } from '@/lib/api/product-warehouse';
+import { backfillProductGudangForTenant } from '@/lib/stock-ledger';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleBgJobs({

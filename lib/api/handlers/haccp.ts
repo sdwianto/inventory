@@ -47,6 +47,7 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
+import { casConflict, casStatusFilter, insertWithAudit } from '@/lib/api/cas';
 
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
 
@@ -309,7 +310,6 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
 
     const actor = auditActor(auth);
     const now = new Date();
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.HACCP_RESULT);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -322,7 +322,7 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
     const doc: HaccpResultDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       templateId: template.id,
       templateKode: template.kode,
       templateNama: template.nama,
@@ -353,21 +353,27 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       createdByName: actor.userName,
     };
     try {
-      await db.collection(HACCP_RESULTS_COLLECTION).insertOne(doc);
+      await insertWithAudit({
+        collection: HACCP_RESULTS_COLLECTION,
+        doc,
+        before: async ({ db: txDb, session }) => {
+          doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.HACCP_RESULT, session);
+        },
+        audit: () => ({
+          tenantId,
+          action: 'HACCP_RESULT_CREATE',
+          entityType: 'haccp_result',
+          entityId: doc.id,
+          summary: `HACCP ${doc.noDokumen} · batch ${doc.batchNo || doc.productionBatchId}`,
+          ...actor,
+        }),
+      });
     } catch (e: unknown) {
       if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
         return err('Nomor dokumen HACCP bentrok, coba lagi', 409);
       }
       throw e;
     }
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'HACCP_RESULT_CREATE',
-      entityType: 'haccp_result',
-      entityId: doc.id,
-      summary: `HACCP ${doc.noDokumen} · batch ${doc.batchNo || doc.productionBatchId}`,
-      ...actor,
-    });
 
     // ADR-004 P0D: HOLD saat kegagalan disimpan (termasuk DRAFT).
     const hold = await applyHaccpHoldToBatch(db, {
@@ -548,8 +554,8 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
       userId: actor.userId,
       userName: actor.userName,
     });
-    await db.collection(HACCP_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const casRes = await db.collection(HACCP_RESULTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casStatusFilter(existing)),
       {
         $set: {
           status: toStatus,
@@ -560,6 +566,7 @@ export async function handleHaccp(ctx: HandlerContext): Promise<NextResponse | n
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const saved = await db.collection(HACCP_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );

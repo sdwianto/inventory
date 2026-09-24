@@ -27,6 +27,7 @@ export default defineConfig({
       'tests/unit/**/*.test.ts',
       'tests/contract/**/*.test.ts',
       'tests/integration/execution/**/*.test.ts',
+      'tests/integration/stock-ledger/**/*.test.ts',
       'tests/e2e/execution/**/*.test.ts',
     ],
     globals: false,

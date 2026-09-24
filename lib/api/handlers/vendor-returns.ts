@@ -25,6 +25,7 @@ import { findInflightVendorReturnSibling } from '@/lib/api/vendor-return-infligh
 import { VENDOR_RETURNS_COLLECTION, vendorReturnLineKey, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import type { HandlerContext } from '@/types/api/handler';
 import type { JsonObject } from '@/types/json';
+import { casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, insertWithAudit } from '@/lib/api/cas';
 
 const MAX_PHOTOS = 5;
 const RTV_ROLES = RTV_CREATE_ROLES;
@@ -531,9 +532,10 @@ export async function handleVendorReturns({
     }
 
     const now = new Date();
-    const claim = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-      { id: doc.id, status: 'DRAFT' },
-      {
+    const submitConflict = await casUpdateWithAudit({
+      collection: VENDOR_RETURNS_COLLECTION,
+      filter: casEditFilter(doc),
+      update: {
         $set: {
           status: 'PENDING_APPROVAL',
           reason,
@@ -543,18 +545,17 @@ export async function handleVendorReturns({
           updatedAt: now,
         },
       },
-    );
-    if (claim.modifiedCount === 0) return err('Retur sudah tidak berstatus DRAFT', 400);
-
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'VENDOR_RETURN_SUBMITTED',
-      entityType: 'vendor_return',
-      entityId: doc.id,
-      summary: `Ajukan RTV ${doc.noReturn} untuk approval`,
-      userId: auth?.userId,
-      userName: auth?.name,
+      audit: {
+        tenantId,
+        action: 'VENDOR_RETURN_SUBMITTED',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: `Ajukan RTV ${doc.noReturn} untuk approval`,
+        userId: auth?.userId,
+        userName: auth?.name,
+      },
     });
+    if (submitConflict) return submitConflict;
 
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
     return ok(clean(fresh as JsonObject));
@@ -583,9 +584,10 @@ export async function handleVendorReturns({
 
     const now = new Date();
     const rejectReason = String(rtvBody.reason || '').trim() || null;
-    const claim = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-      { id: doc.id, status: 'PENDING_APPROVAL' },
-      {
+    const backConflict = await casUpdateWithAudit({
+      collection: VENDOR_RETURNS_COLLECTION,
+      filter: casStatusFilter(doc, 'PENDING_APPROVAL'),
+      update: {
         $set: {
           status: 'DRAFT',
           submittedAt: null,
@@ -596,18 +598,17 @@ export async function handleVendorReturns({
           updatedAt: now,
         },
       },
-    );
-    if (claim.modifiedCount === 0) return err('Retur sudah tidak menunggu approval', 400);
-
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'VENDOR_RETURN_RETURNED_TO_DRAFT',
-      entityType: 'vendor_return',
-      entityId: doc.id,
-      summary: `RTV ${doc.noReturn} kembali ke DRAFT${rejectReason ? `: ${rejectReason}` : ''}`,
-      userId: auth?.userId,
-      userName: auth?.name,
+      audit: {
+        tenantId,
+        action: 'VENDOR_RETURN_RETURNED_TO_DRAFT',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: `RTV ${doc.noReturn} kembali ke DRAFT${rejectReason ? `: ${rejectReason}` : ''}`,
+        userId: auth?.userId,
+        userName: auth?.name,
+      },
     });
+    if (backConflict) return backConflict;
 
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
     return ok(clean(fresh as JsonObject));
@@ -680,8 +681,8 @@ export async function handleVendorReturns({
     const { subTotal, total } = totalsFromItems(items);
     const now = new Date();
     const approver = rtvActor(auth, rtvBody);
-    await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-      { id: doc.id, status: 'PENDING_APPROVAL' },
+    const prep = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+      casEditFilter(doc),
       {
         $set: {
           reason,
@@ -692,6 +693,7 @@ export async function handleVendorReturns({
         },
       },
     );
+    if (prep.matchedCount === 0) return casConflict();
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id }) as VendorReturnDoc | null;
     if (!fresh) return err('Tidak ditemukan', 404);
     if (fresh.status !== 'PENDING_APPROVAL') {
@@ -709,18 +711,17 @@ export async function handleVendorReturns({
         approvedBy: approver,
         photos: rtvBody.photos,
       },
+      extraAudit: {
+        tenantId,
+        action: 'VENDOR_RETURN_APPROVED',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: `Setujui & post RTV ${doc.noReturn}`,
+        userId: auth?.userId,
+        userName: auth?.name,
+      },
     });
-    if (result.error) return err(String(result.error), 400);
-
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'VENDOR_RETURN_APPROVED',
-      entityType: 'vendor_return',
-      entityId: doc.id,
-      summary: `Setujui & post RTV ${doc.noReturn}`,
-      userId: auth?.userId,
-      userName: auth?.name,
-    });
+    if (result.error) return err(String(result.error), result.conflict ? 409 : 400);
 
     return ok(clean(result as JsonObject));
   }
@@ -858,7 +859,7 @@ export async function handleVendorReturns({
     const doc = stampTenantId(writeTid, {
       id: uuidv4(),
       tenantId: writeTid,
-      noReturn: await nextDocNumber(db, writeTid, 'RTV', 'RTV'),
+      noReturn: '',
       status: 'DRAFT',
       vendorTenantId: String(hutang.vendorTenantId || rtvBody.vendorTenantId || ''),
       supplierName: hutang.supplierName ? String(hutang.supplierName) : null,
@@ -881,7 +882,22 @@ export async function handleVendorReturns({
       createdBy: rtvActor(auth, rtvBody),
     }) as VendorReturnDoc;
 
-    await db.collection(VENDOR_RETURNS_COLLECTION).insertOne(doc);
+    await insertWithAudit({
+      collection: VENDOR_RETURNS_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noReturn = await nextDocNumber(txDb, writeTid, 'RTV', 'RTV', session);
+      },
+      audit: () => ({
+        tenantId: writeTid,
+        action: 'VENDOR_RETURN_CREATED',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: `Draft RTV ${doc.noReturn} invoice ${doc.noInvoice}`,
+        userId: auth?.userId,
+        userName: auth?.name,
+      }),
+    });
     return ok(clean({
       ...doc,
       skipped: mapped.skipped,
@@ -927,7 +943,8 @@ export async function handleVendorReturns({
       patch.subTotal = subTotal;
       patch.total = total;
     }
-    await db.collection(VENDOR_RETURNS_COLLECTION).updateOne({ id: doc.id }, { $set: patch });
+    const edited = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(casEditFilter(doc), { $set: patch });
+    if (edited.matchedCount === 0) return casConflict();
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
     return ok(clean(fresh as JsonObject));
   }

@@ -1,41 +1,12 @@
 /**
- * Unified stock mutation entrypoint (ADR-001 Phase 0).
- * Always updates stok_lokasi + stok_kartu + product.stok denorm.
+ * Adapter satu baris untuk postStockMovements (lib/stock-ledger).
+ * Always updates stok_lokasi + stok_kartu + product.stok denorm in the caller's session.
  */
 
 import type { ClientSession, Db } from 'mongodb';
-import { v4 as uuidv4 } from 'uuid';
-import {
-  adjustStokLokasi,
-  ensureStokLokasiRow,
-  syncProductStokFromLokasi,
-  parseLokasiKode,
-} from '@/lib/api/stok-lokasi';
-import {
-  getAvailableQtyAtLokasi,
-  shouldEnforceLedgerOnOutbound,
-} from '@/lib/api/stock-ledger';
-import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
-import { softPutawayBinOnWarehouseIn } from '@/lib/api/stok-bin-allocate';
-import { warehouseLabel } from '@/lib/api/warehouses';
-import { stampTenantId } from '@/lib/api/tenant-operational';
-import { txOpts } from '@/lib/api/transaction';
+import { postStockMovements, type StockActor, type StockLotPolicy, type StockSourceType } from '@/lib/stock-ledger';
 
-export type StockMutationSourceType =
-  | 'RELEASE'
-  | 'GRN'
-  | 'VENDOR_RETURN'
-  | 'VENDOR_RETURN_REJECTED'
-  | 'PENYESUAIAN'
-  | 'TRANSFER'
-  | 'MASTER_PRODUK'
-  | 'FP_ISSUE'
-  | 'FP_RESULT'
-  | 'FP_RESULT_WASTE'
-  | 'FP_DIST'
-  | 'FP_DIST_RETURN'
-  | 'FP_ADJUST'
-  | string;
+export type StockMutationSourceType = StockSourceType;
 
 export interface PostStockMutationInput {
   tenantId: string;
@@ -52,104 +23,55 @@ export interface PostStockMutationInput {
   uomId?: string;
   satuan?: string;
   session?: ClientSession;
+  /** Id dokumen sumber (kunci idempotensi bersama lineRef). */
+  sourceId: string;
+  /** Unik per dokumen sumber; default productId. */
+  lineRef?: string;
+  actor?: StockActor | null;
+  postingDate?: Date;
+  kartuExtra?: Record<string, unknown>;
+  lotPolicy?: StockLotPolicy;
 }
 
 export type PostStockMutationResult =
-  | { ok: true; qtyAfter: number; lokasiKode: string }
+  | { ok: true; qtyAfter: number; lokasiKode: string; kartuId: string; lot?: import('@/lib/stock-ledger').LotPostingResult }
   | { ok: false; error: string };
 
 export async function postStockMutation(
   db: Db,
   input: PostStockMutationInput,
 ): Promise<PostStockMutationResult> {
-  const tid = input.tenantId || 'default';
-  const lokasiKode = parseLokasiKode(input.warehouseKode);
-  const delta = Number(input.deltaQtyBase);
-  if (!Number.isFinite(delta) || delta === 0) {
-    return { ok: false, error: 'Qty mutasi stok tidak valid' };
-  }
   if (!input.productId || !input.noTransaksi) {
     return { ok: false, error: 'productId dan noTransaksi wajib' };
   }
-
-  await ensureStokLokasiRow(db, tid, input.productId, lokasiKode, input.session);
-
-  if (delta < 0 && shouldEnforceLedgerOnOutbound(input.sourceType)) {
-    const need = -delta;
-    const available = await getAvailableQtyAtLokasi(
-      db,
-      tid,
-      input.productId,
-      lokasiKode,
-      input.session,
-    );
-    if (available < need) {
-      return {
-        ok: false,
-        error: `Stok di lokasi ${lokasiKode} tidak cukup (sisa: ${available} — dibatasi saldo kartu stok)`,
-      };
-    }
-  }
-
-  const adj = await adjustStokLokasi(
-    db,
-    tid,
-    input.productId,
-    lokasiKode,
-    delta,
-    input.session,
-  );
-  if ('error' in adj && adj.error) {
-    return { ok: false, error: adj.error };
-  }
-
-  // W2-19/W2-20: soft bin OUT after warehouse qty succeeded — never fail mutation on shortfall.
-  if (delta < 0) {
-    await softConsumeBinOnWarehouseOut(
-      db,
-      tid,
-      input.productId,
-      lokasiKode,
-      -delta,
-      input.session,
-    );
-  }
-  // W2-21: soft default-bin putaway on IN — never fail mutation if no default bin.
-  if (delta > 0) {
-    await softPutawayBinOnWarehouseIn(
-      db,
-      tid,
-      input.productId,
-      lokasiKode,
-      delta,
-      input.session,
-    );
-  }
-
-  const qtyAfter = await syncProductStokFromLokasi(db, tid, input.productId, input.session);
-  const masuk = delta > 0 ? delta : 0;
-  const keluar = delta < 0 ? -delta : 0;
-  const lokasiLabel = `${lokasiKode} - ${warehouseLabel(lokasiKode)}`;
-
-  await db.collection('stok_kartu').insertOne(
-    stampTenantId(tid, {
-      id: uuidv4(),
-      stokId: input.productId,
-      lokasi: lokasiLabel,
-      lokasiKode,
-      tanggal: new Date(),
-      noTransaksi: input.noTransaksi,
-      keterangan: input.keterangan,
-      sourceType: input.sourceType,
-      masuk,
-      keluar,
+  const res = await postStockMovements(db, input.session, {
+    tenantId: input.tenantId || 'default',
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    noTransaksi: input.noTransaksi,
+    keterangan: input.keterangan,
+    postingDate: input.postingDate,
+    actor: input.actor,
+    lines: [{
+      lineRef: input.lineRef || input.productId,
+      productId: input.productId,
+      warehouseKode: input.warehouseKode,
+      deltaQtyBase: Number(input.deltaQtyBase),
+      unitCost: input.hargaSatuan,
       qtyEntered: input.qtyEntered,
       uomId: input.uomId,
       satuan: input.satuan,
-      hargaSatuan: input.hargaSatuan ?? 0,
-    }),
-    txOpts(input.session),
-  );
-
-  return { ok: true, qtyAfter, lokasiKode };
+      kartuExtra: input.kartuExtra,
+      lotPolicy: input.lotPolicy,
+    }],
+  });
+  if (!res.ok) return { ok: false, error: res.error };
+  const line = res.lines[0];
+  return {
+    ok: true,
+    qtyAfter: res.productStok[input.productId] ?? 0,
+    lokasiKode: line.lokasiKode,
+    kartuId: line.kartuId,
+    ...(line.lot ? { lot: line.lot } : {}),
+  };
 }

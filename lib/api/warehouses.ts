@@ -74,15 +74,6 @@ export function warehouseOptions() {
   }));
 }
 
-interface StokLokasiDoc {
-  id?: string;
-  tenantId: string;
-  stokId: string;
-  lokasiKode: string;
-  qty?: number;
-  updatedAt?: Date;
-}
-
 /** Pastikan master lokasi tenant punya semua gudang tetap (idempoten, aman dari race). */
 export async function ensureWarehousesForTenant(db: Db, tenantId: string | null | undefined): Promise<void> {
   const tid = tenantId || 'default';
@@ -114,42 +105,14 @@ export async function ensureWarehousesForTenant(db: Db, tenantId: string | null 
   }
 }
 
-/** Pindahkan stok legacy L001/L002 ke gudang baru (sekali per tenant). */
-export async function migrateLegacyStokLokasi(db: Db, tenantId: string | null | undefined): Promise<void> {
-  const tid = tenantId || 'default';
-  const col = db.collection<StokLokasiDoc>('stok_lokasi');
-  for (const [legacy, target] of Object.entries(LEGACY_LOKASI_MAP)) {
-    const legacyRows = await col.find({ tenantId: tid, lokasiKode: legacy }).toArray();
-    for (const row of legacyRows) {
-      const targetRow = await col.findOne({ tenantId: tid, stokId: row.stokId, lokasiKode: target });
-      const qty = parseFloat(String(row.qty)) || 0;
-      if (targetRow) {
-        await col.updateOne(
-          { tenantId: tid, stokId: row.stokId, lokasiKode: target },
-          { $inc: { qty }, $set: { updatedAt: new Date() } },
-        );
-      } else if (qty > 0) {
-        await col.insertOne({
-          id: uuidv4(),
-          tenantId: tid,
-          stokId: row.stokId,
-          lokasiKode: target,
-          qty,
-          updatedAt: new Date(),
-        });
-      }
-      await col.deleteOne({ tenantId: tid, stokId: row.stokId, lokasiKode: legacy });
-    }
-  }
-}
-
-export async function ensureAllTenantsWarehouses(db: Db): Promise<void> {
+/** Pastikan gudang tetap untuk semua tenant yang dikenal; mengembalikan daftar tenant. */
+export async function ensureAllTenantsWarehouses(db: Db): Promise<string[]> {
   const tenantIds = await db.collection('lokasi').distinct('tenantId') as string[];
   const productTenants = await db.collection('products').distinct('tenantId') as string[];
   const grnTenants = await db.collection('goods_receipts').distinct('tenantId') as string[];
   const all = [...new Set([...tenantIds, ...productTenants, ...grnTenants, 'sppg', 'default'].filter(Boolean))];
   for (const tid of all) {
     await ensureWarehousesForTenant(db, tid);
-    await migrateLegacyStokLokasi(db, tid);
   }
+  return all;
 }

@@ -6,11 +6,11 @@ vi.mock('uuid', () => ({
 
 const allocateStokBinSoft = vi.fn();
 
-vi.mock('@/lib/api/stok-bin-allocate', () => ({
+vi.mock('@/lib/stock-ledger/bin-allocate', () => ({
   allocateStokBinSoft: (...args: unknown[]) => allocateStokBinSoft(...args),
 }));
 
-import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
 import {
   repairStokBinMismatches,
   STOK_BIN_RECONCILE_REPORTS_COLLECTION,

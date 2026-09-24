@@ -13,6 +13,7 @@ import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } from '@/lib/api/journal-lines';
+import { CasConflictError, isCasConflict } from '@/lib/api/cas';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { logger } from '@/lib/api/logger';
@@ -388,73 +389,86 @@ async function syncExistingVendorHutangFromPayload(
   const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
   const settlement = resolveHutangSettlement(total, payload.jatuhTempo, txnDate);
 
-  await db.collection('hutang').updateOne(
-    { id: existing.id },
-    {
-      $set: {
+  try {
+    await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+      const res = await txDb.collection('hutang').updateOne(
+        {
+          id: existing.id,
+          status: existing.status ?? null,
+          approvalStatus: existing.approvalStatus ?? null,
+          terbayar: existing.terbayar ?? null,
+        },
+        {
+          $set: {
+            tenantId: tid,
+            referenceType: 'VENDOR_INVOICE',
+            supplierName: displayName,
+            vendorBillingSnapshot: billingSnap,
+            noInvoice: payload.noInvoice || existing.noInvoice,
+            noDO: payload.noDO || existing.noDO || null,
+            noSO: payload.noSO || existing.noSO || null,
+            noPO: payload.noPO || existing.noPO || null,
+            customerPoId: varianceCtx.customerPoId || existing.customerPoId || null,
+            deliveryId: payload.deliveryId || existing.deliveryId || null,
+            salesOrderId: payload.salesOrderId || existing.salesOrderId || null,
+            salesOrderTotal: parseInt(String(payload.salesOrderTotal || 0), 10) || existing.salesOrderTotal || null,
+            salesOrderSubTotal: parseInt(String(payload.salesOrderSubTotal || 0), 10) || existing.salesOrderSubTotal || null,
+            subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
+            ppn: parseInt(String(payload.ppn || 0), 10),
+            total,
+            terbayar: settlement.terbayar,
+            sisa: settlement.sisa,
+            status: settlement.status,
+            approvalStatus: settlement.approvalStatus,
+            paymentTerms,
+            items: invoiceItems.length ? invoiceItems : (existing.items || []),
+            matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
+            matchError: matchOk ? null : (match.error || null),
+            matchCode: matchOk ? null : (match.code || null),
+            matchGrnCount: match.grnCount || 0,
+            grnValue: match.grnValue || 0,
+            poEstimasiTotal: varianceCtx.poEstimasiTotal,
+            soTotal: varianceCtx.soTotal,
+            soSubTotal: varianceCtx.soSubTotal,
+            variancePoToSo: varianceCtx.variancePoToSo,
+            varianceSoToInvoice,
+            updatedAt: now,
+          },
+          $unset: {
+            paidExternalAt: '',
+            paidExternalBy: '',
+            paidExternalNote: '',
+            approvedAt: '',
+            approvedBy: '',
+            rejectedAt: '',
+            rejectedBy: '',
+            rejectReason: '',
+            matchOverride: '',
+            matchOverrideNote: '',
+            matchOverrideBy: '',
+          },
+        },
+        txOpts(session),
+      );
+      if (res.matchedCount === 0) throw new CasConflictError('Hutang berubah bersamaan (dibayar/di-review) — sinkron invoice diulang');
+      await writeAuditLog(txDb, {
         tenantId: tid,
-        referenceType: 'VENDOR_INVOICE',
-        supplierName: displayName,
-        vendorBillingSnapshot: billingSnap,
-        noInvoice: payload.noInvoice || existing.noInvoice,
-        noDO: payload.noDO || existing.noDO || null,
-        noSO: payload.noSO || existing.noSO || null,
-        noPO: payload.noPO || existing.noPO || null,
-        customerPoId: varianceCtx.customerPoId || existing.customerPoId || null,
-        deliveryId: payload.deliveryId || existing.deliveryId || null,
-        salesOrderId: payload.salesOrderId || existing.salesOrderId || null,
-        salesOrderTotal: parseInt(String(payload.salesOrderTotal || 0), 10) || existing.salesOrderTotal || null,
-        salesOrderSubTotal: parseInt(String(payload.salesOrderSubTotal || 0), 10) || existing.salesOrderSubTotal || null,
-        subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
-        ppn: parseInt(String(payload.ppn || 0), 10),
-        total,
-        terbayar: settlement.terbayar,
-        sisa: settlement.sisa,
-        status: settlement.status,
-        approvalStatus: settlement.approvalStatus,
-        paymentTerms,
-        items: invoiceItems.length ? invoiceItems : (existing.items || []),
-        matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
-        matchError: matchOk ? null : (match.error || null),
-        matchCode: matchOk ? null : (match.code || null),
-        matchGrnCount: match.grnCount || 0,
-        grnValue: match.grnValue || 0,
-        poEstimasiTotal: varianceCtx.poEstimasiTotal,
-        soTotal: varianceCtx.soTotal,
-        soSubTotal: varianceCtx.soSubTotal,
-        variancePoToSo: varianceCtx.variancePoToSo,
-        varianceSoToInvoice,
-        updatedAt: now,
-      },
-      $unset: {
-        paidExternalAt: '',
-        paidExternalBy: '',
-        paidExternalNote: '',
-        approvedAt: '',
-        approvedBy: '',
-        rejectedAt: '',
-        rejectedBy: '',
-        rejectReason: '',
-        matchOverride: '',
-        matchOverrideNote: '',
-        matchOverrideBy: '',
-      },
-    },
-  );
-
-  await writeAuditLog(db, {
-    tenantId: tid,
-    action: 'HUTANG_UPDATED',
-    entityType: 'hutang',
-    entityId: String(existing.id),
-    summary: `Hutang ${existing.noHutang} diperbarui dari invoice vendor`,
-    metadata: {
-      noInvoice: payload.noInvoice,
-      total,
-      matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
-      correctedFromGrn: invCorrection.corrected,
-    },
-  });
+        action: 'HUTANG_UPDATED',
+        entityType: 'hutang',
+        entityId: String(existing.id),
+        summary: `Hutang ${existing.noHutang} diperbarui dari invoice vendor`,
+        metadata: {
+          noInvoice: payload.noInvoice,
+          total,
+          matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
+          correctedFromGrn: invCorrection.corrected,
+        },
+      }, session);
+    });
+  } catch (e) {
+    if (isCasConflict(e)) return { error: e.message, conflict: true };
+    throw e;
+  }
 
   return {
     action: 'refreshed',
@@ -569,11 +583,11 @@ export async function createHutangFromVendorInvoice(
   const tanggal = payload.postedAt ? new Date(payload.postedAt) : now;
   const settlement = resolveHutangSettlement(total, payload.jatuhTempo, tanggal);
 
-  const noHutang = await nextDocNumber(db, tid, 'HUTANG', 'HT');
+  let noHutang = '';
 
   const hutang = stampTenantId(tid, {
     id: uuidv4(),
-    noHutang,
+    noHutang: '',
     noInvoice: payload.noInvoice,
     vendorInvoiceId: invoiceId,
     noDO: payload.noDO || null,
@@ -618,6 +632,8 @@ export async function createHutangFromVendorInvoice(
   });
 
   await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+    noHutang = await nextDocNumber(txDb, tid, 'HUTANG', 'HT', session);
+    hutang.noHutang = noHutang;
     await txDb.collection('hutang').insertOne(hutang, txOpts(session));
 
     const ppnAmt = parseInt(String(hutang.ppn || 0), 10);

@@ -9,6 +9,7 @@ import {
   DISTRIBUTION_ORDERS_COLLECTION,
   type DispatchDoc,
 } from '@/lib/food-production/distribution';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export const DIST_RETURN_FEFO_SHORTFALL_REPORTS_COLLECTION = 'dist_return_fefo_shortfall_reports';
 
@@ -40,7 +41,7 @@ export type DistReturnFefoShortfallReport = {
 function isRestoreShortfallLine(
   row: NonNullable<DispatchDoc['fefoRestore']>[number],
 ): boolean {
-  return Number(row.shortfall || 0) > 0.001;
+  return qtyGt(Number(row.shortfall || 0), 0);
 }
 
 export async function detectDistReturnFefoShortfalls(

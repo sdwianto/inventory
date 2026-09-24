@@ -237,7 +237,7 @@ export async function handleGoodsReceipts({
       asyncInvoice: grnBody.asyncInvoice !== false,
       receivedBy,
     });
-    if (posted.error) return err(posted.error, 400);
+    if (posted.error) return err(posted.error, posted.conflict ? 409 : 400);
 
     await invalidateDashboardSnapshot(db, tenantId);
 

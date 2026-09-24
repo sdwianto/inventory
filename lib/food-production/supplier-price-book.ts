@@ -1,3 +1,4 @@
+import { roundMoney } from '@/lib/stock-ledger/precision';
 /**
  * Supplier price book — ADR-001 Phase 5 / Sprint 23.
  * Multi-supplier catalogue harga beli untuk feed CHEAPER_SUPPLY.
@@ -27,7 +28,7 @@ export interface SupplierPriceBookDoc {
 export function normalizeHargaBeliBook(raw: unknown): number | { error: string } {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return { error: 'harga wajib > 0' };
-  return Math.round(n * 100) / 100;
+  return roundMoney(n);
 }
 
 export function isPriceBookEffective(

@@ -25,6 +25,7 @@ import {
 } from '@/lib/people/person-payment';
 import { PEOPLE_MANAGE_ROLES } from '@/lib/people/roles';
 import type { HandlerContext } from '@/types/api/handler';
+import { casConflict, casStatusFilter } from '@/lib/api/cas';
 
 const MANAGE_ROLES = PEOPLE_MANAGE_ROLES;
 
@@ -206,10 +207,11 @@ export async function handleBankTxn({
     const inbox = inboxRaw as unknown as BankTxnInboxDoc;
     if (inbox.status === 'MATCHED') return err('Mutasi sudah tercocokkan');
     if (inbox.status === 'IGNORED') return ok({ id, status: 'IGNORED', alreadyIgnored: true });
-    await db.collection(BANK_TXN_INBOX_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
+    const casRes = await db.collection(BANK_TXN_INBOX_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casStatusFilter(inbox)),
       { $set: { status: 'IGNORED' } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await writeAuditLog(db, {
       tenantId: inbox.tenantId,
       action: 'PERSON_PAYMENT_IGNORE',

@@ -1,3 +1,4 @@
+import { casConflict, casStatusFilter } from '@/lib/api/cas';
 /**
  * Kitchen Assurance API — ADR-002.
  * P1: Dashboard + exception Monitoring.
@@ -445,8 +446,8 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
       userName: actor.userName,
       note: String(b.note || '').trim() || undefined,
     });
-    await db.collection(KA_OBSERVATIONS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
+    const casRes = await db.collection(KA_OBSERVATIONS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casStatusFilter(existing)),
       {
         $set: {
           status: toStatus as KaObservationStatus,
@@ -458,6 +459,7 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action: 'KA_OBSERVATION_STATUS',
@@ -923,9 +925,11 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
 
     // W2-29 — soft-stamp pointer (dotted $set); never replace whole resolution / type
     const stamp = buildKaResolutionFollowUpStamp(doc);
+    // Transisi OPEN → IN_PROGRESS hanya bila case masih OPEN; stempel follow-up selalu ditulis.
+    let movedToInProgress = false;
     if (linkedCase.status === 'OPEN') {
-      await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id: linkedCase.id }),
+      const moved = await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
+        withTenantFilter(scopeAuth, casStatusFilter(linkedCase, 'OPEN')),
         {
           $set: {
             status: 'IN_PROGRESS',
@@ -942,7 +946,9 @@ export async function handleKitchenAssurance(ctx: HandlerContext): Promise<NextR
           },
         },
       );
-    } else {
+      movedToInProgress = moved.matchedCount > 0;
+    }
+    if (!movedToInProgress) {
       await db.collection(KA_SAFETY_CASES_COLLECTION).updateOne(
         withTenantFilter(scopeAuth, { id: linkedCase.id }),
         {

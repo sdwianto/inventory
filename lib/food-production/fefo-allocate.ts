@@ -3,6 +3,8 @@
  * Earliest expiry first; skip expired unless allowExpired.
  */
 
+import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
+
 export type FefoBatchCandidate = {
   id: string;
   batchNo?: string;
@@ -27,8 +29,8 @@ export type FefoAllocateResult = {
 };
 
 function remainingOf(b: FefoBatchCandidate): number {
-  const n = Number(b.qtyRemaining);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  const n = roundStockQty(b.qtyRemaining);
+  return n > 0 ? n : 0;
 }
 
 /** Sort copy: expiryDate ASC, then id for stability. */
@@ -51,7 +53,7 @@ export function allocateFefo(
     rejectFoodSafetyHold?: boolean;
   },
 ): FefoAllocateResult {
-  const need = Number(needQty);
+  const need = roundStockQty(needQty);
   if (!(need > 0)) {
     return { allocations: [], allocated: 0, shortfall: 0 };
   }
@@ -65,26 +67,27 @@ export function allocateFefo(
   let left = need;
 
   for (const b of ordered) {
-    if (left <= 0) break;
+    if (left <= 0 || isZeroQty(left)) break;
     if (rejectHold && String(b.foodSafetyStatus || '').toUpperCase() === 'HOLD') continue;
-    const rem = remainingOf(b);
-    if (rem <= 0) continue;
+    const rem = roundStockQty(remainingOf(b));
+    if (!(rem > 0)) continue;
     const exp = String(b.expiryDate || '').slice(0, 10);
     if (!allowExpired && /^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < asOfIso) continue;
 
-    const take = Math.min(rem, left);
+    const take = roundStockQty(Math.min(rem, left));
     allocations.push({
       batchId: b.id,
       batchNo: b.batchNo,
       expiryDate: exp,
       qty: take,
     });
-    left -= take;
+    left = roundStockQty(left - take);
   }
+  if (isZeroQty(left)) left = 0;
 
   return {
     allocations,
-    allocated: need - left,
+    allocated: roundStockQty(need - left),
     shortfall: left,
   };
 }
@@ -97,22 +100,22 @@ export function planFefoRestore(
   returnQty: number,
   allocations: FefoAllocation[],
 ): FefoAllocation[] {
-  const need = Number(returnQty);
+  const need = roundStockQty(returnQty);
   if (!(need > 0) || !allocations?.length) return [];
   let left = need;
   const out: FefoAllocation[] = [];
   for (const a of [...allocations].reverse()) {
-    if (left <= 0) break;
-    const avail = Number(a.qty) || 0;
+    if (left <= 0 || isZeroQty(left)) break;
+    const avail = roundStockQty(a.qty);
     if (!(avail > 0)) continue;
-    const take = Math.min(avail, left);
+    const take = roundStockQty(Math.min(avail, left));
     out.push({
       batchId: a.batchId,
       batchNo: a.batchNo,
       expiryDate: a.expiryDate,
       qty: take,
     });
-    left -= take;
+    left = roundStockQty(left - take);
   }
   return out;
 }

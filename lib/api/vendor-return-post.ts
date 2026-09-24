@@ -3,7 +3,8 @@
 import type { Db } from 'mongodb';
 import { getSalesApiKeyForVendor } from '@/lib/api/integration-links';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
-import { writeAuditLog } from '@/lib/api/audit-log';
+import { writeAuditLog, type AuditLogEntry } from '@/lib/api/audit-log';
+import { CasConflictError, isCasConflict } from '@/lib/api/cas';
 import { logger } from '@/lib/api/logger';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import { drainEnsureGoodsReturnCn, insertEnsureGoodsReturnCnOutbox, ensureGoodsReturnCnOutboxPending } from '@/lib/api/integration-outbox';
@@ -26,12 +27,15 @@ export async function postVendorReturn(
     doc,
     tenantId,
     body,
+    extraAudit,
   }: {
     doc: VendorReturnDoc;
     tenantId: string;
     body?: Record<string, unknown>;
+    /** Audit tambahan (mis. approval) yang harus ikut commit bersama posting. */
+    extraAudit?: AuditLogEntry;
   },
-): Promise<Record<string, unknown> & { error?: string }> {
+): Promise<Record<string, unknown> & { error?: string; conflict?: boolean }> {
   const isGrnReject = doc.source === 'grn-reject';
   const salesApiKey = await getSalesApiKeyForVendor(
     db,
@@ -47,12 +51,12 @@ export async function postVendorReturn(
     txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
       const now = new Date();
       const claim = await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: doc.id, status: 'PENDING_APPROVAL' },
+        { id: doc.id, status: 'PENDING_APPROVAL', updatedAt: doc.updatedAt ?? null },
         { $set: { status: 'POSTING', postingStartedAt: now, updatedAt: now } },
         txOpts(session),
       );
-      if (claim.modifiedCount === 0) {
-        throw new Error('Retur vendor harus berstatus PENDING_APPROVAL (sudah diajukan) sebelum diposting');
+      if (claim.matchedCount === 0) {
+        throw new CasConflictError('Retur vendor sudah berubah atau tidak lagi menunggu approval — muat ulang lalu coba lagi');
       }
 
       try {
@@ -120,6 +124,12 @@ export async function postVendorReturn(
             doc.noReturn,
             doc.items || [],
             session,
+            {
+              returnId: doc.id,
+              actor: body?.userId
+                ? { userId: String(body.userId), userName: body.userName ? String(body.userName) : undefined }
+                : null,
+            },
           );
       if (stock.error) throw new Error(stock.error);
 
@@ -204,7 +214,7 @@ export async function postVendorReturn(
           ? { userId: postedBy.userId, userName: postedBy.userName, role: body?.userRole ? String(body.userRole) : undefined }
           : null);
 
-      await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+      const finalized = await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
         { id: doc.id, status: 'POSTING' },
         {
           $set: {
@@ -225,6 +235,21 @@ export async function postVendorReturn(
         },
         txOpts(session),
       );
+      if (finalized.matchedCount === 0) throw new CasConflictError();
+
+      await writeAuditLog(txDb, {
+        tenantId,
+        action: 'VENDOR_RETURN_POSTED',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: isGrnReject
+          ? `Post RTV ${doc.noReturn} dari item ditolak GRN ${doc.noGRN || ''}`
+          : `Post RTV ${doc.noReturn} invoice ${doc.noInvoice}`,
+        metadata: { noReturn: doc.noReturn, noInvoice: doc.noInvoice, total: doc.total },
+        userId: postedBy.userId,
+        userName: postedBy.userName,
+      }, session);
+      if (extraAudit) await writeAuditLog(txDb, extraAudit, session);
 
       if (canSyncCn) {
         await insertEnsureGoodsReturnCnOutbox(
@@ -251,7 +276,7 @@ export async function postVendorReturn(
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { error: msg };
+    return { error: msg, ...(isCasConflict(e) ? { conflict: true } : {}) };
   }
 
   if (txResult && 'error' in txResult && txResult.error) {
@@ -260,19 +285,6 @@ export async function postVendorReturn(
 
   const posted = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id }) as VendorReturnDoc | null;
   if (!posted) return { error: 'Retur tidak ditemukan setelah posting' };
-
-  await writeAuditLog(db, {
-    tenantId,
-    action: 'VENDOR_RETURN_POSTED',
-    entityType: 'vendor_return',
-    entityId: doc.id,
-    summary: isGrnReject
-      ? `Post RTV ${doc.noReturn} dari item ditolak GRN ${doc.noGRN || ''}`
-      : `Post RTV ${doc.noReturn} invoice ${doc.noInvoice}`,
-    metadata: { noReturn: doc.noReturn, noInvoice: doc.noInvoice, total: doc.total },
-    userId: posted.postedBy?.userId,
-    userName: posted.postedBy?.userName,
-  });
 
   let cnSync: Record<string, unknown> | null = null;
   let jobId: string | null = null;

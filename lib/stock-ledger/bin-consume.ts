@@ -5,7 +5,8 @@
  */
 
 import type { ClientSession, Db } from 'mongodb';
-import { adjustStokBin, STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { adjustStokBin, STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
+import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 import { resolveDefaultBinKode } from '@/lib/api/warehouse-bins';
 import { isValidWarehouseKode, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { txOpts } from '@/lib/api/transaction';
@@ -42,7 +43,7 @@ export async function consumeStokBinSoft(
   qtyNeed: number,
   session?: ClientSession,
 ): Promise<ConsumeStokBinSoftResult> {
-  const need0 = Math.abs(Number(qtyNeed) || 0);
+  const need0 = Math.abs(roundStockQty(qtyNeed));
   if (!(need0 > 0) || !stokId) {
     return emptyResult(0, false);
   }
@@ -82,13 +83,13 @@ export async function consumeStokBinSoft(
     const takes: Array<{ binKode: string; qty: number }> = [];
 
     for (const row of sorted) {
-      if (need <= 0) break;
+      if (isZeroQty(need) || need < 0) break;
       const binKode = String(row.binKode || '');
       if (!binKode) continue;
-      const available = parseFloat(String(row.qty)) || 0;
+      const available = roundStockQty(row.qty);
       if (available <= 0) continue;
 
-      const take = Math.min(need, available);
+      const take = roundStockQty(Math.min(need, available));
       if (!(take > 0)) continue;
 
       const adj = await adjustStokBin(db, tid, stokId, wh, binKode, -take, session);
@@ -97,14 +98,14 @@ export async function consumeStokBinSoft(
         continue;
       }
 
-      allocated += take;
-      need -= take;
+      allocated = roundStockQty(allocated + take);
+      need = roundStockQty(need - take);
       takes.push({ binKode, qty: take });
     }
 
     return {
       allocated,
-      shortfall: Math.max(0, need0 - allocated),
+      shortfall: Math.max(0, roundStockQty(need0 - allocated)),
       skippedNoBins: false,
       takes,
     };
@@ -127,7 +128,7 @@ export async function softConsumeBinOnWarehouseOut(
   session?: ClientSession,
   consumeFn: SoftConsumeFn = consumeStokBinSoft,
 ): Promise<ConsumeStokBinSoftResult> {
-  const need = Math.abs(Number(qty) || 0);
+  const need = Math.abs(roundStockQty(qty));
   try {
     return await consumeFn(db, tenantId, stokId, warehouseKode, need, session);
   } catch {

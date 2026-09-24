@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 import { lineQtyToBase, legacyLineQtyToBase, pickBaseUom } from '@/lib/uom/conversion';
 import type { ProductUom } from '@/lib/uom/types';
 import { listProductUoms, listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { roundQty } from '@/lib/stock-ledger/precision';
 
 export type LineQtyInput = {
   qty?: number | string;
@@ -41,7 +42,7 @@ export function resolveLineQtyBaseFromUoms(
     if (!uom) return { error: 'Satuan produk tidak ditemukan (uomId)' };
     return {
       qty,
-      qtyBase: lineQtyToBase(qty, uom),
+      qtyBase: roundQty(lineQtyToBase(qty, uom)),
       uomId: uom.id,
       satuan: uom.satuan,
       factorToBase: uom.factorToBase,
@@ -53,7 +54,7 @@ export function resolveLineQtyBaseFromUoms(
     if (uom) {
       return {
         qty,
-        qtyBase: lineQtyToBase(qty, uom),
+        qtyBase: roundQty(lineQtyToBase(qty, uom)),
         uomId: uom.id,
         satuan: uom.satuan,
         factorToBase: uom.factorToBase,
@@ -63,7 +64,7 @@ export function resolveLineQtyBaseFromUoms(
   const base = pickBaseUom(uoms);
   return {
     qty,
-    qtyBase: legacyLineQtyToBase(qty),
+    qtyBase: roundQty(legacyLineQtyToBase(qty)),
     uomId: base?.id,
     satuan: base?.satuan || sat || undefined,
     factorToBase: base?.factorToBase ?? 1,
@@ -104,7 +105,7 @@ export async function sumQtyBaseByStokId(
     const uoms = uomMap.get(line.stokId) || [];
     const resolved = resolveLineQtyBaseFromUoms(line, uoms);
     if ('error' in resolved) return { error: resolved.error };
-    totals.set(line.stokId, (totals.get(line.stokId) || 0) + resolved.qtyBase);
+    totals.set(line.stokId, roundQty((totals.get(line.stokId) || 0) + resolved.qtyBase));
     byLine.push({ stokId: line.stokId, resolved });
   }
   return { totals, byLine };

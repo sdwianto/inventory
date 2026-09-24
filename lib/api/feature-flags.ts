@@ -13,25 +13,74 @@ export interface TenantFeatureFlags {
    * bukan opt-in bertahap.
    */
   foodSafetyHoldEnabled: boolean;
+  /** Fase 0.3 — opt-in per tenant, default mati sampai cutover. */
+  pblReferenceMode: boolean;
+  rlFromPoReference: boolean;
+  strictRecipeConversion: boolean;
+  lotQcRequired: boolean;
+  planStockReservation: boolean;
+  costingV2: boolean;
+  adjustmentApproval: boolean;
 }
+
+export type OptInFeatureFlag = keyof Pick<
+  TenantFeatureFlags,
+  | 'pblReferenceMode'
+  | 'rlFromPoReference'
+  | 'strictRecipeConversion'
+  | 'lotQcRequired'
+  | 'planStockReservation'
+  | 'costingV2'
+  | 'adjustmentApproval'
+>;
+
+export const OPT_IN_FEATURE_FLAGS: readonly OptInFeatureFlag[] = [
+  'pblReferenceMode',
+  'rlFromPoReference',
+  'strictRecipeConversion',
+  'lotQcRequired',
+  'planStockReservation',
+  'costingV2',
+  'adjustmentApproval',
+];
 
 export const DEFAULT_FEATURE_FLAGS: TenantFeatureFlags = {
   multiUomEnabled: true,
   offlineQueueEnabled: true,
   reportSnapshotsEnabled: true,
   foodSafetyHoldEnabled: true,
+  pblReferenceMode: false,
+  rlFromPoReference: false,
+  strictRecipeConversion: false,
+  lotQcRequired: false,
+  planStockReservation: false,
+  costingV2: false,
+  adjustmentApproval: false,
 };
 
 export function mergeFeatureFlags(raw?: Record<string, unknown> | null): TenantFeatureFlags {
   const src = (raw?.features && typeof raw.features === 'object'
     ? raw.features
     : raw) as Record<string, unknown> | undefined;
+  const optIn = Object.fromEntries(
+    OPT_IN_FEATURE_FLAGS.map((key) => [key, src?.[key] === true]),
+  ) as Pick<TenantFeatureFlags, OptInFeatureFlag>;
   return {
     multiUomEnabled: src?.multiUomEnabled !== false,
     offlineQueueEnabled: src?.offlineQueueEnabled !== false,
     reportSnapshotsEnabled: src?.reportSnapshotsEnabled !== false,
     foodSafetyHoldEnabled: src?.foodSafetyHoldEnabled !== false,
+    ...optIn,
   };
+}
+
+export async function isTenantFeatureEnabled(
+  db: Db,
+  tenantId: string,
+  flag: OptInFeatureFlag,
+): Promise<boolean> {
+  const flags = await getTenantFeatureFlags(db, tenantId);
+  return flags[flag] === true;
 }
 
 export async function getTenantFeatureFlags(

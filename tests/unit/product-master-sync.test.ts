@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/api/product-warehouse', () => ({
-  setProductWarehouseStock: vi.fn(async () => {}),
+vi.mock('@/lib/stock-ledger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/stock-ledger')>()),
+  setProductWarehouseStock: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('@/lib/api/apply-product-classification', () => ({
   applyInferredClassification: vi.fn(async () => ({})),

@@ -28,6 +28,7 @@ import {
   looksLikeProductionKeperluan,
   planDayWindowWib,
 } from '@/lib/food-production/production-keperluan';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export {
   isExcludedOperationalKeperluan,
@@ -500,7 +501,7 @@ export function isIssueLineMismatch(opts: {
   const issued = roundQty(Number(opts.qtyIssued) || 0);
   const remaining = roundQty(Number(opts.qtyRemaining) || 0);
   const onHand = Math.max(0, roundQty(Number(opts.qtyOnHand) || 0));
-  return issued > remaining || issued > onHand;
+  return qtyGt(issued, remaining) || qtyGt(issued, onHand);
 }
 
 /** Build reconciliation view for an issue's lines vs plan consumption + on-hand. */

@@ -6,11 +6,11 @@ vi.mock('uuid', () => ({
 
 const consumeStokBinSoft = vi.fn();
 
-vi.mock('@/lib/api/stok-bin-consume', () => ({
+vi.mock('@/lib/stock-ledger/bin-consume', () => ({
   consumeStokBinSoft: (...args: unknown[]) => consumeStokBinSoft(...args),
 }));
 
-import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
 import {
   repairStokBinGtMismatches,
   STOK_BIN_RECONCILE_REPORTS_COLLECTION,

@@ -3,7 +3,7 @@ import { ok, err, clean } from '@/lib/api/db';
 import { withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { isValidWarehouseKode, normalizeWarehouseKode, warehouseLabel } from '@/lib/api/warehouses';
 import { isValidBinKode, normalizeBinKode } from '@/lib/api/warehouse-bins';
-import { STOK_BIN_COLLECTION } from '@/lib/api/stok-bin';
+import { STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleStokBin({

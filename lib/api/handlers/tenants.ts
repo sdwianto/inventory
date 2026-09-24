@@ -254,6 +254,7 @@ export async function handleTenants({
     await db.collection('tenant_settings').insertOne(settings);
     await bootstrapTenantMasterData(db, tenantId, {
       includeProducts: createBody.seedDemoProducts === true,
+      actor: auth ? { userId: auth.userId, userName: auth.name || auth.email, role: auth.role } : null,
     });
     return ok(clean(settings));
   }

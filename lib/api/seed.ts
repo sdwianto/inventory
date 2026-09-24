@@ -8,10 +8,13 @@ import {
   REKENING_DEFAULTS,
   DEMO_PRODUCTS,
 } from './tenant-master';
-import { migrateStokLokasiFromProducts } from './stok-lokasi';
 import { ensureDefaultRenamedToSppg } from './migrate-tenant-sppg';
 import { ensureAllTenantsWarehouses } from './warehouses';
-import { backfillAllProductGudang } from './product-warehouse';
+import {
+  backfillAllProductGudang,
+  migrateLegacyStokLokasi,
+  migrateStokLokasiFromProducts,
+} from '@/lib/stock-ledger';
 import { normalizeUserEmail, userEmailFields } from './user-email';
 import { hasSystemFlag, setSystemFlag } from './system-meta';
 
@@ -110,7 +113,10 @@ async function runBootstrap(db: Db): Promise<void> {
   await migrateStokLokasiFromProducts(db);
   await ensureDefaultRenamedToSppg(db);
   await ensureDemoUsers(db);
-  await ensureAllTenantsWarehouses(db);
+  const tenantIds = await ensureAllTenantsWarehouses(db);
+  for (const tid of tenantIds) {
+    await migrateLegacyStokLokasi(db, tid);
+  }
   if (!(await hasSystemFlag(db, PRODUCT_GUDANG_BACKFILL_FLAG))) {
     await backfillAllProductGudang(db);
     await setSystemFlag(db, PRODUCT_GUDANG_BACKFILL_FLAG);

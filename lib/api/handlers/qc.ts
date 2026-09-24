@@ -56,6 +56,7 @@ import { FP_MANAGE_ROLES, FP_OPS_WRITE_ROLES } from '@/lib/food-production/roles
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import type { HandlerContext } from '@/types/api/handler';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
+import { casConflict, casEditFilter, casStatusFilter, insertWithAudit } from '@/lib/api/cas';
 
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
 
@@ -408,7 +409,6 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
 
     const actor = auditActor(auth);
     const now = new Date();
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.QC_RESULT);
     const status: QcResultStatus = saveNow ? 'COMPLETED' : 'DRAFT';
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
@@ -438,7 +438,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
     const doc: QcResultDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       templateId: template.id,
       templateKode: template.kode,
       templateNama: template.nama,
@@ -468,14 +468,20 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       createdBy: actor.userId,
       createdByName: actor.userName,
     };
-    await db.collection(QC_RESULTS_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: saveNow ? 'QC_RESULT_RECORD' : 'QC_RESULT_CREATE',
-      entityType: 'qc_result',
-      entityId: doc.id,
-      summary: `QC ${doc.noDokumen} (${template.kode})`,
-      ...auditActor(auth),
+    await insertWithAudit({
+      collection: QC_RESULTS_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.QC_RESULT, session);
+      },
+      audit: () => ({
+        tenantId,
+        action: saveNow ? 'QC_RESULT_RECORD' : 'QC_RESULT_CREATE',
+        entityType: 'qc_result',
+        entityId: doc.id,
+        summary: `QC ${doc.noDokumen} (${template.kode})`,
+        ...auditActor(auth),
+      }),
     });
 
     // ADR-004 P0F: HOLD / proposed hold saat kegagalan disimpan.
@@ -614,8 +620,8 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       note: 'Checklist finding disimpan',
     });
 
-    await db.collection(QC_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const casRes = await db.collection(QC_RESULTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casEditFilter(existing)),
       {
         $set: {
           items,
@@ -634,6 +640,7 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
         },
       },
     );
+    if (casRes.matchedCount === 0) return casConflict();
 
     const foodSafetyHold = await applyQcFoodSafetyOnSave(db, {
       tenantId: existing.tenantId,
@@ -736,10 +743,11 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       userName: actor.userName,
       note: String(qcBody.note || '').trim() || undefined,
     });
-    await db.collection(QC_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const casRes = await db.collection(QC_RESULTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casStatusFilter(existing)),
       { $set: { status: toStatus, history, updatedAt: now } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const saved = await db.collection(QC_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
@@ -779,10 +787,11 @@ export async function handleQc(ctx: HandlerContext): Promise<NextResponse | null
       userName: actor.userName,
       note: 'Dibatalkan',
     });
-    await db.collection(QC_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const casRes = await db.collection(QC_RESULTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casStatusFilter(existing)),
       { $set: { status: 'CANCELLED', history, updatedAt: now } },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     await writeAuditLog(db, {
       tenantId: existing.tenantId,
       action: 'QC_RESULT_CANCEL',

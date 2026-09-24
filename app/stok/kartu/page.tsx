@@ -18,6 +18,7 @@ import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { qtyEq } from '@/lib/stock-ledger/precision';
 
 const KARTU_COL_SPAN = 9;
 
@@ -84,7 +85,7 @@ export default function KartuStokPage() {
     : (data.ledgerSaldo ?? num(data.product?.stok));
   const stokMismatch = data.product
     && data.ledgerSaldo != null
-    && Math.abs(num(data.product.stok) - data.ledgerSaldo) > 1e-9;
+    && !qtyEq(num(data.product.stok), data.ledgerSaldo);
 
   const reconcile = async () => {
     if (!selectedProduct) return;

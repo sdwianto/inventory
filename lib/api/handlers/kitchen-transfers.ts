@@ -10,10 +10,9 @@ import {
 import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
-import { postStockMutation } from '@/lib/api/stock-mutation';
+import { postStockMovements, type PostedStockLine, type StockActor } from '@/lib/stock-ledger';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { relocateBatchesFefo } from '@/lib/food-production/transfer-fefo';
-import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold } from '@/lib/food-production/food-safety-exit-gate';
 import {
@@ -40,6 +39,7 @@ import {
 } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
+import { insertWithAudit, casConflict, casStatusFilter, casUpdateWithAudit } from '@/lib/api/cas';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -83,38 +83,46 @@ async function postXferStock(
   db: HandlerContext['db'],
   doc: KitchenTransferDoc,
   session: ClientSession,
-): Promise<{ error: string } | { ok: true }> {
-  for (const line of doc.lines) {
-    const qty = Number(line.qty);
-    if (!(qty > 0)) continue;
-    const out = await postStockMutation(db, {
-      tenantId: doc.tenantId,
-      productId: line.productId,
-      warehouseKode: doc.fromWarehouseKode,
-      deltaQtyBase: -qty,
-      sourceType: 'FP_XFER',
-      noTransaksi: doc.noDokumen,
-      keterangan: `XFR keluar ${doc.noDokumen} → ${doc.toKitchenNama || doc.toKitchenId}`,
-      satuan: line.satuan,
-      qtyEntered: qty,
-      session,
-    });
-    if (!out.ok) return { error: out.error || `Gagal stok keluar ${line.productId}` };
-    const inn = await postStockMutation(db, {
-      tenantId: doc.tenantId,
-      productId: line.productId,
-      warehouseKode: doc.toWarehouseKode,
-      deltaQtyBase: qty,
-      sourceType: 'FP_XFER',
-      noTransaksi: doc.noDokumen,
-      keterangan: `XFR masuk ${doc.noDokumen} ← ${doc.fromKitchenNama || doc.fromKitchenId}`,
-      satuan: line.satuan,
-      qtyEntered: qty,
-      session,
-    });
-    if (!inn.ok) return { error: inn.error || `Gagal stok masuk ${line.productId}` };
-  }
-  return { ok: true };
+  actor: StockActor,
+  postingDate: Date,
+): Promise<{ error: string } | { ok: true; lines: PostedStockLine[] }> {
+  const lines = doc.lines
+    .map((line, idx) => ({ line, idx, qty: Number(line.qty) }))
+    .filter(({ qty }) => qty > 0);
+  if (!lines.length) return { ok: true, lines: [] };
+  const posted = await postStockMovements(db, session, {
+    tenantId: doc.tenantId,
+    sourceType: 'FP_XFER',
+    sourceId: doc.id,
+    noTransaksi: doc.noDokumen,
+    keterangan: `XFR ${doc.noDokumen}`,
+    postingDate,
+    actor,
+    lines: lines.flatMap(({ line, idx, qty }) => [
+      {
+        lineRef: `${idx + 1}:OUT`,
+        productId: line.productId,
+        warehouseKode: doc.fromWarehouseKode,
+        deltaQtyBase: -qty,
+        satuan: line.satuan,
+        qtyEntered: qty,
+        keterangan: `XFR keluar ${doc.noDokumen} → ${doc.toKitchenNama || doc.toKitchenId}`,
+        // W2-13: lot bahan pindah FEFO bersama stok.
+        lotPolicy: { mode: 'RELOCATE' as const, toWarehouseKode: doc.toWarehouseKode },
+      },
+      {
+        lineRef: `${idx + 1}:IN`,
+        productId: line.productId,
+        warehouseKode: doc.toWarehouseKode,
+        deltaQtyBase: qty,
+        satuan: line.satuan,
+        qtyEntered: qty,
+        keterangan: `XFR masuk ${doc.noDokumen} ← ${doc.fromKitchenNama || doc.fromKitchenId}`,
+      },
+    ]),
+  });
+  if (!posted.ok) return { error: posted.error };
+  return { ok: true, lines: posted.lines };
 }
 
 export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -179,7 +187,6 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
     if (productErr) return err(productErr, 400);
     const actor = auditActor(auth);
     const now = new Date();
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.KITCHEN_TRANSFER);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -192,7 +199,7 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
     const doc: KitchenTransferDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       tanggal: String(xferBody.tanggal || '').trim() || new Date().toISOString().slice(0, 10),
       fromKitchenId: fromK.id,
       fromKitchenNama: fromK.nama,
@@ -212,14 +219,20 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
       createdBy: actor.userId,
       createdByName: actor.userName,
     };
-    await db.collection(KITCHEN_TRANSFERS_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'XFER_CREATE',
-      entityType: 'kitchen_transfer',
-      entityId: doc.id,
-      summary: `XFR ${doc.noDokumen}: ${fromK.nama} → ${toK.nama}`,
-      ...auditActor(auth),
+    await insertWithAudit({
+      collection: KITCHEN_TRANSFERS_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.KITCHEN_TRANSFER, session);
+      },
+      audit: () => ({
+        tenantId,
+        action: 'XFER_CREATE',
+        entityType: 'kitchen_transfer',
+        entityId: doc.id,
+        summary: `XFR ${doc.noDokumen}: ${fromK.nama} → ${toK.nama}`,
+        ...auditActor(auth),
+      }),
     });
     return ok(clean(doc as unknown as Record<string, unknown>));
   }
@@ -311,11 +324,28 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
           const fefoRelocate: Array<Record<string, unknown>> = [];
           const lotRelocate: Array<Record<string, unknown>> = [];
           if (!fresh.allocationOnly) {
-            const posted = await postXferStock(txDb, fresh, session!);
+            const posted = await postXferStock(txDb, fresh, session!, {
+              userId: actor.userId,
+              userName: actor.userName,
+              role: auth?.role,
+            }, now);
             if ('error' in posted) {
               throw Object.assign(new Error(posted.error), { httpStatus: 400 });
             }
-            // W2-12/W2-13: relocate FG batches + ingredient lots FEFO with the stock move.
+            for (const line of posted.lines) {
+              if (!line.lot) continue;
+              lotRelocate.push({
+                stokId: line.productId,
+                fromWarehouseKode: fresh.fromWarehouseKode,
+                toWarehouseKode: fresh.toWarehouseKode,
+                needQty: -line.deltaQtyBase,
+                allocated: line.lot.allocated,
+                shortfall: line.lot.shortfall,
+                skippedNoLots: line.lot.skippedNoLots,
+                allocations: line.lot.allocations,
+              });
+            }
+            // W2-12: relocate FG batches FEFO with the stock move.
             for (const line of fresh.lines) {
               const qty = Number(line.qty);
               if (!(qty > 0)) continue;
@@ -345,31 +375,6 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
                 skippedNoBatches: fefo.skippedNoBatches,
                 allocations: fefo.allocations,
               });
-              const lots = await relocateLotsFefo(
-                txDb,
-                {
-                  tenantId: fresh.tenantId,
-                  stokId: line.productId,
-                  fromWarehouseKode: fresh.fromWarehouseKode,
-                  toWarehouseKode: fresh.toWarehouseKode,
-                  needQty: qty,
-                  asOf: now,
-                  allowExpired: true,
-                  noTransaksi: fresh.noDokumen,
-                  xferId: fresh.id,
-                },
-                session,
-              );
-              lotRelocate.push({
-                stokId: lots.stokId,
-                fromWarehouseKode: lots.fromWarehouseKode,
-                toWarehouseKode: lots.toWarehouseKode,
-                needQty: lots.needQty,
-                allocated: lots.allocated,
-                shortfall: lots.shortfall,
-                skippedNoLots: lots.skippedNoLots,
-                allocations: lots.allocations,
-              });
             }
           }
 
@@ -383,8 +388,8 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
               ? 'Alokasi selesai (tanpa mutasi stok)'
               : 'Stok transfer diposting',
           });
-          await txDb.collection(KITCHEN_TRANSFERS_COLLECTION).updateOne(
-            withTenantFilter(scopeAuth, { id }),
+          const completed = await txDb.collection(KITCHEN_TRANSFERS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id, status: fresh.status, stockPostedAt: null }),
             {
               $set: {
                 status: 'COMPLETED',
@@ -397,13 +402,22 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
             },
             txOpts(session),
           );
+          if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+          await writeAuditLog(txDb, {
+            tenantId: existing.tenantId,
+            action: 'XFER_COMPLETE',
+            entityType: 'kitchen_transfer',
+            entityId: id,
+            summary: `XFR ${existing.noDokumen} selesai`,
+            ...auditActor(auth),
+          }, session);
         });
       } catch (e) {
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 400) {
           return err(e instanceof Error ? e.message : 'Gagal', 400);
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 409) {
-          return err('Dokumen berubah — muat ulang', 409);
+          return casConflict();
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 503) {
           return err(e instanceof Error ? e.message : 'Transaksi MongoDB wajib', 503);
@@ -414,14 +428,6 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
       const saved = await db.collection(KITCHEN_TRANSFERS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id }),
       );
-      await writeAuditLog(db, {
-        tenantId: existing.tenantId,
-        action: 'XFER_COMPLETE',
-        entityType: 'kitchen_transfer',
-        entityId: id,
-        summary: `XFR ${existing.noDokumen} selesai`,
-        ...auditActor(auth),
-      });
       return ok(clean(saved as Record<string, unknown>));
     }
 
@@ -436,21 +442,23 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
       userName: actor.userName,
       note: String(xferBody.note || '').trim() || undefined,
     });
-    await db.collection(KITCHEN_TRANSFERS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: toStatus, history, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: KITCHEN_TRANSFERS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: toStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'XFER_STATUS',
+        entityType: 'kitchen_transfer',
+        entityId: id,
+        summary: `XFR ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(KITCHEN_TRANSFERS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'XFER_STATUS',
-      entityType: 'kitchen_transfer',
-      entityId: id,
-      summary: `XFR ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(clean(saved as Record<string, unknown>));
   }
 
@@ -478,18 +486,20 @@ export async function handleKitchenTransfers(ctx: HandlerContext): Promise<NextR
       userName: actor.userName,
       note: 'Dibatalkan',
     });
-    await db.collection(KITCHEN_TRANSFERS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'XFER_CANCEL',
-      entityType: 'kitchen_transfer',
-      entityId: path[1],
-      summary: `XFR ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: KITCHEN_TRANSFERS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'XFER_CANCEL',
+        entityType: 'kitchen_transfer',
+        entityId: path[1],
+        summary: `XFR ${existing.noDokumen} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
     return ok({ id: path[1], status: 'CANCELLED' });
   }
 

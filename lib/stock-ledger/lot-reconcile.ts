@@ -10,7 +10,8 @@ import {
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
+import { consumeIngredientLotsFefo } from '@/lib/stock-ledger/lot-consume';
+import { STOCK_QTY_EPS, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export const INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION = 'ingredient_lot_reconcile_reports';
 
@@ -100,7 +101,7 @@ export async function detectIngredientLotMismatches(
     if (!(rem > 0)) continue;
     const key = `${productId}|${wh}`;
     const cur = byKey.get(key) || { productId, warehouseKode: wh, sum: 0 };
-    cur.sum += rem;
+    cur.sum = roundStockQty(cur.sum + rem);
     byKey.set(key, cur);
   }
 
@@ -108,9 +109,8 @@ export async function detectIngredientLotMismatches(
   for (const { productId, warehouseKode, sum } of byKey.values()) {
     if (mismatches.length >= limit) break;
     const lokasi = await getQtyStokLokasi(db, tid, productId, warehouseKode);
-    const stock = typeof lokasi === 'number' ? lokasi : Number(lokasi);
-    if (!Number.isFinite(stock)) continue;
-    if (sum > stock + 0.001) {
+    const stock = roundStockQty(lokasi);
+    if (sum > stock + STOCK_QTY_EPS) {
       lotVsStok += 1;
       mismatches.push({
         kind: 'LOT_VS_STOK_LOKASI',
@@ -202,8 +202,8 @@ export async function repairIngredientLotMismatches(
     }
 
     if (m.kind === 'LOT_VS_STOK_LOKASI' && m.productId && m.warehouseKode) {
-      const excess = Number(m.qtyRemaining || 0) - Number(m.stokLokasi || 0);
-      if (!(excess > 0.001)) continue;
+      const excess = roundStockQty(Number(m.qtyRemaining || 0) - Number(m.stokLokasi || 0));
+      if (!(excess > STOCK_QTY_EPS)) continue;
       const fefo = await consumeIngredientLotsFefo(db, {
         tenantId: tid,
         stokId: m.productId,

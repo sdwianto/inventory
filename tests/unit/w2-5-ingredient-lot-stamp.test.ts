@@ -8,7 +8,7 @@ import {
 import {
   detectIngredientLotMismatches,
   repairIngredientLotMismatches,
-} from '@/lib/api/ingredient-lot-reconcile';
+} from '@/lib/stock-ledger/lot-reconcile';
 
 vi.mock('@/lib/api/stok-lokasi', () => ({
   getQtyStokLokasi: vi.fn(async () => 5),

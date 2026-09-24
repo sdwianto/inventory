@@ -1,19 +1,26 @@
 /** Apply stok OUT per RTV line (qtyBase, sourceType VENDOR_RETURN) + FEFO lot consume. */
 
 import type { ClientSession, Db } from 'mongodb';
-import { postStockMutation } from '@/lib/api/stock-mutation';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
+import { postStockMovements, roundUnitCost, type StockActor, type StockMovementLine } from '@/lib/stock-ledger';
 import type { VendorReturnDoc, VendorReturnLine } from '@/types/vendor-return';
 
 export type VendorReturnLotConsume = NonNullable<VendorReturnDoc['lotConsume']>[number];
+
+/** Harga baris RTV per satuan input → harga per satuan dasar (kartu stok selalu satuan dasar). */
+export function vendorReturnUnitCostBase(harga: unknown, qty: number, qtyBase: number): number | undefined {
+  const h = Number(harga);
+  if (!Number.isFinite(h) || h <= 0 || !(qty > 0) || !(qtyBase > 0)) return undefined;
+  return roundUnitCost((h * qty) / qtyBase);
+}
 
 export async function applyVendorReturnStock(
   db: Db,
   tenantId: string,
   noReturn: string,
   items: VendorReturnLine[],
-  session?: ClientSession,
+  session: ClientSession | undefined,
+  ctx: { returnId: string; actor?: StockActor | null },
 ): Promise<{
   error?: string;
   items?: VendorReturnLine[];
@@ -22,10 +29,9 @@ export async function applyVendorReturnStock(
   const tid = tenantId || 'default';
   const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
   const nextItems: VendorReturnLine[] = [];
-  const lotConsume: VendorReturnLotConsume[] = [];
-  const now = new Date();
+  const movementLines: StockMovementLine[] = [];
 
-  for (const it of items) {
+  for (const [idx, it] of items.entries()) {
     const qty = parseFloat(String(it.qty)) || 0;
     if (qty <= 0) continue;
     const resolved = await resolveLineQtyBase(db, tid, it.localStokId, {
@@ -34,48 +40,19 @@ export async function applyVendorReturnStock(
       satuan: it.satuan,
     }, uomsCache);
     if ('error' in resolved) return { error: resolved.error };
-    const mut = await postStockMutation(db, {
-      tenantId: tid,
+
+    movementLines.push({
+      lineRef: `${idx + 1}:${it.lineId || it.invoiceLineId || it.localStokId}`,
       productId: it.localStokId,
       warehouseKode: it.gudangKode,
       deltaQtyBase: -resolved.qtyBase,
-      sourceType: 'VENDOR_RETURN',
-      noTransaksi: noReturn,
-      keterangan: `Retur vendor ${noReturn}`,
-      hargaSatuan: it.harga,
+      unitCost: vendorReturnUnitCostBase(it.harga, qty, resolved.qtyBase),
       qtyEntered: qty,
       uomId: resolved.uomId,
       satuan: resolved.satuan,
-      session,
+      // Soft FEFO — sama Issue: tanpa lot / shortfall tidak gagalkan RTV.
+      lotPolicy: { mode: 'FEFO_CONSUME', preferredLotNo: it.lotNo },
     });
-    if (!mut.ok) return { error: mut.error };
-
-    // Soft FEFO — sama Issue: tanpa lot / shortfall tidak gagalkan RTV.
-    const fefo = await consumeIngredientLotsFefo(
-      db,
-      {
-        tenantId: tid,
-        stokId: it.localStokId,
-        warehouseKode: it.gudangKode,
-        needQty: resolved.qtyBase,
-        asOf: now,
-        noDokumen: noReturn,
-        preferredLotNo: it.lotNo,
-      },
-      session,
-    );
-    lotConsume.push({
-      lineId: it.lineId,
-      invoiceLineId: it.invoiceLineId,
-      localStokId: it.localStokId,
-      warehouseKode: it.gudangKode,
-      needQty: fefo.needQty,
-      allocated: fefo.allocated,
-      shortfall: fefo.shortfall,
-      skippedNoLots: fefo.skippedNoLots,
-      allocations: fefo.allocations,
-    });
-
     nextItems.push({
       ...it,
       qty,
@@ -87,5 +64,28 @@ export async function applyVendorReturnStock(
     });
   }
   if (!nextItems.length) return { error: 'Tidak ada baris stok yang bisa dikeluarkan' };
+
+  const posted = await postStockMovements(db, session, {
+    tenantId: tid,
+    sourceType: 'VENDOR_RETURN',
+    sourceId: ctx.returnId,
+    noTransaksi: noReturn,
+    keterangan: `Retur vendor ${noReturn}`,
+    actor: ctx.actor,
+    lines: movementLines,
+  });
+  if (!posted.ok) return { error: posted.error };
+
+  const lotConsume: VendorReturnLotConsume[] = posted.lines.map((line, i) => ({
+    lineId: nextItems[i].lineId,
+    invoiceLineId: nextItems[i].invoiceLineId,
+    localStokId: line.productId,
+    warehouseKode: nextItems[i].gudangKode,
+    needQty: -line.deltaQtyBase,
+    allocated: line.lot?.allocated ?? 0,
+    shortfall: line.lot?.shortfall ?? -line.deltaQtyBase,
+    skippedNoLots: line.lot?.skippedNoLots ?? true,
+    allocations: line.lot?.allocations ?? [],
+  }));
   return { items: nextItems, lotConsume };
 }

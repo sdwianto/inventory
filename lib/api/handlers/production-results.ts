@@ -10,7 +10,7 @@ import {
 import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
-import { postStockMutation } from '@/lib/api/stock-mutation';
+import { postStockMovements, type StockActor, type StockMovementLine } from '@/lib/stock-ledger';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
   PRODUCTION_RESULTS_COLLECTION,
@@ -62,6 +62,7 @@ import {
   type ProductionBatchDoc,
 } from '@/lib/food-production/production-batch';
 import type { HandlerContext } from '@/types/api/handler';
+import { insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit } from '@/lib/api/cas';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -253,58 +254,72 @@ async function loadIssueGate(
 async function postResultStock(
   db: HandlerContext['db'],
   doc: ProductionResultDoc,
-  session?: ClientSession,
+  session: ClientSession | undefined,
+  actor: StockActor,
+  postingDate: Date,
 ): Promise<{ error: string } | { ok: true; postedLines: number; wastePostedQty: number }> {
-  let postedLines = 0;
   let wastePostedQty = 0;
-  for (const line of doc.lines) {
+  const inLines: StockMovementLine[] = [];
+  const wasteLines: StockMovementLine[] = [];
+  for (const [idx, line] of doc.lines.entries()) {
     const fgId = String(line.finishedGoodProductId || '').trim();
     const waste = Number(line.wastePorsi) || 0;
     const gross = resultLineGrossPorsi(line);
     if (!fgId || !(gross > 0)) continue; // MBG / empty FG — skip stock
-    if (!session) {
-      return {
-        error: 'Posting stok Result membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
-      };
-    }
+    const label = line.finishedGoodNama || line.finishedGoodKode || fgId;
     // W2-15: IN gross (actual + waste), then OUT waste as FP_RESULT_WASTE.
-    const posted = await postStockMutation(db, {
-      tenantId: doc.tenantId,
+    inLines.push({
+      lineRef: `${idx + 1}:${fgId}`,
       productId: fgId,
       warehouseKode: doc.warehouseKode,
       deltaQtyBase: gross,
-      sourceType: 'FP_RESULT',
-      noTransaksi: doc.noDokumen,
-      keterangan: `Hasil produksi ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || fgId}`,
       satuan: line.satuan,
       qtyEntered: gross,
-      session,
+      keterangan: `Hasil produksi ${doc.noDokumen} — ${label}`,
     });
-    if (!posted.ok) {
-      return { error: posted.error || `Gagal post stok ${fgId}` };
-    }
-    postedLines += 1;
-
     if (waste > 0) {
-      const wasteOut = await postStockMutation(db, {
-        tenantId: doc.tenantId,
+      wasteLines.push({
+        lineRef: `${idx + 1}:${fgId}`,
         productId: fgId,
         warehouseKode: doc.warehouseKode,
         deltaQtyBase: -waste,
-        sourceType: 'FP_RESULT_WASTE',
-        noTransaksi: doc.noDokumen,
-        keterangan: `Write-off waste HSL ${doc.noDokumen} — ${line.finishedGoodNama || line.finishedGoodKode || fgId}`,
         satuan: line.satuan,
         qtyEntered: waste,
-        session,
+        keterangan: `Write-off waste HSL ${doc.noDokumen} — ${label}`,
       });
-      if (!wasteOut.ok) {
-        return { error: wasteOut.error || `Gagal write-off waste ${fgId}` };
-      }
       wastePostedQty += waste;
     }
   }
-  return { ok: true, postedLines, wastePostedQty };
+  if (!inLines.length) return { ok: true, postedLines: 0, wastePostedQty: 0 };
+  if (!session) {
+    return {
+      error: 'Posting stok Result membutuhkan transaksi MongoDB (replica set). Jalankan mongod --replSet rs0',
+    };
+  }
+  const common = {
+    tenantId: doc.tenantId,
+    sourceId: doc.id,
+    noTransaksi: doc.noDokumen,
+    postingDate,
+    actor,
+  };
+  const posted = await postStockMovements(db, session, {
+    ...common,
+    sourceType: 'FP_RESULT',
+    keterangan: `Hasil produksi ${doc.noDokumen}`,
+    lines: inLines,
+  });
+  if (!posted.ok) return { error: posted.error };
+  if (wasteLines.length) {
+    const wasteOut = await postStockMovements(db, session, {
+      ...common,
+      sourceType: 'FP_RESULT_WASTE',
+      keterangan: `Write-off waste HSL ${doc.noDokumen}`,
+      lines: wasteLines,
+    });
+    if (!wasteOut.ok) return { error: wasteOut.error };
+  }
+  return { ok: true, postedLines: inLines.length, wastePostedQty };
 }
 
 async function maybeCompletePlan(
@@ -462,7 +477,6 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     const tenantId = tenantIdForWrite(scopeAuth, resultBody);
     const now = new Date();
     const actor = actorFields(auth);
-    const noDokumen = await nextFpDocNumber(db, tenantId, FP_DOC_TYPES.PRODUCTION_RESULT);
     const history: DocHistoryEntry[] = appendDocHistory([], {
       at: now,
       fromStatus: null,
@@ -475,7 +489,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     const doc: ProductionResultDoc = {
       id: uuidv4(),
       tenantId,
-      noDokumen,
+      noDokumen: '',
       productionPlanId: plan.id,
       productionPlanNo: plan.noDokumen,
       materialIssueId,
@@ -496,7 +510,21 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
     };
 
     try {
-      await db.collection(PRODUCTION_RESULTS_COLLECTION).insertOne(doc);
+      await insertWithAudit({
+        collection: PRODUCTION_RESULTS_COLLECTION,
+        doc,
+        before: async ({ db: txDb, session }) => {
+          doc.noDokumen = await nextFpDocNumber(txDb, tenantId, FP_DOC_TYPES.PRODUCTION_RESULT, session);
+        },
+        audit: () => ({
+          tenantId,
+          action: 'RESULT_CREATE',
+          entityType: 'production_result',
+          entityId: doc.id,
+          summary: `Result ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} FG)`,
+          ...auditActor(auth),
+        }),
+      });
     } catch (e) {
       if (isDuplicateKeyError(e)) {
         return err('Hasil untuk rencana ini sedang dibuat — muat ulang', 409);
@@ -504,14 +532,6 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       throw e;
     }
 
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'RESULT_CREATE',
-      entityType: 'production_result',
-      entityId: doc.id,
-      summary: `Result ${doc.noDokumen} dari ${plan.noDokumen} (${doc.summary.lineCount} FG)`,
-      ...auditActor(auth),
-    });
     return ok(project(doc as unknown as Record<string, unknown>));
   }
 
@@ -549,8 +569,8 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       warnings: existing.summary.warnings,
     };
     const now = new Date();
-    await db.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
+    const edited = await db.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
+      withTenantFilter(scopeAuth, casEditFilter(existing)),
       {
         $set: {
           lines: normalized,
@@ -562,6 +582,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
         },
       },
     );
+    if (edited.matchedCount === 0) return casConflict();
     const saved = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
@@ -635,7 +656,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             throw Object.assign(new Error(productErrTx), { httpStatus: 400 });
           }
 
-          const posted = await postResultStock(txDb, fresh, session);
+          const posted = await postResultStock(txDb, fresh, session, { ...actor, role: auth?.role }, now);
           if ('error' in posted) {
             throw Object.assign(new Error(posted.error), { httpStatus: 400 });
           }
@@ -668,8 +689,8 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             userName: actor.userName,
             note: String(resultBody.note || '').trim() || defaultNote,
           });
-          await txDb.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
-            withTenantFilter(scopeAuth, { id }),
+          const completed = await txDb.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
+            withTenantFilter(scopeAuth, { id, status: fresh.status, stockPostedAt: null }),
             {
               $set: {
                 status: 'COMPLETED',
@@ -683,6 +704,7 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             },
             txOpts(session),
           );
+          if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
 
           const batchDocs: ProductionBatchDoc[] = [];
           for (const line of fresh.lines) {
@@ -748,13 +770,23 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
           }
 
           await maybeCompletePlan(txDb, scopeAuth, fresh.productionPlanId, session);
+          await writeAuditLog(txDb, {
+            tenantId: existing.tenantId,
+            action: 'RESULT_COMPLETE',
+            entityType: 'production_result',
+            entityId: id,
+            summary: needsStock
+              ? `Result ${existing.noDokumen} selesai — stok FG masuk`
+              : `Result ${existing.noDokumen} selesai — MBG tanpa post stok FG`,
+            ...auditActor(auth),
+          }, session);
         });
       } catch (e) {
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 400) {
           return err(e instanceof Error ? e.message : 'Gagal selesaikan', 400);
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 409) {
-          return err('Dokumen berubah — muat ulang', 409);
+          return casConflict();
         }
         if (e && typeof e === 'object' && (e as { httpStatus?: number }).httpStatus === 503) {
           return err(e instanceof Error ? e.message : 'Transaksi MongoDB wajib', 503);
@@ -765,16 +797,6 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       const saved = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id }),
       );
-      await writeAuditLog(db, {
-        tenantId: existing.tenantId,
-        action: 'RESULT_COMPLETE',
-        entityType: 'production_result',
-        entityId: id,
-        summary: needsStock
-          ? `Result ${existing.noDokumen} selesai — stok FG masuk`
-          : `Result ${existing.noDokumen} selesai — MBG tanpa post stok FG`,
-        ...auditActor(auth),
-      });
       return ok(project(saved as Record<string, unknown>));
     }
 
@@ -786,21 +808,23 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       userName: actor.userName,
       note: String(resultBody.note || '').trim() || undefined,
     });
-    await db.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: { status: toStatus, history, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_RESULTS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: toStatus, history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'RESULT_STATUS',
+        entityType: 'production_result',
+        entityId: id,
+        summary: `Result ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     const saved = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'RESULT_STATUS',
-      entityType: 'production_result',
-      entityId: id,
-      summary: `Result ${existing.noDokumen}: ${existing.status} → ${toStatus}`,
-      ...auditActor(auth),
-    });
     return ok(project(saved as Record<string, unknown>));
   }
 
@@ -832,18 +856,20 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
       userName: actor.userName,
       note: 'Dibatalkan',
     });
-    await db.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: path[1] }),
-      { $set: { status: 'CANCELLED', history, updatedAt: now } },
-    );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'RESULT_CANCEL',
-      entityType: 'production_result',
-      entityId: path[1],
-      summary: `Result ${existing.noDokumen} dibatalkan`,
-      ...auditActor(auth),
+    const conflict = await casUpdateWithAudit({
+      collection: PRODUCTION_RESULTS_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
+      update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId,
+        action: 'RESULT_CANCEL',
+        entityType: 'production_result',
+        entityId: path[1],
+        summary: `Result ${existing.noDokumen} dibatalkan`,
+        ...auditActor(auth),
+      },
     });
+    if (conflict) return conflict;
     return ok({ id: path[1], status: 'CANCELLED' });
   }
 

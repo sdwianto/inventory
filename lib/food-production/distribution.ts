@@ -46,6 +46,7 @@ import {
   type ServicePointPorsiByKategori,
 } from '@/lib/food-production/service-point';
 import type { DeliveryArmada, DeliveryLoading } from '@/lib/logistics/delivery';
+import { qtyEq, qtyGt } from '@/lib/stock-ledger/precision';
 
 export const DISTRIBUTION_ORDERS_COLLECTION = 'distribution_orders';
 
@@ -238,7 +239,7 @@ export function isDistLineSettled(line: DispatchLine): boolean {
   const sent = roundQty(Number(line.qtyDikirim ?? line.qtyPorsi) || 0);
   const recv = roundQty(Number(line.qtyDiterima) || 0);
   const ret = roundQty(Number(line.qtyDikembalikan) || 0);
-  return Math.abs(roundQty(recv + ret) - sent) < 0.0001;
+  return qtyEq(recv + ret, sent);
 }
 
 export function allDistLinesSettled(lines: DispatchLine[]): boolean {
@@ -484,7 +485,7 @@ export function applyDistSettleLines(
 
     const recv = roundQty(Number(next.qtyDiterima) || 0);
     const ret = roundQty(Number(next.qtyDikembalikan) || 0);
-    if (Math.abs(roundQty(recv + ret) - sent) > 0.0001) {
+    if (!qtyEq(recv + ret, sent)) {
       const nama = line.servicePointNama || line.servicePointKode || line.servicePointId;
       return {
         error: `Titik "${nama}": diterima (${recv}) + dikembalikan (${ret}) harus = dikirim (${sent})`,
@@ -732,7 +733,7 @@ export function assertDistQtyWithinSource(input: {
       return `Baris alokasi tidak ada di sumber (${key || 'kosong'})`;
     }
     const avail = availByKey.get(key) || 0;
-    if (take > avail + 0.0001) {
+    if (qtyGt(take, avail)) {
       return `Alokasi melebihi sumber untuk ${key}: ${take} > ${avail}`;
     }
   }

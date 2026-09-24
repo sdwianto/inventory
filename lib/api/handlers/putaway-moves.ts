@@ -11,7 +11,8 @@ import {
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
-import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { CasConflictError, casEditFilter, casUpdateWithAudit, insertWithAudit, isCasConflict, casConflict } from '@/lib/api/cas';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { isValidWarehouseKode, normalizeWarehouseKode, warehouseLabel } from '@/lib/api/warehouses';
 import {
@@ -134,10 +135,9 @@ export async function handlePutawayMoves({
     const tanggal = putBody.tanggal ? new Date(putBody.tanggal) : now;
     if (Number.isNaN(tanggal.getTime())) return err('Tanggal tidak valid', 400);
 
-    const noPutaway = await nextDocNumber(db, tenantId, 'PA', 'PA');
     const doc = stampTenantId(tenantId, {
       id: uuidv4(),
-      noPutaway,
+      noPutaway: '',
       warehouseKode,
       warehouseNama: warehouseLabel(warehouseKode),
       tanggal,
@@ -148,7 +148,21 @@ export async function handlePutawayMoves({
       createdAt: now,
       updatedAt: now,
     });
-    await db.collection(PUTAWAY_MOVES_COLLECTION).insertOne(doc);
+    await insertWithAudit({
+      collection: PUTAWAY_MOVES_COLLECTION,
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noPutaway = await nextDocNumber(txDb, tenantId, 'PA', 'PA', session);
+      },
+      audit: () => ({
+        tenantId,
+        action: 'PUTAWAY_CREATE',
+        entityType: 'putaway_move',
+        entityId: doc.id,
+        summary: `Putaway ${doc.noPutaway} dibuat (${warehouseKode}, ${resolved.lines.length} baris)`,
+        ...auditActor(auth),
+      }),
+    });
     return ok(clean(doc));
   }
 
@@ -198,10 +212,20 @@ export async function handlePutawayMoves({
       update.tanggal = tanggal;
     }
 
-    await db.collection(PUTAWAY_MOVES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: existing.id, status: 'DRAFT' }),
-      { $set: update },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PUTAWAY_MOVES_COLLECTION,
+      filter: withTenantFilter(scopeAuth, casEditFilter(existing)),
+      update: { $set: update },
+      audit: {
+        tenantId,
+        action: 'PUTAWAY_UPDATE',
+        entityType: 'putaway_move',
+        entityId: existing.id,
+        summary: `Putaway ${existing.noPutaway} diubah (${resolved.lines.length} baris)`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     return ok(clean(await loadPutaway(db, scopeAuth, existing.id)));
   }
 
@@ -230,7 +254,7 @@ export async function handlePutawayMoves({
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const claim = await txDb.collection(PUTAWAY_MOVES_COLLECTION).updateOne(
-          { id: existing.id, status: 'DRAFT' },
+          casEditFilter(existing),
           {
             $set: {
               status: 'POSTED',
@@ -240,10 +264,10 @@ export async function handlePutawayMoves({
               updatedAt: now,
             },
           },
-          session ? { session } : {},
+          txOpts(session),
         );
-        if (claim.modifiedCount === 0) {
-          throw new Error('Putaway sudah diproses oleh user lain');
+        if (claim.matchedCount === 0) {
+          throw new CasConflictError('Putaway sudah diproses atau diubah user lain — muat ulang lalu coba lagi');
         }
         await postPutawayMoveBins(
           txDb,
@@ -251,25 +275,26 @@ export async function handlePutawayMoves({
           { warehouseKode, lines: resolved.lines, noPutaway: existing.noPutaway },
           session,
         );
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'PUTAWAY_POST',
+          entityType: 'putaway_move',
+          entityId: existing.id,
+          summary: `Putaway ${existing.noPutaway} diposting (${warehouseKode})`,
+          ...auditActor(auth),
+          metadata: {
+            noPutaway: existing.noPutaway,
+            warehouseKode,
+            lineCount: resolved.lines.length,
+          },
+        }, session);
       });
     } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
       const msg = e instanceof Error ? e.message : 'Gagal post putaway';
       return err(msg, 400);
     }
 
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'PUTAWAY_POST',
-      entityType: 'putaway_move',
-      entityId: existing.id,
-      summary: `Putaway ${existing.noPutaway} diposting (${warehouseKode})`,
-      ...auditActor(auth),
-      metadata: {
-        noPutaway: existing.noPutaway,
-        warehouseKode,
-        lineCount: resolved.lines.length,
-      },
-    });
     return ok(clean(await loadPutaway(db, scopeAuth, existing.id)));
   }
 
@@ -284,10 +309,20 @@ export async function handlePutawayMoves({
     if (existing.status !== 'DRAFT') return err('Hanya DRAFT yang bisa dibatalkan', 400);
 
     const now = new Date();
-    await db.collection(PUTAWAY_MOVES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id: existing.id, status: 'DRAFT' }),
-      { $set: { status: 'CANCELLED', cancelledAt: now, updatedAt: now } },
-    );
+    const conflict = await casUpdateWithAudit({
+      collection: PUTAWAY_MOVES_COLLECTION,
+      filter: withTenantFilter(scopeAuth, { id: existing.id, status: 'DRAFT' }),
+      update: { $set: { status: 'CANCELLED', cancelledAt: now, updatedAt: now } },
+      audit: {
+        tenantId: existing.tenantId || 'default',
+        action: 'PUTAWAY_CANCEL',
+        entityType: 'putaway_move',
+        entityId: existing.id,
+        summary: `Putaway ${existing.noPutaway} dibatalkan`,
+        ...auditActor(auth),
+      },
+    });
+    if (conflict) return conflict;
     return ok(clean(await loadPutaway(db, scopeAuth, existing.id)));
   }
 

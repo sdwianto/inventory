@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const peekMock = vi.fn(async () => 'LOT-FEFO-1');
-vi.mock('@/lib/food-production/ingredient-lot-consume', () => ({
+vi.mock('@/lib/stock-ledger/lot-consume', () => ({
   peekFefoLotNo: (...args: unknown[]) => peekMock(...args),
 }));
 

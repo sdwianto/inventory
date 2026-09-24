@@ -49,6 +49,7 @@ import { WEEKLY_MENU_PUBLISH_NOTE } from '@/lib/food-production/fp-flow';
 import { FP_DOC_TYPES, appendDocHistory, type DocHistoryEntry } from '@/lib/food-production/document';
 import { nextFpDocNumber } from '@/lib/food-production/document-number';
 import type { HandlerContext } from '@/types/api/handler';
+import { CasConflictError, casEditFilter, casUpdateWithAudit, insertWithAudit } from '@/lib/api/cas';
 
 interface WeeklyBody extends Record<string, unknown> {
   kitchenId?: string;
@@ -308,10 +309,12 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
     const tenantId = tenantIdForWrite(scopeAuth, weeklyBody);
     const status = weeklyPlanStatusFromDays(days);
 
-    async function persistExisting(id: string, nextDays: WeeklyMenuDay[]) {
-      await db.collection(WEEKLY_MENU_PLANS_COLLECTION).updateOne(
-        withTenantFilter(scopeAuth, { id }),
-        {
+    async function persistExisting(current: WeeklyMenuPlanDoc, nextDays: WeeklyMenuDay[]) {
+      const id = current.id;
+      const conflict = await casUpdateWithAudit({
+        collection: WEEKLY_MENU_PLANS_COLLECTION,
+        filter: withTenantFilter(scopeAuth, casEditFilter(current)),
+        update: {
           $set: {
             days: nextDays,
             status: weeklyPlanStatusFromDays(nextDays),
@@ -321,24 +324,25 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
             updatedByName: actor.userName,
           },
         },
-      );
+        audit: {
+          tenantId,
+          action: 'WEEKLY_MENU_PLAN_UPSERT',
+          entityType: 'weekly_menu_plan',
+          entityId: id,
+          summary: `Rencana menu minggu ${weekStart} disimpan`,
+          ...actor,
+        },
+      });
+      if (conflict) return conflict;
       const saved = await db.collection(WEEKLY_MENU_PLANS_COLLECTION).findOne(
         withTenantFilter(scopeAuth, { id }),
       ) as WeeklyMenuPlanDoc | null;
-      await writeAuditLog(db, {
-        tenantId,
-        action: 'WEEKLY_MENU_PLAN_UPSERT',
-        entityType: 'weekly_menu_plan',
-        entityId: id,
-        summary: `Rencana menu minggu ${weekStart} disimpan`,
-        ...actor,
-      });
       if (!saved) return err('Gagal menyimpan rencana menu', 500);
       return ok(presentWeeklyPayload(saved as unknown as Record<string, unknown>));
     }
 
     if (existing) {
-      return persistExisting(existing.id, days);
+      return persistExisting(existing, days);
     }
 
     const doc: WeeklyMenuPlanDoc = {
@@ -357,7 +361,18 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
       updatedByName: actor.userName,
     };
     try {
-      await db.collection(WEEKLY_MENU_PLANS_COLLECTION).insertOne(doc);
+      await insertWithAudit({
+        collection: WEEKLY_MENU_PLANS_COLLECTION,
+        doc,
+        audit: {
+          tenantId,
+          action: 'WEEKLY_MENU_PLAN_UPSERT',
+          entityType: 'weekly_menu_plan',
+          entityId: doc.id,
+          summary: `Rencana menu minggu ${weekStart} dibuat`,
+          ...actor,
+        },
+      });
     } catch (e: unknown) {
       if (e && typeof e === 'object' && (e as { code?: number }).code === 11000) {
         const raced = await db.collection(WEEKLY_MENU_PLANS_COLLECTION).findOne(
@@ -373,18 +388,10 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
         );
         const locked = lockedDayEditError(raced.days, days2, rpnById);
         if (locked) return err(locked, 409);
-        return persistExisting(raced.id, days2);
+        return persistExisting(raced, days2);
       }
       throw e;
     }
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'WEEKLY_MENU_PLAN_UPSERT',
-      entityType: 'weekly_menu_plan',
-      entityId: doc.id,
-      summary: `Rencana menu minggu ${weekStart} dibuat`,
-      ...actor,
-    });
     return ok(presentWeeklyPayload(doc as unknown as Record<string, unknown>));
   }
 
@@ -581,8 +588,8 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
           });
         }
 
-        await txDb.collection(WEEKLY_MENU_PLANS_COLLECTION).updateOne(
-          withTenantFilter(scopeAuth, { id: existing.id }),
+        const publishedRes = await txDb.collection(WEEKLY_MENU_PLANS_COLLECTION).updateOne(
+          withTenantFilter(scopeAuth, casEditFilter(existing)),
           {
             $set: {
               days: outDays,
@@ -594,6 +601,15 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
           },
           opts,
         );
+        if (publishedRes.matchedCount === 0) throw new CasConflictError();
+        await writeAuditLog(txDb, {
+          tenantId: existing.tenantId,
+          action: 'WEEKLY_MENU_PLAN_PUBLISH',
+          entityType: 'weekly_menu_plan',
+          entityId: existing.id,
+          summary: `Terbit ${outPublished.map((p) => p.productionPlanNo).join(', ')}`,
+          ...actor,
+        }, session);
         return { published: outPublished, days: outDays };
       });
       published = result.published;
@@ -606,14 +622,6 @@ export async function handleWeeklyMenuPlans(ctx: HandlerContext): Promise<NextRe
     const saved = await db.collection(WEEKLY_MENU_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id: existing.id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'WEEKLY_MENU_PLAN_PUBLISH',
-      entityType: 'weekly_menu_plan',
-      entityId: existing.id,
-      summary: `Terbit ${published.map((p) => p.productionPlanNo).join(', ')}`,
-      ...actor,
-    });
     return ok({
       ...presentWeeklyPayload((saved || { ...existing, days: nextDays }) as Record<string, unknown>),
       published,

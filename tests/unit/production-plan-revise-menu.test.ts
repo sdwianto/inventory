@@ -36,6 +36,11 @@ vi.mock('@/lib/api/tenant-master', () => ({
   tenantIdForWrite: () => 't1',
 }));
 
+vi.mock('@/lib/api/transaction', () => ({
+  runInTransactionOrFallback: async (fn: (c: { db: unknown }) => unknown) => fn({ db: mockDb() }),
+  txOpts: () => ({}),
+}));
+
 vi.mock('@/lib/api/audit-log', () => ({
   writeAuditLog: vi.fn(),
   auditActor: () => ({ userId: 'u1', userName: 'U' }),
@@ -135,6 +140,7 @@ describe('production-plan revise-menu change order', () => {
         action: 'PRODUCTION_PLAN_MENU_REVISE',
         summary: expect.stringMatching(/bahan serai habis di pasar/),
       }),
+      undefined,
     );
     expect(col('customer_purchase_orders').updateOne).not.toHaveBeenCalled();
     expect(col(MATERIAL_REQUIREMENTS_COLLECTION).updateOne).not.toHaveBeenCalled();

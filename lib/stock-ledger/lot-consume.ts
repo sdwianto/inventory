@@ -9,6 +9,7 @@ import {
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { allocateFefo, type FefoAllocation } from '@/lib/food-production/fefo-allocate';
+import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export type IngredientLotConsumeResult = {
   stokId: string;
@@ -85,7 +86,7 @@ export async function consumeIngredientLotsFefo(
   },
   session?: ClientSession | null,
 ): Promise<IngredientLotConsumeResult> {
-  const needQty = Number(input.needQty);
+  const needQty = roundStockQty(input.needQty);
   const empty: IngredientLotConsumeResult = {
     stokId: input.stokId,
     warehouseKode: input.warehouseKode,
@@ -157,8 +158,8 @@ export async function consumeIngredientLotsFefo(
     const lot = rows.find((r) => r.id === a.batchId);
     if (!lot) continue;
     const before = effectiveIngredientQtyRemaining(lot);
-    const after = Math.max(0, before - a.qty);
-    const status = after <= 0 ? 'CONSUMED' : lot.status === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
+    const after = Math.max(0, roundStockQty(before - a.qty));
+    const status = isZeroQty(after) ? 'CONSUMED' : lot.status === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
     await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
       { id: lot.id, tenantId: input.tenantId },
       {
@@ -183,8 +184,8 @@ export async function consumeIngredientLotsFefo(
     stokId: input.stokId,
     warehouseKode: input.warehouseKode,
     needQty,
-    allocated: needQty - left,
-    shortfall: left,
+    allocated: roundStockQty(needQty - left),
+    shortfall: roundStockQty(left),
     allocations: merged,
     skippedNoLots: false,
   };
@@ -214,7 +215,7 @@ export async function restoreIngredientLotsFromAllocations(
   },
   session?: ClientSession | null,
 ): Promise<IngredientLotRestoreResult> {
-  const needQty = (input.restores || []).reduce((s, a) => s + (Number(a.qty) || 0), 0);
+  const needQty = roundStockQty((input.restores || []).reduce((s, a) => s + roundStockQty(a.qty), 0));
   const empty: IngredientLotRestoreResult = {
     stokId: input.stokId,
     needQty,
@@ -230,7 +231,7 @@ export async function restoreIngredientLotsFromAllocations(
   const applied: FefoAllocation[] = [];
 
   for (const a of input.restores) {
-    const qty = Number(a.qty) || 0;
+    const qty = roundStockQty(a.qty);
     if (!(qty > 0) || !a.batchId) continue;
     const lot = await db.collection(INGREDIENT_LOTS_COLLECTION).findOne(
       { id: a.batchId, tenantId: input.tenantId },
@@ -239,14 +240,14 @@ export async function restoreIngredientLotsFromAllocations(
     if (!lot) continue;
 
     const before = effectiveIngredientQtyRemaining(lot);
-    const cap = Math.max(0, Number(lot.qty) || 0);
-    const after = Math.min(cap, before + qty);
-    const gained = after - before;
+    const cap = Math.max(0, roundStockQty(lot.qty));
+    const after = Math.min(cap, roundStockQty(before + qty));
+    const gained = roundStockQty(after - before);
     if (!(gained > 0)) continue;
 
     const exp = String(lot.expiryDate || '').slice(0, 10);
     const past = /^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today;
-    const status = after <= 0 ? 'CONSUMED' : past ? 'EXPIRED' : 'ACTIVE';
+    const status = isZeroQty(after) ? 'CONSUMED' : past ? 'EXPIRED' : 'ACTIVE';
 
     await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
       { id: lot.id, tenantId: input.tenantId },
@@ -264,7 +265,7 @@ export async function restoreIngredientLotsFromAllocations(
       },
       txOpts(session),
     );
-    restored += gained;
+    restored = roundStockQty(restored + gained);
     applied.push({
       batchId: a.batchId,
       batchNo: a.batchNo || lot.lotNo,
@@ -277,7 +278,7 @@ export async function restoreIngredientLotsFromAllocations(
     stokId: input.stokId,
     needQty,
     restored,
-    shortfall: Math.max(0, needQty - restored),
+    shortfall: Math.max(0, roundStockQty(needQty - restored)),
     allocations: applied,
   };
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('uuid', () => ({ v4: () => 'clone-lot-uuid-1' }));
 
-import { relocateLotsFefo } from '@/lib/food-production/transfer-lot-fefo';
+import { relocateLotsFefo } from '@/lib/stock-ledger/lot-relocate';
 
 type Lot = {
   id: string;

@@ -81,6 +81,12 @@ agenthub/agents/youtube/db
 # Local media uploads (tenant logos, etc.)
 storage/media/
 
+# Database lokal dev (data + skrip uji). Jangan ikut commit atau deploy.
+.devdb/
+
+# Laporan before/after migrasi (bisa berisi data tenant)
+scripts/migrations/reports/
+
 # Review Excel master produk (bisa berisi data tenant)
 docs/konversi/Review-Recipe-Bridge.xlsx
 docs/konversi/Review-Recipe-Bridge*.xlsx

@@ -8,28 +8,21 @@ import { requireRole, RELEASE_CREATE_ROLES, RELEASE_APPROVE_ROLES } from '@/lib/
 import { tenantIdForWrite, withTenantFilter, findMasterDoc, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
-import {
-  adjustStokLokasi,
-  ensureStokLokasiRow,
-  syncProductStokFromLokasi,
-} from '@/lib/api/stok-lokasi';
-import { getAvailableQtyAtLokasi } from '@/lib/api/stock-ledger';
+import { getAvailableQtyAtLokasi, postStockMovements, qtyLt } from '@/lib/stock-ledger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode, warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
 import { writeAuditLog } from '@/lib/api/audit-log';
-import { runInTransactionOrFallback } from '@/lib/api/transaction';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import type { AuthContext } from '@/types/auth';
 import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api/maintenance-resolve';
 import { tryAutoCompleteWrFromRelease } from '@/lib/api/maintenance-wr-loop';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { consumeBatchesFefo } from '@/lib/food-production/fefo-consume';
-import { consumeIngredientLotsFefo } from '@/lib/food-production/ingredient-lot-consume';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { assertFefoExitNotBlockedByHold, assertConsumeShortfallNotDueToHold } from '@/lib/food-production/food-safety-exit-gate';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
-import { softConsumeBinOnWarehouseOut } from '@/lib/api/stok-bin-consume';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import {
@@ -37,6 +30,7 @@ import {
   looksLikeProductionKeperluan,
 } from '@/lib/food-production/material-issue-reconcile';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
+import { casConflict, casEditFilter, casStatusFilter, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
 
 interface ReleaseItemInput {
   stokId?: string;
@@ -141,7 +135,7 @@ async function buildReleaseLineItems(
     const qtyBase = resolved.qtyBase;
     if (qtyBase <= 0) return { error: `Qty tidak valid: ${prodRow.nama}`, status: 400 };
     const avail = await getAvailableQtyAtLokasi(db, tenantId, prodRow.id, lokasiKode);
-    if (avail < qtyBase) {
+    if (qtyLt(avail, qtyBase)) {
       return {
         error: `Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`,
         status: 400,
@@ -307,10 +301,9 @@ export async function handleInventoryReleases({
     if ('error' in planResolved) return err(planResolved.error, 400);
 
     const submitNow = releaseBody.submit === true;
-    const noRelease = await nextDocNumber(db, tenantId, 'RL', 'RL');
     const doc = stampTenantId(tenantId, {
       id: uuidv4(),
-      noRelease,
+      noRelease: '',
       status: submitNow ? 'PENDING_APPROVAL' : 'DRAFT',
       tanggal: now,
       lokasiKode,
@@ -334,7 +327,23 @@ export async function handleInventoryReleases({
       submittedAt: submitNow ? now : null,
       createdAt: now,
     });
-    await db.collection('inventory_releases').insertOne(doc);
+    await insertWithAudit({
+      collection: 'inventory_releases',
+      doc,
+      before: async ({ db: txDb, session }) => {
+        doc.noRelease = await nextDocNumber(txDb, tenantId, 'RL', 'RL', session);
+      },
+      audit: () => ({
+        tenantId,
+        action: 'INVENTORY_RELEASE_CREATE',
+        entityType: 'inventory_release',
+        entityId: String(doc.id),
+        summary: `Release ${doc.noRelease} dibuat (${doc.status})`,
+        userId: auth.userId,
+        userName: auth.name || auth.email || 'System',
+        metadata: { noRelease: doc.noRelease, lokasiKode, itemCount: lineItems.length },
+      }),
+    });
 
     if (releaseBody.maintenanceRequestId) {
       const wr = await loadWrById(db, scopeAuth, String(releaseBody.maintenanceRequestId));
@@ -434,13 +443,14 @@ export async function handleInventoryReleases({
       unset.rejectReason = '';
     }
 
-    await db.collection('inventory_releases').updateOne(
-      { id: doc.id },
+    const edited = await db.collection('inventory_releases').updateOne(
+      casEditFilter(doc),
       {
         $set: patch,
         ...(Object.keys(unset).length ? { $unset: unset } : {}),
       },
     );
+    if (edited.matchedCount === 0) return casConflict();
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
@@ -465,10 +475,11 @@ export async function handleInventoryReleases({
       );
     }
     const now = new Date();
-    await db.collection('inventory_releases').updateOne(
-      { id: doc.id },
-      { $set: { status: 'PENDING_APPROVAL', submittedAt: now } },
+    const submitted = await db.collection('inventory_releases').updateOne(
+      casStatusFilter(doc, 'DRAFT'),
+      { $set: { status: 'PENDING_APPROVAL', submittedAt: now, updatedAt: now } },
     );
+    if (submitted.matchedCount === 0) return casConflict();
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
@@ -544,7 +555,7 @@ export async function handleInventoryReleases({
           },
           session ? { session } : {},
         );
-        if (claim.modifiedCount === 0) throw new Error('Release sudah diproses oleh approver lain');
+        if (claim.modifiedCount === 0) throw new CasConflictError('Release sudah diproses oleh approver lain');
 
         const fefoLines: Array<{
           stokId: string;
@@ -563,27 +574,8 @@ export async function handleInventoryReleases({
           allocations: FefoAllocation[];
         }> = [];
 
-        for (const it of releaseLines) {
-          await ensureStokLokasiRow(txDb, tenantId, it.stokId, lokasiKode, session);
-          const available = await getAvailableQtyAtLokasi(txDb, tenantId, it.stokId, lokasiKode, session);
-          if (available < it.qtyBase) {
-            throw new Error(
-              `${it.nama}: stok tidak cukup (sisa: ${available} satuan dasar — dibatasi saldo kartu stok)`,
-            );
-          }
-          const adj = await adjustStokLokasi(txDb, tenantId, it.stokId, lokasiKode, -it.qtyBase, session);
-          if ('error' in adj && adj.error) throw new Error(`${it.nama}: ${adj.error}`);
-          // W2-20: soft bin OUT after warehouse OUT — never fail release on bin shortfall.
-          await softConsumeBinOnWarehouseOut(
-            txDb,
-            tenantId,
-            it.stokId,
-            lokasiKode,
-            it.qtyBase,
-            session,
-          );
-          await syncProductStokFromLokasi(txDb, tenantId, it.stokId, session);
-
+        const kartuAllocations = new Map<number, Record<string, unknown>>();
+        for (const [idx, it] of releaseLines.entries()) {
           // W2-1: FEFO consume production batches when present for this FG+warehouse.
           const fefo = await consumeBatchesFefo(
             txDb,
@@ -628,47 +620,43 @@ export async function handleInventoryReleases({
             allocations: fefo.allocations,
           });
 
-          // W2-6: FEFO consume ingredient lots (raw/ops stock) so Panduan Release SOH stays in sync.
-          const lotFefo = await consumeIngredientLotsFefo(
-            txDb,
-            {
-              tenantId,
-              stokId: it.stokId,
-              warehouseKode: lokasiKode,
-              needQty: it.qtyBase,
-              asOf: now,
-              issueId: doc.id,
-              noDokumen: doc.noRelease,
-            },
-            session,
-          );
-          ingredientLotLines.push({
-            stokId: it.stokId,
-            warehouseKode: lokasiKode,
-            needQty: lotFefo.needQty,
-            allocated: lotFefo.allocated,
-            shortfall: lotFefo.shortfall,
-            skippedNoLots: lotFefo.skippedNoLots,
-            allocations: lotFefo.allocations,
-          });
+          kartuAllocations.set(idx, { fefoAllocations: fefo.allocations });
+        }
 
-          await txDb.collection('stok_kartu').insertOne(stampTenantId(tenantId, {
-            id: uuidv4(),
-            stokId: it.stokId,
-            lokasi: `${lokasiKode} - ${doc.lokasiNama}`,
-            tanggal: now,
-            noTransaksi: doc.noRelease,
-            keterangan: `Release operasional: ${doc.keperluan}`,
-            sourceType: 'RELEASE',
-            masuk: 0,
-            keluar: it.qtyBase,
-            qtyEntered: it.qty,
+        const posted = await postStockMovements(txDb, session, {
+          tenantId,
+          sourceType: 'RELEASE',
+          sourceId: String(doc.id),
+          noTransaksi: String(doc.noRelease),
+          keterangan: `Release operasional: ${doc.keperluan}`,
+          postingDate: now,
+          actor: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
+          lines: releaseLines.map((it, idx) => ({
+            lineRef: `${idx + 1}:${it.stokId}`,
+            productId: String(it.stokId),
+            warehouseKode: lokasiKode,
+            deltaQtyBase: -it.qtyBase,
+            unitCost: Number(it.hargaBeli) > 0 ? Number(it.hargaBeli) : undefined,
+            qtyEntered: Number(it.qty) || undefined,
             uomId: it.uomId,
             satuan: it.satuan,
-            hargaSatuan: it.hargaBeli || 0,
-            fefoAllocations: fefo.allocations,
-            ingredientLotAllocations: lotFefo.allocations,
-          }), session ? { session } : {});
+            lokasiLabel: `${lokasiKode} - ${doc.lokasiNama}`,
+            kartuExtra: kartuAllocations.get(idx),
+            // W2-6: lot bahan ikut FEFO agar SOH Panduan Release tetap sinkron.
+            lotPolicy: { mode: 'FEFO_CONSUME' as const },
+          })),
+        });
+        if (!posted.ok) throw new Error(posted.error);
+        for (const line of posted.lines) {
+          ingredientLotLines.push({
+            stokId: line.productId,
+            warehouseKode: line.lokasiKode,
+            needQty: -line.deltaQtyBase,
+            allocated: line.lot?.allocated ?? 0,
+            shortfall: line.lot?.shortfall ?? -line.deltaQtyBase,
+            skippedNoLots: line.lot?.skippedNoLots ?? true,
+            allocations: line.lot?.allocations ?? [],
+          });
         }
 
         await txDb.collection('inventory_releases').updateOne(
@@ -682,21 +670,23 @@ export async function handleInventoryReleases({
           },
           session ? { session } : {},
         );
+
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'INVENTORY_RELEASE',
+          entityType: 'inventory_release',
+          entityId: String(doc.id),
+          summary: `Release ${doc.noRelease} disetujui`,
+          userId: auth.userId,
+          userName: auth.name || auth.email || 'System',
+          metadata: { noRelease: doc.noRelease, lokasiKode, itemCount: (doc.items || []).length },
+        }, session);
       });
     } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
       const msg = e instanceof Error ? e.message : 'Gagal approve release';
       return err(msg, 400);
     }
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'INVENTORY_RELEASE',
-      entityType: 'inventory_release',
-      entityId: String(doc.id),
-      summary: `Release ${doc.noRelease} disetujui`,
-      userId: auth.userId,
-      userName: auth.name || auth.email || 'System',
-      metadata: { noRelease: doc.noRelease, lokasiKode, itemCount: (doc.items || []).length },
-    });
     const posted = await loadRelease(db, scopeAuth, doc.id);
     const wrLoop = await tryAutoCompleteWrFromRelease(db, posted || doc);
     return ok(clean({ ...(posted || doc), wrLoop }));
@@ -712,17 +702,19 @@ export async function handleInventoryReleases({
     if (!doc) return err('Tidak ditemukan', 404);
     if (doc.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
     const now = new Date();
-    await db.collection('inventory_releases').updateOne(
-      { id: doc.id },
+    const rejected = await db.collection('inventory_releases').updateOne(
+      casStatusFilter(doc, 'PENDING_APPROVAL'),
       {
         $set: {
           status: 'REJECTED',
           rejectedBy: { userId: auth.userId, userName: auth.name || auth.email },
           rejectedAt: now,
           rejectReason: releaseBody.reason || 'Ditolak',
+          updatedAt: now,
         },
       },
     );
+    if (rejected.matchedCount === 0) return casConflict();
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
@@ -736,19 +728,28 @@ export async function handleInventoryReleases({
     if (!doc) return err('Tidak ditemukan', 404);
     if (doc.status !== 'DRAFT') return err('Hanya draft yang bisa dihapus', 400);
     if (!canEditReleaseDoc(auth, doc)) return err('Tidak berwenang menghapus draft ini', 403);
-    await db.collection('inventory_releases').deleteOne(
-      withTenantFilter(scopeAuth, { id: doc.id }),
-    );
-    await writeAuditLog(db, {
-      tenantId: doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody),
-      action: 'INVENTORY_RELEASE',
-      entityType: 'inventory_release',
-      entityId: String(doc.id),
-      summary: `Draft release ${doc.noRelease} dihapus`,
-      userId: auth.userId,
-      userName: auth.name || auth.email || 'System',
-      metadata: { noRelease: doc.noRelease, status: 'DRAFT', deleted: true },
-    });
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const removed = await txDb.collection('inventory_releases').deleteOne(
+          withTenantFilter(scopeAuth, { id: doc.id, status: 'DRAFT' }),
+          txOpts(session),
+        );
+        if (removed.deletedCount === 0) throw new CasConflictError();
+        await writeAuditLog(txDb, {
+          tenantId: doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody),
+          action: 'INVENTORY_RELEASE',
+          entityType: 'inventory_release',
+          entityId: String(doc.id),
+          summary: `Draft release ${doc.noRelease} dihapus`,
+          userId: auth.userId,
+          userName: auth.name || auth.email || 'System',
+          metadata: { noRelease: doc.noRelease, status: 'DRAFT', deleted: true },
+        }, session);
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
     return ok({ message: 'deleted' });
   }
 

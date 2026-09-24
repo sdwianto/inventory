@@ -131,10 +131,16 @@ async function resetVendorHutangToPendingReview(
   db: Db,
   hutang: HutangDoc,
   { total = null, items = null }: { total?: number | null; items?: HutangItemLike[] | null } = {},
-): Promise<void> {
+): Promise<boolean> {
   const nextTotal = total != null ? total : Number(hutang.total || 0);
-  await db.collection('hutang').updateOne(
-    { id: hutang.id },
+  // Jangan reset tagihan yang statusnya/pembayarannya berubah sejak dibaca (mis. pembayaran bersamaan).
+  const res = await db.collection('hutang').updateOne(
+    {
+      id: hutang.id,
+      status: hutang.status ?? null,
+      approvalStatus: hutang.approvalStatus ?? null,
+      terbayar: hutang.terbayar ?? null,
+    },
     {
       $set: {
         referenceType: 'VENDOR_INVOICE',
@@ -161,6 +167,7 @@ async function resetVendorHutangToPendingReview(
       },
     },
   );
+  return res.matchedCount > 0;
 }
 
 export async function fixHutangApprovalIfNeeded(
@@ -209,8 +216,7 @@ export async function fixHutangApprovalIfNeeded(
     return false;
   }
 
-  await resetVendorHutangToPendingReview(db, normalized, { total: correctedTotal, items: correctedItems });
-  return true;
+  return resetVendorHutangToPendingReview(db, normalized, { total: correctedTotal, items: correctedItems });
 }
 
 function calcGrnReceivedTotal(grn: GrnDoc): number {

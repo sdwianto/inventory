@@ -9,6 +9,7 @@ import {
   MATERIAL_ISSUES_COLLECTION,
   type MaterialIssueDoc,
 } from '@/lib/food-production/material-issue';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export const ISSUE_FEFO_SHORTFALL_REPORTS_COLLECTION = 'issue_fefo_shortfall_reports';
 
@@ -41,7 +42,7 @@ function isShortfallLine(
   row: NonNullable<MaterialIssueDoc['fefoConsume']>[number],
 ): boolean {
   if (row.skippedNoLots) return false;
-  return Number(row.shortfall || 0) > 0.001;
+  return qtyGt(Number(row.shortfall || 0), 0);
 }
 
 export async function detectIssueFefoShortfalls(

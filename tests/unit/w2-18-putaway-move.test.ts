@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/api/stok-bin', () => ({
+vi.mock('@/lib/stock-ledger/bin', () => ({
   adjustStokBin: vi.fn(),
 }));
 
-import { adjustStokBin } from '@/lib/api/stok-bin';
+import { adjustStokBin } from '@/lib/stock-ledger/bin';
 import {
   normalizePutawayLine,
   postPutawayMoveBins,

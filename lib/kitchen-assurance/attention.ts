@@ -36,6 +36,7 @@ import {
   toPillar,
   type KaPillar,
 } from '@/lib/kitchen-assurance/categories';
+import { qtyGt } from '@/lib/stock-ledger/precision';
 
 export type KaAttentionLevel = 'ATTENTION' | 'CRITICAL';
 
@@ -244,7 +245,7 @@ export async function collectAttentions(
       const line = c as { shortfall?: number; skippedNoLots?: boolean };
       if (line.skippedNoLots) continue;
       const sf = Number(line.shortfall || 0);
-      if (sf > 0.001) {
+      if (qtyGt(sf, 0)) {
         shortfallSum += sf;
         lineCount += 1;
       }
@@ -289,7 +290,7 @@ export async function collectAttentions(
       const line = c as { shortfall?: number; skippedNoBatches?: boolean };
       if (line.skippedNoBatches) continue;
       const sf = Number(line.shortfall || 0);
-      if (sf > 0.001) {
+      if (qtyGt(sf, 0)) {
         shortfallSum += sf;
         lineCount += 1;
       }
@@ -332,7 +333,7 @@ export async function collectAttentions(
     for (const c of restore) {
       const line = c as { shortfall?: number };
       const sf = Number(line.shortfall || 0);
-      if (sf > 0.001) {
+      if (qtyGt(sf, 0)) {
         shortfallSum += sf;
         lineCount += 1;
       }
@@ -411,7 +412,7 @@ export async function collectAttentions(
         const line = c as { shortfall?: number; skippedNoBatches?: boolean };
         if (line.skippedNoBatches) continue;
         const sf = Number(line.shortfall || 0);
-        if (sf > 0.001) {
+        if (qtyGt(sf, 0)) {
           shortfallSum += sf;
           lineCount += 1;
         }

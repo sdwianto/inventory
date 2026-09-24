@@ -2,6 +2,8 @@
  * W2-5 — Ingredient lots stamped on GRN POST (foundation for W2-6 Issue FEFO).
  */
 
+import { roundStockQty } from '@/lib/stock-ledger/precision';
+
 export const INGREDIENT_LOTS_COLLECTION = 'ingredient_lots';
 
 /** Default shelf life when GRN line / product has no expiry (days). */
@@ -104,11 +106,11 @@ export function effectiveIngredientQtyRemaining(
   b: Pick<IngredientLotDoc, 'qty' | 'status'> & { qtyRemaining?: number | null },
 ): number {
   if (b.qtyRemaining != null && Number.isFinite(Number(b.qtyRemaining))) {
-    return Math.max(0, Number(b.qtyRemaining));
+    return Math.max(0, roundStockQty(b.qtyRemaining));
   }
   if (b.status === 'CONSUMED') return 0;
-  const q = Number(b.qty);
-  return Number.isFinite(q) && q > 0 ? q : 0;
+  const q = roundStockQty(b.qty);
+  return q > 0 ? q : 0;
 }
 
 export function isIngredientExpired(expiryDate: string, asOf = new Date()): boolean {

@@ -30,6 +30,13 @@ export default function TenantSetupPage() {
       offlineQueueEnabled: true,
       reportSnapshotsEnabled: true,
       foodSafetyHoldEnabled: true,
+      pblReferenceMode: false,
+      rlFromPoReference: false,
+      strictRecipeConversion: false,
+      lotQcRequired: false,
+      planStockReservation: false,
+      costingV2: false,
+      adjustmentApproval: false,
     },
   });
   const [saving, setSaving] = useState(false);
@@ -54,6 +61,13 @@ export default function TenantSetupPage() {
           offlineQueueEnabled: true,
           reportSnapshotsEnabled: true,
           foodSafetyHoldEnabled: true,
+          pblReferenceMode: false,
+          rlFromPoReference: false,
+          strictRecipeConversion: false,
+          lotQcRequired: false,
+          planStockReservation: false,
+          costingV2: false,
+          adjustmentApproval: false,
           ...(settingsData.features as Record<string, boolean> | undefined),
         },
         periodLockedUntil: settingsData.periodLockedUntil
@@ -296,6 +310,27 @@ export default function TenantSetupPage() {
               />
               Food safety HOLD (blokir keluar)
             </label>
+            {([
+              ['pblReferenceMode', 'PBL acuan (tanpa mutasi stok)'],
+              ['rlFromPoReference', 'RL dari acuan PO'],
+              ['strictRecipeConversion', 'Konversi resep ketat'],
+              ['lotQcRequired', 'Lot wajib QC'],
+              ['planStockReservation', 'Cadangan stok rencana'],
+              ['costingV2', 'Costing v2'],
+              ['adjustmentApproval', 'Approval penyesuaian'],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.features?.[key] === true}
+                  onChange={(e) => setForm({
+                    ...form,
+                    features: { ...form.features, [key]: e.target.checked },
+                  })}
+                />
+                {label}
+              </label>
+            ))}
           </CardContent>
         </Card>
       )}

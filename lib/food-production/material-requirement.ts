@@ -31,6 +31,7 @@ import {
   expandLegacyKategoriPorsi,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
+import { roundQty } from '@/lib/stock-ledger/precision';
 
 /** Sisi resep tunggal → kontribusi qty bahan (belum di-round, belum diagregasi ke kode+satuan). */
 export type RecipeLineContribution = {
@@ -220,10 +221,7 @@ export function isMrpEditable(status: string): boolean {
   return status === 'DRAFT' || status === 'SUBMITTED';
 }
 
-export function roundQty(n: number, digits = 4): number {
-  const f = 10 ** digits;
-  return Math.round((n + Number.EPSILON) * f) / f;
-}
+export { roundQty };
 
 /**
  * Qty belanja/pengadaan — ceil sesuai resolusi satuan.

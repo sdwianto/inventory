@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isCatalogProductActive,
   pickLiveCatalogProduct,
+  pickSameSkuInTenant,
   attachLiveCatalogProducts,
 } from '@/lib/api/resolve-live-catalog-product';
 
@@ -77,5 +78,62 @@ describe('attachLiveCatalogProducts', () => {
     const map = await attachLiveCatalogProducts(db as never, 'sppg', rows);
     expect(map.get('old')?.id).toBe('live');
     expect(map.get('live')?.id).toBe('live');
+  });
+});
+
+describe('pickSameSkuInTenant', () => {
+  const foreignTempe = {
+    id: 'ff8fcd3e-eb6b-4f10-9738-9e38c89e544f',
+    kode: 'B711755',
+    nama: 'Tempe ',
+    vendorStokId: 'bd74b2cc-58ef-4260-94a9-db93bc280f8c',
+    aktif: true,
+  };
+
+  it('maps another tenant Tempe id to the local row with the same vendor stock id', () => {
+    const local = pickSameSkuInTenant(foreignTempe, [
+      {
+        id: 'a3e46b4e-4f2e-46ee-94a3-e06cfbe0c2d6',
+        kode: 'B711755',
+        nama: 'Tempe ',
+        vendorStokId: 'bd74b2cc-58ef-4260-94a9-db93bc280f8c',
+        aktif: true,
+      },
+      { id: 'other', kode: 'B711755', vendorStokId: 'different', aktif: true },
+    ]);
+    expect(local?.id).toBe('a3e46b4e-4f2e-46ee-94a3-e06cfbe0c2d6');
+  });
+
+  it('maps by masterProductId when stock id differs', () => {
+    const local = pickSameSkuInTenant(
+      { id: 'foreign', kode: 'B-LAMA', masterProductId: 'mp-tempe', vendorStokId: '' },
+      [
+        { id: 'local', kode: 'B711755', masterProductId: 'mp-tempe', vendorStokId: 'other', aktif: true },
+        { id: 'else', kode: 'B-LAMA', masterProductId: 'mp-lain', aktif: true },
+      ],
+    );
+    expect(local?.id).toBe('local');
+  });
+
+  it('maps by vendor and kode when stock id is absent', () => {
+    const local = pickSameSkuInTenant(
+      { id: 'foreign', kode: 'B511393', vendorTenantId: 'uddawam' },
+      [
+        { id: 'local', kode: 'B511393', vendorTenantId: 'uddawam', aktif: true },
+        { id: 'other-vendor', kode: 'B511393', vendorTenantId: 'zulmy', aktif: true },
+      ],
+    );
+    expect(local?.id).toBe('local');
+  });
+
+  it('does not guess when several local rows share only the kode', () => {
+    const local = pickSameSkuInTenant(
+      { id: 'foreign', kode: 'B402689', vendorStokId: 'missing-here' },
+      [
+        { id: 'a', kode: 'B402689', vendorStokId: 'v1', aktif: true },
+        { id: 'b', kode: 'B402689', vendorStokId: 'v2', aktif: true },
+      ],
+    );
+    expect(local).toBeNull();
   });
 });

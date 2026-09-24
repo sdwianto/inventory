@@ -30,7 +30,7 @@ import {
   type RecipeImportProduct,
 } from '@/lib/food-production/recipe-import';
 import { isFinishedGoodRole, isIngredientRole, normalizeItemRole } from '@/lib/food-production/item-role';
-import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
+import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap, resolveCatalogProductsInTenant, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
 import {
   convertRecipeLineQtys,
   defaultKitchenSatuan,
@@ -143,20 +143,14 @@ async function findRecipeByNama(
 
 async function enrichFinishedGood(
   db: HandlerContext['db'],
-  tenantFilter: Record<string, unknown>,
+  tenantId: string,
   productId: string,
 ): Promise<{ kode?: string; nama?: string } | { error: string }> {
-  const found = await db.collection('products').findOne({
-    ...tenantFilter,
-    id: productId,
-  }) as { id?: string; kode?: string; nama?: string; itemRole?: string; aktif?: boolean; masterProductId?: string | null } | null;
+  const resolved = await resolveCatalogProductsInTenant(db, tenantId, [productId]);
+  const found = resolved.get(productId);
   if (!found) return { error: 'Produk barang jadi tidak ditemukan' };
-  const liveMap = await attachLiveCatalogProducts(
-    db,
-    String(tenantFilter.tenantId || ''),
-    [found],
-  );
-  const prod = liveMap.get(productId) || found;
+  const liveMap = await attachLiveCatalogProducts(db, tenantId, [found]);
+  const prod = liveMap.get(String(found.id || productId)) || found;
   if (!isCatalogProductActive(prod)) return { error: 'Produk barang jadi nonaktif' };
   if (!isFinishedGoodRole(prod.itemRole)) {
     const role = normalizeItemRole(prod.itemRole);
@@ -169,38 +163,21 @@ async function enrichFinishedGood(
 
 async function enrichLines(
   db: HandlerContext['db'],
-  tenantFilter: Record<string, unknown>,
+  tenantId: string,
   lines: RecipeLine[],
   yieldQty = 0,
 ): Promise<RecipeLine[] | { error: string }> {
   const ids = [...new Set(lines.map((l) => l.productId))];
-  const products = await db.collection('products')
-    .find({ ...tenantFilter, id: { $in: ids } })
-    .project({
-      id: 1,
-      kode: 1,
-      nama: 1,
-      satuan: 1,
-      itemRole: 1,
-      aktif: 1,
-      syncSource: 1,
-      recipeBaseGrams: 1,
-      recipeBaseMl: 1,
-      nutrition: 1,
-      vendorTenantId: 1,
-      masterProductId: 1,
-      cutoverToKode: 1,
-    })
-    .toArray() as LiveCatalogProduct[];
-  const liveMap = await attachLiveCatalogProducts(
-    db,
-    String(tenantFilter.tenantId || ''),
-    products,
-  );
+  const resolved = await resolveCatalogProductsInTenant(db, tenantId, ids);
+  const products = [...resolved.values()];
+  const liveMap = await attachLiveCatalogProducts(db, tenantId, products);
   const out: RecipeLine[] = [];
   for (const line of lines) {
-    const p: LiveCatalogProduct | undefined = liveMap.get(line.productId)
-      || products.find((row) => String(row.id) === line.productId);
+    const resolvedRow = resolved.get(line.productId);
+    const p: LiveCatalogProduct | undefined = (resolvedRow
+      ? (liveMap.get(String(resolvedRow.id || '')) || resolvedRow)
+      : undefined)
+      || liveMap.get(line.productId);
     if (!p) return { error: `Bahan ${line.productId} tidak ditemukan` };
     if (!isCatalogProductActive(p)) {
       return { error: `Bahan "${String(p.nama || p.kode || line.productId)}" nonaktif` };
@@ -291,7 +268,7 @@ async function enrichLines(
       baseSatuan: converted.baseSatuan,
     });
   }
-  const exceptionKeys = await loadRecipePortionExceptionSet(db, tenantFilter);
+  const exceptionKeys = await loadRecipePortionExceptionSet(db, { tenantId });
   return applySppgPortionStandards(
     applyFullPortionExceptions(out, exceptionKeys),
     yieldQty,
@@ -408,7 +385,7 @@ async function commitRecipeImports(
     }
     const lines = await enrichLines(
       db,
-      tenantFilter,
+      tenantId,
       applySppgPortionStandards(linesRaw, draft.yieldQty),
       draft.yieldQty,
     );
@@ -645,14 +622,14 @@ export async function handleRecipes({
     let fgKode: string | undefined;
     let fgNama: string | undefined;
     if (finishedGoodProductId) {
-      const fg = await enrichFinishedGood(db, tenantFilter, finishedGoodProductId);
+      const fg = await enrichFinishedGood(db, tenantId, finishedGoodProductId);
       if ('error' in fg) return err(fg.error, 400);
       fgKode = fg.kode;
       fgNama = fg.nama;
     }
     const lines = await enrichLines(
       db,
-      tenantFilter,
+      tenantId,
       applySppgPortionStandards(linesRaw, yieldQty),
       yieldQty,
     );
@@ -748,7 +725,7 @@ export async function handleRecipes({
         update.finishedGoodKode = null;
         update.finishedGoodNama = null;
       } else {
-        const fg = await enrichFinishedGood(db, tenantFilter, finishedGoodProductId);
+        const fg = await enrichFinishedGood(db, tenantIdForWrite(scopeAuth, recipeBody), finishedGoodProductId);
         if ('error' in fg) return err(fg.error, 400);
         update.finishedGoodProductId = finishedGoodProductId;
         update.finishedGoodKode = fg.kode;
@@ -801,7 +778,7 @@ export async function handleRecipes({
       );
       const lines = await enrichLines(
         db,
-        tenantFilter,
+        tenantIdForWrite(scopeAuth, recipeBody),
         applySppgPortionStandards(linesRaw, yieldForLines),
         yieldForLines,
       );

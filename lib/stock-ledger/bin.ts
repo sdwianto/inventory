@@ -3,11 +3,12 @@
  * Parallel grain to warehouse `stok_lokasi`; does not change FEFO keys.
  */
 
-import type { ClientSession, Db } from 'mongodb';
+import type { ClientSession, Db, Document } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { txOpts } from '@/lib/api/transaction';
 import { isValidWarehouseKode, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { isValidBinKode, normalizeBinKode } from '@/lib/api/warehouse-bins';
+import { STOCK_QTY_DP, STOCK_QTY_EPS, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export const STOK_BIN_COLLECTION = 'stok_bin';
 
@@ -46,11 +47,32 @@ export async function getQtyStokBin(
     { tenantId: tid, stokId, warehouseKode: wh, binKode: bin },
     txOpts(session),
   );
-  return parseFloat(String(row?.qty)) || 0;
+  return roundStockQty(row?.qty);
+}
+
+function binDeltaPipeline(
+  delta: number,
+  now: Date,
+  ids: { id: string; tenantId: string; stokId: string; warehouseKode: string; binKode: string },
+): Document[] {
+  const current = { $convert: { input: { $ifNull: ['$qty', 0] }, to: 'double', onError: 0, onNull: 0 } };
+  const sum = { $round: [{ $add: [current, delta] }, STOCK_QTY_DP] };
+  return [{
+    $set: {
+      id: { $ifNull: ['$id', ids.id] },
+      tenantId: ids.tenantId,
+      stokId: ids.stokId,
+      warehouseKode: ids.warehouseKode,
+      binKode: ids.binKode,
+      createdAt: { $ifNull: ['$createdAt', now] },
+      qty: delta < 0 ? { $max: [0, sum] } : sum,
+      updatedAt: now,
+    },
+  }];
 }
 
 /**
- * Atomic bin qty mutation. Negative delta requires qty >= |delta|.
+ * Atomic bin qty mutation (4 dp). Negative delta requires qty >= |delta| − toleransi.
  */
 export async function adjustStokBin(
   db: Db,
@@ -70,41 +92,32 @@ export async function adjustStokBin(
   if (!isValidBinKode(bin)) {
     return { error: `Kode bin tidak valid: ${binKode}` };
   }
-  const d = parseFloat(String(delta)) || 0;
+  const d = roundStockQty(delta);
   if (d === 0) {
     return { qty: await getQtyStokBin(db, tid, stokId, wh, bin, session) };
   }
   const now = new Date();
+  const key = { tenantId: tid, stokId, warehouseKode: wh, binKode: bin };
+  const pipeline = binDeltaPipeline(d, now, { id: uuidv4(), ...key });
 
-  if (d >= 0) {
+  if (d > 0) {
     const doc = await db.collection(STOK_BIN_COLLECTION).findOneAndUpdate(
-      { tenantId: tid, stokId, warehouseKode: wh, binKode: bin },
-      {
-        $inc: { qty: d },
-        $set: { updatedAt: now },
-        $setOnInsert: {
-          id: uuidv4(),
-          tenantId: tid,
-          stokId,
-          warehouseKode: wh,
-          binKode: bin,
-          createdAt: now,
-        },
-      },
+      key,
+      pipeline,
       { upsert: true, returnDocument: 'after', ...txOpts(session) },
     );
-    return { qty: parseFloat(String(doc?.qty)) || 0 };
+    return { qty: roundStockQty(doc?.qty) };
   }
 
   const need = -d;
   const doc = await db.collection(STOK_BIN_COLLECTION).findOneAndUpdate(
-    { tenantId: tid, stokId, warehouseKode: wh, binKode: bin, qty: { $gte: need } },
-    { $inc: { qty: d }, $set: { updatedAt: now } },
+    { ...key, qty: { $gte: need - STOCK_QTY_EPS } },
+    pipeline,
     { returnDocument: 'after', ...txOpts(session) },
   );
   if (!doc) {
     const current = await getQtyStokBin(db, tid, stokId, wh, bin, session);
     return { error: `Stok di bin ${bin}@${wh} tidak cukup (sisa: ${current})` };
   }
-  return { qty: parseFloat(String(doc.qty)) || 0 };
+  return { qty: roundStockQty(doc.qty) };
 }

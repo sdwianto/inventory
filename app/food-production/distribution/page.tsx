@@ -57,6 +57,7 @@ import { printDocument } from '@/lib/doc-print';
 import { Input } from '@/components/ui/input';
 import Link from 'next/link';
 import { format } from 'date-fns';
+import { qtyEq } from '@/lib/stock-ledger/precision';
 
 const MANAGE_ROLES = new Set(['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER']);
 /** Manage + DRIVER (Logistics) — update status kirim/selesai. */
@@ -881,7 +882,7 @@ function DistributionPageContent() {
           return;
         }
         const sum = Number(line.qtyDiterima) + Number(line.qtyDikembalikan);
-        if (Math.abs(sum - Number(line.qtyDikirim)) > 0.0001) {
+        if (!qtyEq(sum, Number(line.qtyDikirim))) {
           toast.error(
             `${line.servicePointNama || 'Titik'}: diterima + dikembalikan harus = dikirim (${line.qtyDikirim})`,
           );
@@ -1572,7 +1573,7 @@ function DistributionPageContent() {
                       <tbody>
                         {statusLineQtys.map((line) => {
                           const sum = Number(line.qtyDiterima || 0) + Number(line.qtyDikembalikan || 0);
-                          const ok = Math.abs(sum - Number(line.qtyDikirim)) < 0.0001;
+                          const ok = qtyEq(sum, Number(line.qtyDikirim));
                           return (
                             <tr key={line.key} className="border-t align-top">
                               <td className="p-2">
