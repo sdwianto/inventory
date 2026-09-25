@@ -87,7 +87,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
 
     const missingOnly = url.searchParams.get('missing') === '1';
     const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
-    const filter: Record<string, unknown> = {};
+    const filter: Record<string, unknown> = { mergedInto: null };
     if (missingOnly) filter.nutrition = { $exists: false };
     const list = await db.collection('products')
       .find(withTenantFilter(scopeAuth, filter))

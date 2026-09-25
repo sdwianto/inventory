@@ -22,6 +22,7 @@ import { countOpenQcResults } from '@/lib/kitchen-assurance';
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { loadPinnedPlanRecipes, mergePlanRecipes } from '@/lib/api/recipe-revisions';
 import type { HandlerContext } from '@/types/api/handler';
 
 const OPEN = ['DRAFT', 'SUBMITTED', 'APPROVED', 'PROCESSING'];
@@ -54,6 +55,7 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
       db.collection('products').countDocuments({
         ...tf,
         aktif: { $ne: false },
+        mergedInto: null,
         nutrition: { $exists: false },
       }),
       db.collection(RECIPES_COLLECTION)
@@ -117,6 +119,7 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
       .limit(5)
       .toArray() as unknown as ProductionPlanDoc[];
     let costVarianceAlerts = 0;
+    const pinnedByPlan = await loadPinnedPlanRecipes(db, tenantIdForWrite(scopeAuth, {}), completedPlans.map((p) => p.id));
     for (const plan of completedPlans) {
       const { menuIds, recipeIds: directRecipeIds } = collectPlanLineRefs(plan.lines);
       const menus = menuIds.length
@@ -128,11 +131,18 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
         ...directRecipeIds,
         ...menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
       ])];
-      const recipeDocs = recipeIds.length
+      const liveDocs = recipeIds.length
         ? await db.collection(RECIPES_COLLECTION)
           .find({ ...tf, id: { $in: recipeIds } })
           .toArray() as unknown as RecipeDoc[]
         : [];
+      // HPP standar historis: revisi resep yang dipin MRP rencana, bukan resep terkini.
+      const { recipesById } = mergePlanRecipes(
+        recipeIds,
+        new Map(liveDocs.map((r) => [r.id, r])),
+        pinnedByPlan.get(plan.id),
+      );
+      const recipeDocs = [...recipesById.values()];
       const planInput = await loadPlanActualCostInput(db, scopeAuth, plan);
       const actualInput = planInput.referenceMode ? planInput : null;
       const productIds = [
@@ -159,7 +169,7 @@ export async function handleFoodDashboard(ctx: HandlerContext): Promise<NextResp
         planNo: plan.noDokumen,
         planLines: plan.lines || [],
         menusById: new Map(menus.map((m) => [m.id, m])),
-        recipesById: new Map(recipeDocs.map((r) => [r.id, r])),
+        recipesById,
         productsById,
       });
       if ('error' in standard) continue;

@@ -25,11 +25,14 @@ import {
   ledgerSaldoForProducts,
   postStockMovements,
   applyMasterProductStockChange,
+  formatMasterStokDisplay,
+  recomputeProductStok,
   relocateProductWarehouseWithAudit,
   roundStockQty,
   setProductWarehouseStock,
 } from '@/lib/stock-ledger';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
+import { NOT_MERGED_PRODUCT_FILTER, isDuplicateKodeError, normalizeBaseSatuan } from '@/lib/api/product-merge';
 import { normalizeDetailProduk, persistProductFotos } from '@/lib/api/product-media';
 import { drainEnsureProductEnrichment, ensureProductEnrichmentOutboxPending } from '@/lib/api/product-enrichment-outbox';
 import { enrichProductsVendorNames } from '@/lib/api/vendor-tenants';
@@ -62,6 +65,14 @@ import { assertMultiUomAllowed } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 import { isItemRole, normalizeItemRole, type ItemRole } from '@/lib/food-production/item-role';
+import { normalizeShelfLifeDays } from '@/lib/food-production/ingredient-lot';
+import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import {
+  RECIPE_BRIDGE_VALUE_FIELDS,
+  manualRecipeBridgeSet,
+  resolveRecipeBridgeInput,
+  stripRecipeBridgeMeta,
+} from '@/lib/api/product-recipe-bridge';
 
 /** Field identitas vendor yang tidak boleh diubah dari Inventory (kecuali `nama` — boleh koreksi lokal). */
 const VENDOR_LOCKED_FIELDS = [
@@ -100,8 +111,31 @@ interface ProductBody extends Record<string, unknown> {
   recipeBaseGrams?: number | string | null;
   /** 1 products.satuan = N ml (konversi resep ML→BTL/dll). */
   recipeBaseMl?: number | string | null;
+  /** 1 products.satuan = N satuanIsi (mis. 1 RTG = 10 SACHET). */
+  isiPerKemasan?: number | string | null;
+  satuanIsi?: string | null;
+  /** Masa simpan (hari) — dasar kedaluwarsa lot bila GRN tidak mengisi tanggal. */
+  shelfLifeDays?: number | string | null;
+  /** No. lot pemasok wajib di GRN (flag lotExpiryRequired). */
+  requiresLotNo?: boolean;
   detailProduk?: string;
   fotos?: unknown[];
+}
+
+function resolveLotControlInput(
+  body: ProductBody,
+): { values: Record<string, unknown> } | { error: string } {
+  const values: Record<string, unknown> = {};
+  if (body.shelfLifeDays !== undefined) {
+    const shelf = normalizeShelfLifeDays(body.shelfLifeDays);
+    if (shelf !== null && typeof shelf === 'object') return { error: shelf.error };
+    values.shelfLifeDays = shelf;
+  }
+  if (body.requiresLotNo !== undefined) {
+    if (typeof body.requiresLotNo !== 'boolean') return { error: 'requiresLotNo harus true/false' };
+    values.requiresLotNo = body.requiresLotNo;
+  }
+  return { values };
 }
 
 interface ProductDoc extends Record<string, unknown> {
@@ -115,19 +149,12 @@ interface ProductDoc extends Record<string, unknown> {
   stok?: number;
   itemRole?: ItemRole;
   classificationSource?: 'inferred' | 'manual';
-  recipeBaseGrams?: number;
-  recipeBaseMl?: number;
+  recipeBaseGrams?: number | null;
+  recipeBaseMl?: number | null;
+  isiPerKemasan?: number | null;
+  satuanIsi?: string | null;
   detailProduk?: string;
   fotos?: string[];
-}
-
-/** Optional positive factor for recipe kitchen UOM; null clears; undefined skips. */
-function parseRecipeBaseFactor(value: unknown): number | null | undefined {
-  if (value === undefined) return undefined;
-  if (value === null || value === '') return null;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n;
 }
 
 async function enrichProductList(
@@ -218,6 +245,9 @@ export async function handleProducts({
       const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);
       if (ids.length) filter.id = { $in: ids };
     }
+    // Salinan vendor tergabung hanya untuk pemilih pembelian (PO) atau lookup id eksplisit.
+    const includeVendorSources = url.searchParams.get('includeVendorSources') === '1' || !!idsParam;
+    if (!includeVendorSources) Object.assign(filter, NOT_MERGED_PRODUCT_FILTER);
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithUomBarcode(db, tenantId, q, filter);
     filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
@@ -238,15 +268,37 @@ export async function handleProducts({
     const includeUom = url.searchParams.get('includeUom') === '1';
     const enrichUom = url.searchParams.get('enrichUom') === '1';
     const withUom = await enrichProductList(db, tid, enriched, includeUom, enrichUom);
+    // Sumber vendor tidak memegang stok: tampilkan stok item persediaan kanoniknya.
+    const stockIdOf = (p: ProductDoc) => String((p as { mergedInto?: string }).mergedInto || p.id);
+    const canonIds = [...new Set(withUom.map((p) => (p as { mergedInto?: string }).mergedInto).filter(Boolean).map(String))];
+    const canonById = new Map(
+      canonIds.length
+        ? (await db.collection('products').find({ tenantId: tid, id: { $in: canonIds } })
+          .project({ id: 1, kode: 1, nama: 1, stok: 1, stokDisplay: 1, gudangKode: 1, itemRole: 1 }).toArray())
+          .map((c) => [String(c.id), c])
+        : [],
+    );
+    for (const p of withUom) {
+      const c = canonById.get(stockIdOf(p));
+      if (!c || c.id === p.id) continue;
+      Object.assign(p, {
+        stok: c.stok,
+        stokDisplay: c.stokDisplay,
+        gudangKode: c.gudangKode ?? p.gudangKode,
+        mergedIntoKode: c.kode,
+        mergedIntoNama: c.nama,
+      });
+    }
     const withWarehouseStock = url.searchParams.get('withWarehouseStock') === '1' || !!q;
     if (withWarehouseStock && withUom.length > 0) {
-      const ids = withUom.map((p) => p.id);
+      const ids = [...new Set(withUom.map(stockIdOf))];
       const stokMap = await getStokByWarehouseBatch(db, tid, ids);
       const ledgerMap = await ledgerSaldoForProducts(db, tid, ids);
       for (const p of withUom) {
-        const raw = stokMap.get(p.id) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
+        const sid = stockIdOf(p);
+        const raw = stokMap.get(sid) || Object.fromEntries(WAREHOUSE_CODES.map((k) => [k, 0]));
         const home = resolveProductGudangKode(p as Record<string, unknown>);
-        const byWh = applyLedgerCapToWarehouseMap(raw, home, ledgerMap.get(p.id));
+        const byWh = applyLedgerCapToWarehouseMap(raw, home, ledgerMap.get(sid));
         const whDoc = p as ProductDoc & { stokByWarehouse?: Record<string, number>; gudangKode?: string };
         whDoc.stokByWarehouse = byWh;
         // Tampilan picker: qty gudang home dibatasi saldo kartu (bukan phantom lokasi).
@@ -286,12 +338,16 @@ export async function handleProducts({
     const uomPrep = await prepareProductUomsForWrite(db, tenantId, grup, uomParsed.uoms);
     if ('error' in uomPrep) return err(uomPrep.error, 400);
 
+    // Satu kode = satu item persediaan, termasuk item nonaktif (item sales.app bisa aktif lagi saat vendor menjual ulang).
     const existing = await db.collection('products').findOne({
       tenantId,
       kode: productBody.kode,
-      syncSource: 'local',
-    });
-    if (existing) return err('Kode sudah ada di tenant ini');
+      $or: [{ syncSource: 'local' }, NOT_MERGED_PRODUCT_FILTER],
+    }, { projection: { nama: 1, aktif: 1 } });
+    if (existing) {
+      const note = existing.aktif === false ? ' (nonaktif — aktifkan item itu)' : '';
+      return err(`Kode sudah dipakai produk ${existing.nama || productBody.kode}${note} di tenant ini`, 409);
+    }
 
     const draft = { grup, nama: productBody.nama };
     const classified = classifyProduct(draft);
@@ -301,6 +357,14 @@ export async function handleProducts({
     if (!isValidProductGudang(gudangKode)) {
       return err('Pilih gudang produk: GKERING (Kering), GBASAH (Basah), atau GJANITOR (Janitor)', 400);
     }
+
+    const initialStokRaw = productBody.stok === undefined || productBody.stok === null || productBody.stok === ''
+      ? 0
+      : Number(productBody.stok);
+    if (!Number.isFinite(initialStokRaw) || initialStokRaw < 0) {
+      return err('Stok awal harus angka ≥ 0', 400);
+    }
+    const initialStok = roundStockQty(initialStokRaw);
 
     const productId = uuidv4();
     const uomDocs = planProductUomDocs(tenantId, productId, uomParsed.uoms);
@@ -329,19 +393,21 @@ export async function handleProducts({
       classificationSource,
       ...denorm,
       uomCount: uomDocs.length,
-      stokDisplay: formatStockDualLabel(parseFloat(String(productBody.stok || 0)), uomDocs),
+      stokDisplay: formatMasterStokDisplay(0, tenantId, productId, denorm, uomDocs),
       hargaBeli: parseInt(String(productBody.hargaBeli || 0), 10),
-      stok: parseFloat(String(productBody.stok || 0)),
+      stok: 0,
       minStok: parseFloat(String(productBody.minStok || 0)),
       aktif: productBody.aktif !== false,
       syncSource: 'local',
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    const recipeGrams = parseRecipeBaseFactor(productBody.recipeBaseGrams);
-    const recipeMl = parseRecipeBaseFactor(productBody.recipeBaseMl);
-    if (recipeGrams != null) doc.recipeBaseGrams = recipeGrams;
-    if (recipeMl != null) doc.recipeBaseMl = recipeMl;
+    const bridge = resolveRecipeBridgeInput(productBody, doc.satuan, null);
+    if ('error' in bridge) return err(bridge.error, 400);
+    if (bridge.changed) Object.assign(doc, manualRecipeBridgeSet(bridge.values, doc.createdAt as Date));
+    const lotControl = resolveLotControlInput(productBody);
+    if ('error' in lotControl) return err(lotControl.error, 400);
+    Object.assign(doc, lotControl.values);
     if (productBody.detailProduk !== undefined) {
       const detail = normalizeDetailProduk(productBody.detailProduk);
       if (typeof detail === 'object' && 'error' in detail) return err(detail.error, 400);
@@ -352,7 +418,6 @@ export async function handleProducts({
       if (!Array.isArray(fotos)) return err(fotos.error, 400);
       doc.fotos = fotos;
     }
-    const initialStok = roundStockQty(doc.stok);
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         await txDb.collection('products').insertOne(doc, txOpts(session));
@@ -379,6 +444,7 @@ export async function handleProducts({
         }
       });
     } catch (e: unknown) {
+      if (isDuplicateKodeError(e)) return err('Kode sudah dipakai produk aktif lain di tenant ini', 409);
       const msg = e instanceof Error ? e.message : 'Gagal menyimpan produk';
       return err(msg, 500);
     }
@@ -426,11 +492,14 @@ export async function handleProducts({
 
     const uomHit = await findProductUomByBarcode(db, tenantId, code);
     if (uomHit) {
-      const product = await findMasterDoc(db, 'products', scopeAuth, { id: uomHit.productId });
+      let product = await findMasterDoc(db, 'products', scopeAuth, { id: uomHit.productId });
+      if (product?.mergedInto) product = await findMasterDoc(db, 'products', scopeAuth, { id: String(product.mergedInto) }) || product;
       if (!product) return err('Produk tidak ditemukan', 404);
-      const uoms = (await listProductUomsByProductIds(db, tenantId, [uomHit.productId])).get(uomHit.productId) || [];
+      const pid = String(product.id);
+      const uoms = (await listProductUomsByProductIds(db, tenantId, [pid])).get(pid) || [];
       const enriched = attachUomSummary(product as Record<string, unknown>, uoms);
-      const matchedUom = uoms.find((u) => u.barcode === code) || uomHit;
+      const matchedUom = uoms.find((u) => u.barcode === code)
+        || (pid === uomHit.productId ? uomHit : uoms.find((u) => u.satuan === uomHit.satuan) || pickBaseUom(uoms) || uomHit);
       return ok(clean({
         product: enriched,
         uom: matchedUom,
@@ -438,8 +507,10 @@ export async function handleProducts({
       }));
     }
 
-    let doc = await findMasterDoc(db, 'products', scopeAuth, { barcode: code });
-    if (!doc) doc = await findMasterDoc(db, 'products', scopeAuth, { kode: code });
+    let doc = await findMasterDoc(db, 'products', scopeAuth, { barcode: code, ...NOT_MERGED_PRODUCT_FILTER });
+    if (!doc) doc = await findMasterDoc(db, 'products', scopeAuth, { kode: code, ...NOT_MERGED_PRODUCT_FILTER });
+    if (!doc) doc = await findMasterDoc(db, 'products', scopeAuth, { barcode: code });
+    if (doc?.mergedInto) doc = await findMasterDoc(db, 'products', scopeAuth, { id: String(doc.mergedInto) }) || doc;
     if (!doc) return err('Produk tidak ditemukan', 404);
     const uoms = (await listProductUomsByProductIds(db, tenantId, [String(doc.id)])).get(String(doc.id)) || [];
     const enriched = attachUomSummary(doc as Record<string, unknown>, uoms);
@@ -543,6 +614,25 @@ export async function handleProducts({
           update.detailFotosUpdatedAt = new Date();
         }
       }
+      const vendorSources = await db.collection('products').countDocuments({
+        tenantId: existing.tenantId || 'default',
+        mergedInto: id,
+      });
+      if (update.aktif === true && existing.aktif === false && !existing.mergedInto) {
+        const activeTwin = await db.collection('products').findOne({
+          tenantId: existing.tenantId || 'default',
+          kode: String(update.kode || existing.kode),
+          id: { $ne: id },
+          aktif: { $ne: false },
+          ...NOT_MERGED_PRODUCT_FILTER,
+        }, { projection: { nama: 1 } });
+        if (activeTwin) {
+          return err(`Kode ${update.kode || existing.kode} sudah dipakai item aktif ${activeTwin.nama || ''} — gabungkan kode ganda lebih dulu`, 409);
+        }
+      }
+      if (vendorSources && update.kode && update.kode !== existing.kode) {
+        return err(`Kode tidak bisa diubah: ${vendorSources} sumber vendor tergabung ke item ini dengan kode ${existing.kode}`, 400);
+      }
       if (update.kode && update.kode !== existing.kode) {
         const dup = await db.collection('products').findOne({
           tenantId: existing.tenantId || 'default',
@@ -558,12 +648,26 @@ export async function handleProducts({
         if (update[k] !== undefined) update[k] = parseFloat(String(update[k] || 0));
       });
       const tid = existing.tenantId || 'default';
-      if (productBody.recipeBaseGrams !== undefined) {
-        update.recipeBaseGrams = parseRecipeBaseFactor(productBody.recipeBaseGrams) ?? null;
+      stripRecipeBridgeMeta(update);
+      RECIPE_BRIDGE_VALUE_FIELDS.forEach((k) => delete update[k]);
+      const bridge = resolveRecipeBridgeInput(productBody, existing.satuan, existing);
+      if ('error' in bridge) return err(bridge.error, 400);
+      if (bridge.changed) Object.assign(update, manualRecipeBridgeSet(bridge.values, new Date()));
+      delete update.shelfLifeDays;
+      delete update.requiresLotNo;
+      const lotControl = resolveLotControlInput(productBody);
+      if ('error' in lotControl) return err(lotControl.error, 400);
+      const lotControlBefore = {
+        shelfLifeDays: (existing.shelfLifeDays as number | null | undefined) ?? null,
+        requiresLotNo: existing.requiresLotNo === true,
+      };
+      const lotControlAfter = { ...lotControlBefore, ...lotControl.values };
+      const lotControlChanged = lotControlAfter.shelfLifeDays !== lotControlBefore.shelfLifeDays
+        || lotControlAfter.requiresLotNo !== lotControlBefore.requiresLotNo;
+      if (lotControlChanged && existing.mergedInto) {
+        return err('Produk ini sudah digabung ke item persediaan lain — atur masa simpan & no. lot di item tersebut', 400);
       }
-      if (productBody.recipeBaseMl !== undefined) {
-        update.recipeBaseMl = parseRecipeBaseFactor(productBody.recipeBaseMl) ?? null;
-      }
+      Object.assign(update, lotControl.values);
       if (productBody.detailProduk !== undefined) {
         const detail = normalizeDetailProduk(productBody.detailProduk);
         if (typeof detail === 'object' && 'error' in detail) return err(detail.error, 400);
@@ -594,10 +698,6 @@ export async function handleProducts({
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
           update.uomCount = uomDocs.length;
-          update.stokDisplay = formatStockDualLabel(
-            parseFloat(String(update.stok ?? existing.stok ?? 0)),
-            uomDocs,
-          );
           update.grup = grup;
         } else if (update.grup !== undefined || update.satuan !== undefined) {
           const uomParsed = validateAndNormalizeUomInputs(resolveUomInputsFromProductBody({
@@ -615,10 +715,6 @@ export async function handleProducts({
           if (!baseUom) return err('Satuan dasar tidak ditemukan', 500);
           Object.assign(update, productDenormFromBaseUom(baseUom));
           update.uomCount = uomDocs.length;
-          update.stokDisplay = formatStockDualLabel(
-            parseFloat(String(update.stok ?? existing.stok ?? 0)),
-            uomDocs,
-          );
           update.grup = grup;
         }
       }
@@ -669,8 +765,18 @@ export async function handleProducts({
           inferred: classified,
         });
       }
+      if (
+        vendorSources
+        && update.satuan !== undefined
+        && normalizeBaseSatuan(update.satuan) !== normalizeBaseSatuan(existing.satuan)
+      ) {
+        return err(`Satuan dasar tidak bisa diubah: ${vendorSources} sumber vendor tergabung ke item ini memakai satuan ${existing.satuan}`, 400);
+      }
       const stokDiubah = update.stok !== undefined;
       if (stokDiubah) {
+        if (!Number.isFinite(update.stok as number) || (update.stok as number) < 0) {
+          return err('Stok harus angka ≥ 0', 400);
+        }
         const gudang = resolveProductGudangKode({ ...existing, ...update });
         const qtyAfter = roundStockQty(update.stok as number);
         const mergedProduct = { ...existing, ...update, id };
@@ -711,6 +817,7 @@ export async function handleProducts({
               { $set: update },
               txOpts(session),
             );
+            await recomputeProductStok(txDb, tid, id, session);
           });
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : 'Gagal menyimpan satuan produk';
@@ -722,6 +829,37 @@ export async function handleProducts({
           withTenantFilter(scopeAuth, { id }),
           { $set: update },
         );
+      }
+      if (bridge.changed) {
+        await writeAuditLog(db, {
+          tenantId: tid,
+          action: 'PRODUCT_RECIPE_BRIDGE',
+          entityType: 'product',
+          entityId: id,
+          summary: `Konversi resep ${existing.kode} diubah manual`,
+          metadata: {
+            source: 'MASTER',
+            before: {
+              recipeBaseGrams: existing.recipeBaseGrams ?? null,
+              recipeBaseMl: existing.recipeBaseMl ?? null,
+              isiPerKemasan: existing.isiPerKemasan ?? null,
+              satuanIsi: existing.satuanIsi ?? null,
+            },
+            after: bridge.values,
+          },
+          ...auditActor(userAuth),
+        });
+      }
+      if (lotControlChanged) {
+        await writeAuditLog(db, {
+          tenantId: tid,
+          action: 'PRODUCT_LOT_CONTROL',
+          entityType: 'product',
+          entityId: id,
+          summary: `Masa simpan / no. lot wajib ${existing.kode} diubah`,
+          metadata: { before: lotControlBefore, after: lotControlAfter },
+          ...auditActor(userAuth),
+        });
       }
       await invalidateDashboardSnapshot(db, tid);
       const doc = await findMasterDoc(db, 'products', auth, { id });
@@ -799,6 +937,9 @@ export async function handleProducts({
       const tid = String(access.doc.tenantId || auth?.tenantId || 'default');
       if ((await productIdsWithStock(db, tid, [id])).length) {
         return err('Produk masih punya stok — kosongkan lewat penyesuaian stok sebelum dihapus', 400);
+      }
+      if (await db.collection('products').countDocuments({ tenantId: tid, mergedInto: id }, { limit: 1 })) {
+        return err('Produk ini item persediaan untuk sumber vendor tergabung — tidak bisa dihapus', 400);
       }
       await deleteProductUoms(db, tid, id);
       await db.collection('products').deleteOne(withTenantFilter(scopeAuth, { id }));

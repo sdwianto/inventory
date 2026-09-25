@@ -125,6 +125,10 @@ export const PRODUCT_LIST_PROJECTION = {
   /** Bridge resep dapur — wajib di list agar COUNT (BTL/PCS/…) bisa pilih GR/ML. */
   recipeBaseGrams: 1,
   recipeBaseMl: 1,
+  isiPerKemasan: 1,
+  satuanIsi: 1,
+  recipeBridgeSource: 1,
+  recipeBridgeConfirmedAt: 1,
   detailProduk: 1,
   fotos: 1,
   nutrition: 1,
@@ -140,6 +144,8 @@ export const PRODUCT_LIST_PROJECTION = {
   vendorHargaEcer: 1,
   stok: 1,
   minStok: 1,
+  shelfLifeDays: 1,
+  requiresLotNo: 1,
   gudangKode: 1,
   itemRole: 1,
   classificationSource: 1,
@@ -154,6 +160,8 @@ export const PRODUCT_LIST_PROJECTION = {
   masterProductId: 1,
   barcodeDuplicateWarning: 1,
   barcodeDuplicateConfirmedSameMaster: 1,
+  mergedInto: 1,
+  vendorAktif: 1,
 } as const;
 
 export const TRANSACTION_LIST_PROJECTION = {

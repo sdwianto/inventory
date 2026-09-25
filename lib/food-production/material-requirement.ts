@@ -5,6 +5,7 @@
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
 import type { MenuDoc } from '@/lib/food-production/menu';
+import type { RecipeRevisionPin } from '@/lib/food-production/recipe-revision';
 import {
   convertQtySameFamily,
   foldSameFamilyQtyLines,
@@ -128,6 +129,8 @@ export interface MrpSourceRef {
   menuKode?: string;
   recipeId: string;
   recipeKode?: string;
+  /** Revisi resep yang dipakai saat eksplosi (null: resep lama belum punya revisi). */
+  recipeRevisionId?: string | null;
   qty: number;
 }
 
@@ -172,6 +175,10 @@ export interface MaterialRequirementDoc {
   };
   /** Snapshot acuan porsi saat explode (audit / rehitungkan). */
   acuanByKategori?: Partial<Record<string, number>> | null;
+  /** Revisi resep yang dipakai MRP ini — HPP rencana memakai revisi yang sama. */
+  recipeRevisions?: RecipeRevisionPin[];
+  /** true: pin diisi migrasi 0002 (revisi = isi resep saat migrasi, bukan saat MRP dibuat). */
+  recipeRevisionsBackfilled?: boolean;
   catatan?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -432,6 +439,7 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
           menuKode: slot.menuKode,
           recipeId: recipe.id,
           recipeKode: recipe.kode,
+          recipeRevisionId: recipe.currentRevisionId ?? null,
           qty: roundQty(c.qty),
         });
         acc.set(key, prev);

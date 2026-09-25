@@ -1,4 +1,4 @@
-import type { ClientSession, Db, Filter, UpdateFilter } from 'mongodb';
+import type { Db, Filter } from 'mongodb';
 // Operasional & akunting per tenant — migrasi, filter, stamp tenantId.
 
 import { withTenantFilter, migrateCollectionTenantId } from '@/lib/api/tenant-master';
@@ -89,29 +89,6 @@ export function assertOperationalDoc(
 /** Sisipkan tenantId ke dokumen insert. */
 export function stampTenantId<T extends Record<string, unknown>>(tenantId: string, doc: T) {
   return { ...doc, tenantId: normalizeTenantId(tenantId || 'default') };
-}
-
-/** Update stok produk hanya jika id + tenant cocok. */
-export async function updateProductStockScoped(
-  db: Db,
-  tenantId: string,
-  productId: string,
-  update: UpdateFilter<Record<string, unknown>>,
-  session?: ClientSession,
-) {
-  const tid = tenantId || 'default';
-  const filter: Record<string, unknown> = { id: productId };
-  if (tid === 'default') {
-    filter.$or = [
-      { tenantId: 'default' },
-      { tenantId: { $exists: false } },
-      { tenantId: null },
-      { tenantId: '' },
-    ];
-  } else {
-    filter.tenantId = tid;
-  }
-  return db.collection('products').updateOne(filter, update, session ? { session } : {});
 }
 
 export function productFilterById(tenantId: string, productId: string) {

@@ -1,5 +1,5 @@
 // Buku stok: satu-satunya modul yang boleh menulis stok_lokasi / stok_kartu / stok_bin / ingredient_lots
-// (dijaga ESLint). Mutasi transaksi → postStockMovements (lotPolicy untuk lot bahan).
+// serta products.stok / products.stokDisplay (dijaga ESLint). Mutasi transaksi → postStockMovements (lotPolicy untuk lot bahan).
 // Master/perbaikan → master-stock. Bin manual/rekonsiliasi → bin*. Migrasi skema lama → legacy-migrations.
 
 export {
@@ -44,6 +44,15 @@ export {
 export { recomputeProductStok, purgeNonHomeLokasiRows } from '@/lib/stock-ledger/balance';
 
 export {
+  formatMasterStokDisplay,
+  planProductsMasterStock,
+  refreshProductsMasterStock,
+  writeProductMasterStock,
+  type MasterStockPlanRow,
+  type MasterStockWrite,
+} from '@/lib/stock-ledger/master';
+
+export {
   setProductWarehouseStock,
   applyMasterProductStockChange,
   relocateProductWarehouseWithAudit,
@@ -57,3 +66,9 @@ export {
 } from '@/lib/stock-ledger/master-stock';
 
 export { migrateStokLokasiFromProducts, migrateLegacyStokLokasi } from '@/lib/stock-ledger/legacy-migrations';
+
+export {
+  mergeProductStock,
+  type MergeProductStockInput,
+  type MergeProductStockResult,
+} from '@/lib/stock-ledger/merge-product';

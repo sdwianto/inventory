@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,7 @@ import { actingTenantHeaders } from '@/lib/acting-tenant-client';
 import { isIngredientRole } from '@/lib/food-production/item-role';
 import PhotoUploadField from '@/components/maintenance/PhotoUploadField';
 import ProductSearchSelect from '@/components/ProductSearchSelect';
-import { BookOpen, Download, FileUp, Plus, Pencil, RefreshCw, Trash2, ListChecks, Search } from 'lucide-react';
+import { BookOpen, Download, FileUp, History, Plus, Pencil, RefreshCw, Trash2, ListChecks, Search } from 'lucide-react';
 import { str } from '@/types/json';
 import {
   DEFAULT_PCT_KECIL,
@@ -49,6 +50,7 @@ import {
   missingProductIds,
 } from '@/lib/food-production/recipe-product-cache';
 import { formatNumber } from '@/lib/format';
+import { getClientFeatureFlags } from '@/lib/feature-flags-client';
 
 function toProductOpt(p: Record<string, unknown>): ProductOpt {
   const nutrition = p.nutrition && typeof p.nutrition === 'object'
@@ -67,6 +69,8 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     satuan: p.satuan ? String(p.satuan) : '',
     recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
     recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+    isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
+    satuanIsi: p.satuanIsi ? String(p.satuanIsi) : undefined,
     gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
     itemRole: p.itemRole ? String(p.itemRole) : undefined,
     aktif: p.aktif !== false,
@@ -113,6 +117,8 @@ interface ProductOpt {
   satuan?: string;
   recipeBaseGrams?: number;
   recipeBaseMl?: number;
+  isiPerKemasan?: number;
+  satuanIsi?: string;
   gramsPerUnit?: number;
   itemRole?: string;
   aktif?: boolean;
@@ -156,7 +162,30 @@ interface RecipeRow {
     productNama?: string;
   }>;
   aktif: boolean;
+  updatedAt?: string;
+  revision?: number;
+  currentRevisionId?: string;
 }
+
+interface RecipeRevisionRow {
+  id: string;
+  revision: number;
+  reason: 'CREATE' | 'UPDATE' | 'IMPORT' | 'RECOMPUTE' | 'BACKFILL' | 'PRODUCT_MERGE';
+  createdAt: string;
+  createdByName?: string;
+  nama: string;
+  yieldQty: number;
+  lineCount: number;
+}
+
+const REVISION_REASON_LABEL: Record<RecipeRevisionRow['reason'], string> = {
+  CREATE: 'Dibuat',
+  UPDATE: 'Diubah',
+  IMPORT: 'Impor',
+  RECOMPUTE: 'Hitung ulang konversi',
+  BACKFILL: 'Revisi awal (data lama)',
+  PRODUCT_MERGE: 'Gabung kode produk ganda',
+};
 
 function productConvFromOpt(p: ProductOpt | undefined): RecipeConversionProduct {
   if (!p) return {};
@@ -166,30 +195,37 @@ function productConvFromOpt(p: ProductOpt | undefined): RecipeConversionProduct 
     nama: p.nama,
     recipeBaseGrams: p.recipeBaseGrams,
     recipeBaseMl: p.recipeBaseMl,
+    isiPerKemasan: p.isiPerKemasan,
+    satuanIsi: p.satuanIsi,
     nutrition: p.gramsPerUnit != null ? { gramsPerUnit: p.gramsPerUnit } : undefined,
+  };
+}
+
+function strictRecipeConversion(): boolean {
+  return getClientFeatureFlags().strictRecipeConversion === true;
+}
+
+function kitchenOptsOf(p: ProductOpt) {
+  return {
+    recipeBaseGrams: p.recipeBaseGrams,
+    recipeBaseMl: p.recipeBaseMl,
+    gramsPerUnit: p.gramsPerUnit,
+    isiPerKemasan: p.isiPerKemasan,
+    satuanIsi: p.satuanIsi,
+    nama: p.nama,
+    kode: p.kode,
+    strict: strictRecipeConversion(),
   };
 }
 
 function kitchenOptsForProduct(p: ProductOpt | undefined): string[] {
   if (!p?.satuan) return [];
-  return kitchenSatuanOptionsForBase(p.satuan, {
-    recipeBaseGrams: p.recipeBaseGrams,
-    recipeBaseMl: p.recipeBaseMl,
-    gramsPerUnit: p.gramsPerUnit,
-    nama: p.nama,
-    kode: p.kode,
-  });
+  return kitchenSatuanOptionsForBase(p.satuan, kitchenOptsOf(p));
 }
 
 function defaultSatuanForProduct(p: ProductOpt | undefined): string {
   if (!p?.satuan) return '';
-  return defaultKitchenSatuan(p.satuan, {
-    recipeBaseGrams: p.recipeBaseGrams,
-    recipeBaseMl: p.recipeBaseMl,
-    gramsPerUnit: p.gramsPerUnit,
-    nama: p.nama,
-    kode: p.kode,
-  });
+  return defaultKitchenSatuan(p.satuan, kitchenOptsOf(p));
 }
 
 /** Live preview: kitchen qty → product base. */
@@ -201,7 +237,9 @@ function basePreview(
   if (!product?.satuan || !kitchenSatuan || !(qtyKitchen > 0)) {
     return { text: '', ok: true };
   }
-  const r = toBaseRecipeQty(qtyKitchen, kitchenSatuan, productConvFromOpt(product));
+  const r = toBaseRecipeQty(qtyKitchen, kitchenSatuan, productConvFromOpt(product), {
+    strict: strictRecipeConversion(),
+  });
   if ('error' in r) return { text: r.error, ok: false };
   return {
     text: `= ${formatNumber(r.qtyBase)} ${r.baseSatuan}`,
@@ -287,6 +325,8 @@ export default function FoodProductionRecipePage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<RecipeRow | null>(null);
+  const [historyFor, setHistoryFor] = useState<RecipeRow | null>(null);
+  const [historyRows, setHistoryRows] = useState<RecipeRevisionRow[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [nextKode, setNextKode] = useState('RSP-0001');
   const [namaSuggestOpen, setNamaSuggestOpen] = useState(false);
@@ -751,6 +791,20 @@ export default function FoodProductionRecipePage() {
     }
   }
 
+  async function openHistory(row: RecipeRow) {
+    setHistoryFor(row);
+    setHistoryRows(null);
+    try {
+      const res = await fetch(`/api/recipes/${row.id}/revisions`, { headers: { ...actingTenantHeaders() } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Gagal memuat riwayat revisi');
+      setHistoryRows(Array.isArray(data?.revisions) ? data.revisions : []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat riwayat revisi');
+      setHistoryRows([]);
+    }
+  }
+
   function openEdit(row: RecipeRow) {
     setEditing(row);
     setLoadedFrom(null);
@@ -845,11 +899,13 @@ export default function FoodProductionRecipePage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json', ...actingTenantHeaders() },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(editing ? { ...payload, expectedUpdatedAt: editing.updatedAt ?? null } : payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Gagal menyimpan');
-      toast.success(editing ? 'Resep diperbarui' : 'Resep ditambahkan');
+      toast.success(editing
+        ? (data?.revision && data.revision !== editing.revision ? `Resep diperbarui — revisi ${data.revision}` : 'Resep diperbarui')
+        : 'Resep ditambahkan');
       setOpen(false);
       await load();
     } catch (e) {
@@ -1002,6 +1058,9 @@ export default function FoodProductionRecipePage() {
             <RefreshCw className="h-4 w-4 mr-1" />
             Muat ulang
           </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/food-production/recipe/konversi">Review konversi</Link>
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1096,13 +1155,23 @@ export default function FoodProductionRecipePage() {
                     <div className="h-10 w-10 rounded border bg-muted/40" />
                   )}
                 </td>
-                <td className="p-3 font-mono text-xs whitespace-nowrap">{row.kode}</td>
+                <td className="p-3 font-mono text-xs whitespace-nowrap">
+                  {row.kode}
+                  {row.revision ? (
+                    <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground" title="Revisi resep terkini">
+                      rev {row.revision}
+                    </span>
+                  ) : null}
+                </td>
                 <td className="p-3 font-medium truncate" title={row.nama}>{row.nama}</td>
                 <td className="p-3 whitespace-nowrap text-sm">{kategoriMenuLabel(row.kategoriMenu)}</td>
                 <td className="p-3 whitespace-nowrap">{row.yieldQty} porsi</td>
                 <td className="p-3 whitespace-nowrap">{row.effectiveDate || '—'}</td>
                 <td className="p-3 whitespace-nowrap">{row.aktif ? 'Aktif' : 'Nonaktif'}</td>
                 <td className="p-1 pr-2 text-right whitespace-nowrap">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void openHistory(row)} title="Riwayat revisi">
+                    <History className="h-4 w-4" />
+                  </Button>
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(row)} title="Ubah">
                     <Pencil className="h-4 w-4" />
                   </Button>
@@ -1661,6 +1730,58 @@ export default function FoodProductionRecipePage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTkpiPick(null)}>Batal</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={historyFor !== null} onOpenChange={(v) => { if (!v) setHistoryFor(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Riwayat revisi — {historyFor?.kode} {historyFor?.nama}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Setiap perubahan isi resep membuat revisi baru. MRP dan HPP rencana memakai revisi yang berlaku saat
+            MRP dihitung, jadi angka lama tidak berubah saat resep diedit.
+          </p>
+          {historyRows === null ? (
+            <p className="py-4 text-sm text-muted-foreground">Memuat…</p>
+          ) : historyRows.length === 0 ? (
+            <p className="py-4 text-sm text-muted-foreground">
+              Belum ada revisi tercatat. Revisi awal dibuat saat resep disimpan atau dipakai MRP berikutnya.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="p-2">Rev</th>
+                  <th className="p-2">Waktu</th>
+                  <th className="p-2">Sebab</th>
+                  <th className="p-2">Oleh</th>
+                  <th className="p-2 text-right">Yield</th>
+                  <th className="p-2 text-right">Bahan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((r) => (
+                  <tr key={r.id} className="border-t">
+                    <td className="p-2 font-mono">
+                      {r.revision}
+                      {historyFor?.currentRevisionId === r.id ? (
+                        <span className="ml-1 text-[10px] text-emerald-700">terkini</span>
+                      ) : null}
+                    </td>
+                    <td className="p-2 whitespace-nowrap">{new Date(r.createdAt).toLocaleString('id-ID')}</td>
+                    <td className="p-2">{REVISION_REASON_LABEL[r.reason] || r.reason}</td>
+                    <td className="p-2">{r.createdByName || '—'}</td>
+                    <td className="p-2 text-right">{r.yieldQty}</td>
+                    <td className="p-2 text-right">{r.lineCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHistoryFor(null)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

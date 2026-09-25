@@ -167,6 +167,7 @@ export default function PoFormDialog({
                         <span className="text-xs text-slate-400 sm:hidden mb-1 block">Baris {i + 1}</span>
                         <ProductSearchSelect
                           syncSource="sales.app"
+                          includeVendorSources
                           selectedProduct={l.product}
                           value={str(l.localStokId)}
                           onChange={(id) => onSelectProduct(i, id)}

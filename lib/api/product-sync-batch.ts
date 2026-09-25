@@ -4,14 +4,73 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { setProductWarehouseStock } from '@/lib/stock-ledger';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
-import { vendorProductSnapshot, bulkSyncVendorProductUoms, resolveVendorBaseUomId } from '@/lib/api/product-sync';
+import { vendorProductSnapshot, bulkSyncVendorProductUoms, resolveVendorBaseUomId, applyVendorRecipeBridge } from '@/lib/api/product-sync';
 import {
   preserveManualLocalNama,
   shouldApplyEnrichmentFields,
   salesEnrichmentAllowsOverwrite,
 } from '@/lib/api/product-enrichment-lww';
 import { materializeInboundProductFotos } from '@/lib/api/product-media';
+import { kodeConflictMessage } from '@/lib/api/product-sync';
+import {
+  PRODUCT_KODE_UNIQUE_INDEX,
+  canonicalIdsForRows,
+  findKodeCanonical,
+  findKodeCanonicalBatch,
+  refreshCanonicalAktif,
+  relinkMergedCopyForKode,
+} from '@/lib/api/product-merge';
+import { logger } from '@/lib/api/logger';
 import type { JsonObject } from '@/types/json';
+
+/**
+ * Indeks operasi bulk yang gagal karena index unik kode item persediaan.
+ * Error tulis lain dilempar ulang — hanya bentrok kode yang dilaporkan per item.
+ */
+function kodeConflictIndexes(e: unknown): number[] {
+  const writeErrors = (e as { writeErrors?: unknown })?.writeErrors;
+  const list = Array.isArray(writeErrors) ? writeErrors : writeErrors ? [writeErrors] : [];
+  if (!list.length) throw e;
+  const out: number[] = [];
+  for (const w of list as Array<{ index?: number; code?: number; errmsg?: string; err?: { errmsg?: string } }>) {
+    const msg = String(w.errmsg || w.err?.errmsg || '');
+    if (w.code === 11000 && msg.includes(PRODUCT_KODE_UNIQUE_INDEX) && typeof w.index === 'number') out.push(w.index);
+    else throw e;
+  }
+  return out;
+}
+
+/**
+ * Salinan vendor di batch yang sama ditautkan ke dokumen baru pertama berkode sama. Bila dokumen itu
+ * gagal insert (kode sudah dipakai item aktif lain), pindahkan salinannya ke item kanonik yang ada.
+ */
+async function relinkOrphanedBatchCopies(
+  db: Db,
+  tid: string,
+  docs: Array<Record<string, unknown>>,
+  failedIds: Set<string>,
+  now: Date,
+): Promise<void> {
+  const orphans = docs.filter((d) => d.mergedInto && failedIds.has(String(d.mergedInto)) && !failedIds.has(String(d.id)));
+  if (!orphans.length) return;
+  const byKode = new Map<string, string[]>();
+  for (const d of orphans) {
+    const k = String(d.kode || '').trim();
+    byKode.set(k, [...(byKode.get(k) || []), String(d.id)]);
+  }
+  for (const [kode, ids] of byKode) {
+    const canon = await findKodeCanonical(db, tid, kode);
+    if (!canon || failedIds.has(canon.id)) {
+      logger.error('product_sync_orphan_merged_copy', { tenantId: tid, kode, productIds: ids });
+      continue;
+    }
+    await db.collection('products').updateMany(
+      { tenantId: tid, id: { $in: ids } },
+      { $set: { mergedInto: canon.id, mergedAt: now, mergeSource: 'SYNC_AUTO' } },
+    );
+    for (const d of orphans) if (ids.includes(String(d.id))) d.mergedInto = canon.id;
+  }
+}
 
 const BATCH_SIZE = 250;
 
@@ -64,6 +123,7 @@ export function buildSyncSet(
     grup: snap.grup,
     satuan: snap.satuan,
     aktif: snap.aktif,
+    vendorAktif: snap.aktif,
     vendorStokId: snap.id,
     vendorTenantId: vTenant,
     vendorTenantName: snap.vendorTenantName || vTenant,
@@ -83,8 +143,7 @@ export function buildSyncSet(
       : { lastVendorSyncEmittedAt: now }),
   };
   preserveManualLocalNama(syncSet, existing, snap);
-  if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
-  if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
+  applyVendorRecipeBridge(syncSet, existing, snap);
   // Detail/Foto/Nama LWW — advance stamp juga untuk nama-only enrichment.
   if (shouldApplyEnrichmentFields(snap)) {
     const { allow, salesDetailAt } = salesEnrichmentAllowsOverwrite(existing, snap);
@@ -223,8 +282,11 @@ export async function bulkUpsertProductsFromVendor(
       parsed.map((x) => ({ vendorTenantId: x.vTenant, kode: String(x.snap.kode) })),
     );
     const barcodeMap = await loadBarcodeMap(db, tid, parsed.map((x) => x.snap.barcode));
+    const newKodes = parsed.filter((x) => !findExisting(existingMap, x.snap, x.vTenant)).map((x) => String(x.snap.kode));
+    const canonByKode = await findKodeCanonicalBatch(db, tid, newKodes);
 
     const bulkOps: { updateOne: { filter: Record<string, unknown>; update: { $set: Record<string, unknown> } } }[] = [];
+    const bulkMeta: { kode: string; vendorTenantId: string; row: ExistingRow; relinkIds: string[] }[] = [];
     const toCreate: { doc: Record<string, unknown>; gudangKode: string }[] = [];
     const uomSyncQueue: { productId: string; raw: JsonObject; snap: ReturnType<typeof vendorProductSnapshot> }[] = [];
 
@@ -267,17 +329,22 @@ export async function bulkUpsertProductsFromVendor(
 
       if (existing) {
         const classPatch = await applyInferredClassification(db, tid, existing, snap);
+        const relink = await relinkMergedCopyForKode(db, tid, existing, String(snap.kode), now);
         bulkOps.push({
           updateOne: {
             filter: { id: existing.id },
-            update: { $set: { ...syncSet, ...classPatch } },
+            update: { $set: { ...syncSet, ...classPatch, ...relink?.patch } },
           },
         });
+        bulkMeta.push({ kode: String(snap.kode), vendorTenantId: vTenant, row: existing, relinkIds: relink?.canonicalIds || [] });
         uomSyncQueue.push({ productId: existing.id, raw, snap });
         result.updated += 1;
       } else {
         const classified = inferredClassificationPatch(snap);
         const id = uuidv4();
+        const kode = String(snap.kode || '').trim();
+        // Kode yang sudah punya item persediaan (termasuk yang baru dibuat di batch ini) → sumber vendor.
+        const canon = kode ? canonByKode.get(kode) : undefined;
         toCreate.push({
           gudangKode: classified.gudangKode,
           doc: {
@@ -289,8 +356,10 @@ export async function bulkUpsertProductsFromVendor(
             stok: 0,
             minStok: 0,
             createdAt: now,
+            ...(canon ? { mergedInto: canon.id, mergedAt: now, mergeSource: 'SYNC_AUTO' } : {}),
           },
         });
+        if (kode && !canon) canonByKode.set(kode, { id, kode });
         uomSyncQueue.push({ productId: id, raw, snap });
         result.created += 1;
         if (snap.barcode) {
@@ -301,19 +370,51 @@ export async function bulkUpsertProductsFromVendor(
       }
     }
 
+    const failedIds = new Set<string>();
     if (bulkOps.length) {
-      await db.collection('products').bulkWrite(bulkOps, { ordered: false });
+      try {
+        await db.collection('products').bulkWrite(bulkOps, { ordered: false });
+      } catch (e) {
+        for (const idx of kodeConflictIndexes(e)) {
+          const meta = bulkMeta[idx];
+          if (!meta) continue;
+          failedIds.add(meta.row.id);
+          result.updated -= 1;
+          result.errors.push({ kode: meta.kode, vendorTenantId: meta.vendorTenantId, error: kodeConflictMessage(meta.kode, meta.vendorTenantId) });
+        }
+      }
     }
     if (toCreate.length) {
-      await db.collection('products').insertMany(toCreate.map((x) => x.doc));
+      try {
+        await db.collection('products').insertMany(toCreate.map((x) => x.doc), { ordered: false });
+      } catch (e) {
+        for (const idx of kodeConflictIndexes(e)) {
+          const doc = toCreate[idx]?.doc;
+          if (!doc) continue;
+          failedIds.add(String(doc.id));
+          result.created -= 1;
+          const vt = String(doc.vendorTenantId || '');
+          result.errors.push({ kode: String(doc.kode || ''), vendorTenantId: vt, error: kodeConflictMessage(String(doc.kode || ''), vt) });
+        }
+        await relinkOrphanedBatchCopies(db, tid, toCreate.map((x) => x.doc), failedIds, now);
+      }
       await Promise.all(
-        toCreate.map((x) =>
-          setProductWarehouseStock(db, tid, String(x.doc.id), x.gudangKode, 0),
-        ),
+        toCreate
+          .filter((x) => !x.doc.mergedInto && !failedIds.has(String(x.doc.id)))
+          .map((x) => setProductWarehouseStock(db, tid, String(x.doc.id), x.gudangKode, 0)),
       );
     }
-    if (uomSyncQueue.length) {
-      await bulkSyncVendorProductUoms(db, tid, uomSyncQueue);
+    const okMeta = bulkMeta.filter((m) => !failedIds.has(m.row.id));
+    await refreshCanonicalAktif(db, tid, [
+      ...canonicalIdsForRows([
+        ...okMeta.map((m) => m.row),
+        ...toCreate.map((x) => x.doc).filter((d) => d.mergedInto && !failedIds.has(String(d.id))),
+      ]),
+      ...okMeta.flatMap((m) => m.relinkIds),
+    ]);
+    const uomQueue = uomSyncQueue.filter((q) => !failedIds.has(q.productId));
+    if (uomQueue.length) {
+      await bulkSyncVendorProductUoms(db, tid, uomQueue);
     }
   }
 

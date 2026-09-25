@@ -362,48 +362,6 @@ export function attachUomSummary<T extends Record<string, unknown>>(
   };
 }
 
-/** Persist denormalized stokDisplay on product doc after stock/UOM changes. */
-export async function persistStokDisplay(
-  db: Db,
-  tenantId: string,
-  productId: string,
-  qtyBase?: number,
-  session?: import('mongodb').ClientSession,
-): Promise<void> {
-  const opts = session ? { session } : undefined;
-  const prod = await db.collection('products').findOne(
-    { tenantId, id: productId },
-    opts,
-  ) as Record<string, unknown> | null;
-  if (!prod) return;
-  let stok: number;
-  if (qtyBase !== undefined) {
-    stok = qtyBase;
-  } else {
-    const rows = await db.collection<{ qty?: number | string }>('stok_lokasi')
-      .find({ tenantId, stokId: productId }, opts)
-      .project({ qty: 1 })
-      .toArray();
-    stok = rows.reduce((s, r) => s + (parseFloat(String(r.qty)) || 0), 0);
-  }
-  const uomCount = Number(prod.uomCount) || 0;
-  let stokDisplay: string;
-  if (uomCount <= 1) {
-    const rounded = Math.round(stok * 1000) / 1000;
-    const qtyStr = Number.isInteger(rounded) ? String(rounded) : String(rounded);
-    stokDisplay = `${qtyStr} ${String(prod.satuan || 'PCS')}`;
-  } else {
-    const uoms = await listProductUoms(db, tenantId, productId);
-    stokDisplay = formatStockDualLabel(stok, uoms);
-  }
-  if (String(prod.stokDisplay || '') === stokDisplay) return;
-  await db.collection('products').updateOne(
-    { tenantId, id: productId },
-    { $set: { stokDisplay, updatedAt: new Date() } },
-    opts,
-  );
-}
-
 export async function prepareProductUomsForWrite(
   db: Db,
   tenantId: string,

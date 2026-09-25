@@ -26,6 +26,23 @@ interface CostAnalysis {
   warnings: string[];
   lines?: Array<{ productNama?: string; qty: number; unitCost: number; amount: number; missingPrice?: boolean }>;
   actualLines?: Array<{ productNama?: string; qty: number; unitCost: number; amount: number }>;
+  recipeSource?: 'MRP' | 'LIVE' | 'MIXED';
+  recipeRevisions?: Array<{ recipeId: string; recipeKode?: string; revision: number }>;
+  mrpNo?: string;
+  recipeRevisionsBackfilled?: boolean;
+}
+
+function recipeSourceNote(a: CostAnalysis): string | null {
+  if (!a.recipeSource) return null;
+  const revs = (a.recipeRevisions || [])
+    .map((r) => `${r.recipeKode || r.recipeId} rev ${r.revision}`)
+    .join(', ');
+  if (a.recipeSource === 'LIVE') return 'Resep: versi terkini (rencana belum punya MRP berpin revisi).';
+  const head = a.recipeSource === 'MRP'
+    ? `Resep: revisi yang dipakai MRP ${a.mrpNo || ''}`.trim()
+    : `Resep: sebagian dari revisi MRP ${a.mrpNo || ''}, sisanya versi terkini`.trim();
+  const tail = a.recipeRevisionsBackfilled ? ' (revisi dipasang migrasi dari isi resep saat itu)' : '';
+  return `${head}${tail}${revs ? ` — ${revs}` : ''}.`;
 }
 
 function idr(n: number) {
@@ -123,6 +140,9 @@ export default function FoodCostPage() {
 
       {analysis && (
         <div className="space-y-3">
+          {recipeSourceNote(analysis) && (
+            <p className="text-xs text-muted-foreground">{recipeSourceNote(analysis)}</p>
+          )}
           {!!analysis.warnings.length && (
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
               {analysis.warnings.join(' · ')}

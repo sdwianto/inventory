@@ -25,6 +25,7 @@ import { PRODUCTION_RESULTS_COLLECTION, type ProductionResultDoc } from '@/lib/f
 import { RECIPES_COLLECTION, type RecipeDoc } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
+import { loadPinnedPlanRecipes, mergePlanRecipes } from '@/lib/api/recipe-revisions';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import type { HandlerContext } from '@/types/api/handler';
 
@@ -87,7 +88,7 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
         .limit(100)
         .toArray() as Promise<MenuDoc[]>,
       db.collection('products')
-        .find({ ...tfBase, aktif: { $ne: false } })
+        .find({ ...tfBase, aktif: { $ne: false }, mergedInto: null })
         .project({ id: 1, kode: 1, nama: 1, satuan: 1, hargaBeli: 1, grup: 1, produkGrup: 1 })
         .limit(500)
         .toArray(),
@@ -201,13 +202,15 @@ export async function handleFoodRecommendations(ctx: HandlerContext): Promise<Ne
       });
     }
 
+    const pinnedByPlan = await loadPinnedPlanRecipes(db, tid, openPlans.map((p) => p.id));
     for (const plan of openPlans) {
+      const pinned = pinnedByPlan.get(plan.id);
       const standard = analyzePlanStandardCost({
         planId: plan.id,
         planNo: plan.noDokumen,
         planLines: plan.lines || [],
         menusById,
-        recipesById,
+        recipesById: pinned ? mergePlanRecipes([...recipeIdsNeeded], recipesById, pinned).recipesById : recipesById,
         productsById: costProductsById,
       });
       if ('error' in standard) {

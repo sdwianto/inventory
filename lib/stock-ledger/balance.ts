@@ -3,8 +3,7 @@
 
 import type { ClientSession, Db, Document } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
-import { persistStokDisplay } from '@/lib/api/product-uom';
-import { updateProductStockScoped } from '@/lib/api/tenant-operational';
+import { writeProductMasterStock } from '@/lib/stock-ledger/master';
 import { normalizeWarehouseKode, WAREHOUSE_CODES, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { txOpts } from '@/lib/api/transaction';
 import { STOCK_QTY_DP, STOCK_QTY_EPS, roundStockQty } from '@/lib/stock-ledger/precision';
@@ -113,21 +112,15 @@ export async function purgeNonHomeLokasiRows(
   }, txOpts(session));
 }
 
-/** products.stok = Σ stok_lokasi (dibulatkan), dihitung di dalam sesi yang sama. */
+/** products.stok & stokDisplay = Σ stok_lokasi (dibulatkan), dihitung di dalam sesi yang sama. */
 export async function recomputeProductStok(
   db: Db,
   tenantId: string,
   stokId: string,
   session?: ClientSession,
 ): Promise<number> {
-  const rows = await db.collection<LokasiRow>(STOK_LOKASI)
-    .find({ tenantId, stokId }, txOpts(session))
-    .project({ qty: 1 })
-    .toArray();
-  const total = roundStockQty(rows.reduce((s, r) => s + roundStockQty(r.qty), 0));
-  await updateProductStockScoped(db, tenantId, stokId, { $set: { stok: total, updatedAt: new Date() } }, session);
-  await persistStokDisplay(db, tenantId, stokId, total, session).catch(() => {});
-  return total;
+  const out = await writeProductMasterStock(db, tenantId, stokId, session);
+  return out.stok;
 }
 
 export type SetWarehouseStockResult = { qty: number } | { error: string };

@@ -112,7 +112,7 @@ export async function handleDashboard({
 
   const tenantPo = withTenantFilter(scopeAuth, {});
   const tenantGrn = withTenantFilter(scopeAuth, {});
-  const tenantProducts = withTenantFilter(scopeAuth, { aktif: true });
+  const tenantProducts = withTenantFilter(scopeAuth, { aktif: true, mergedInto: null });
   const tenantApprovedHutang = withTenantFilter(scopeAuth, {
     referenceType: 'VENDOR_INVOICE',
     ...approvedVendorInvoiceMatch(),

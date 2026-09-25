@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { ok, err, clean } from '@/lib/api/db';
+import { ok, err, clean, cors } from '@/lib/api/db';
 import {
   tenantIdForWrite,
   withTenantFilter,
@@ -14,7 +14,6 @@ import {
   todayIsoDate,
   applyFullPortionExceptions,
   applySppgPortionStandards,
-  sppgStandardBaseFromKitchen,
   isKategoriMenu,
   type RecipeDoc,
   type RecipeLine,
@@ -32,12 +31,12 @@ import {
 import { isFinishedGoodRole, isIngredientRole, normalizeItemRole } from '@/lib/food-production/item-role';
 import { attachLiveCatalogProducts, isCatalogProductActive, loadLiveProductMap, resolveCatalogProductsInTenant, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
 import {
-  convertRecipeLineQtys,
-  defaultKitchenSatuan,
-  kitchenSatuanOptionsForBase,
-  normalizeRecipeSatuan,
-  type RecipeConversionProduct,
-} from '@/lib/food-production/recipe-uom';
+  convertRecipeLineForProduct,
+  formatRecipeConversionIssues,
+  resolveRecipeLineForExecution,
+  type RecipeConversionIssue,
+} from '@/lib/food-production/recipe-conversion';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 import { nextSequentialCode } from '@/lib/api/document-sequence';
 import { storeBase64Image, deleteMediaFile } from '@/lib/api/media-storage';
@@ -45,6 +44,9 @@ import { validateBase64Image } from '@/lib/api/image-base64';
 import type { HandlerContext } from '@/types/api/handler';
 import { NextResponse } from 'next/server';
 import { loadRecipePortionExceptionSet } from '@/lib/api/handlers/recipe-portion-exceptions';
+import { casConflict } from '@/lib/api/cas';
+import { insertRecipeWithRevision, updateRecipeWithRevision } from '@/lib/api/recipe-revisions';
+import { RECIPE_REVISIONS_COLLECTION } from '@/lib/food-production/recipe-revision';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 
@@ -62,6 +64,8 @@ interface RecipeBody extends Record<string, unknown> {
   /** data-URL baru, URL media yang sudah ada, atau null/'' untuk hapus. */
   gambarBase64?: string | null;
   aktif?: boolean;
+  /** `updatedAt` resep saat form dibuka; beda dengan server → 409 (edit bersamaan). */
+  expectedUpdatedAt?: string | null;
 }
 
 function parseKategoriMenu(
@@ -86,25 +90,29 @@ async function resolveRecipeImage(
   tenantId: string,
   incoming: unknown,
   existing?: { gambarUrl?: string; gambarMediaFile?: string },
-): Promise<{ gambarUrl?: string | null; gambarMediaFile?: string | null } | { error: string }> {
+  opts: { deferDelete?: boolean } = {},
+): Promise<
+  | { gambarUrl?: string | null; gambarMediaFile?: string | null; storedMediaFile?: string; obsoleteMediaFile?: string }
+  | { error: string }
+> {
   if (incoming === undefined) {
     return {
       gambarUrl: existing?.gambarUrl,
       gambarMediaFile: existing?.gambarMediaFile,
     };
   }
+  const dropExisting = async () => {
+    if (!existing?.gambarMediaFile) return undefined;
+    if (opts.deferDelete) return existing.gambarMediaFile;
+    await deleteMediaFile(tenantId, existing.gambarMediaFile);
+    return undefined;
+  };
   if (incoming === null || incoming === '') {
-    if (existing?.gambarMediaFile) {
-      await deleteMediaFile(tenantId, existing.gambarMediaFile);
-    }
-    return { gambarUrl: null, gambarMediaFile: null };
+    return { gambarUrl: null, gambarMediaFile: null, obsoleteMediaFile: await dropExisting() };
   }
   const s = String(incoming).trim();
   if (!s) {
-    if (existing?.gambarMediaFile) {
-      await deleteMediaFile(tenantId, existing.gambarMediaFile);
-    }
-    return { gambarUrl: null, gambarMediaFile: null };
+    return { gambarUrl: null, gambarMediaFile: null, obsoleteMediaFile: await dropExisting() };
   }
   if (s.startsWith('/api/media/') || s.startsWith('http://') || s.startsWith('https://')) {
     return { gambarUrl: s, gambarMediaFile: existing?.gambarMediaFile || null };
@@ -119,10 +127,11 @@ async function resolveRecipeImage(
     maxBytes: 768_000,
   });
   if ('error' in stored) return { error: stored.error };
+  let obsoleteMediaFile: string | undefined;
   if (existing?.gambarMediaFile && existing.gambarMediaFile !== stored.filename) {
-    await deleteMediaFile(tenantId, existing.gambarMediaFile);
+    obsoleteMediaFile = await dropExisting();
   }
-  return { gambarUrl: stored.url, gambarMediaFile: stored.filename };
+  return { gambarUrl: stored.url, gambarMediaFile: stored.filename, storedMediaFile: stored.filename, obsoleteMediaFile };
 }
 
 async function findRecipeByNama(
@@ -166,12 +175,14 @@ async function enrichLines(
   tenantId: string,
   lines: RecipeLine[],
   yieldQty = 0,
-): Promise<RecipeLine[] | { error: string }> {
+): Promise<RecipeLine[] | { error: string; conversionIssues?: RecipeConversionIssue[] }> {
+  const strict = await isTenantFeatureEnabled(db, tenantId, 'strictRecipeConversion');
   const ids = [...new Set(lines.map((l) => l.productId))];
   const resolved = await resolveCatalogProductsInTenant(db, tenantId, ids);
   const products = [...resolved.values()];
   const liveMap = await attachLiveCatalogProducts(db, tenantId, products);
   const out: RecipeLine[] = [];
+  const issues: RecipeConversionIssue[] = [];
   for (const line of lines) {
     const resolvedRow = resolved.get(line.productId);
     const p: LiveCatalogProduct | undefined = (resolvedRow
@@ -189,90 +200,37 @@ async function enrichLines(
       };
     }
 
-    const productConv: RecipeConversionProduct = {
-      satuan: p.satuan != null ? String(p.satuan) : undefined,
-      kode: p.kode != null ? String(p.kode) : undefined,
-      nama: p.nama != null ? String(p.nama) : undefined,
-      recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
-      recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
-      nutrition: p.nutrition && typeof p.nutrition === 'object'
-        ? (p.nutrition as { gramsPerUnit?: number })
-        : undefined,
-    };
-    const baseSatuan = normalizeRecipeSatuan(productConv.satuan);
-    const namedLine: RecipeLine = {
-      ...line,
-      productNama: line.productNama || (p.nama != null ? String(p.nama) : undefined),
-      productKode: line.productKode || (p.kode != null ? String(p.kode) : undefined),
-    };
-    const standardBase = sppgStandardBaseFromKitchen(namedLine, baseSatuan);
-    if (standardBase) {
-      out.push({
-        ...namedLine,
+    const converted = convertRecipeLineForProduct(line, p, { strict });
+    if (!converted.ok) {
+      const label = String(p.nama || p.kode || line.productId);
+      if (!strict) return { error: `Bahan "${label}": ${converted.error}` };
+      issues.push({
         productId: String(p.id || line.productId),
-        productKode: p.kode != null ? String(p.kode) : namedLine.productKode,
-        productNama: p.nama != null ? String(p.nama) : namedLine.productNama,
-        satuan: standardBase.satuan,
-        qtyBaseBesar: standardBase.qtyBaseBesar,
-        qtyBaseKecil: standardBase.qtyBaseKecil,
-        factorToBase: standardBase.factorToBase,
-        baseSatuan: standardBase.baseSatuan,
+        productKode: p.kode != null ? String(p.kode) : undefined,
+        productNama: p.nama != null ? String(p.nama) : undefined,
+        code: converted.code,
+        error: converted.error,
       });
       continue;
     }
-    const allowed = kitchenSatuanOptionsForBase(baseSatuan, {
-      recipeBaseGrams: productConv.recipeBaseGrams,
-      recipeBaseMl: productConv.recipeBaseMl,
-      gramsPerUnit: productConv.nutrition?.gramsPerUnit,
-      nama: productConv.nama,
-      kode: productConv.kode,
-    });
-    let kitchen = normalizeRecipeSatuan(line.satuan);
-    if (!kitchen) {
-      kitchen = defaultKitchenSatuan(baseSatuan, {
-        recipeBaseGrams: productConv.recipeBaseGrams,
-        recipeBaseMl: productConv.recipeBaseMl,
-        gramsPerUnit: productConv.nutrition?.gramsPerUnit,
-        nama: productConv.nama,
-        kode: productConv.kode,
-      });
-    }
-    if (kitchen && allowed.length && !allowed.includes(kitchen)) {
-      return {
-        error: `Bahan "${String(p.nama || p.kode || line.productId)}": satuan dapur ${kitchen} tidak kompatibel dengan basis ${baseSatuan || '—'} (pilih: ${allowed.join(', ')})`,
-      };
-    }
-    if (!kitchen && baseSatuan) kitchen = baseSatuan;
-
-    const converted = convertRecipeLineQtys({
-      qtyBesar: Number(line.qtyBesar) || 0,
-      qtyKecil: Number(line.qtyKecil) || 0,
-      kitchenSatuan: kitchen,
-      product: productConv,
-    });
-    if ('error' in converted) {
-      return {
-        error: `Bahan "${String(p.nama || p.kode || line.productId)}": ${converted.error}`,
-      };
-    }
-
-    out.push({
-      ...line,
-      productId: String(p.id || line.productId),
-      productKode: p.kode != null ? String(p.kode) : line.productKode,
-      productNama: p.nama != null ? String(p.nama) : line.productNama,
-      satuan: converted.satuan || kitchen || undefined,
-      qtyBaseBesar: converted.qtyBaseBesar,
-      qtyBaseKecil: converted.qtyBaseKecil,
-      factorToBase: converted.factorToBase,
-      baseSatuan: converted.baseSatuan,
-    });
+    out.push(converted.line);
+  }
+  if (issues.length) {
+    return { error: formatRecipeConversionIssues(issues), conversionIssues: issues };
   }
   const exceptionKeys = await loadRecipePortionExceptionSet(db, { tenantId });
   return applySppgPortionStandards(
     applyFullPortionExceptions(out, exceptionKeys),
     yieldQty,
   );
+}
+
+function enrichError(res: { error: string; conversionIssues?: RecipeConversionIssue[] }): NextResponse {
+  if (!res.conversionIssues?.length) return err(res.error, 400);
+  return cors(NextResponse.json(
+    { error: res.error, code: 'RECIPE_CONVERSION_INVALID', conversionIssues: res.conversionIssues },
+    { status: 422 },
+  ));
 }
 
 async function allocateRecipeKode(
@@ -328,9 +286,13 @@ async function loadIngredientProducts(
     .find({
       ...tenantFilter,
       aktif: { $ne: false },
-      // Impor Excel memetakan ke master Produk tenant (termasuk yang sync dari sales.app).
+      // Impor Excel memetakan ke master Produk tenant (termasuk yang sync dari sales.app), bukan salinan vendor tergabung.
+      mergedInto: null,
     })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1 })
+    .project({
+      id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1,
+      recipeBaseGrams: 1, recipeBaseMl: 1, isiPerKemasan: 1, satuanIsi: 1,
+    })
     .limit(2000)
     .toArray();
   return list
@@ -342,7 +304,37 @@ async function loadIngredientProducts(
       satuan: p.satuan != null ? String(p.satuan) : undefined,
       itemRole: p.itemRole != null ? String(p.itemRole) : undefined,
       aktif: p.aktif !== false,
+      recipeBaseGrams: p.recipeBaseGrams != null ? Number(p.recipeBaseGrams) : undefined,
+      recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
+      isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
+      satuanIsi: p.satuanIsi != null ? String(p.satuanIsi) : undefined,
     }));
+}
+
+/** Preview impor strict: tandai draf yang bahannya belum punya konversi valid (sama dengan saat simpan). */
+function flagStrictImportConversion(drafts: RecipeImportDraft[], products: RecipeImportProduct[]): void {
+  const byId = new Map(products.map((p) => [p.id, p]));
+  for (const draft of drafts) {
+    for (const l of draft.lines) {
+      const p = l.productId ? byId.get(l.productId) : undefined;
+      if (!p) continue;
+      const res = convertRecipeLineForProduct(
+        {
+          productId: p.id,
+          qty: l.qty,
+          qtyBesar: l.qty,
+          qtyKecil: 0,
+          satuan: l.satuan,
+          productKode: p.kode,
+          productNama: p.nama,
+        } as RecipeLine,
+        p,
+        { strict: true },
+      );
+      if (!res.ok) draft.errors.push(`Bahan "${p.nama || p.kode}": ${res.error}`);
+    }
+    if (draft.errors.length) draft.ok = false;
+  }
 }
 
 async function commitRecipeImports(
@@ -412,14 +404,17 @@ async function commitRecipeImports(
       createdAt: now,
       updatedAt: now,
     };
-    await db.collection(RECIPES_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'RECIPE_IMPORT',
-      entityType: 'recipe',
-      entityId: doc.id,
-      summary: `Import resep ${doc.kode} — ${doc.nama}`,
-      ...auditActor(auth),
+    await insertRecipeWithRevision(db, doc, {
+      reason: 'IMPORT',
+      actor: auditActor(auth),
+      audit: {
+        tenantId,
+        action: 'RECIPE_IMPORT',
+        entityType: 'recipe',
+        entityId: doc.id,
+        summary: `Import resep ${doc.kode} — ${doc.nama}`,
+        ...auditActor(auth),
+      },
     });
     created.push({ id: doc.id, kode: doc.kode, nama: doc.nama });
   }
@@ -463,22 +458,30 @@ export async function handleRecipes({
     const source = String(recipeBody.source || 'excel').trim();
     const dryRun = recipeBody.dryRun !== false;
     const products = await loadIngredientProducts(db, withTenantFilter(scopeAuth, {}));
+    const strict = await isTenantFeatureEnabled(
+      db,
+      tenantIdForWrite(scopeAuth, recipeBody),
+      'strictRecipeConversion',
+    );
+    const parseOpts = { requireSatuan: strict };
 
     let parsed;
     if (source === 'seed') {
       parsed = parseRecipeImportAoa(
         [[...RECIPE_IMPORT_HEADERS], ...MBG_RECIPE_SEED_ROWS],
         products,
+        parseOpts,
       );
     } else {
       const excelBase64 = String(recipeBody.excelBase64 || recipeBody.fileBase64 || '').trim();
       if (!excelBase64) return err('Unggah file Excel (.xlsx)', 400);
-      parsed = parseRecipeImportExcel(excelBase64, products);
+      parsed = parseRecipeImportExcel(excelBase64, products, parseOpts);
     }
 
     if (parsed.errors.length && !parsed.recipes.length) {
       return err(parsed.errors[0] || 'Excel tidak valid', 400);
     }
+    if (strict) flagStrictImportConversion(parsed.recipes, products);
 
     const ready = parsed.recipes.filter((r) => r.ok).length;
     const blocked = parsed.recipes.filter((r) => !r.ok).length;
@@ -559,21 +562,19 @@ export async function handleRecipes({
     const productIds = [...new Set(
       list.flatMap((doc) => ((doc as unknown as RecipeDoc).lines || []).map((l) => l.productId)),
     )];
-    const liveMap = await loadLiveProductMap(db, tenantId, productIds);
+    const [liveMap, strict] = await Promise.all([
+      loadLiveProductMap(db, tenantId, productIds),
+      isTenantFeatureEnabled(db, tenantId, 'strictRecipeConversion'),
+    ]);
     return ok(list.map((doc) => {
       const recipe = doc as unknown as RecipeDoc;
       const lines = applySppgPortionStandards(
         applyFullPortionExceptions(recipe.lines, exceptionKeys),
         recipe.yieldQty,
       ).map((line) => {
-        const live = liveMap.get(line.productId);
-        if (!live?.id || live.id === line.productId) return line;
-        return {
-          ...line,
-          productId: String(live.id),
-          productKode: live.kode != null ? String(live.kode) : line.productKode,
-          productNama: live.nama != null ? String(live.nama) : line.productNama,
-        };
+        const resolved = resolveRecipeLineForExecution(line, liveMap.get(line.productId), { strict });
+        const problem = resolved.error || resolved.warning;
+        return problem ? { ...resolved.line, conversionWarning: problem } : resolved.line;
       });
       return clean({
         ...recipe,
@@ -633,7 +634,7 @@ export async function handleRecipes({
       applySppgPortionStandards(linesRaw, yieldQty),
       yieldQty,
     );
-    if ('error' in lines) return err(lines.error, 400);
+    if ('error' in lines) return enrichError(lines);
 
     let wastePct: number | undefined;
     if (recipeBody.wastePct != null) {
@@ -677,16 +678,53 @@ export async function handleRecipes({
       createdAt: now,
       updatedAt: now,
     };
-    await db.collection(RECIPES_COLLECTION).insertOne(doc);
-    await writeAuditLog(db, {
-      tenantId,
-      action: 'RECIPE_CREATE',
-      entityType: 'recipe',
-      entityId: doc.id,
-      summary: `Resep ${doc.kode} v${doc.version} dibuat`,
-      ...auditActor(auth),
+    await insertRecipeWithRevision(db, doc, {
+      reason: 'CREATE',
+      actor: auditActor(auth),
+      audit: {
+        tenantId,
+        action: 'RECIPE_CREATE',
+        entityType: 'recipe',
+        entityId: doc.id,
+        summary: `Resep ${doc.kode} v${doc.version} dibuat`,
+        ...auditActor(auth),
+      },
     });
     return ok(clean(doc as unknown as Record<string, unknown>));
+  }
+
+  // GET /recipes/:id/revisions[/:revisionId] — riwayat revisi (isi tidak berubah setelah ditulis)
+  if (path[0] === 'recipes' && path[1] && path[2] === 'revisions' && !path[4] && method === 'GET') {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const recipe = await db.collection(RECIPES_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+      { projection: { id: 1, kode: 1, nama: 1, currentRevisionId: 1, revision: 1 } },
+    );
+    if (path[3]) {
+      const rev = await db.collection(RECIPE_REVISIONS_COLLECTION).findOne(
+        withTenantFilter(scopeAuth, { recipeId: path[1], id: path[3] }),
+        { projection: { _id: 0 } },
+      );
+      if (!rev) return err('Revisi resep tidak ditemukan', 404);
+      return ok({ ...rev, current: recipe?.currentRevisionId === rev.id });
+    }
+    const revisions = await db.collection(RECIPE_REVISIONS_COLLECTION)
+      .find(withTenantFilter(scopeAuth, { recipeId: path[1] }))
+      .sort({ revision: -1 })
+      .limit(200)
+      .project({ _id: 0, id: 1, revision: 1, reason: 1, createdAt: 1, createdByName: 1, nama: 1, yieldQty: 1, version: 1, lines: 1 })
+      .toArray();
+    if (!recipe && !revisions.length) return err('Resep tidak ditemukan', 404);
+    return ok({
+      recipeId: path[1],
+      kode: recipe?.kode ?? null,
+      nama: recipe?.nama ?? null,
+      currentRevisionId: recipe?.currentRevisionId ?? null,
+      deleted: !recipe,
+      revisions: revisions.map(({ lines, ...r }) => ({ ...r, lineCount: Array.isArray(lines) ? lines.length : 0 })),
+    });
   }
 
   if (path[0] === 'recipes' && path[1] && method === 'PUT') {
@@ -701,6 +739,13 @@ export async function handleRecipes({
       withTenantFilter(scopeAuth, { id }),
     ) as RecipeDoc | null;
     if (!existing) return err('Resep tidak ditemukan', 404);
+    if (recipeBody.expectedUpdatedAt !== undefined && recipeBody.expectedUpdatedAt !== null) {
+      const expected = new Date(String(recipeBody.expectedUpdatedAt)).getTime();
+      const actual = existing.updatedAt ? new Date(existing.updatedAt).getTime() : NaN;
+      if (!Number.isFinite(expected) || expected !== actual) {
+        return casConflict('Resep sudah diubah pengguna lain sejak dibuka — muat ulang lalu simpan lagi');
+      }
+    }
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
     const tenantFilter = withTenantFilter(scopeAuth, {});
@@ -782,21 +827,27 @@ export async function handleRecipes({
         applySppgPortionStandards(linesRaw, yieldForLines),
         yieldForLines,
       );
-      if ('error' in lines) return err(lines.error, 400);
+      if ('error' in lines) return enrichError(lines);
       update.lines = lines;
     }
     if (recipeBody.catatan !== undefined) {
       update.catatan = String(recipeBody.catatan || '').trim() || null;
     }
+    let storedMediaFile: string | undefined;
+    let obsoleteMediaFile: string | undefined;
     if (recipeBody.gambarBase64 !== undefined) {
+      // File lama baru dihapus setelah simpan berhasil: konflik 409 tidak boleh meninggalkan resep tanpa gambar.
       const image = await resolveRecipeImage(
         existing.tenantId,
         recipeBody.gambarBase64,
         { gambarUrl: existing.gambarUrl, gambarMediaFile: existing.gambarMediaFile },
+        { deferDelete: true },
       );
       if ('error' in image) return err(image.error, 400);
       update.gambarUrl = image.gambarUrl ?? null;
       update.gambarMediaFile = image.gambarMediaFile ?? null;
+      storedMediaFile = image.storedMediaFile;
+      obsoleteMediaFile = image.obsoleteMediaFile;
     }
     if (recipeBody.aktif !== undefined) {
       update.aktif = !!recipeBody.aktif;
@@ -807,23 +858,46 @@ export async function handleRecipes({
     const dup = await db.collection(RECIPES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { kode: nextKode, version: nextVersion, id: { $ne: id } }),
     );
-    if (dup) return err(`Resep ${nextKode} versi ${nextVersion} sudah ada`, 409);
+    const discardStored = async () => {
+      if (storedMediaFile) await deleteMediaFile(existing.tenantId, storedMediaFile);
+    };
+    if (dup) {
+      await discardStored();
+      return err(`Resep ${nextKode} versi ${nextVersion} sudah ada`, 409);
+    }
 
-    await db.collection(RECIPES_COLLECTION).updateOne(
-      withTenantFilter(scopeAuth, { id }),
-      { $set: update },
-    );
+    let result: Awaited<ReturnType<typeof updateRecipeWithRevision>>;
+    try {
+      result = await updateRecipeWithRevision(db, existing, update, {
+        actor: auditActor(auth),
+        now: update.updatedAt as Date,
+        audit: (revisions) => {
+          const latest = revisions[revisions.length - 1];
+          return {
+            tenantId: existing.tenantId,
+            action: 'RECIPE_UPDATE',
+            entityType: 'recipe',
+            entityId: id,
+            summary: latest
+              ? `Resep ${existing.kode} diubah — revisi ${latest.revision}`
+              : `Resep ${existing.kode} diubah (tanpa perubahan isi)`,
+            metadata: { revisions: revisions.map((r) => ({ id: r.id, revision: r.revision, reason: r.reason })) },
+            ...auditActor(auth),
+          };
+        },
+      });
+    } catch (e) {
+      await discardStored();
+      throw e;
+    }
+    if (!result.ok) {
+      await discardStored();
+      return casConflict('Resep sudah diubah pengguna lain sejak dibuka — muat ulang lalu simpan lagi');
+    }
+    if (obsoleteMediaFile) await deleteMediaFile(existing.tenantId, obsoleteMediaFile);
     const saved = await db.collection(RECIPES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    await writeAuditLog(db, {
-      tenantId: existing.tenantId,
-      action: 'RECIPE_UPDATE',
-      entityType: 'recipe',
-      entityId: id,
-      summary: `Resep ${String(saved?.kode || existing.kode)} diubah`,
-      ...auditActor(auth),
-    });
     return ok(clean(saved));
   }
 

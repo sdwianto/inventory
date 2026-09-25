@@ -4,7 +4,7 @@ import {
   KATEGORI_PORSI_LEGACY,
   type KategoriPorsi,
 } from '@/lib/food-production/production-plan';
-import { normalizeRecipeSatuan, recipeUomFamily } from '@/lib/food-production/recipe-uom';
+import { normalizeRecipeSatuan, recipeUomFamily, type RecipeFactorSource } from '@/lib/food-production/recipe-uom';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -106,6 +106,8 @@ export interface RecipeLine {
   factorToBase?: number;
   /** Snapshot label products.satuan saat simpan. */
   baseSatuan?: string;
+  /** Snapshot asal faktor (INFERRED/NUTRITION = cadangan non-strict). */
+  factorSource?: RecipeFactorSource | 'SPPG_STANDARD';
   notes?: string;
 }
 
@@ -142,6 +144,10 @@ export interface RecipeDoc {
   aktif: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /** Revisi isi terkini (koleksi recipe_revisions). */
+  currentRevisionId?: string;
+  revision?: number;
+  revisionHash?: string;
 }
 
 export function clampPctKecil(raw: unknown, fallback = DEFAULT_PCT_KECIL): number {
@@ -354,6 +360,7 @@ function applyBuahStandard<T extends PortionLine>(line: T, yieldQty: number): T 
       qtyBaseBesar: roundBaseQty(qtyBesar * factorToBase),
       qtyBaseKecil: roundBaseQty(qtyKecil * factorToBase),
       baseSatuan: line.baseSatuan,
+      factorSource: 'SPPG_STANDARD' as const,
     };
   }
   return {
@@ -367,6 +374,7 @@ function applyBuahStandard<T extends PortionLine>(line: T, yieldQty: number): T 
     qtyBaseBesar: qtyBesar,
     qtyBaseKecil: qtyKecil,
     baseSatuan: line.baseSatuan || 'PCS',
+    factorSource: 'IDENTITY' as const,
   };
 }
 
@@ -386,6 +394,7 @@ function applyAyamStandard<T extends PortionLine>(line: T, yieldQty: number): T 
       factorToBase,
       qtyBaseBesar: qtyBase,
       qtyBaseKecil: qtyBase,
+      factorSource: 'SPPG_STANDARD' as const,
     };
   }
   return {
@@ -399,6 +408,7 @@ function applyAyamStandard<T extends PortionLine>(line: T, yieldQty: number): T 
     qtyBaseKecil: qty,
     factorToBase: 1,
     baseSatuan: line.baseSatuan || 'POTONG',
+    factorSource: 'SPPG_STANDARD' as const,
   };
 }
 
@@ -671,6 +681,7 @@ export function consolidateRecipeLines(lines: RecipeLine[]): RecipeLine[] {
     delete existing.qtyBaseKecil;
     delete existing.factorToBase;
     delete existing.baseSatuan;
+    delete existing.factorSource;
     if (!existing.satuan && normalized.satuan) existing.satuan = normalized.satuan;
     if (!existing.uomId && normalized.uomId) existing.uomId = normalized.uomId;
     if (!existing.productKode && normalized.productKode) existing.productKode = normalized.productKode;

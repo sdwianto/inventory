@@ -12,6 +12,8 @@ import {
 } from '@/lib/migrations/types';
 
 const APPLY_CLAIM_INDEX = 'uniq_migration_apply_claim';
+/** Migrasi terlama selesai dalam menit; klaim RUNNING lebih tua dari ini berarti prosesnya mati. */
+const STALE_RUNNING_CLAIM_MS = 2 * 60 * 60 * 1000;
 
 function isDuplicateKey(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && (e as { code?: number }).code === 11000);
@@ -48,6 +50,7 @@ export interface ExecuteMigrationInput {
   /** Jalankan lagi walau APPLY sebelumnya sudah OK. Migrasi sendiri wajib idempoten. */
   force?: boolean;
   now?: Date;
+  options?: Record<string, unknown>;
 }
 
 export interface ExecuteMigrationResult {
@@ -84,6 +87,23 @@ export async function executeMigration(input: ExecuteMigrationInput): Promise<Ex
         { $set: { activeClaim: false } },
       );
     }
+    await input.db.collection(MIGRATION_RUNS_COLLECTION).updateMany(
+      {
+        migrationId: input.migration.id,
+        tenantId: input.tenantId,
+        activeClaim: true,
+        status: 'RUNNING',
+        startedAt: { $lt: new Date(Date.now() - STALE_RUNNING_CLAIM_MS) },
+      },
+      {
+        $set: {
+          activeClaim: false,
+          status: 'FAILED',
+          summary: 'Klaim RUNNING basi (proses berhenti sebelum selesai) — dilepas otomatis',
+          finishedAt: new Date(),
+        },
+      },
+    );
     try {
       await input.db.collection(MIGRATION_RUNS_COLLECTION).insertOne({
         ...base,
@@ -127,6 +147,8 @@ export async function executeMigration(input: ExecuteMigrationInput): Promise<Ex
       tenantId: input.tenantId,
       dryRun: mode === 'DRY_RUN',
       now,
+      actor,
+      options: input.options,
     });
     const reportHash = hashMigrationReport(report);
     mkdirSync(input.reportDir, { recursive: true });
@@ -141,6 +163,7 @@ export async function executeMigration(input: ExecuteMigrationInput): Promise<Ex
       actor,
       at: now.toISOString(),
       reportHash,
+      ...(input.options ? { options: input.options } : {}),
       ...report,
     }, null, 2));
     const result: ExecuteMigrationResult = {

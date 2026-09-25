@@ -43,6 +43,7 @@ export default function ProductSearchSelect({
   withWarehouseStock = true,
   itemRole,
   filterProduct,
+  includeVendorSources = false,
   placeholder = 'Cari / pilih produk…',
   className,
 }: {
@@ -56,6 +57,8 @@ export default function ProductSearchSelect({
   itemRole?: string;
   /** Client-side filter after fetch (e.g. isIngredientRole). */
   filterProduct?: (product: JsonObject) => boolean;
+  /** Pemilih pembelian: tampilkan juga salinan vendor yang sudah digabung ke item persediaan. */
+  includeVendorSources?: boolean;
   placeholder?: string;
   className?: string;
 }) {
@@ -95,6 +98,7 @@ export default function ProductSearchSelect({
       if (withWarehouseStock) url += '&withWarehouseStock=1';
       if (syncSource) url += `&syncSource=${encodeURIComponent(syncSource)}`;
       if (itemRole) url += `&itemRole=${encodeURIComponent(itemRole)}`;
+      if (includeVendorSources) url += '&includeVendorSources=1';
       fetchJson<JsonObject[] | { items?: JsonObject[] }>(url, {
         headers: { ...actingTenantHeaders() },
       })
@@ -110,7 +114,7 @@ export default function ProductSearchSelect({
         .finally(() => setLoading(false));
     }, q ? 300 : 0);
     return () => clearTimeout(t);
-  }, [open, q, syncSource, withWarehouseStock, itemRole, filterProduct]);
+  }, [open, q, syncSource, withWarehouseStock, itemRole, includeVendorSources, filterProduct]);
 
   const selected = useMemo(() => {
     if (resolved && str(resolved.id) === value) return resolved;

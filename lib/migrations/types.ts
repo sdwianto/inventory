@@ -8,6 +8,10 @@ export interface MigrationContext {
   /** true = jangan menulis data bisnis. Catatan migration_runs tetap disimpan oleh runner. */
   dryRun: boolean;
   now: Date;
+  /** Pelaku (--by) untuk audit log dan riwayat dokumen. */
+  actor?: string;
+  /** Masukan tambahan migrasi (mis. file keputusan --decisions). Ikut dicatat di laporan. */
+  options?: Record<string, unknown>;
 }
 
 export interface MigrationReport {

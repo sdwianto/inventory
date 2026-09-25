@@ -16,6 +16,7 @@ import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { resolveTanggalKedatanganForWrite } from '@/lib/api/po-arrival-date';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { isCatalogProductActive, loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
+import { loadPurchaseSources, type CatalogIdentityRow } from '@/lib/api/product-merge';
 import { vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
@@ -278,10 +279,22 @@ async function mapCpoItemsFromProducts(
     : [];
   const prodById = new Map(productRows.map((p) => [String(p.id), p]));
   const liveMap = await loadLiveProductMap(db, tenantId, localIds);
-  const liveIds = [...new Set(
-    localIds.map((id) => String(liveMap.get(id)?.id || id)),
+  const canonicalOf = (id: string) => (liveMap.get(id) || prodById.get(id)) as (LiveCatalogProduct & Record<string, unknown>) | undefined;
+  // Item persediaan → dokumen katalog vendor yang masih menjual (item itu sendiri atau sumber vendor tergabung).
+  const purchaseByCanon = await loadPurchaseSources(
+    db,
+    tenantId,
+    localIds.map(canonicalOf).filter(Boolean) as unknown as CatalogIdentityRow[],
+  );
+  const purchaseOf = (id: string) => {
+    const canon = canonicalOf(id);
+    return (canon?.id ? purchaseByCanon.get(String(canon.id)) : undefined) as (Record<string, unknown> & LiveCatalogProduct) | undefined
+      || canon;
+  };
+  const purchaseIds = [...new Set(
+    localIds.map((id) => String(purchaseOf(id)?.id || id)),
   )];
-  const uomsByProduct = await listProductUomsByProductIds(db, tenantId, liveIds);
+  const uomsByProduct = await listProductUomsByProductIds(db, tenantId, purchaseIds);
 
   const warnings: string[] = [];
   for (const it of rawItems) {
@@ -289,26 +302,32 @@ async function mapCpoItemsFromProducts(
     if (!orig) {
       return { error: `Produk ${it.kode || it.localStokId} tidak ditemukan di katalog` };
     }
-    const prod: LiveCatalogProduct = liveMap.get(String(it.localStokId))
-      || (orig as LiveCatalogProduct);
+    const prod: LiveCatalogProduct = canonicalOf(String(it.localStokId)) || (orig as LiveCatalogProduct);
     if (!isCatalogProductActive(prod)) {
       const label = String(prod.nama || prod.kode || orig.nama || it.localStokId);
       return {
         error: `Produk "${label}" tidak aktif — aktifkan / Sync Katalog sebelum buat Draft CPO`,
       };
     }
-    if (!prod.vendorStokId || !prod.vendorTenantId) {
+    const buy = purchaseOf(String(it.localStokId)) || prod;
+    if (!buy.vendorStokId || !buy.vendorTenantId) {
       warnings.push(
         `${prod.nama || prod.kode || it.localStokId} belum sync vendor — Draft CPO perlu Sync Katalog sebelum kirim`,
+      );
+    } else if ((buy as { vendorAktif?: boolean }).vendorAktif === false) {
+      warnings.push(
+        `${prod.nama || prod.kode || it.localStokId}: vendor ${buy.vendorTenantId} tidak lagi menjual dan belum ada sumber vendor lain — ganti produk di Draft CPO`,
       );
     }
   }
 
   const mapped = rawItems.map((it) => {
     const orig = prodById.get(String(it.localStokId))!;
-    const prod = (liveMap.get(String(it.localStokId)) || orig) as typeof orig;
+    const canon = (canonicalOf(String(it.localStokId)) || orig) as typeof orig;
+    const prod = (purchaseOf(String(it.localStokId)) || canon) as typeof orig;
     const liveId = String(prod.id || it.localStokId);
-    const hargaBeli = parseInt(String(prod.hargaBeli || 0), 10) || 0;
+    // Estimasi dari harga rata-rata item persediaan (sumber vendor tidak memegang stok/harga rata-rata).
+    const hargaBeli = parseInt(String(canon.hargaBeli || prod.hargaBeli || 0), 10) || 0;
     const uoms = uomsByProduct.get(liveId) || [];
     const satuanWant = String(it.satuan || prod.satuan || '').trim().toLowerCase();
     const matchedUom = satuanWant

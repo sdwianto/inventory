@@ -348,7 +348,7 @@ export async function handleStokSaldo({
     return ok({ trend });
   }
 
-  let filter = withTenantFilter(scopeAuth, { aktif: { $ne: false } });
+  let filter = withTenantFilter(scopeAuth, { aktif: { $ne: false }, mergedInto: null });
   if (q) {
     filter = {
       ...filter,

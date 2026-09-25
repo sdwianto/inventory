@@ -15,6 +15,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { MongoClient } from 'mongodb';
+import { updateRecipeWithRevision, type RecipeWithState } from '@/lib/api/recipe-revisions';
 
 function loadEnv() {
   try {
@@ -181,10 +182,27 @@ async function main() {
           baseSatuan: 'KG',
         };
       });
-      await db.collection('recipes').updateOne(
-        { id: rec.id, tenantId },
-        { $set: { lines: nextLines, updatedAt: now } },
+      const res = await updateRecipeWithRevision(
+        db,
+        rec as unknown as RecipeWithState,
+        { lines: nextLines, updatedAt: now },
+        {
+          reason: 'RECOMPUTE',
+          actor: { userId: 'script:rebase-b755073', userName: 'Skrip rebase B755073' },
+          now,
+          audit: (revisions) => ({
+            tenantId: String(tenantId),
+            action: 'RECIPE_CONVERSION_RECOMPUTE',
+            entityType: 'recipe',
+            entityId: String(rec.id),
+            summary: `Resep ${String(rec.kode || rec.id)}: rebase ${KODE} IKAT → KG`,
+            metadata: { script: 'rebase-b755073-ikat-to-kg', revisions: revisions.map((r) => r.revision) },
+            userId: 'script:rebase-b755073',
+            userName: 'Skrip rebase B755073',
+          }),
+        },
       );
+      if (!res.ok) console.warn(`Resep ${String(rec.kode || rec.id)} berubah saat skrip berjalan — dilewati, jalankan ulang`);
     }
   }
 

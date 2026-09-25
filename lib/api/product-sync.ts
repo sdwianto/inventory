@@ -2,7 +2,7 @@ import type { Db } from 'mongodb';
 // Upsert master produk dari sales.app — kode produk sama dengan katalog vendor.
 
 import { v4 as uuidv4 } from 'uuid';
-import { setProductWarehouseStock } from '@/lib/stock-ledger';
+import { refreshProductsMasterStock, setProductWarehouseStock } from '@/lib/stock-ledger';
 import { applyInferredClassification, inferredClassificationPatch } from '@/lib/api/apply-product-classification';
 import { pickBaseUom, uomInputsFromLegacyProductBody, validateAndNormalizeUomInputs } from '@/lib/uom/conversion';
 import type { NormalizedUomInput } from '@/lib/uom/types';
@@ -19,6 +19,18 @@ import {
   shouldApplyEnrichmentFields,
   salesEnrichmentAllowsOverwrite,
 } from '@/lib/api/product-enrichment-lww';
+import {
+  canonicalIdsForRows,
+  findKodeCanonical,
+  isDuplicateKodeError,
+  refreshCanonicalAktif,
+  relinkMergedCopyForKode,
+} from '@/lib/api/product-merge';
+
+export function kodeConflictMessage(kode: string, vendorTenantId: string): string {
+  return `Kode ${kode} (vendor ${vendorTenantId}) bentrok dengan item persediaan aktif lain — `
+    + 'jalankan alat gabung kode ganda (migrasi 0003-merge-duplicate-products)';
+}
 
 export {
   preserveManualLocalNama,
@@ -43,6 +55,25 @@ function parseSyncTime(value: unknown): number | null {
   }
   const t = new Date(String(value)).getTime();
   return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * Jembatan resep dari vendor: tidak menimpa nilai yang diisi/dikonfirmasi lokal
+ * (recipeBridgeSource), dan null dari vendor tidak menghapus nilai lokal.
+ */
+export function applyVendorRecipeBridge(
+  syncSet: Record<string, unknown>,
+  existing: Record<string, unknown> | null | undefined,
+  snap: Pick<ReturnType<typeof vendorProductSnapshot>, 'hasRecipeBaseGrams' | 'hasRecipeBaseMl' | 'recipeBaseGrams' | 'recipeBaseMl'>,
+): void {
+  const source = String(existing?.recipeBridgeSource || '');
+  if (source === 'MASTER' || source === 'CONFIRMED_INFER') return;
+  if (snap.hasRecipeBaseGrams && (snap.recipeBaseGrams != null || existing?.recipeBaseGrams == null)) {
+    syncSet.recipeBaseGrams = snap.recipeBaseGrams;
+  }
+  if (snap.hasRecipeBaseMl && (snap.recipeBaseMl != null || existing?.recipeBaseMl == null)) {
+    syncSet.recipeBaseMl = snap.recipeBaseMl;
+  }
 }
 
 export function vendorProductSnapshot(product: Record<string, unknown>) {
@@ -172,6 +203,7 @@ export async function upsertProductFromVendor(
     grup: snap.grup,
     satuan: snap.satuan,
     aktif: snap.aktif,
+    vendorAktif: snap.aktif,
     vendorStokId: snap.id,
     vendorTenantId: vTenant,
     vendorTenantName: snap.vendorTenantName || vTenant,
@@ -189,8 +221,7 @@ export async function upsertProductFromVendor(
     ...(incomingEmit != null ? { lastVendorSyncEmittedAt: new Date(incomingEmit) } : { lastVendorSyncEmittedAt: now }),
   };
   preserveManualLocalNama(syncSet, existing as { namaSource?: unknown; detailFotosUpdatedAt?: unknown; nama?: unknown } | null, snap);
-  if (snap.hasRecipeBaseGrams) syncSet.recipeBaseGrams = snap.recipeBaseGrams;
-  if (snap.hasRecipeBaseMl) syncSet.recipeBaseMl = snap.recipeBaseMl;
+  applyVendorRecipeBridge(syncSet, existing as Record<string, unknown> | null, snap);
   // Detail/Foto/Nama LWW: stamp detailFotosUpdatedAt (jangan pakai emittedAt).
   // Nama-only enrichment dari Sales juga membawa stamp — advance watermark.
   if (shouldApplyEnrichmentFields(snap)) {
@@ -220,7 +251,14 @@ export async function upsertProductFromVendor(
 
   if (existing) {
     const classPatch = await applyInferredClassification(db, tid, existing, snap);
-    await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch } });
+    const relink = await relinkMergedCopyForKode(db, tid, existing, snap.kode, now);
+    try {
+      await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch, ...relink?.patch } });
+    } catch (e) {
+      if (isDuplicateKodeError(e)) throw new Error(kodeConflictMessage(snap.kode, vTenant));
+      throw e;
+    }
+    await refreshCanonicalAktif(db, tid, [...canonicalIdsForRows([existing]), ...(relink?.canonicalIds || [])]);
     await syncVendorProductUoms(db, tid, existing.id, product, snap);
     return {
       action: 'updated',
@@ -249,9 +287,24 @@ export async function upsertProductFromVendor(
     stok: 0,
     minStok: 0,
     createdAt: now,
+  } as Record<string, unknown> & { id: string };
+  // Kode yang sudah punya item persediaan → dokumen vendor baru menjadi sumber vendor item itu.
+  const insertLinked = async () => {
+    const canon = await findKodeCanonical(db, tid, snap.kode);
+    if (canon) Object.assign(doc, { mergedInto: canon.id, mergedAt: now, mergeSource: 'SYNC_AUTO' });
+    await db.collection('products').insertOne(doc);
+    return canon;
   };
-  await db.collection('products').insertOne(doc);
-  await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
+  let canon;
+  try {
+    canon = await insertLinked();
+  } catch (e) {
+    if (!isDuplicateKodeError(e)) throw e;
+    delete (doc as { _id?: unknown })._id;
+    canon = await insertLinked();
+  }
+  if (canon) await refreshCanonicalAktif(db, tid, [canon.id]);
+  else await setProductWarehouseStock(db, tid, doc.id, gudangKode, 0);
   await syncVendorProductUoms(db, tid, doc.id, product, snap);
   return {
     action: 'created',
@@ -350,6 +403,7 @@ export async function bulkSyncVendorProductUoms(
   if (bulkOps.length) {
     await db.collection('products').bulkWrite(bulkOps, { ordered: false });
   }
+  await refreshProductsMasterStock(db, tenantId, [...uomDocsByProduct.keys()]);
   // Path utama Sync Katalog UI — wajib rematch CPO open (single-product path sudah punya).
   await rematchOpenDocsAfterBulkProductUomSync(db, tenantId, uomDocsByProduct);
 }
@@ -395,6 +449,7 @@ export async function syncVendorProductUoms(
       },
     );
   }
+  await refreshProductsMasterStock(db, tenantId, [localProductId]);
   // Rebind CPO/PRB open: uomId lokal + vendorUomId by satuan (hindari ID usang → base ONS)
   await rematchOpenDocsAfterProductUomSync(db, tenantId, localProductId, uomDocs);
 }
@@ -414,7 +469,7 @@ export async function deactivateProductFromVendor(
   } else return null;
 
   const existing = await db.collection('products').findOne(filter, {
-    projection: { id: 1, kode: 1, lastVendorSyncEmittedAt: 1 },
+    projection: { id: 1, kode: 1, lastVendorSyncEmittedAt: 1, mergedInto: 1 },
   });
   if (!existing) return null;
 
@@ -438,11 +493,13 @@ export async function deactivateProductFromVendor(
     {
       $set: {
         aktif: false,
+        vendorAktif: false,
         updatedAt: now,
         lastVendorSyncEmittedAt: new Date(stampMs),
       },
     },
   );
+  await refreshCanonicalAktif(db, tid, canonicalIdsForRows([existing]));
   return r.modifiedCount ? { kode: product.kode, action: 'deactivated' } : null;
 }
 
@@ -479,14 +536,16 @@ export async function reconcileOrphanVendorProducts(
     aktif: { $ne: false },
     vendorStokId: { $exists: true, $type: 'string', $ne: '' },
     vendorTenantId: { $exists: true, $type: 'string', $ne: '' },
-  }).project({ id: 1, kode: 1, vendorStokId: 1, vendorTenantId: 1 }).toArray();
+  }).project({ id: 1, kode: 1, vendorStokId: 1, vendorTenantId: 1, mergedInto: 1 }).toArray();
 
   const orphanIds: string[] = [];
+  const orphans: typeof rows = [];
   const sample: string[] = [];
   for (const row of rows) {
     const key = vendorCatalogKey(String(row.vendorTenantId), String(row.vendorStokId));
     if (activeCatalogKeys.has(key)) continue;
     orphanIds.push(String(row.id));
+    orphans.push(row);
     if (sample.length < 10) sample.push(String(row.kode || row.id));
   }
 
@@ -495,8 +554,9 @@ export async function reconcileOrphanVendorProducts(
   const now = new Date();
   const r = await db.collection('products').updateMany(
     { tenantId: tid, id: { $in: orphanIds } },
-    { $set: { aktif: false, updatedAt: now, lastVendorSyncEmittedAt: now } },
+    { $set: { aktif: false, vendorAktif: false, updatedAt: now, lastVendorSyncEmittedAt: now } },
   );
+  await refreshCanonicalAktif(db, tid, canonicalIdsForRows(orphans));
   return { deactivated: r.modifiedCount, sample };
 }
 

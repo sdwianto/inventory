@@ -26,6 +26,10 @@ export type RecipeImportProduct = {
   satuan?: string;
   itemRole?: string;
   aktif?: boolean;
+  recipeBaseGrams?: number;
+  recipeBaseMl?: number;
+  isiPerKemasan?: number;
+  satuanIsi?: string;
 };
 
 export type RecipeImportLineDraft = {
@@ -148,10 +152,16 @@ export function matchImportProduct(
   return null;
 }
 
+export type RecipeImportParseOptions = {
+  /** strictRecipeConversion: kolom satuan wajib, tanpa default satuan basis produk. */
+  requireSatuan?: boolean;
+};
+
 /** Parse sheet AOA (baris pertama = header). */
 export function parseRecipeImportAoa(
   aoa: Cell[][],
   products: RecipeImportProduct[],
+  options: RecipeImportParseOptions = {},
 ): RecipeImportParseResult {
   const errors: string[] = [];
   const rows = (aoa || []).filter((r) => Array.isArray(r) && r.some((c) => cellStr(c) !== ''));
@@ -229,12 +239,16 @@ export function parseRecipeImportAoa(
       errors.push(`Baris ${r + 1}: pct_kecil harus 1–100`);
       continue;
     }
+    const satuanCell = getS('satuan');
+    if (!satuanCell && options.requireSatuan) {
+      acc.errors.push(`Baris ${r + 1}: satuan kosong untuk bahan ${bahanKode || bahanNama}`);
+    }
     const line: RecipeImportLineDraft = {
       bahanKode,
       bahanNama,
       qty,
       pctKecil: pctKecil != null && Number.isFinite(pctKecil) ? pctKecil : undefined,
-      satuan: getS('satuan') || matched?.product.satuan || '',
+      satuan: satuanCell || (options.requireSatuan ? '' : matched?.product.satuan || ''),
       notes: getS('notes') || undefined,
       match: matched?.match || 'none',
       productId: matched?.product.id,
@@ -301,6 +315,7 @@ export function recipeImportSeedXlsxBuffer(): Buffer {
 export function parseRecipeImportExcel(
   input: Buffer | ArrayBuffer | string,
   products: RecipeImportProduct[],
+  options: RecipeImportParseOptions = {},
 ): RecipeImportParseResult {
   let buf: Buffer;
   if (typeof input === 'string') {
@@ -324,7 +339,7 @@ export function parseRecipeImportExcel(
   if (!sheetName) return { recipes: [], errors: ['Workbook tidak punya sheet'] };
   const ws = wb.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json<Cell[]>(ws, { header: 1, defval: '', raw: true }) as Cell[][];
-  return parseRecipeImportAoa(aoa, products);
+  return parseRecipeImportAoa(aoa, products, options);
 }
 
 /** @deprecated pakai parseRecipeImportExcel / parseRecipeImportAoa */

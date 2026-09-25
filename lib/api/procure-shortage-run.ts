@@ -11,6 +11,7 @@ import { insertWithAudit } from '@/lib/api/cas';
 import { txOpts } from '@/lib/api/transaction';
 import { tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
 import { buildPlanMaterialExplosion } from '@/lib/api/handlers/material-requirements';
+import { finalizeMrpRecipeRevisions } from '@/lib/api/recipe-revisions';
 import { handlePurchaseRequirements } from '@/lib/api/handlers/purchase-requirements';
 import {
   MATERIAL_REQUIREMENTS_COLLECTION,
@@ -167,8 +168,9 @@ async function runProcureShortageCore(
   }
 
   const tenantId = tenantIdForWrite(opts.scopeAuth, {});
-  const now = new Date();
   const actor = auditActor(ctx.auth);
+  const pinned = await finalizeMrpRecipeRevisions(db, built, actor);
+  const now = new Date();
 
   let history: DocHistoryEntry[] = appendDocHistory([], {
     at: now,
@@ -209,7 +211,8 @@ async function runProcureShortageCore(
     kitchenId: plan.kitchenId,
     kitchenNama: plan.kitchenNama,
     warehouseKode: built.warehouseKode!,
-    lines: built.lines!,
+    lines: pinned.lines,
+    recipeRevisions: pinned.recipeRevisions,
     status: 'APPROVED',
     history,
     summary: built.summary!,

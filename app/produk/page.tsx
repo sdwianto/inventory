@@ -380,6 +380,14 @@ export default function ProdukPage() {
       payload.recipeBaseMl = form.recipeBaseMl === '' || form.recipeBaseMl == null
         ? null
         : num(form.recipeBaseMl);
+      payload.isiPerKemasan = form.isiPerKemasan === '' || form.isiPerKemasan == null
+        ? null
+        : num(form.isiPerKemasan);
+      payload.satuanIsi = str(form.satuanIsi).trim().toUpperCase() || null;
+      payload.shelfLifeDays = form.shelfLifeDays === '' || form.shelfLifeDays == null
+        ? null
+        : num(form.shelfLifeDays);
+      payload.requiresLotNo = form.requiresLotNo === true;
       payload.detailProduk = str(form.detailProduk);
       payload.fotos = asArray(form.fotos).map((x) => str(x)).filter(Boolean);
       // MASTER wajib kirim tenant operasional (query + body) — filter dropdown bisa kosong
@@ -457,6 +465,8 @@ export default function ProdukPage() {
     { key: 'hargaEcer', label: 'Harga Ecer' },
     { key: 'stokBase', label: 'Stok (base)' },
     { key: 'minStok', label: 'Stok Minimum (base)' },
+    { key: 'shelfLifeDays', label: 'Masa Simpan (hari)' },
+    { key: 'requiresLotNo', label: 'No. Lot Pemasok Wajib', value: (r) => (r.requiresLotNo === true ? 'Ya' : 'Tidak') },
     { key: 'aktif', label: 'Aktif', value: (r) => (r.aktif !== false ? 'Ya' : 'Tidak') },
   ];
 
@@ -482,6 +492,8 @@ export default function ProdukPage() {
           hargaEcer: p.hargaEcer,
           stokBase: p.stok,
           minStok: p.minStok,
+          shelfLifeDays: p.shelfLifeDays ?? '',
+          requiresLotNo: p.requiresLotNo === true,
           aktif: p.aktif,
         });
         continue;
@@ -504,6 +516,8 @@ export default function ProdukPage() {
           hargaEcer: u.hargaEcer ?? p.hargaEcer,
           stokBase: u.isBase === true ? p.stok : '',
           minStok: u.isBase === true ? p.minStok : '',
+          shelfLifeDays: p.shelfLifeDays ?? '',
+          requiresLotNo: p.requiresLotNo === true,
           aktif: p.aktif,
         });
       }
@@ -1203,6 +1217,62 @@ export default function ProdukPage() {
                 Untuk konversi ML dari resep ke basis kemasan. Tidak mengubah satuan stok/pengadaan.
               </p>
             </div>
+            <div>
+              <Label>Isi per kemasan</Label>
+              <Input
+                type="number"
+                min={0}
+                step="any"
+                value={form.isiPerKemasan === '' || form.isiPerKemasan == null ? '' : num(form.isiPerKemasan)}
+                onChange={(e) => setForm({
+                  ...form,
+                  isiPerKemasan: e.target.value === '' ? '' : parseFloat(e.target.value),
+                })}
+                placeholder="contoh: 10"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                1 {str(form.satuan) || 'basis'} = N satuan isi. Berat di nama produk dianggap per satuan isi.
+              </p>
+            </div>
+            <div>
+              <Label>Satuan isi</Label>
+              <Input
+                value={str(form.satuanIsi)}
+                onChange={(e) => setForm({ ...form, satuanIsi: e.target.value.toUpperCase() })}
+                placeholder="contoh: SACHET"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Isi berpasangan dengan jumlah isi. Resep boleh memakai satuan ini (mis. 2 SACHET).
+              </p>
+            </div>
+
+            <FormSectionTitle>Kedaluwarsa &amp; Lot</FormSectionTitle>
+            <div>
+              <Label>Masa simpan (hari)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={3650}
+                step={1}
+                value={form.shelfLifeDays === '' || form.shelfLifeDays == null ? '' : num(form.shelfLifeDays)}
+                onChange={(e) => setForm({
+                  ...form,
+                  shelfLifeDays: e.target.value === '' ? '' : Number(e.target.value),
+                })}
+                placeholder="kosong = wajib isi tanggal kedaluwarsa di GRN"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Dipakai bila tanggal kedaluwarsa tidak diisi saat terima barang (tanggal terima + N hari).
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.requiresLotNo === true}
+                onChange={(e) => setForm({ ...form, requiresLotNo: e.target.checked })}
+              />
+              No. lot pemasok wajib saat terima barang
+            </label>
 
             <FormSectionTitle>Gudang Penyimpanan</FormSectionTitle>
             <div className="col-span-2">

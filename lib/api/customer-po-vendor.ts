@@ -258,7 +258,8 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
       .filter(Boolean)
       .map(String),
   )];
-  const liveMap = await loadLiveProductMap(db, tid, productIds);
+  // Baris PO menunjuk dokumen katalog vendor itu sendiri — salinan tergabung tidak dialihkan ke item kanonik.
+  const liveMap = await loadLiveProductMap(db, tid, productIds, { followMerged: false });
   const liveIds = [...new Set(productIds.map((id) => String(liveMap.get(id)?.id || id)))];
   const uomsByProduct = await listProductUomsByProductIds(db, tid, liveIds);
 
@@ -268,7 +269,8 @@ export async function enrichPoItemsForVendor(db: Db, tenantId: string, items: Js
     const resolved = resolveProduct(it, maps);
     const prod = (resolved?.id ? liveMap.get(String(resolved.id)) : null) || resolved;
 
-    if (prod && !isCatalogProductActive(prod)) {
+    // Item kanonik tetap aktif selama ada sumber vendor lain; vendorAktif = status di katalog vendornya sendiri.
+    if (prod && (!isCatalogProductActive(prod) || (prod as { vendorAktif?: boolean }).vendorAktif === false)) {
       const label = String(prod.nama || prod.kode || it.nama || it.kode || '?');
       const kode = String(prod.kode || it.kode || it.vendorKode || '');
       return {

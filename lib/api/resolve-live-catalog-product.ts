@@ -14,6 +14,8 @@ export type LiveCatalogProduct = {
   vendorStokId?: string;
   masterProductId?: string | null;
   cutoverToKode?: string;
+  /** Salinan vendor yang sudah digabung → id item persediaan kanonik. */
+  mergedInto?: string | null;
   satuan?: string;
   itemRole?: string;
   hargaBeli?: number;
@@ -21,6 +23,9 @@ export type LiveCatalogProduct = {
   syncSource?: string;
   recipeBaseGrams?: number;
   recipeBaseMl?: number;
+  isiPerKemasan?: number;
+  satuanIsi?: string;
+  recipeBridgeSource?: string;
   nutrition?: { gramsPerUnit?: number };
 };
 
@@ -28,12 +33,21 @@ export function isCatalogProductActive(p: LiveCatalogProduct | null | undefined)
   return !!p && p.aktif !== false;
 }
 
-/** Pilih salinan aktif: vendor yang sama → master yang sama → kode cutover → kode yang sama. */
+function isMergedCopy(p: LiveCatalogProduct): boolean {
+  return !!String(p.mergedInto || '').trim();
+}
+
+/**
+ * Pilih salinan aktif: vendor yang sama → master yang sama → kode cutover → kode yang sama.
+ * `includeMerged: false` (default) tidak pernah memilih salinan vendor yang sudah digabung.
+ */
 export function pickLiveCatalogProduct(
   current: LiveCatalogProduct,
   candidates: LiveCatalogProduct[],
+  opts: { includeMerged?: boolean } = {},
 ): LiveCatalogProduct | null {
-  const active = candidates.filter((p) => isCatalogProductActive(p) && p.id && p.id !== current.id);
+  const active = candidates.filter((p) => isCatalogProductActive(p) && p.id && p.id !== current.id
+    && (opts.includeMerged || !isMergedCopy(p)));
   if (!active.length) return null;
 
   const kode = String(current.kode || '').trim();
@@ -80,8 +94,10 @@ export function pickSameSkuInTenant(
   foreign: LiveCatalogProduct,
   localRows: LiveCatalogProduct[],
 ): LiveCatalogProduct | null {
-  const active = localRows.filter((p) => isCatalogProductActive(p) && p.id);
-  if (!active.length) return null;
+  const withMerged = localRows.filter((p) => isCatalogProductActive(p) && p.id);
+  // Salinan vendor tergabung hanya cocok lewat vendorStokId (attach lalu memetakan ke item kanonik).
+  const active = withMerged.filter((p) => !isMergedCopy(p));
+  if (!withMerged.length) return null;
 
   const stokId = String(foreign.vendorStokId || '').trim();
   const kode = String(foreign.kode || '').trim();
@@ -90,7 +106,7 @@ export function pickSameSkuInTenant(
   const cutover = String(foreign.cutoverToKode || '').trim();
 
   if (stokId) {
-    const byStok = active.filter((p) => String(p.vendorStokId || '').trim() === stokId);
+    const byStok = withMerged.filter((p) => String(p.vendorStokId || '').trim() === stokId);
     if (byStok.length === 1) return byStok[0];
     if (byStok.length > 1) {
       return kode
@@ -133,11 +149,15 @@ const SKU_MATCH_PROJECTION = {
   syncSource: 1,
   recipeBaseGrams: 1,
   recipeBaseMl: 1,
+  isiPerKemasan: 1,
+  satuanIsi: 1,
+  recipeBridgeSource: 1,
   nutrition: 1,
   vendorTenantId: 1,
   vendorStokId: 1,
   masterProductId: 1,
   cutoverToKode: 1,
+  mergedInto: 1,
 } as const;
 
 type CatalogDb = { collection: (name: string) => ProductColl };
@@ -219,24 +239,46 @@ export async function resolveForeignSkuInTenant(
   return map.get(id) ?? null;
 }
 
+export type LiveCatalogOptions = {
+  /**
+   * Default true: salinan vendor tergabung → item persediaan kanonik (stok, resep, MRP, RL).
+   * false hanya untuk jalur pembelian ke vendor (CPO) yang butuh dokumen katalog vendor itu sendiri.
+   */
+  followMerged?: boolean;
+};
+
 export async function attachLiveCatalogProducts(
   db: { collection: (name: string) => ProductColl },
   tenantId: string,
   products: LiveCatalogProduct[],
+  opts: LiveCatalogOptions = {},
 ): Promise<Map<string, LiveCatalogProduct>> {
+  const follow = opts.followMerged !== false;
   const map = new Map<string, LiveCatalogProduct>();
-  const inactive: LiveCatalogProduct[] = [];
-  for (const p of products) {
-    const id = String(p.id || '').trim();
+
+  let canonById = new Map<string, LiveCatalogProduct>();
+  if (follow) {
+    const targets = [...new Set(products.map((p) => String(p.mergedInto || '').trim()).filter(Boolean))];
+    if (targets.length) {
+      const canon = await db.collection('products').find({ tenantId, id: { $in: targets } }).toArray();
+      canonById = new Map(canon.map((c) => [String(c.id), c]));
+    }
+  }
+
+  const inactive: Array<{ id: string; p: LiveCatalogProduct }> = [];
+  for (const raw of products) {
+    const id = String(raw.id || '').trim();
     if (!id) continue;
+    const target = follow ? String(raw.mergedInto || '').trim() : '';
+    const p = (target && canonById.get(target)) || raw;
     if (isCatalogProductActive(p)) map.set(id, p);
-    else inactive.push(p);
+    else inactive.push({ id, p });
   }
   if (!inactive.length) return map;
 
   const kodes = new Set<string>();
   const masters = new Set<string>();
-  for (const p of inactive) {
+  for (const { p } of inactive) {
     const kode = String(p.kode || '').trim();
     if (kode) kodes.add(kode);
     const cutover = String(p.cutoverToKode || '').trim();
@@ -256,10 +298,8 @@ export async function attachLiveCatalogProducts(
     }).toArray()
     : [];
 
-  for (const p of inactive) {
-    const id = String(p.id || '').trim();
-    if (!id) continue;
-    map.set(id, pickLiveCatalogProduct(p, siblings) || p);
+  for (const { id, p } of inactive) {
+    map.set(id, pickLiveCatalogProduct(p, siblings, { includeMerged: !follow }) || p);
   }
   return map;
 }
@@ -268,6 +308,7 @@ export async function loadLiveProductMap(
   db: { collection: (name: string) => ProductColl },
   tenantId: string,
   ids: string[],
+  opts: LiveCatalogOptions = {},
 ): Promise<Map<string, LiveCatalogProduct>> {
   const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
   if (!unique.length) return new Map();
@@ -280,7 +321,7 @@ export async function loadLiveProductMap(
     seen.add(id);
     locals.push(row);
   }
-  const live = await attachLiveCatalogProducts(db, tenantId, locals);
+  const live = await attachLiveCatalogProducts(db, tenantId, locals, opts);
   const out = new Map<string, LiveCatalogProduct>();
   for (const id of unique) {
     const row = resolved.get(id);

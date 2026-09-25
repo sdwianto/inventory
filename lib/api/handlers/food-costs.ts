@@ -23,6 +23,12 @@ import {
   type ProductionResultDoc,
 } from '@/lib/food-production/production-result';
 import type { HandlerContext } from '@/types/api/handler';
+import { loadPlanRecipesForCost } from '@/lib/api/recipe-revisions';
+import {
+  RECIPE_REVISIONS_COLLECTION,
+  recipeFromRevision,
+  type RecipeRevisionDoc,
+} from '@/lib/food-production/recipe-revision';
 
 function asCostRef(p: Record<string, unknown>): ProductCostRef {
   return {
@@ -63,7 +69,18 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
     const tenantFilter = withTenantFilter(scopeAuth, {});
 
     if (scope === 'recipe') {
-      const recipe = await db.collection(RECIPES_COLLECTION).findOne({ ...tenantFilter, id }) as RecipeDoc | null;
+      const revisionId = String(url.searchParams.get('revisionId') || '').trim();
+      let recipe: RecipeDoc | null;
+      if (revisionId) {
+        const rev = await db.collection(RECIPE_REVISIONS_COLLECTION).findOne(
+          { ...tenantFilter, recipeId: id, id: revisionId },
+          { projection: { _id: 0 } },
+        ) as RecipeRevisionDoc | null;
+        if (!rev) return err('Revisi resep tidak ditemukan', 404);
+        recipe = recipeFromRevision(rev);
+      } else {
+        recipe = await db.collection(RECIPES_COLLECTION).findOne({ ...tenantFilter, id }) as RecipeDoc | null;
+      }
       if (!recipe) return err('Resep tidak ditemukan', 404);
       const productsById = await loadProducts(db, scopeAuth, (recipe.lines || []).map((l) => l.productId));
       return ok(analyzeRecipeStandardCost({ recipe, productsById }));
@@ -100,11 +117,15 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         ...directRecipeIds,
         ...menus.flatMap((m) => (m.items || []).map((i) => i.recipeId)),
       ])];
-      const recipes = recipeIds.length
-        ? await db.collection(RECIPES_COLLECTION)
-          .find({ ...tenantFilter, id: { $in: recipeIds } })
-          .toArray() as unknown as RecipeDoc[]
-        : [];
+      // Resep dari revisi yang dipin MRP rencana: edit resep sesudahnya tidak mengubah HPP rencana ini.
+      const planRecipes = await loadPlanRecipesForCost(db, plan.tenantId, plan.id, recipeIds);
+      const { recipes } = planRecipes;
+      const recipeRevision = {
+        recipeSource: planRecipes.source,
+        recipeRevisions: planRecipes.pins,
+        ...(planRecipes.mrpNo ? { mrpNo: planRecipes.mrpNo } : {}),
+        ...(planRecipes.pinsBackfilled ? { recipeRevisionsBackfilled: true } : {}),
+      };
       const productIds = recipes.flatMap((r) => (r.lines || []).map((l) => l.productId));
       const standard = analyzePlanStandardCost({
         planId: plan.id,
@@ -115,7 +136,7 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         productsById: await loadProducts(db, scopeAuth, productIds),
       });
       if ('error' in standard) return err(standard.error, 400);
-      if (scope === 'plan') return ok(standard);
+      if (scope === 'plan') return ok({ ...standard, ...recipeRevision });
 
       const result = await db.collection(PRODUCTION_RESULTS_COLLECTION).findOne(
         { ...tenantFilter, productionPlanId: plan.id, status: 'COMPLETED' },
@@ -125,7 +146,7 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
       const productsById = await loadProducts(db, scopeAuth, [
         ...new Set([...productIds, ...actualInput.productIds]),
       ]);
-      return ok(analyzeActualCost({
+      const actual = analyzeActualCost({
         planId: plan.id,
         planNo: plan.noDokumen,
         issueLines: actualInput.issueLines,
@@ -133,7 +154,8 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         productsById,
         standard: standard.standard,
         ...(actualInput.kartuCostByProduct ? { kartuCostByProduct: actualInput.kartuCostByProduct } : {}),
-      }));
+      });
+      return ok({ ...actual, ...recipeRevision });
     }
 
     return err('scope wajib recipe | menu | plan | actual', 400);

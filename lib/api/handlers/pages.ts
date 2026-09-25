@@ -141,7 +141,7 @@ export async function handlePages({
       itemRole: url.searchParams.get('itemRole'),
     });
     if (catalog.error) return err(catalog.error, 400);
-    filter = catalog.filter as Record<string, unknown>;
+    filter = { ...(catalog.filter as Record<string, unknown>), mergedInto: null };
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
     const { limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });

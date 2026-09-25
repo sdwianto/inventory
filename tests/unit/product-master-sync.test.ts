@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/stock-ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/stock-ledger')>()),
   setProductWarehouseStock: vi.fn(async () => ({ ok: true })),
+  refreshProductsMasterStock: vi.fn(async () => ({ updated: 0, skipped: 0 })),
 }));
 vi.mock('@/lib/api/apply-product-classification', () => ({
   applyInferredClassification: vi.fn(async () => ({})),
@@ -13,6 +14,13 @@ vi.mock('@/lib/api/product-uom', () => ({
   replaceProductUomsFromVendor: vi.fn(async () => []),
   productDenormFromBaseUom: vi.fn(() => ({})),
   bulkReplaceProductUoms: vi.fn(async () => new Map()),
+}));
+vi.mock('@/lib/api/product-merge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/product-merge')>()),
+  findKodeCanonical: vi.fn(async () => null),
+  findKodeCanonicalBatch: vi.fn(async () => new Map()),
+  refreshCanonicalAktif: vi.fn(async () => 0),
+  relinkMergedCopyForKode: vi.fn(async () => null),
 }));
 vi.mock('@/lib/api/product-sync', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/product-sync')>();
