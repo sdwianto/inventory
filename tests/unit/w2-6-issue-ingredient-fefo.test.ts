@@ -72,8 +72,12 @@ describe('W2-6 consumeIngredientLotsFefo', () => {
       sort: () => findCursor,
       toArray: async () => lots,
     };
+    const emptyCursor = { sort: () => emptyCursor, project: () => emptyCursor, toArray: async () => [] };
     const db = {
-      collection: () => ({
+      collection: (name: string) => (name === 'stock_allocations' ? {
+        find: () => emptyCursor,
+        findOne: async () => null,
+      } : {
         find: () => findCursor,
         updateOne: async (f: { id: string }, u: { $set: Record<string, unknown> }) => {
           updates.push({ id: f.id, set: u.$set });

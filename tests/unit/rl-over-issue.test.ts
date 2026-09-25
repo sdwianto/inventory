@@ -8,6 +8,11 @@ import {
 import type { PlanReference, PlanReferenceLine } from '@/lib/food-production/plan-reference';
 
 vi.mock('@/lib/api/dashboard-snapshot', () => ({ invalidateDashboardSnapshot: vi.fn() }));
+vi.mock('@/lib/api/transaction', () => ({
+  runInTransactionOrFallback: async (fn: (ctx: { db: unknown; session?: undefined }) => unknown) =>
+    fn({ db: (globalThis as { __tenantSettingsDb?: unknown }).__tenantSettingsDb }),
+  txOpts: () => ({}),
+}));
 
 function line(partial: Partial<PlanReferenceLine>): PlanReferenceLine {
   return {
@@ -85,6 +90,15 @@ describe('evaluateRlOverIssue', () => {
     expect(rlOverIssueMissingReasonMessage(res)).toMatch(/Sabun: 1 di luar acuan rencana/);
   });
 
+  it('baris acuan bersumber NONE (tanpa PO/MRP) dilaporkan di luar acuan rencana', () => {
+    const res = evaluateRlOverIssue(
+      ref([line({ productId: 'sabun', productIds: ['sabun'], sumber: 'NONE', acuanQty: 0, rlPosted: 0, sisa: 0 })]),
+      [{ stokId: 'sabun', nama: 'Sabun', qtyBase: 1 }],
+      0,
+    );
+    expect(res.lines[0]).toMatchObject({ sumber: 'DI_LUAR_ACUAN', acuanQty: 0 });
+  });
+
   it('salinan katalog cocok lewat aliasProductIds', () => {
     const res = evaluateRlOverIssue(
       ref([line({ aliasProductIds: ['gula-master'] })]),
@@ -113,6 +127,7 @@ describe('PUT /tenant/settings — toleransi & feature flag hanya MASTER', () =>
     const db = {
       collection: () => ({ updateOne, findOne: vi.fn().mockResolvedValue({ tenantId: 't1' }) }),
     };
+    (globalThis as { __tenantSettingsDb?: unknown }).__tenantSettingsDb = db;
     const res = await handleTenants({
       db,
       route: '/tenant/settings',

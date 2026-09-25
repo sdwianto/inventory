@@ -18,6 +18,15 @@ vi.mock('@/lib/api/audit-log', () => ({ writeAuditLog: async () => {} }));
 
 import { applyCreditNoteFromVendor } from '@/lib/api/hutang-from-vendor';
 
+const approvedInvoiceJournal = {
+  find: (filter: { sourceType?: string }) => ({
+    sort: () => ({
+      toArray: async () => (filter.sourceType === 'AUTO_HUTANG_VENDOR' ? [{ id: 'j-inv' }] : []),
+    }),
+  }),
+  countDocuments: async () => 0,
+};
+
 describe('applyCreditNoteFromVendor — clearTransit race-safe', () => {
   beforeEach(() => {
     createJournalIfNotExists.mockClear();
@@ -52,6 +61,7 @@ describe('applyCreditNoteFromVendor — clearTransit race-safe', () => {
             updateOne: async () => ({ matchedCount: 1 }),
           };
         }
+        if (name === 'jurnal') return approvedInvoiceJournal;
         throw new Error(name);
       },
     };

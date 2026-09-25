@@ -31,11 +31,13 @@ import {
 } from '@/lib/api/hutang-filters';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { buildHutangPaymentJournalLines, buildPaidExternalJournalLines, reverseJournalDetails } from '@/lib/api/journal-lines';
+import { postVendorHutangJournal, voidVendorHutangJournal } from '@/lib/api/hutang-vendor-journal';
 import { resolveKasRekening } from '@/lib/api/cash-bank-accounts';
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { upsertSupplierPriceBookFromHutang } from '@/lib/api/supplier-price-book-from-invoice';
 import { CasConflictError, casConflict, isCasConflict } from '@/lib/api/cas';
+import { auditActor, writeAuditLog } from '@/lib/api/audit-log';
 import type { HandlerContext } from '@/types/api/handler';
 
 /** Status, approvalStatus, dan sisa persis seperti saat dibaca (null cocok dengan field hilang). */
@@ -332,8 +334,36 @@ export async function handleVendorHutang({
       patch.matchOverrideBy = approver;
     }
 
-    const res = await db.collection('hutang').updateOne(hutangStateFilter(hutang), { $set: patch });
-    if (res.matchedCount === 0) return casConflict();
+    const tenantId = String(hutang.tenantId || auth?.tenantId || 'default');
+    try {
+      await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+        const res = await txDb.collection('hutang').updateOne(
+          hutangStateFilter(hutang),
+          { $set: patch },
+          txOpts(session),
+        );
+        if (res.matchedCount === 0) throw new CasConflictError();
+        await postVendorHutangJournal(txDb, { ...hutang, tenantId }, { userName: approver.userName }, session);
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'HUTANG_APPROVED',
+          entityType: 'hutang',
+          entityId: String(hutang.id),
+          ...auditActor(auth),
+          summary: `Setujui tagihan vendor ${hutang.noInvoice || hutang.noHutang}${patch.matchOverride ? ' (override 3-way match)' : ''}`,
+          metadata: {
+            noHutang: hutang.noHutang,
+            total: hutang.total,
+            matchStatus: hutang.matchStatus || null,
+            matchOverride: patch.matchOverride === true,
+            matchOverrideNote: patch.matchOverride ? patch.matchOverrideNote : undefined,
+          },
+        }, session);
+      });
+    } catch (e) {
+      if (isCasConflict(e)) return casConflict(e.message);
+      throw e;
+    }
     const approved = { ...hutang, ...patch };
     try {
       await upsertSupplierPriceBookFromHutang(db, approved);
@@ -378,25 +408,19 @@ export async function handleVendorHutang({
           txOpts(session),
         );
         if (rejected.matchedCount === 0) throw new CasConflictError();
-        // AUTO_HUTANG_VENDOR posting terjadi saat invoice DIBUAT, sebelum review — tolak
-        // harus membalikkannya juga, kalau tidak Hutang Usaha/Persediaan di GL tetap
-        // mencatat tagihan yang sudah ditolak (mis. duplikat GRN yang sama).
-        const accrual = await txDb.collection('jurnal').findOne({
+        await voidVendorHutangJournal(txDb, { ...hutang, tenantId }, {
+          userName: rejector.userName,
+          keterangan: `Tolak tagihan vendor ${hutang.noInvoice || hutang.noHutang}`,
+        }, session);
+        await writeAuditLog(txDb, {
           tenantId,
-          sourceType: 'AUTO_HUTANG_VENDOR',
-          sourceId: hutang.id,
-        }, txOpts(session));
-        if (accrual?.details?.length) {
-          await createJournalIfNotExists(txDb, {
-            tanggal: now,
-            keterangan: `Tolak tagihan vendor ${hutang.noInvoice || hutang.noHutang}`,
-            sourceType: 'AUTO_HUTANG_VENDOR_VOID',
-            sourceId: hutang.id,
-            details: reverseJournalDetails(accrual.details),
-            userName: rejector.userName,
-            tenantId,
-          }, session);
-        }
+          action: 'HUTANG_REJECTED',
+          entityType: 'hutang',
+          entityId: String(hutang.id),
+          ...auditActor(auth),
+          summary: `Tolak tagihan vendor ${hutang.noInvoice || hutang.noHutang}`,
+          metadata: { noHutang: hutang.noHutang, total: hutang.total, reason: hutangBody.reason || 'Ditolak admin' },
+        }, session);
       });
     } catch (e) {
       if (isCasConflict(e)) return casConflict(e.message);

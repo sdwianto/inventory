@@ -26,6 +26,14 @@ import { VENDOR_RETURNS_COLLECTION, vendorReturnLineKey, type VendorReturnDoc, t
 import type { HandlerContext } from '@/types/api/handler';
 import type { JsonObject } from '@/types/json';
 import { casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, insertWithAudit } from '@/lib/api/cas';
+import { resolveStockProducts } from '@/lib/api/product-merge';
+import { effectiveIngredientQtyRemaining } from '@/lib/food-production/ingredient-lot';
+import { qtyGt, roundQty } from '@/lib/stock-ledger/precision';
+import {
+  claimRejectedLotForRtv,
+  loadRejectedLotForFollowUp,
+  releaseRejectedLotRtvClaim,
+} from '@/lib/stock-ledger/lot-qc';
 
 const MAX_PHOTOS = 5;
 const RTV_ROLES = RTV_CREATE_ROLES;
@@ -62,6 +70,8 @@ interface RtvBody extends Record<string, unknown> {
   source?: string;
   grnId?: string;
   lineId?: string;
+  /** `qc-reject` — lot ditolak inspeksi QC. */
+  lotId?: string;
 }
 
 async function resolvePostedGrn(
@@ -85,6 +95,9 @@ async function resolvePostedGrn(
   });
   if (!grn) return { error: 'GRN terkait tidak ditemukan' };
   if (String(grn.status) !== 'POSTED') return { error: 'GRN terkait harus POSTED sebelum retur vendor' };
+  if (grn.reversalPendingId) {
+    return { error: `GRN ${grn.noGRN || ''} sedang diajukan pembalik ${grn.reversalPendingNo || ''} — tolak/batalkan pengajuan itu dulu`.replace(/\s+/g, ' ') };
+  }
   return {
     id: String(grn.id),
     noGRN: grn.noGRN ? String(grn.noGRN) : undefined,
@@ -141,6 +154,9 @@ async function createVendorReturnFromGrnReject(
   });
   if (!grn) return err('GRN tidak ditemukan', 404);
   if (String(grn.status) !== 'POSTED') return err('GRN harus POSTED sebelum retur vendor', 400);
+  if (grn.reversalPendingId) {
+    return err(`GRN ini sedang diajukan pembalik ${grn.reversalPendingNo || ''} — tolak/batalkan pengajuan itu dulu`.replace(/\s+/g, ' '), 409);
+  }
 
   const items = (grn.items || []) as JsonObject[];
   const item = items.find((it) => String(it.lineId) === lineId);
@@ -204,6 +220,8 @@ async function createVendorReturnFromGrnReject(
       const claim = await txDb.collection('goods_receipts').updateOne(
         {
           id: grn.id,
+          status: 'POSTED',
+          reversalPendingId: { $exists: false },
           items: {
             $elemMatch: {
               lineId,
@@ -273,6 +291,158 @@ async function createVendorReturnFromGrnReject(
     return err(msg, 400);
   }
 
+  return ok(clean({ ...doc } as JsonObject), 201);
+}
+
+/**
+ * Fase 3.2 — RTV DRAFT dari lot ditolak inspeksi QC. Barang sudah masuk stok & tertagih, jadi
+ * alurnya sama dengan retur dari tagihan (stok keluar + CN), dibatasi satu baris faktur produk lot
+ * dengan qty = sisa lot (dalam satuan faktur) dan lot dipin. Klaim lot + insert RTV atomik.
+ */
+async function createVendorReturnFromQcReject(
+  db: HandlerContext['db'],
+  { tenantId, auth, rtvBody }: { tenantId: string; auth: HandlerContext['auth']; rtvBody: RtvBody },
+): Promise<NextResponse> {
+  const lotId = String(rtvBody.lotId || '').trim();
+  if (!lotId) return err('lotId wajib untuk retur dari lot ditolak QC', 400);
+  const lot = await loadRejectedLotForFollowUp(db, tenantId, lotId);
+  if ('error' in lot) return err(lot.error, lot.status);
+  if (!lot.grnId) return err('Lot ini bukan dari penerimaan barang (GRN) — tidak bisa diretur ke vendor', 400);
+
+  const grnRow = await db.collection('goods_receipts').findOne({ ...tenantIdMatchFilter(tenantId), id: lot.grnId });
+  if (!grnRow) return err('GRN lot ini tidak ditemukan', 404);
+  const hutangOr: Record<string, unknown>[] = [{ grnId: String(grnRow.id) }];
+  if (grnRow.noGRN) hutangOr.push({ noGRN: String(grnRow.noGRN) });
+  if (grnRow.noDO) hutangOr.push({ noDO: String(grnRow.noDO) });
+  const hutang = await db.collection('hutang').findOne({
+    ...tenantIdMatchFilter(tenantId),
+    referenceType: 'VENDOR_INVOICE',
+    approvalStatus: { $nin: ['REJECTED'] },
+    $or: hutangOr,
+  });
+  if (!hutang || !String(hutang.noInvoice || '').trim()) {
+    return err(
+      `Faktur vendor untuk ${grnRow.noGRN || 'GRN ini'} belum ada — buat faktur dulu di Penerimaan Barang, lalu ulangi retur`,
+      400,
+    );
+  }
+  const grn = await resolvePostedGrn(db, tenantId, { grnId: grnRow.id, noGRN: grnRow.noGRN, noDO: grnRow.noDO });
+  if ('error' in grn) return err(grn.error, 400);
+
+  const existingDraft = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({
+    ...tenantIdMatchFilter(tenantId),
+    hutangId: String(hutang.id || ''),
+    status: 'DRAFT',
+  }) as VendorReturnDoc | null;
+  if (existingDraft) {
+    return err(`Faktur ini sudah punya draft retur ${existingDraft.noReturn || existingDraft.id} — ajukan atau hapus draft itu dulu`, 409);
+  }
+
+  const posted = await loadPostedReturns(db, tenantId, String(hutang.noInvoice || ''), String(hutang.id || ''));
+  const blocking = findInflightVendorReturnSibling(posted as unknown as VendorReturnDoc[], '');
+  if (blocking) {
+    return err(
+      `Faktur ini masih punya retur ${blocking.noReturn || blocking.id} yang sedang berjalan — selesaikan dulu sebelum meretur lot ditolak`,
+      409,
+    );
+  }
+  const mapped = await buildVendorReturnLinesFromHutang(db, tenantId, asHutangLike(hutang), asPostedReturns(posted));
+  const targets = await resolveStockProducts(db, tenantId, mapped.items.map((it) => it.localStokId));
+  if ('error' in targets) return err(targets.error, 400);
+  const candidates = mapped.items.filter((it) => (
+    (targets.targets.get(it.localStokId)?.productId || it.localStokId) === lot.productId
+  ));
+  const label = lot.productNama || lot.productKode || lot.productId;
+  if (!candidates.length) {
+    return err(mapped.skipped[0] || `Baris faktur untuk ${label} tidak ditemukan atau sudah habis diretur`, 400);
+  }
+  const lotQtyBase = effectiveIngredientQtyRemaining(lot);
+  const qtyFor = (it: VendorReturnLine) => roundQty(lotQtyBase / (Number(it.factorToBase) > 0 ? Number(it.factorToBase) : 1));
+  const pick = candidates.find((it) => !qtyGt(qtyFor(it), Number(it.maxQty) || 0));
+  if (!pick) {
+    const c = candidates[0];
+    return err(
+      `Qty lot ditolak ${qtyFor(c)} ${c.satuan} melebihi sisa yang bisa diretur pada faktur ${hutang.noInvoice} (maks ${c.maxQty} ${c.satuan})`,
+      400,
+    );
+  }
+  const qty = qtyFor(pick);
+  const line: VendorReturnLine = {
+    ...pick,
+    qty,
+    qtyBase: lotQtyBase,
+    jumlah: Math.round(qty * (pick.harga || 0)),
+    gudangKode: lot.warehouseKode,
+    lotNo: lot.lotNo,
+    qcLotId: lot.id,
+  };
+  const returable = buildReturableLines(asHutangLike(hutang), asPostedReturns(posted));
+  const qtyErr = assertReturnQtyWithinMax([line], returable);
+  if (qtyErr) return err(qtyErr, 400);
+  const identErr = vendorReturnSalesIdentityError([line]);
+  if (identErr) return err(identErr, 400);
+
+  const reason = String(rtvBody.reason || '').trim()
+    || `Ditolak QC${lot.noInspeksi ? ` ${lot.noInspeksi}` : ''}: ${lot.qcRejectReason || 'tidak lolos pemeriksaan'}`;
+  const { subTotal, total } = totalsFromItems([line]);
+  const now = new Date();
+  const writeTid = tenantIdForWrite(auth, rtvBody) || tenantId;
+  const rtvId = uuidv4();
+
+  let doc: VendorReturnDoc;
+  try {
+    doc = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+      const noReturn = await nextDocNumber(txDb, writeTid, 'RTV', 'RTV', session);
+      const claimed = await claimRejectedLotForRtv(txDb, session, { tenantId, lotId: lot.id, rtvId, noReturn });
+      if (!claimed) throw new Error('Lot ini sudah punya retur atau sudah ditindaklanjuti');
+      const built = stampTenantId(writeTid, {
+        id: rtvId,
+        tenantId: writeTid,
+        noReturn,
+        status: 'DRAFT',
+        source: 'qc-reject',
+        qcLotId: lot.id,
+        vendorTenantId: String(hutang.vendorTenantId || ''),
+        supplierName: hutang.supplierName ? String(hutang.supplierName) : null,
+        hutangId: String(hutang.id || ''),
+        vendorInvoiceId: String(hutang.vendorInvoiceId || hutang.referenceId || ''),
+        noInvoice: String(hutang.noInvoice || ''),
+        noGRN: hutang.noGRN ? String(hutang.noGRN) : (grn.noGRN || null),
+        grnId: grn.id,
+        noDO: hutang.noDO ? String(hutang.noDO) : (grn.noDO || null),
+        noPO: hutang.noPO ? String(hutang.noPO) : null,
+        noSO: hutang.noSO ? String(hutang.noSO) : null,
+        reason,
+        photos: [],
+        items: [line],
+        subTotal,
+        total,
+        cnSyncStatus: 'NONE',
+        createdAt: now,
+        updatedAt: now,
+        createdBy: rtvActor(auth, rtvBody),
+      }) as VendorReturnDoc;
+      try {
+        await txDb.collection(VENDOR_RETURNS_COLLECTION).insertOne(built, txOpts(session));
+      } catch (insertErr) {
+        if (!session) await releaseRejectedLotRtvClaim(txDb, undefined, { tenantId, lotId: lot.id, rtvId });
+        throw insertErr;
+      }
+      await writeAuditLog(txDb, {
+        tenantId: writeTid,
+        action: 'VENDOR_RETURN_CREATED',
+        entityType: 'vendor_return',
+        entityId: rtvId,
+        summary: `Draft RTV ${noReturn} dari lot ditolak QC ${lot.lotNo}`,
+        userId: auth?.userId,
+        userName: auth?.name,
+        metadata: { lotId: lot.id, lotNo: lot.lotNo, noInvoice: hutang.noInvoice },
+      }, session);
+      return built;
+    });
+  } catch (e) {
+    return err(e instanceof Error ? e.message : String(e), 400);
+  }
   return ok(clean({ ...doc } as JsonObject), 201);
 }
 
@@ -800,6 +970,9 @@ export async function handleVendorReturns({
     if (String(rtvBody.source || '') === 'grn-reject') {
       return createVendorReturnFromGrnReject(db, { tenantId, auth: scopeAuth, rtvBody });
     }
+    if (String(rtvBody.source || '') === 'qc-reject') {
+      return createVendorReturnFromQcReject(db, { tenantId, auth: scopeAuth, rtvBody });
+    }
 
     const hutang = await loadHutangForReturn(db, tenantId, rtvBody);
     if (!hutang) return err('Tagihan tidak ditemukan. Isi hutangId atau noInvoice.', 400);
@@ -925,7 +1098,8 @@ export async function handleVendorReturns({
     }
     // Baris retur dari item ditolak GRN adalah snapshot tetap (qty = qtyRejected) — abaikan
     // items dari body (reason/photos tetap bisa diubah), jangan proses lewat hutang-bound validation.
-    if (Array.isArray(rtvBody.items) && doc.source !== 'grn-reject') {
+    // Retur lot ditolak QC juga snapshot tetap: qty = sisa lot, lot dipin.
+    if (Array.isArray(rtvBody.items) && doc.source !== 'grn-reject' && doc.source !== 'qc-reject') {
       const hydrated = await hydrateDraftItems(db, tenantId, rtvBody.items, doc.items);
       if ('error' in hydrated) return err(hydrated.error, 400);
       const hutang = await db.collection('hutang').findOne({
@@ -983,6 +1157,9 @@ export async function handleVendorReturns({
               txOpts(session),
             );
           }
+        }
+        if (doc.source === 'qc-reject' && doc.qcLotId) {
+          await releaseRejectedLotRtvClaim(txDb, session, { tenantId, lotId: doc.qcLotId, rtvId: doc.id });
         }
       });
     } catch (e) {

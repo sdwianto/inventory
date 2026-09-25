@@ -1,4 +1,4 @@
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
 import type { MaintenanceRequestDoc, MaintenanceResolutionType } from '@/types/maintenance';
 import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 import { syncAssetStatusFromOpenRequests } from '@/lib/api/maintenance-helpers';
@@ -136,6 +136,54 @@ export async function tryAutoCompleteWrFromGrn(
     noPO: grn.noPO || po.noPO || null,
   });
   return { ...result, wrId };
+}
+
+/**
+ * Fase 3.6 — GRN yang menutup WR otomatis dibalik: WR dibuka lagi (IN_PROGRESS) karena barangnya
+ * dianggap tidak pernah diterima. WR yang ditutup manual atau oleh dokumen lain tidak disentuh.
+ */
+export async function reopenWrClosedByGrn(
+  db: Db,
+  session: ClientSession | undefined,
+  input: { tenantId: string; grnId: string; noGRN: string; noReversal: string; actor?: { userId?: string; userName?: string } },
+): Promise<{ wrId: string; assetId?: string } | null> {
+  const wr = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).findOne(
+    { tenantId: input.tenantId, linkedGrnId: input.grnId, autoClosedBy: 'GRN', status: 'CLOSED' },
+    session ? { session } : {},
+  ) as MaintenanceRequestDoc | null;
+  if (!wr?.id) return null;
+  const now = new Date();
+  const unset: Record<string, ''> = {
+    closedAt: '', autoClosedAt: '', autoClosedBy: '', linkedGrnId: '', linkedGrnNo: '', completedAt: '',
+  };
+  if (String(wr.catatanPenyelesaian || '').startsWith(`Otomatis: GRN ${input.noGRN} diposting`)) {
+    unset.catatanPenyelesaian = '';
+  }
+  const res = await db.collection(MAINTENANCE_REQUESTS_COLLECTION).updateOne(
+    { id: wr.id, status: 'CLOSED', linkedGrnId: input.grnId },
+    {
+      $set: {
+        status: 'IN_PROGRESS',
+        reopenedAt: now,
+        reopenReason: `GRN ${input.noGRN} dibalik (${input.noReversal})`,
+        updatedAt: now,
+      },
+      $unset: unset,
+    },
+    session ? { session } : {},
+  );
+  if (!res.modifiedCount) return null;
+  await writeAuditLog(db, {
+    tenantId: input.tenantId,
+    action: 'MAINTENANCE_WR_REOPENED',
+    entityType: 'maintenance_request',
+    entityId: wr.id,
+    summary: `${wr.noWR} dibuka lagi — GRN ${input.noGRN} dibalik (${input.noReversal})`,
+    userId: input.actor?.userId,
+    userName: input.actor?.userName || 'System',
+    metadata: { grnId: input.grnId, noReversal: input.noReversal },
+  }, session);
+  return { wrId: wr.id, ...(wr.assetId ? { assetId: String(wr.assetId) } : {}) };
 }
 
 export async function tryAutoCompleteWrFromRelease(

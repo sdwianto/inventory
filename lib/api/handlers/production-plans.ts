@@ -8,6 +8,7 @@ import {
 } from '@/lib/api/tenant-master';
 import { RELEASE_CREATE_ROLES, requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { releasePlanReservations } from '@/lib/stock-ledger/plan-reservation';
 import {
   PRODUCTION_PLANS_COLLECTION,
   normalizePlanLines,
@@ -64,6 +65,7 @@ import {
   MATERIAL_ISSUES_COLLECTION,
   ISSUE_ELIGIBLE_PLAN_STATUSES,
   ISSUE_OPEN_STATUSES,
+  poOutstandingQty,
 } from '@/lib/food-production/material-issue';
 import { loadReleasePrefill } from '@/lib/food-production/release-prefill';
 import { isPblReferenceModeEnabled, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
@@ -602,6 +604,11 @@ export async function handleProductionPlans({
             txOpts(session),
           );
           if (srcRes.matchedCount === 0) throw new CasConflictError(`Rencana ${src.noDokumen} sudah berubah — muat ulang`);
+          await releasePlanReservations(txDb, session, {
+            tenantId,
+            productionPlanId: src.id,
+            reason: 'PLAN_CANCELLED',
+          });
         }
 
         const draftMrps = await txDb.collection(MATERIAL_REQUIREMENTS_COLLECTION)
@@ -1110,6 +1117,15 @@ export async function handleProductionPlans({
       collection: PRODUCTION_PLANS_COLLECTION,
       filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
       update: { $set: { status: toStatus, history, updatedAt: now } },
+      before: toStatus === 'COMPLETED' || toStatus === 'CANCELLED'
+        ? async ({ db: txDb, session }) => {
+          await releasePlanReservations(txDb, session, {
+            tenantId: existing.tenantId,
+            productionPlanId: id,
+            reason: toStatus === 'COMPLETED' ? 'PLAN_COMPLETED' : 'PLAN_CANCELLED',
+          });
+        }
+        : undefined,
       audit: {
         tenantId: existing.tenantId,
         action: 'PRODUCTION_PLAN_STATUS',
@@ -1207,7 +1223,8 @@ export async function handleProductionPlans({
     const issueCompleted = Boolean(completedIssue);
     const pblReferenceMode = built.mode === 'REFERENCE' && await isPblReferenceModeEnabled(db, plan.tenantId);
     const sisaLineCount = built.reference.lines.filter((l) => l.sisa > 0).length;
-    const rlFulfilled = built.reference.lines.length > 0 && sisaLineCount === 0;
+    const poOutstandingLineCount = built.reference.lines.filter((l) => poOutstandingQty(l) > 0).length;
+    const rlFulfilled = built.reference.lines.length > 0 && sisaLineCount === 0 && poOutstandingLineCount === 0;
     const materialsReady = pblReferenceMode
       ? rlFulfilled || issueCompleted
       : stockReady || issueCompleted;
@@ -1238,6 +1255,7 @@ export async function handleProductionPlans({
       pblReferenceMode,
       rlFulfilled,
       sisaLineCount,
+      poOutstandingLineCount,
       shortageCount: issueCompleted ? 0 : shortageCount,
       lineCount: built.summary.lineCount,
       warehouseKode: built.warehouseKode,
@@ -1351,6 +1369,13 @@ export async function handleProductionPlans({
       collection: PRODUCTION_PLANS_COLLECTION,
       filter: withTenantFilter(scopeAuth, casStatusFilter(existing)),
       update: { $set: { status: 'CANCELLED', history, updatedAt: now } },
+      before: async ({ db: txDb, session }) => {
+        await releasePlanReservations(txDb, session, {
+          tenantId: existing.tenantId,
+          productionPlanId: id,
+          reason: 'PLAN_CANCELLED',
+        });
+      },
       audit: {
         tenantId: existing.tenantId,
         action: 'PRODUCTION_PLAN_CANCEL',

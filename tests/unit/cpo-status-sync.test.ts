@@ -15,11 +15,11 @@ describe('buildPoOrderedReceivedMap', () => {
     expect(map.get('onion')).toEqual({ qtyOrdered: 5, qtyReceived: 5 });
   });
 
-  it('excludes lines whose ordered target resolves to 0 (no cancelled flag needed)', () => {
+  it('keeps a fully rejected line as open demand', () => {
     const map = buildPoOrderedReceivedMap([
       { localStokId: 'p1', qty: 10, qtyRejected: 10 },
     ]);
-    expect(map.has('p1')).toBe(false);
+    expect(map.get('p1')).toEqual({ qtyOrdered: 10, qtyReceived: 0 });
   });
 
   it('skips lines without localStokId', () => {
@@ -122,7 +122,7 @@ describe('syncCpoOnGrnPosted', () => {
     expect(items[0]?.qtyReceived).toBe(2);
   });
 
-  it('reaches RECEIVED when remaining qty is explicitly rejected (not just short-shipped)', async () => {
+  it('stays open and records backorder when qty is rejected', async () => {
     const po = {
       id: 'po1',
       tenantId: 'sppg',
@@ -137,10 +137,12 @@ describe('syncCpoOnGrnPosted', () => {
       noPO: 'CPO-1',
       items: [{ localStokId: 'p1', localKode: 'A', qtyReceived: 7, qtyRejected: 3 }],
     });
-    expect(updates[0]?.status).toBe('RECEIVED');
-    const items = updates[0]?.items as Array<{ qtyReceived: number; qtyRejected: number }>;
+    expect(updates[0]?.status).toBe('PARTIAL_RECEIVED');
+    expect(updates[0]?.hasBackorder).toBe(true);
+    const items = updates[0]?.items as Array<{ qtyReceived: number; qtyRejected: number; qtyBackorder: number }>;
     expect(items[0]?.qtyReceived).toBe(7);
     expect(items[0]?.qtyRejected).toBe(3);
+    expect(items[0]?.qtyBackorder).toBe(3);
   });
 
   it('stays PARTIAL_RECEIVED when rejected qty does not cover the remaining shortfall', async () => {

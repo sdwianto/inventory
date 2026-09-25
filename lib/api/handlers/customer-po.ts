@@ -42,6 +42,7 @@ import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { guardPosting } from '@/lib/api/period-lock';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { findProductUomsByIds } from '@/lib/api/product-uom';
+import { resolveStockProducts } from '@/lib/api/product-merge';
 import type { JsonObject } from '@/types/json';
 import { asObject } from '@/types/json';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
@@ -291,6 +292,13 @@ async function validatePoForApproval(db: Db, tenantId, items) {
       return { error: `Qty harus lebih dari 0 untuk "${it.nama || it.kode || 'item'}"` };
     }
   }
+  // Blok sebelum barang dikirim: GRN nanti gagal bila salinan vendor beda satuan dasar dengan item persediaan.
+  const stockTargets = await resolveStockProducts(
+    db,
+    tenantId,
+    items.map((it) => String(it.localStokId || '')).filter(Boolean),
+  );
+  if ('error' in stockTargets) return { error: stockTargets.error };
   return enrichPoItemsForVendor(db, tenantId, items);
 }
 
@@ -566,11 +574,20 @@ export async function handleCustomerPo({
     const locked = await guardPosting(db, scopeAuth, poBody, tanggalKedatangan);
     if (locked) return locked;
 
+    const manualNoPO = String(poBody.noPO || '').trim();
+    if (manualNoPO) {
+      const taken = await db.collection('customer_purchase_orders').findOne(
+        { tenantId, noPO: manualNoPO },
+        { projection: { id: 1 } },
+      );
+      if (taken) return err(`No. PO ${manualNoPO} sudah dipakai`, 409);
+    }
+
     const poItems = await mapPoItems(db, tenantId, poBody.items);
     const doc = {
       id: uuidv4(),
       tenantId,
-      noPO: String(poBody.noPO || ''),
+      noPO: manualNoPO,
       tanggal: now,
       tanggalKedatangan,
       status: 'DRAFT',
@@ -587,11 +604,12 @@ export async function handleCustomerPo({
       createdAt: now,
       updatedAt: now,
     };
+    try {
     await insertWithAudit({
       collection: 'customer_purchase_orders',
       doc,
       before: async ({ db: txDb, session }) => {
-        if (!poBody.noPO) doc.noPO = await nextDocNumber(txDb, tenantId, 'CPO', 'CPO', session);
+        if (!manualNoPO) doc.noPO = await nextDocNumber(txDb, tenantId, 'CPO', 'CPO', session);
         if (vendorReturnForPo) {
           await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
             { id: vendorReturnForPo.id },
@@ -610,6 +628,10 @@ export async function handleCustomerPo({
         userName: auth?.name || auth?.email,
       }),
     });
+    } catch (e) {
+      if ((e as { code?: number } | null)?.code === 11000) return err(`No. PO ${doc.noPO} sudah dipakai`, 409);
+      throw e;
+    }
     const noPO = doc.noPO;
 
     if (poBody.maintenanceRequestId) {
@@ -1129,6 +1151,38 @@ export async function handleCustomerPo({
       revisedFromNoPO: sourceNoPO || null,
       message: `Draft ${created.noPO} dibuat dari ${sourceNoPO || source.id}`,
     });
+  }
+
+  // POST /customer-purchase-orders/:id/short-close — tutup sisa backorder (SUPERVISOR+, alasan wajib, audit)
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'short-close' && method === 'POST') {
+    const deniedRole = requireRole(auth, PO_EDIT_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+    const locked = await guardPosting(db, scopeAuth, poBody);
+    if (locked) return locked;
+    const po = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+      { projection: { tenantId: 1 } },
+    );
+    if (!po) return err('PO tidak ditemukan', 404);
+    const { shortClosePoRemaining } = await import('@/lib/api/cpo-short-close');
+    const { runInTransactionOrFallback } = await import('@/lib/api/transaction');
+    const tenantId = String(po.tenantId || 'default');
+    const result = await runInTransactionOrFallback(({ db: txDb, session }) => shortClosePoRemaining(txDb, session, {
+      tenantId,
+      poId: path[1],
+      reason: String(poBody.reason || ''),
+      actor: {
+        userId: auth!.userId,
+        userName: auth!.name || auth!.email || 'System',
+        role: auth!.isMaster ? 'MASTER' : auth!.role,
+      },
+    }));
+    if (!result.ok) return err(result.error, result.status);
+    await invalidateDashboardSnapshot(db, tenantId);
+    const updated = await db.collection('customer_purchase_orders').findOne({ id: path[1], tenantId });
+    return ok({ ...(await enrichOnePo(db, updated as JsonObject)), shortClose: result });
   }
 
   // POST /customer-purchase-orders/:id/cancel — TX CANCELLED + ENSURE_PUSH_CANCEL_SO (W1-2)

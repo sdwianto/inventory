@@ -7,6 +7,8 @@ import { countScheduleDueStats, startOfDay } from '@/lib/api/maintenance-schedul
 import { hutangPendingReviewFilter } from '@/lib/api/hutang-filters';
 import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 import { grnPendingRejectFilter } from '@/lib/api/grn-reject-status';
+import { INGREDIENT_LOTS_COLLECTION } from '@/lib/food-production/ingredient-lot';
+import { GRN_REVERSALS_COLLECTION } from '@/lib/api/grn-reversal-constants';
 import type { HandlerContext } from '@/types/api/handler';
 
 export async function handleNavBadges({
@@ -25,7 +27,7 @@ export async function handleNavBadges({
   const today = startOfDay(new Date());
   const tenantFilter = withTenantFilter(scopeAuth, {});
 
-  const [grnPending, grnRejectedPending, hutangReview, wrPending, pmStats, rtvNeedsAttention] = await Promise.all([
+  const [grnPending, grnRejectedPending, hutangReview, wrPending, pmStats, rtvNeedsAttention, lotQcPending, grnReversalPending] = await Promise.all([
     db.collection('goods_receipts').countDocuments(
       withTenantFilter(scopeAuth, {
         status: { $in: ['DRAFT', 'UNKNOWN_PRODUCT', 'NEEDS_MAPPING'] },
@@ -62,6 +64,20 @@ export async function handleNavBadges({
         ],
       }),
     ),
+    // Fase 3.2 — lot menunggu inspeksi QC + lot ditolak yang belum ditindaklanjuti.
+    db.collection(INGREDIENT_LOTS_COLLECTION).countDocuments(
+      withTenantFilter(scopeAuth, {
+        status: { $in: ['ACTIVE', 'EXPIRED'] },
+        $or: [
+          { qcStatus: 'QUARANTINE' },
+          { qcStatus: 'REJECTED', qcRejectStatus: { $nin: ['RTV_CREATED', 'DISPOSED'] } },
+        ],
+      }),
+    ),
+    // Fase 3.6 — pengajuan pembalik GRN menunggu persetujuan.
+    db.collection(GRN_REVERSALS_COLLECTION).countDocuments(
+      withTenantFilter(scopeAuth, { status: 'PENDING_APPROVAL' }),
+    ),
   ]);
 
   return ok({
@@ -72,5 +88,7 @@ export async function handleNavBadges({
     pmOverdue: Number(pmStats?.overdue || 0),
     pmDueSoon: Number(pmStats?.dueSoon || 0),
     rtvNeedsAttention,
+    lotQcPending,
+    grnReversalPending,
   });
 }

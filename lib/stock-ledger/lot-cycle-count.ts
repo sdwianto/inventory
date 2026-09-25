@@ -7,13 +7,16 @@ import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   INGREDIENT_LOTS_COLLECTION,
+  LOT_QC_RELEASED_FILTER,
   buildPenyesuaianLotNo,
-  defaultIngredientExpiryDate,
+  resolveLotExpiry,
+  businessDateIso,
   effectiveIngredientQtyRemaining,
   isIngredientExpired,
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { consumeIngredientLotsFefo } from '@/lib/stock-ledger/lot-consume';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export type CycleCountLotResult = {
@@ -34,7 +37,8 @@ function txOpts(session?: ClientSession | null) {
 /**
  * Count down → FEFO consume lots (allow expired).
  * Count up → increase newest lot qtyRemaining (+ qty cap).
- * Count up + no lots → buat lot baru sumber PENYESUAIAN (asal Panduan Release).
+ * Count up + no lots → buat lot baru sumber PENYESUAIAN (asal Panduan Release); kedaluwarsa dari
+ * masa simpan master, ditolak bila flag lotExpiryRequired aktif dan masa simpan kosong.
  */
 export async function syncLotsOnVariance(
   db: Db,
@@ -48,10 +52,11 @@ export async function syncLotsOnVariance(
     penyesuaianId?: string;
     productKode?: string;
     productNama?: string;
+    shelfLifeDays?: number | null;
     satuan?: string;
   },
   session?: ClientSession | null,
-): Promise<CycleCountLotResult> {
+): Promise<CycleCountLotResult | { error: string }> {
   const delta = roundStockQty(input.deltaQty);
   const base: CycleCountLotResult = {
     stokId: input.stokId,
@@ -76,6 +81,7 @@ export async function syncLotsOnVariance(
         asOf: now,
         allowExpired: true,
         noDokumen: input.noDokumen,
+        qcHeld: 'LAST',
       },
       session,
     );
@@ -87,6 +93,48 @@ export async function syncLotsOnVariance(
     };
   }
 
+  // Selisih kurang memakai lot karantina paling akhir (qcHeld LAST); selisih lebih mengembalikan qty itu
+  // ke lot karantina dulu, supaya hitung turun lalu naik tidak meloloskan barang tanpa inspeksi.
+  const heldRows = await db
+    .collection(INGREDIENT_LOTS_COLLECTION)
+    .find(
+      {
+        tenantId: input.tenantId,
+        productId: input.stokId,
+        warehouseKode: input.warehouseKode,
+        status: { $in: ['ACTIVE', 'EXPIRED', 'CONSUMED'] },
+        qcStatus: 'QUARANTINE',
+      },
+      txOpts(session),
+    )
+    .sort({ expiryDate: -1, receivedAt: -1 })
+    .toArray() as unknown as IngredientLotDoc[];
+  let left = delta;
+  for (const lot of heldRows) {
+    if (!(left > 0)) break;
+    const rem = effectiveIngredientQtyRemaining(lot);
+    const deficit = roundStockQty(Number(lot.qty || 0) - rem);
+    if (!(deficit > 0)) continue;
+    const add = roundStockQty(Math.min(deficit, left));
+    const after = roundStockQty(rem + add);
+    await db.collection(INGREDIENT_LOTS_COLLECTION).updateOne(
+      { id: lot.id, tenantId: input.tenantId },
+      {
+        $set: {
+          qtyRemaining: after,
+          status: isIngredientExpired(lot.expiryDate, now) ? 'EXPIRED' : 'ACTIVE',
+          updatedAt: now,
+          lastCycleCountBy: { noDokumen: input.noDokumen, delta: add, at: now },
+        },
+      },
+      txOpts(session),
+    );
+    left = roundStockQty(left - add);
+  }
+  if (!(left > 0) || isZeroQty(left)) {
+    return { ...base, skippedNoLots: false, increased: delta };
+  }
+
   const rows = await db
     .collection(INGREDIENT_LOTS_COLLECTION)
     .find(
@@ -95,6 +143,8 @@ export async function syncLotsOnVariance(
         productId: input.stokId,
         warehouseKode: input.warehouseKode,
         status: { $in: ['ACTIVE', 'EXPIRED', 'CONSUMED'] },
+        // Selisih lebih tidak boleh menambah lot karantina/ditolak (akan ikut tertahan).
+        ...LOT_QC_RELEASED_FILTER,
       },
       txOpts(session),
     )
@@ -103,7 +153,16 @@ export async function syncLotsOnVariance(
     .toArray() as unknown as IngredientLotDoc[];
 
   if (!rows.length) {
-    const receivedAt = now.toISOString().slice(0, 10);
+    const receivedAt = businessDateIso(now);
+    const expiry = resolveLotExpiry({
+      receivedAt,
+      shelfLifeDays: input.shelfLifeDays,
+      required: await isTenantFeatureEnabled(db, input.tenantId, 'lotExpiryRequired'),
+      label: String(input.productNama || input.productKode || input.stokId),
+    });
+    if ('error' in expiry) {
+      return { error: `${expiry.error}. Stok bertambah tanpa lot: isi masa simpan di master produk atau terima lewat GRN` };
+    }
     const noPS = String(input.noDokumen || '').trim();
     const lotId = uuidv4();
     const lot: IngredientLotDoc = {
@@ -124,13 +183,14 @@ export async function syncLotsOnVariance(
       satuan: input.satuan,
       warehouseKode: input.warehouseKode,
       receivedAt,
-      expiryDate: defaultIngredientExpiryDate(receivedAt),
-      qty: delta,
-      qtyRemaining: delta,
+      expiryDate: expiry.expiryDate,
+      expirySource: expiry.expirySource,
+      qty: left,
+      qtyRemaining: left,
       status: 'ACTIVE',
       lastCycleCountBy: {
         noDokumen: noPS || undefined,
-        delta,
+        delta: left,
         at: now,
       },
       createdAt: now,
@@ -147,7 +207,7 @@ export async function syncLotsOnVariance(
 
   const target = rows.find((b) => b.status !== 'CONSUMED') || rows[0];
   const before = effectiveIngredientQtyRemaining(target);
-  const after = roundStockQty(before + delta);
+  const after = roundStockQty(before + left);
   const qtyCap = Math.max(roundStockQty(target.qty), after);
   const expired = isIngredientExpired(target.expiryDate, now);
   const status = after <= 0 || isZeroQty(after) ? 'CONSUMED' : expired ? 'EXPIRED' : 'ACTIVE';
@@ -162,7 +222,7 @@ export async function syncLotsOnVariance(
         updatedAt: now,
         lastCycleCountBy: {
           noDokumen: input.noDokumen,
-          delta,
+          delta: left,
           at: now,
         },
       },

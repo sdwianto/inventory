@@ -210,4 +210,124 @@ describe('three-way-match', () => {
     };
     expect(matchInvoiceLinesAgainstGrn(grns, payload).ok).toBe(true);
   });
+
+  it('fails per-line price when header total is still inside tolerance', () => {
+    const priced = [{
+      items: [
+        { vendorKode: 'SKU1', qtyReceived: 1, harga: 1000 },
+        { vendorKode: 'SKU2', qtyReceived: 100, harga: 1000 },
+      ],
+    }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-PRICE',
+      subTotal: 101200,
+      total: 101200,
+      items: [
+        { kode: 'SKU1', qty: 1, harga: 1200 },
+        { kode: 'SKU2', qty: 100, harga: 1000 },
+      ],
+    };
+    const result = matchInvoiceLinesAgainstGrn(priced, payload, { priceTolerancePct: 2 });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('PRICE_MISMATCH');
+    expect(result.error).toMatch(/SKU1/);
+    expect(result.error).toMatch(/harga GRN/);
+  });
+
+  it('nets posted returns off invoiceable qty', () => {
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 10000,
+      items: [{ kode: 'SKU1', qty: 10, harga: 1000 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(grns, payload, {
+      postedReturns: [{ items: [{ kode: 'SKU1', qty: 4, harga: 1000 }] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('QTY_MISMATCH');
+
+    const remaining: VendorInvoicePayload = {
+      noDO: 'DO-001',
+      total: 6000,
+      items: [{ kode: 'SKU1', qty: 6, harga: 1000 }],
+    };
+    expect(matchInvoiceLinesAgainstGrn(grns, remaining, {
+      postedReturns: [{ items: [{ kode: 'SKU1', qty: 4, harga: 1000 }] }],
+    }).ok).toBe(true);
+  });
+
+  it('fails when invoice qty or price exceeds the PO line', () => {
+    const one = [{ items: [{ vendorKode: 'SKU1', qtyReceived: 10, harga: 1500 }] }];
+    const overQty: VendorInvoicePayload = {
+      noDO: 'DO-PO',
+      total: 12000,
+      items: [{ kode: 'SKU1', qty: 8, harga: 1500 }],
+    };
+    const qtyFail = matchInvoiceLinesAgainstGrn(one, overQty, {
+      poLines: [{ kode: 'SKU1', qty: 5, harga: 1500 }],
+    });
+    expect(qtyFail.ok).toBe(false);
+    expect(qtyFail.code).toBe('QTY_MISMATCH');
+    expect(qtyFail.error).toMatch(/qty PO/);
+
+    const overPrice: VendorInvoicePayload = {
+      noDO: 'DO-PO',
+      subTotal: 7500,
+      total: 7500,
+      items: [{ kode: 'SKU1', qty: 5, harga: 1500 }],
+    };
+    const priceFail = matchInvoiceLinesAgainstGrn(one, overPrice, {
+      priceTolerancePct: 2,
+      poLines: [{ kode: 'SKU1', qty: 5, harga: 1000 }],
+    });
+    expect(priceFail.ok).toBe(false);
+    expect(priceFail.code).toBe('PRICE_MISMATCH');
+    expect(priceFail.error).toMatch(/harga PO/);
+  });
+
+  it('flags invoice lines that are not on the PO', () => {
+    const two = [{ items: [{ vendorKode: 'SKU1', qtyReceived: 5, harga: 1000 }, { vendorKode: 'SKU9', qtyReceived: 1, harga: 1000 }] }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-PO',
+      total: 6000,
+      items: [{ kode: 'SKU1', qty: 5 }, { kode: 'SKU9', qty: 1 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(two, payload, { poLines: [{ kode: 'SKU1', qty: 5 }] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/SKU9.*tidak ada di PO/);
+  });
+
+  it('skips PO compare when the PO orders the item in another unit', () => {
+    const box = [{ items: [{ vendorKode: 'SKU1', satuan: 'BOX', qtyReceived: 2, harga: 50000 }] }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-PO',
+      total: 100000,
+      items: [{ kode: 'SKU1', satuan: 'BOX', qty: 2, harga: 50000 }],
+    };
+    const result = matchInvoiceLinesAgainstGrn(box, payload, {
+      poLines: [{ kode: 'SKU1', satuan: 'PCS', qty: 1, harga: 100 }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('nets other invoices on the same PO, adding back their returns', () => {
+    const one = [{ items: [{ vendorKode: 'SKU1', qtyReceived: 10, harga: 1000 }] }];
+    const payload: VendorInvoicePayload = {
+      noDO: 'DO-2',
+      total: 4000,
+      items: [{ kode: 'SKU1', qty: 4 }],
+    };
+    const poLines = [{ kode: 'SKU1', qty: 10 }];
+    const poSiblingInvoices = [{ noInvoice: 'INV-1', items: [{ kode: 'SKU1', qty: 8 }] }];
+    const fail = matchInvoiceLinesAgainstGrn(one, payload, { poLines, poSiblingInvoices });
+    expect(fail.ok).toBe(false);
+    expect(fail.error).toMatch(/sisa qty PO 2/);
+
+    const ok = matchInvoiceLinesAgainstGrn(one, payload, {
+      poLines,
+      poSiblingInvoices,
+      poSiblingReturns: [{ items: [{ kode: 'SKU1', qty: 2 }] }],
+    });
+    expect(ok.ok).toBe(true);
+  });
 });

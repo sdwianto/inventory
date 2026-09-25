@@ -17,6 +17,8 @@ export interface TenantFeatureFlags {
   pblReferenceMode: boolean;
   rlFromPoReference: boolean;
   strictRecipeConversion: boolean;
+  /** Fase 3.1 — kedaluwarsa & lot pemasok wajib di GRN; lot baru penyesuaian dari masa simpan master. */
+  lotExpiryRequired: boolean;
   lotQcRequired: boolean;
   planStockReservation: boolean;
   costingV2: boolean;
@@ -28,6 +30,7 @@ export type OptInFeatureFlag = keyof Pick<
   | 'pblReferenceMode'
   | 'rlFromPoReference'
   | 'strictRecipeConversion'
+  | 'lotExpiryRequired'
   | 'lotQcRequired'
   | 'planStockReservation'
   | 'costingV2'
@@ -38,6 +41,7 @@ export const OPT_IN_FEATURE_FLAGS: readonly OptInFeatureFlag[] = [
   'pblReferenceMode',
   'rlFromPoReference',
   'strictRecipeConversion',
+  'lotExpiryRequired',
   'lotQcRequired',
   'planStockReservation',
   'costingV2',
@@ -52,6 +56,7 @@ export const DEFAULT_FEATURE_FLAGS: TenantFeatureFlags = {
   pblReferenceMode: false,
   rlFromPoReference: false,
   strictRecipeConversion: false,
+  lotExpiryRequired: false,
   lotQcRequired: false,
   planStockReservation: false,
   costingV2: false,

@@ -116,9 +116,16 @@ async function resolveProduct(
   }
   if (!kode) return null;
   const filter: Record<string, unknown> = { tenantId: tid, kode, aktif: { $ne: false } };
+  // Buku harga dikunci ke item persediaan kanonik; pemasok membedakan vendornya.
+  const toStockItem = async (row: Record<string, unknown>) => {
+    const target = String(row.mergedInto || '').trim();
+    if (!target) return row;
+    return (await db.collection('products').findOne({ tenantId: tid, id: target })) || row;
+  };
   if (vendorTenantId) {
-    const withVendor = await db.collection('products').findOne({ ...filter, vendorTenantId });
-    if (withVendor) {
+    const withVendorRaw = await db.collection('products').findOne({ ...filter, vendorTenantId });
+    if (withVendorRaw) {
+      const withVendor = await toStockItem(withVendorRaw);
       return {
         id: String(withVendor.id),
         kode: withVendor.kode != null ? String(withVendor.kode) : undefined,
@@ -127,8 +134,10 @@ async function resolveProduct(
       };
     }
   }
-  const p = await db.collection('products').findOne(filter);
-  if (!p) return null;
+  const raw = await db.collection('products').findOne({ ...filter, mergedInto: null })
+    || await db.collection('products').findOne(filter);
+  if (!raw) return null;
+  const p = await toStockItem(raw);
   return {
     id: String(p.id),
     kode: p.kode != null ? String(p.kode) : undefined,

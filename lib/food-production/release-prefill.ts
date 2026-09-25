@@ -1,7 +1,8 @@
 /**
  * Isi RL dari acuan rencana (Fase 1.2).
  * Per produk: min(sisa − RL belum diposting, stok tersedia di gudang asal), dalam satuan dasar.
- * Stok tersedia sama dengan validasi RL: lokasi dibatasi saldo kartu, dikurangi batch HOLD.
+ * Stok tersedia sama dengan validasi RL: lokasi dibatasi saldo kartu, dikurangi batch HOLD
+ * dan lot bahan karantina/ditolak QC (Fase 3.2).
  */
 
 import type { Db } from 'mongodb';
@@ -11,6 +12,8 @@ import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { isFoodSafetyHoldEnforced } from '@/lib/api/feature-flags';
 import { availableQtyAgainstLedger, ledgerSaldoForProducts } from '@/lib/stock-ledger';
+import { loadLotQcHeldQtyByProduct } from '@/lib/stock-ledger/lot-qc';
+import { loadReservedQtyByOtherPlans } from '@/lib/stock-ledger/plan-reservation';
 import { roundQty } from '@/lib/stock-ledger/precision';
 import { pickBaseUom } from '@/lib/uom/conversion';
 import {
@@ -225,7 +228,7 @@ export async function loadReleasePrefill(
   });
   const ids = [...new Set(reference.lines.flatMap((l) => [...l.productIds, ...(l.aliasProductIds || [])]))];
 
-  const [productRows, uomsById, stockMap, ledger, held] = await Promise.all([
+  const [productRows, uomsById, stockMap, ledger, held, qcHeld, reservedOther] = await Promise.all([
     db.collection('products')
       .find({ tenantId, id: { $in: ids } })
       .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1 })
@@ -234,6 +237,8 @@ export async function loadReleasePrefill(
     getStokByWarehouseBatch(db, tenantId, ids),
     ledgerSaldoForProducts(db, tenantId, ids),
     loadHeldQty(db, tenantId, ids, lokasiKode),
+    loadLotQcHeldQtyByProduct(db, tenantId, ids, lokasiKode),
+    loadReservedQtyByOtherPlans(db, tenantId, ids, lokasiKode, plan.id),
   ]);
 
   const products = new Map<string, PrefillProduct>();
@@ -257,10 +262,16 @@ export async function loadReleasePrefill(
   for (const id of ids) {
     const lokasiQty = Number((stockMap.get(id) || {})[lokasiKode] || 0);
     const avail = availableQtyAgainstLedger(lokasiQty, ledger.get(id));
-    availableById.set(id, Math.max(0, roundQty(avail - (held.get(id) || 0))));
+    const locked = reservedOther.get(id) || 0;
+    availableById.set(id, Math.max(0, roundQty(avail - (held.get(id) || 0) - (qcHeld.get(id) || 0) - locked)));
   }
 
   const built = buildReleasePrefill(reference, lokasiKode, { products, availableById });
+  for (const line of built.lines) {
+    const locked = reservedOther.get(line.stokId) || 0;
+    if (!(locked > 0)) continue;
+    line.warnings = [...(line.warnings || []), `${locked} dikunci cadangan rencana lain`];
+  }
   return {
     productionPlanId: reference.productionPlanId,
     lokasiKode,

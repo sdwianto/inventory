@@ -33,6 +33,8 @@ export type VendorReturnLine = {
   jumlah: number;
   gudangKode: string;
   lotNo?: string | null;
+  /** Fase 3.2 — lot ditolak QC yang diretur; posting boleh mengonsumsi lot tertahan ini saja. */
+  qcLotId?: string | null;
   maxQty?: number;
   /** Kenapa baris ini diretur (opsional) — beda dari alasan dokumen kalau diisi. */
   reason?: string | null;
@@ -52,8 +54,13 @@ export type VendorReturnDoc = {
   tenantId: string;
   noReturn: string;
   status: VendorReturnStatus;
-  /** Asal pembuatan RTV — `hutang` (default, dari tagihan vendor) atau `grn-reject` (dari item ditolak saat GRN). */
-  source?: 'hutang' | 'grn-reject';
+  /**
+   * Asal pembuatan RTV — `hutang` (default, dari tagihan vendor), `grn-reject` (item ditolak saat GRN,
+   * tidak pernah masuk stok) atau `qc-reject` (lot ditolak inspeksi QC; alur hutang + stok keluar + CN).
+   */
+  source?: 'hutang' | 'grn-reject' | 'qc-reject';
+  /** `qc-reject`: lot ditolak yang diklaim RTV ini. */
+  qcLotId?: string | null;
   vendorTenantId: string;
   supplierName?: string | null;
   hutangId?: string | null;

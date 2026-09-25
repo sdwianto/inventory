@@ -26,6 +26,9 @@ export default function TenantSetupPage() {
     ppnPercent: 11,
     periodLockedUntil: '' as string,
     rlOverIssueTolerancePct: 0,
+    poOverReceiveTolerancePct: 0,
+    threeWayQtyTolerancePct: 0,
+    threeWayPriceTolerancePct: 2,
     features: {
       multiUomEnabled: true,
       offlineQueueEnabled: true,
@@ -34,6 +37,7 @@ export default function TenantSetupPage() {
       pblReferenceMode: false,
       rlFromPoReference: false,
       strictRecipeConversion: false,
+      lotExpiryRequired: false,
       lotQcRequired: false,
       planStockReservation: false,
       costingV2: false,
@@ -65,6 +69,7 @@ export default function TenantSetupPage() {
           pblReferenceMode: false,
           rlFromPoReference: false,
           strictRecipeConversion: false,
+          lotExpiryRequired: false,
           lotQcRequired: false,
           planStockReservation: false,
           costingV2: false,
@@ -315,6 +320,7 @@ export default function TenantSetupPage() {
               ['pblReferenceMode', 'PBL acuan (tanpa mutasi stok)'],
               ['rlFromPoReference', 'RL dari acuan PO'],
               ['strictRecipeConversion', 'Konversi resep ketat'],
+              ['lotExpiryRequired', 'Kedaluwarsa & lot wajib di GRN'],
               ['lotQcRequired', 'Lot wajib QC'],
               ['planStockReservation', 'Cadangan stok rencana'],
               ['costingV2', 'Costing v2'],
@@ -344,6 +350,48 @@ export default function TenantSetupPage() {
                 </label>
               );
             })}
+            <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded sm:col-span-2">
+              <span>Toleransi lebih terima terhadap sisa PO (%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={0.5}
+                value={form.poOverReceiveTolerancePct ?? 0}
+                onChange={(e) => setForm({
+                  ...form,
+                  poOverReceiveTolerancePct: e.target.value === '' ? 0 : Number(e.target.value),
+                })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded">
+              <span>Toleransi qty 3-way match tagihan (%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={20}
+                step={0.5}
+                value={form.threeWayQtyTolerancePct ?? 0}
+                onChange={(e) => setForm({
+                  ...form,
+                  threeWayQtyTolerancePct: e.target.value === '' ? 0 : Number(e.target.value),
+                })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded">
+              <span>Toleransi harga 3-way match tagihan (%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={20}
+                step={0.5}
+                value={form.threeWayPriceTolerancePct ?? 2}
+                onChange={(e) => setForm({
+                  ...form,
+                  threeWayPriceTolerancePct: e.target.value === '' ? 2 : Number(e.target.value),
+                })}
+              />
+            </label>
             <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded sm:col-span-2">
               <span>Toleransi RL melebihi acuan rencana (%)</span>
               <Input

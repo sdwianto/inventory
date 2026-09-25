@@ -602,6 +602,11 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
           activePastExpiry: Number(ingredientLotSummary.activePastExpiry || 0),
           expiredWithQty: Number(ingredientLotSummary.expiredWithQty || 0),
           lotVsStok: Number(ingredientLotSummary.lotVsStok || 0),
+          defaultExpiryLots: Number(ingredientLotSummary.defaultExpiryLots || 0),
+          quarantineLots: Number(ingredientLotSummary.quarantineLots || 0),
+          quarantineOver24h: Number(ingredientLotSummary.quarantineOver24h || 0),
+          rejectedPending: Number(ingredientLotSummary.rejectedPending || 0),
+          quarantineConsumed: Number(ingredientLotSummary.quarantineConsumed || 0),
           mismatchSample: Array.isArray(ingredientLotReport.mismatches)
             ? ingredientLotReport.mismatches.slice(0, 10)
             : [],

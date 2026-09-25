@@ -25,11 +25,19 @@ import {
   shouldEnforceLedgerOnOutbound,
 } from '@/lib/stock-ledger/ledger-saldo';
 import { stockPeriodLockError } from '@/lib/stock-ledger/period-guard';
+import { loadLotQcHeld, lotQcBlockedMessage, lotQcHeldTotal, type LotQcHeldInfo } from '@/lib/stock-ledger/lot-qc';
+import {
+  consumeReservationPool,
+  loadReservationPools,
+  reservationBlockedMessage,
+  reservationBlockedQty,
+} from '@/lib/stock-ledger/plan-reservation';
 import { buildKartuDoc, type StockActor, type StockCostSource } from '@/lib/stock-ledger/kartu';
 
 export type StockSourceType =
   | 'RELEASE'
   | 'GRN'
+  | 'GRN_REVERSAL'
   | 'VENDOR_RETURN'
   | 'VENDOR_RETURN_REJECTED'
   | 'PENYESUAIAN'
@@ -109,6 +117,9 @@ type ProductRow = {
   nama?: string;
   gudangKode?: string | null;
   hargaBeli?: number | string;
+  mergedInto?: string | null;
+  shelfLifeDays?: number | null;
+  satuan?: string;
 };
 
 type PreparedLine = StockMovementLine & {
@@ -138,6 +149,55 @@ function pairKey(productId: string, lokasiKode: string) {
 
 function fail(error: string, lineRef?: string): PostStockMovementsResult {
   return { ok: false, error, ...(lineRef ? { lineRef } : {}) };
+}
+
+/**
+ * Keluar dari (produk, gudang) yang punya lot tertahan QC; `held` dikurangi agar baris berikutnya
+ * pada pasangan yang sama melihat sisa yang benar. Null = boleh.
+ * - VARIANCE (hitung fisik): lot lolos dulu, sisanya memang hilang dari qty tertahan — tidak diblokir.
+ * - FEFO_CONSUME + qcHeld PREFERRED: lot tertahan bernomor preferredLotNo boleh keluar (RTV/pemusnahan);
+ *   preferredLotNo yang bukan lot tertahan diperiksa seperti keluar biasa (stok lolos QC).
+ */
+function consumeQcHeldAllowance(
+  held: LotQcHeldInfo,
+  line: PreparedLine,
+  need: number,
+  onHand: number,
+  available: number,
+): { releasedAvailable: number; preferredShort?: boolean; preferredLotNo?: string } | null {
+  const heldTotal = lotQcHeldTotal(held);
+  const policy = line.lotPolicy;
+  const takeHeld = (qty: number, status: 'QUARANTINE' | 'REJECTED' | 'ANY') => {
+    let left = qty;
+    const order: Array<'rejected' | 'quarantine'> = status === 'QUARANTINE' ? ['quarantine'] : status === 'REJECTED' ? ['rejected'] : ['rejected', 'quarantine'];
+    for (const k of order) {
+      const t = Math.min(left, held[k]);
+      held[k] = roundStockQty(held[k] - t);
+      left = roundStockQty(left - t);
+    }
+  };
+
+  if (policy?.mode === 'VARIANCE') {
+    const fromHeld = roundStockQty(need - Math.max(0, roundStockQty(onHand - heldTotal)));
+    if (fromHeld > 0) takeHeld(fromHeld, 'ANY');
+    return null;
+  }
+
+  if (policy?.mode === 'FEFO_CONSUME' && policy.qcHeld === 'PREFERRED') {
+    const pref = String(policy.preferredLotNo || '').trim();
+    const prefLot = pref ? held.byLotNo.get(pref) : undefined;
+    if (prefLot) {
+      if (qtyLt(prefLot.qty, need)) {
+        return { releasedAvailable: prefLot.qty, preferredShort: true, preferredLotNo: pref || undefined };
+      }
+      prefLot.qty = roundStockQty(prefLot.qty - need);
+      takeHeld(need, prefLot.qcStatus === 'QUARANTINE' ? 'QUARANTINE' : 'REJECTED');
+      return null;
+    }
+  }
+  const releasedAvailable = roundStockQty(available - heldTotal);
+  if (qtyLt(releasedAvailable, need)) return { releasedAvailable };
+  return null;
 }
 
 class PostingAborted extends Error {
@@ -238,7 +298,7 @@ async function postInSession(
   const ids = [...productIds];
   const products = await db.collection<ProductRow>('products')
     .find(productsFilter(tid, ids), txOpts(session))
-    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1 })
+    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, mergedInto: 1, shelfLifeDays: 1, satuan: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
 
@@ -246,6 +306,12 @@ async function postInSession(
   for (const line of input.lines) {
     const product = productById.get(line.productId);
     if (!product) return fail(`Produk ${line.productId} tidak ditemukan`, line.lineRef);
+    if (product.mergedInto) {
+      return fail(
+        `Produk ${product.kode || line.productId} sudah digabung ke item persediaan lain — muat ulang dokumen lalu pilih item yang aktif`,
+        line.lineRef,
+      );
+    }
     const lokasiKode = parseLokasiKode(line.warehouseKode);
     const whErr = assertProductWarehouse(product, lokasiKode);
     if (whErr) return fail(whErr.error, line.lineRef);
@@ -270,6 +336,9 @@ async function postInSession(
     const ledger = enforceLedger
       ? await ledgerSaldoForProducts(db, tid, [...new Set(outbound.map((l) => l.productId))], session)
       : new Map();
+    // Fase 3.2 — lot karantina/ditolak QC adalah stok fisik yang tidak boleh keluar.
+    const qcHeld = await loadLotQcHeld(db, tid, pairs.map((l) => ({ productId: l.productId, lokasiKode: l.lokasiKode })), session);
+    const reserved = await loadReservationPools(db, tid, pairs.map((l) => ({ productId: l.productId, lokasiKode: l.lokasiKode })), session);
 
     for (const l of prepared) {
       const key = pairKey(l.productId, l.lokasiKode);
@@ -281,15 +350,67 @@ async function postInSession(
         if (qtyLt(onHand, need)) {
           return fail(`${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (sisa: ${Math.max(0, onHand)})`, l.lineRef);
         }
-        if (enforceLedger) {
-          const available = availableQtyAgainstLedger(onHand, info);
-          if (qtyLt(available, need)) {
+        const available = enforceLedger ? availableQtyAgainstLedger(onHand, info) : onHand;
+        if (enforceLedger && qtyLt(available, need)) {
+          return fail(
+            `${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (sisa: ${available} — dibatasi saldo kartu stok)`,
+            l.lineRef,
+          );
+        }
+        const held = qcHeld.get(key);
+        if (held && lotQcHeldTotal(held) > 0) {
+          const heldErr = consumeQcHeldAllowance(held, l, need, onHand, available);
+          if (heldErr?.preferredShort) {
+            const satuan = l.product.satuan ? ` ${l.product.satuan}` : '';
+            const which = heldErr.preferredLotNo ? `Lot ${heldErr.preferredLotNo}` : 'Lot yang diminta';
             return fail(
-              `${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (sisa: ${available} — dibatasi saldo kartu stok)`,
+              `${label}: ${which} tidak cukup untuk keluar (sisa tertahan ${heldErr.releasedAvailable}${satuan}). `
+              + 'Retur dan pemusnahan QC hanya boleh mengambil lot ditolak itu sendiri.',
               l.lineRef,
             );
           }
+          if (heldErr) {
+            return fail(lotQcBlockedMessage({
+              label,
+              lokasiKode: l.lokasiKode,
+              need,
+              releasedAvailable: heldErr.releasedAvailable,
+              held,
+              satuan: l.product.satuan,
+            }), l.lineRef);
+          }
         }
+        const pool = reserved.get(key);
+        const policy = l.lotPolicy;
+        const variance = policy?.mode === 'VARIANCE';
+        const preferred = policy?.mode === 'FEFO_CONSUME' && policy.qcHeld === 'PREFERRED';
+        if (pool && pool.totalReleased > 0 && !preferred) {
+          const planId = policy?.mode === 'FEFO_CONSUME' ? policy.reservationPlanId : undefined;
+          const override = policy?.mode === 'FEFO_CONSUME' && policy.reservationOverride === true;
+          const heldNow = lotQcHeldTotal(qcHeld.get(key));
+          const releasedStock = Math.max(0, roundStockQty(available - heldNow));
+          const blocked = reservationBlockedQty(pool, { planId, override: override || variance });
+          const usable = roundStockQty(releasedStock - blocked);
+          if (!variance && !override && qtyLt(usable, need)) {
+            return fail(reservationBlockedMessage({
+              label,
+              lokasiKode: l.lokasiKode,
+              need,
+              usable,
+              blocked,
+              satuan: l.product.satuan,
+              overrideAvailable: input.sourceType === 'RELEASE',
+            }), l.lineRef);
+          }
+          const unreserved = Math.max(0, roundStockQty(releasedStock - pool.totalReleased));
+          const fromReserved = Math.min(pool.totalReleased, Math.max(0, roundStockQty(need - unreserved)));
+          consumeReservationPool(pool, fromReserved, planId);
+        }
+      } else if (l.lotPolicy?.mode === 'CREATE' && (l.lotPolicy.lot.qcStatus === 'QUARANTINE' || l.lotPolicy.lot.qcStatus === 'REJECTED')) {
+        const held = qcHeld.get(key) || { quarantine: 0, rejected: 0, byLotNo: new Map() };
+        if (l.lotPolicy.lot.qcStatus === 'QUARANTINE') held.quarantine = roundStockQty(held.quarantine + l.delta);
+        else held.rejected = roundStockQty(held.rejected + l.delta);
+        qcHeld.set(key, held);
       }
       if (lokasiQty.has(key)) lokasiQty.set(key, roundStockQty(onHand + l.delta));
       if (info) {

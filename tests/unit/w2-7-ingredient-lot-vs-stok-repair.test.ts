@@ -50,7 +50,7 @@ describe('W2-7 repair LOT_VS_STOK_LOKASI', () => {
     const db = {
       collection: (name: string) => {
         if (name === 'ingredient_lots') {
-          return { find: () => findCursor, updateOne };
+          return { find: () => findCursor, updateOne, countDocuments: async () => 0 };
         }
         return { find: () => findCursor, insertOne };
       },
@@ -110,7 +110,7 @@ describe('W2-7 repair LOT_VS_STOK_LOKASI', () => {
     const db = {
       collection: (name: string) => {
         if (name === 'ingredient_lots') {
-          return { find: () => findCursor, updateOne };
+          return { find: () => findCursor, updateOne, countDocuments: async () => 0 };
         }
         return { find: () => findCursor, insertOne };
       },

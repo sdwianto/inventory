@@ -1,9 +1,13 @@
-import type { Db } from 'mongodb';
+import type { ClientSession, Db } from 'mongodb';
+import { txOpts } from '@/lib/api/transaction';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
 import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems } from '@/lib/api/cpo-line-cancel-sync';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import { logger } from '@/lib/api/logger';
+import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
+import { roundQty } from '@/lib/stock-ledger/precision';
+import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import type { JsonObject } from '@/types/json';
 import { procurementLineKey } from '@/lib/food-production/procurement-line-key';
 
@@ -17,8 +21,14 @@ export type CpoLine = JsonObject & {
   qtyShipped?: number;
   qtyReceived?: number;
   qtyRejected?: number;
+  /** Sisa backorder yang ditutup (short-close) dalam satuan baris PO. */
+  qtyShortClosed?: number;
   cancelled?: boolean;
 };
+
+function lineShortClosedQty(line: CpoLine): number {
+  return Math.max(0, parseFloat(String(line.qtyShortClosed)) || 0);
+}
 
 type CpoDoc = JsonObject & {
   id?: string;
@@ -33,10 +43,68 @@ type CpoDoc = JsonObject & {
   vendorInvoiceId?: string;
   appliedShipDeliveryIds?: string[];
   appliedReceiveGrnIds?: string[];
+  appliedReverseGrnIds?: string[];
   qtySyncVersion?: number;
 };
 
 const QTY_SYNC_RETRIES = 8;
+
+function normUnitText(v: unknown): string {
+  return String(v ?? '').trim().toUpperCase();
+}
+
+/**
+ * Qty baris GRN dalam satuan baris PO. Satuan sama → apa adanya; beda satuan → lewat qty dasar
+ * (faktor satuan PO dari product_uom). Tidak terkonversi → null (qty PO tidak diubah, dicatat log).
+ */
+async function grnQtyInPoUnit(
+  db: Db,
+  tenantId: string,
+  poLine: JsonObject,
+  recv: JsonObject | undefined,
+  uomsCache: Map<string, import('@/lib/uom/types').ProductUom[]>,
+): Promise<{ received: number; rejected: number } | null> {
+  const received = parseFloat(String(recv?.qtyReceived)) || 0;
+  const rejected = parseFloat(String(recv?.qtyRejected)) || 0;
+  if (!recv || (!(received > 0) && !(rejected > 0))) return { received, rejected };
+  const poUom = String(poLine.uomId ?? '').trim();
+  const grnUom = String(recv.uomId ?? '').trim();
+  const poHasUnit = Boolean(poUom || normUnitText(poLine.satuan));
+  const grnHasUnit = Boolean(grnUom || normUnitText(recv.satuan));
+  const sameUnit = !poHasUnit || !grnHasUnit
+    || (poUom && grnUom && poUom === grnUom)
+    || (normUnitText(poLine.satuan) && normUnitText(poLine.satuan) === normUnitText(recv.satuan));
+  if (sameUnit) return { received, rejected };
+
+  const productId = String(poLine.localStokId || '').trim();
+  const receivedBase = parseFloat(String(recv.qtyReceivedBase));
+  if (!productId || !(received > 0 ? Number.isFinite(receivedBase) : true)) return null;
+  const poFactor = await resolveLineQtyBase(db, tenantId, productId, {
+    qty: 1,
+    uomId: poUom || undefined,
+    satuan: poLine.satuan ? String(poLine.satuan) : undefined,
+  }, uomsCache);
+  if ('error' in poFactor || !(poFactor.qtyBase > 0)) return null;
+  const grnFactor = received > 0 ? receivedBase / received : null;
+  let rejectedBase = 0;
+  if (rejected > 0) {
+    if (grnFactor && grnFactor > 0) {
+      rejectedBase = rejected * grnFactor;
+    } else {
+      const grnRes = await resolveLineQtyBase(db, tenantId, String(recv.localStokId || productId), {
+        qty: rejected,
+        uomId: grnUom || undefined,
+        satuan: recv.satuan ? String(recv.satuan) : undefined,
+      }, uomsCache);
+      if ('error' in grnRes) return null;
+      rejectedBase = grnRes.qtyBase;
+    }
+  }
+  return {
+    received: roundQty((received > 0 ? receivedBase : 0) / poFactor.qtyBase),
+    rejected: roundQty(rejectedBase / poFactor.qtyBase),
+  };
+}
 
 function findCpoFilter(tenantId: string, payload: Record<string, unknown>) {
   const base = { tenantId };
@@ -51,7 +119,7 @@ export function lineQtyTarget(line: CpoLine): number {
   if (line.cancelled) return 0;
   const qty = parseFloat(String(line.qty)) || 0;
   const rejected = parseFloat(String(line.qtyRejected)) || 0;
-  return Math.max(0, qty - rejected);
+  return Math.max(0, qty - rejected - lineShortClosedQty(line));
 }
 
 /**
@@ -76,7 +144,7 @@ export function buildPoOrderedReceivedMap(
   };
   for (const item of items || []) {
     if (!item.localStokId || item.cancelled) continue;
-    const qtyOrdered = lineQtyTarget(item);
+    const qtyOrdered = lineOrderedQty(item);
     if (qtyOrdered <= 0) continue;
     const qtyReceived = Number(item.qtyReceived) || 0;
     const id = String(item.localStokId);
@@ -107,13 +175,26 @@ function rollupShipStatus(items: CpoLine[]) {
   return 'CONFIRMED';
 }
 
+/** Qty pesan yang masih harus diterima baik. Penolakan tidak mengurangi target; short-close mengurangi. */
+function lineOrderedQty(line: CpoLine): number {
+  if (line.cancelled) return 0;
+  return Math.max(0, (parseFloat(String(line.qty)) || 0) - lineShortClosedQty(line));
+}
+
+/** Qty ditolak yang belum tergantikan penerimaan berikutnya. */
+export function lineBackorderQty(line: CpoLine): number {
+  const open = Math.max(0, lineOrderedQty(line) - (Number(line.qtyReceived) || 0));
+  const rejected = Math.max(0, parseFloat(String(line.qtyRejected)) || 0);
+  return Math.min(rejected, open);
+}
+
 function rollupReceiveStatus(items: CpoLine[]) {
-  const active = items.filter((it) => lineQtyTarget(it) > 0);
+  const active = items.filter((it) => lineOrderedQty(it) > 0);
   if (!active.length) {
     const anyReceived = items.some((it) => (Number(it.qtyReceived) || 0) > 0);
     return anyReceived ? 'RECEIVED' : 'SHIPPED';
   }
-  const allReceived = active.every((it) => (Number(it.qtyReceived) || 0) >= lineQtyTarget(it));
+  const allReceived = active.every((it) => (Number(it.qtyReceived) || 0) >= lineOrderedQty(it));
   const anyReceived = active.some((it) => (Number(it.qtyReceived) || 0) > 0);
   if (allReceived) return 'RECEIVED';
   if (anyReceived) return 'PARTIAL_RECEIVED';
@@ -140,7 +221,7 @@ function matchesVendorSubmission(
 }
 
 /** Gabungan rollup ship+receive — status kemajuan aktual PO berdasar data item, lepas dari event pemicu. */
-function rollupCpoProgressStatus(items: CpoLine[]): string {
+export function rollupCpoProgressStatus(items: CpoLine[]): string {
   const shipStatus = rollupShipStatus(items);
   if (shipStatus !== 'SHIPPED') return shipStatus;
   return rollupReceiveStatus(items);
@@ -157,7 +238,7 @@ const CPO_STATUS_RANK: Record<string, number> = {
 };
 
 /** Jangan biarkan event yang telat/duplikat menurunkan status yang sudah lebih maju. */
-function pickForwardCpoStatus(current: string, proposed: string): string {
+export function pickForwardCpoStatus(current: string, proposed: string): string {
   const c = CPO_STATUS_RANK[current];
   const p = CPO_STATUS_RANK[proposed];
   if (c == null || p == null) return proposed;
@@ -339,17 +420,78 @@ export async function syncCpoFromVendorEvent(
   return { action: 'updated', poId: po.id, noPO: po.noPO, status: patch.status };
 }
 
+/**
+ * Kurangi qty diterima/ditolak PO saat GRN dibalik — idempotent per grn.id.
+ * grn.id tetap di appliedReceiveGrnIds supaya efek samping posting yang telat tidak menambah lagi.
+ */
+export async function syncCpoOnGrnReversed(db: Db, grn: JsonObject, session?: ClientSession) {
+  if (!grn?.noPO) return { action: 'skipped' as const };
+  const grnId = String(grn.id || '').trim();
+  if (!grnId) return { action: 'skipped' as const, reason: 'missing_grn_id' };
+
+  const lookup = { ...tenantIdMatchFilter(grn.tenantId), noPO: grn.noPO };
+  const grnItems = Array.isArray(grn.items) ? grn.items as JsonObject[] : [];
+
+  for (let attempt = 0; attempt < QTY_SYNC_RETRIES; attempt++) {
+    const po = await db.collection('customer_purchase_orders').findOne(lookup, txOpts(session)) as CpoDoc | null;
+    if (!po) return { action: 'not_found' as const };
+    if (hasAppliedId(po.appliedReverseGrnIds, grnId)) {
+      return { action: 'skipped' as const, reason: 'already_reversed', poId: po.id };
+    }
+    if (!hasAppliedId(po.appliedReceiveGrnIds, grnId)) {
+      return { action: 'skipped' as const, reason: 'not_applied', poId: po.id };
+    }
+
+    const ver = Number(po.qtySyncVersion) || 0;
+    const usedGrn = new Set<number>();
+    const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
+    const items: CpoLine[] = [];
+    for (const line of po.items || []) {
+      const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
+      const qty = await grnQtyInPoUnit(db, String(grn.tenantId || ''), line as JsonObject, recv as JsonObject | undefined, uomsCache);
+      if (!qty) {
+        logger.warn('cpo_grn_line_unit_unconvertible', { poId: po.id, noPO: po.noPO, grnId, lineId: line.lineId, reversal: true });
+      }
+      const next = {
+        ...line,
+        qtyReceived: Math.max(0, roundQty((Number(line.qtyReceived) || 0) - (qty?.received || 0))),
+        qtyRejected: Math.max(0, roundQty((Number(line.qtyRejected) || 0) - (qty?.rejected || 0))),
+      };
+      items.push({ ...next, qtyBackorder: lineBackorderQty(next) });
+    }
+
+    const status = String(po.status || '') === 'INVOICED' ? po.status : rollupReceiveStatus(items);
+    const result = await db.collection('customer_purchase_orders').updateOne(
+      qtySyncVersionFilter(String(po.id), ver, { appliedReverseGrnIds: { $ne: grnId } }),
+      {
+        $set: {
+          items,
+          status,
+          hasRejectedQty: items.some((it) => (Number(it.qtyRejected) || 0) > 0),
+          hasBackorder: items.some((it) => (Number(it.qtyBackorder) || 0) > 0),
+          updatedAt: new Date(),
+          qtySyncVersion: ver + 1,
+        },
+        $addToSet: { appliedReverseGrnIds: grnId },
+      },
+      txOpts(session),
+    );
+    if (result.matchedCount > 0) return { action: 'updated' as const, poId: po.id, status };
+  }
+  return { action: 'skipped' as const, reason: 'concurrent_conflict' };
+}
+
 /** Update qty diterima setelah GRN diposting — idempotent per grn.id + optimistic concurrency. */
-export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
+export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject, session?: ClientSession) {
   if (!grn?.noPO) return { action: 'skipped' };
   const grnId = String(grn.id || '').trim();
   if (!grnId) return { action: 'skipped', reason: 'missing_grn_id' };
 
-  const lookup = { tenantId: grn.tenantId, noPO: grn.noPO };
+  const lookup = { ...tenantIdMatchFilter(grn.tenantId), noPO: grn.noPO };
   const grnItems = Array.isArray(grn.items) ? grn.items as JsonObject[] : [];
 
   for (let attempt = 0; attempt < QTY_SYNC_RETRIES; attempt++) {
-    const po = await db.collection('customer_purchase_orders').findOne(lookup) as CpoDoc | null;
+    const po = await db.collection('customer_purchase_orders').findOne(lookup, txOpts(session)) as CpoDoc | null;
     if (!po) return { action: 'not_found' };
     if (hasAppliedId(po.appliedReceiveGrnIds, grnId)) {
       return { action: 'skipped', reason: 'already_applied', grnId, poId: po.id };
@@ -357,16 +499,21 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
 
     const ver = Number(po.qtySyncVersion) || 0;
     const usedGrn = new Set<number>();
-    const items = (po.items || []).map((line) => {
+    const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
+    const items: CpoLine[] = [];
+    for (const line of po.items || []) {
       const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
-      const add = parseFloat(String(recv?.qtyReceived)) || 0;
-      const addRejected = parseFloat(String((recv as JsonObject | undefined)?.qtyRejected)) || 0;
-      return {
+      const qty = await grnQtyInPoUnit(db, String(grn.tenantId || ''), line as JsonObject, recv as JsonObject | undefined, uomsCache);
+      if (!qty) {
+        logger.warn('cpo_grn_line_unit_unconvertible', { poId: po.id, noPO: po.noPO, grnId, lineId: line.lineId });
+      }
+      const next = {
         ...line,
-        qtyReceived: (Number(line.qtyReceived) || 0) + add,
-        qtyRejected: (Number(line.qtyRejected) || 0) + addRejected,
+        qtyReceived: roundQty((Number(line.qtyReceived) || 0) + (qty?.received || 0)),
+        qtyRejected: roundQty((Number(line.qtyRejected) || 0) + (qty?.rejected || 0)),
       };
-    });
+      items.push({ ...next, qtyBackorder: lineBackorderQty(next) });
+    }
 
     const unmatchedGrnItems = grnItems.filter((_, i) => !usedGrn.has(i));
     if (unmatchedGrnItems.length) {
@@ -397,6 +544,7 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
     // Informasional saja — tidak memengaruhi rollup status, hanya penanda untuk UI bahwa
     // status "selesai diterima" ini menyembunyikan kekurangan akibat item ditolak vendor.
     const hasRejectedQty = items.some((it) => (Number(it.qtyRejected) || 0) > 0);
+    const hasBackorder = items.some((it) => (Number(it.qtyBackorder) || 0) > 0);
 
     const result = await db.collection('customer_purchase_orders').updateOne(
       qtySyncVersionFilter(String(po.id), ver, { appliedReceiveGrnIds: { $ne: grnId } }),
@@ -405,12 +553,14 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject) {
           items,
           status,
           hasRejectedQty,
+          hasBackorder,
           receivedAt: new Date(),
           updatedAt: new Date(),
           qtySyncVersion: ver + 1,
         },
         $addToSet: { appliedReceiveGrnIds: grnId },
       },
+      txOpts(session),
     );
     if (result.matchedCount > 0) {
       return { action: 'updated', poId: po.id, status };

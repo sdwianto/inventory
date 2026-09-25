@@ -4,6 +4,7 @@ import type { ClientSession, Db } from 'mongodb';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { postStockMovements, roundUnitCost, type StockActor, type StockMovementLine } from '@/lib/stock-ledger';
 import type { VendorReturnDoc, VendorReturnLine } from '@/types/vendor-return';
+import { loadStockUomMapper, resolveStockProducts } from '@/lib/api/product-merge';
 
 export type VendorReturnLotConsume = NonNullable<VendorReturnDoc['lotConsume']>[number];
 
@@ -30,6 +31,10 @@ export async function applyVendorReturnStock(
   const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
   const nextItems: VendorReturnLine[] = [];
   const movementLines: StockMovementLine[] = [];
+  // Baris retur memegang salinan katalog vendor; stok keluar dari item persediaan kanonik.
+  const targetRes = await resolveStockProducts(db, tid, items.map((it) => it.localStokId), session);
+  if ('error' in targetRes) return { error: targetRes.error };
+  const stockUomOf = await loadStockUomMapper(db, tid, targetRes.targets);
 
   for (const [idx, it] of items.entries()) {
     const qty = parseFloat(String(it.qty)) || 0;
@@ -43,15 +48,21 @@ export async function applyVendorReturnStock(
 
     movementLines.push({
       lineRef: `${idx + 1}:${it.lineId || it.invoiceLineId || it.localStokId}`,
-      productId: it.localStokId,
+      productId: targetRes.targets.get(it.localStokId)?.productId || it.localStokId,
       warehouseKode: it.gudangKode,
       deltaQtyBase: -resolved.qtyBase,
       unitCost: vendorReturnUnitCostBase(it.harga, qty, resolved.qtyBase),
       qtyEntered: qty,
-      uomId: resolved.uomId,
+      uomId: stockUomOf(it.localStokId, resolved.uomId),
       satuan: resolved.satuan,
       // Soft FEFO — sama Issue: tanpa lot / shortfall tidak gagalkan RTV.
-      lotPolicy: { mode: 'FEFO_CONSUME', preferredLotNo: it.lotNo },
+      // Baris lot ditolak QC: hanya lot itu yang boleh diambil walau tertahan.
+      lotPolicy: {
+        mode: 'FEFO_CONSUME',
+        preferredLotNo: it.lotNo,
+        // Lot ditolak boleh sudah kedaluwarsa — tetap hanya lot itu yang keluar, penuh.
+        ...(it.qcLotId && it.lotNo ? { qcHeld: 'PREFERRED' as const, allowExpired: true } : {}),
+      },
     });
     nextItems.push({
       ...it,

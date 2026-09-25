@@ -17,6 +17,14 @@ vi.mock('@/lib/api/stock-mutation', () => ({
   postStockMutation: (...args: unknown[]) => postStockMutation(...(args as [])),
 }));
 
+vi.mock('@/lib/api/product-merge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/product-merge')>()),
+  resolveStockProducts: async (_db: unknown, _tid: string, ids: string[]) => ({
+    targets: new Map(ids.map((id) => [id, { sourceId: id, productId: id, merged: false, product: { id } }])),
+  }),
+  loadStockUomMapper: async () => (_sourceId: string, uomId: string | undefined) => uomId,
+}));
+
 import { applyVendorReturnDecision } from '@/lib/api/vendor-return-decision';
 
 function makeDb(doc: Record<string, unknown> | null) {

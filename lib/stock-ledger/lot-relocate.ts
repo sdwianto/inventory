@@ -7,10 +7,12 @@ import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   INGREDIENT_LOTS_COLLECTION,
+  LOT_QC_RELEASED_FILTER,
   effectiveIngredientQtyRemaining,
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { allocateFefo, type FefoAllocation } from '@/lib/food-production/fefo-allocate';
+import { reservedQtyByLot } from '@/lib/stock-ledger/plan-reservation';
 import { STOCK_QTY_EPS, isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export type LotRelocateLineResult = {
@@ -83,6 +85,8 @@ export async function relocateLotsFefo(
         productId: input.stokId,
         warehouseKode: fromWh,
         status: { $in: ['ACTIVE', 'EXPIRED'] },
+        // Lot karantina/ditolak QC tidak ikut pindah (guard posting menolak transfer qty tertahan).
+        ...LOT_QC_RELEASED_FILTER,
       },
       txOpts(session),
     )
@@ -91,11 +95,22 @@ export async function relocateLotsFefo(
 
   if (!rows.length) return empty;
 
-  const candidates = rows.map((b) => ({
+  // Qty lot yang dikunci rencana tidak ikut pindah gudang; sisa di atasnya boleh pindah.
+  const locked = await reservedQtyByLot(db, session, {
+    tenantId: tid,
+    lotIds: rows.map((r) => r.id),
+  });
+  const movableQty = (b: IngredientLotDoc) => roundStockQty(
+    effectiveIngredientQtyRemaining(b) - Math.min(effectiveIngredientQtyRemaining(b), locked.get(b.id) || 0),
+  );
+  const movable = rows.filter((r) => movableQty(r) > 0);
+  if (!movable.length) return { ...empty, skippedNoLots: false };
+
+  const candidates = movable.map((b) => ({
     id: b.id,
     batchNo: b.lotNo,
     expiryDate: b.expiryDate,
-    qtyRemaining: effectiveIngredientQtyRemaining(b),
+    qtyRemaining: movableQty(b),
     status: b.status,
   }));
 
@@ -161,6 +176,7 @@ export async function relocateLotsFefo(
         productId: input.stokId,
         warehouseKode: toWh,
         status: { $in: ['ACTIVE', 'EXPIRED'] },
+        ...LOT_QC_RELEASED_FILTER,
       },
       txOpts(session),
     )) as unknown as IngredientLotDoc | null;
@@ -189,6 +205,15 @@ export async function relocateLotsFefo(
         lotNo: lot.lotNo,
         grnId: lot.grnId,
         noGRN: lot.noGRN,
+        ...(lot.sourceType ? { sourceType: lot.sourceType } : {}),
+        ...(lot.penyesuaianId ? { penyesuaianId: lot.penyesuaianId } : {}),
+        ...(lot.noPenyesuaian ? { noPenyesuaian: lot.noPenyesuaian } : {}),
+        ...(lot.supplierId ? { supplierId: lot.supplierId } : {}),
+        ...(lot.supplierLotNo ? { supplierLotNo: lot.supplierLotNo } : {}),
+        ...(lot.expirySource ? { expirySource: lot.expirySource } : {}),
+        ...(lot.qcStatus ? { qcStatus: lot.qcStatus } : {}),
+        ...(lot.qcInspectionId ? { qcInspectionId: lot.qcInspectionId, noInspeksi: lot.noInspeksi } : {}),
+        ...(lot.receivedByUserId ? { receivedByUserId: lot.receivedByUserId } : {}),
         productId: lot.productId || input.stokId,
         productKode: lot.productKode,
         productNama: lot.productNama,

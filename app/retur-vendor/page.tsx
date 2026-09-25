@@ -82,6 +82,7 @@ export default function ReturVendorPage() {
   const user = useSessionUser();
   const qc = useQueryClient();
   const hutangIdParam = searchParams.get('hutangId') || '';
+  const openIdParam = searchParams.get('open') || '';
   const [statusFilter, setStatusFilter] = useState('');
   const [decisionFilter, setDecisionFilter] = useState('');
   const [q, setQ] = useState('');
@@ -149,6 +150,15 @@ export default function ReturVendorPage() {
       setActing('');
     }
   };
+
+  useEffect(() => {
+    if (!openIdParam) return;
+    let cancelled = false;
+    fetchJson<JsonObject>(`/api/vendor-returns/${encodeURIComponent(openIdParam)}`)
+      .then((data) => { if (!cancelled) setDetail(data); })
+      .catch((e) => toast.error(e instanceof Error ? e.message : 'Gagal memuat retur'));
+    return () => { cancelled = true; };
+  }, [openIdParam]);
 
   useEffect(() => {
     if (!hutangIdParam || hutangCreateRef.current === hutangIdParam) return;
@@ -393,6 +403,8 @@ export default function ReturVendorPage() {
   const canApproveThis = isPendingApproval && canApproveRole && (canSelfApprove || !isCreator);
   const canWithdraw = isPendingApproval && (isCreator || canApproveRole);
   const isGrnReject = str(detail?.source) === 'grn-reject';
+  const isQcReject = str(detail?.source) === 'qc-reject';
+  const linesLocked = isGrnReject || isQcReject;
   const cnSync = str(detail?.cnSyncStatus);
   const vendorDecision = str(detail?.vendorDecision);
   const hasCn = !!(str(detail?.creditNoteId) || str(detail?.noCN) || cnSync === 'DONE');
@@ -573,6 +585,13 @@ export default function ReturVendorPage() {
           </DialogHeader>
           {detail && (
             <div className="flex-1 overflow-auto space-y-3">
+              {isQcReject && (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Retur lot ditolak inspeksi QC — qty = sisa lot {str(asObject(asArray(detail.items)[0]).lotNo)},
+                  tidak bisa diubah. Saat diposting, stok lot itu keluar dan credit note diajukan ke vendor.
+                  Hapus draft ini untuk mengembalikan lot ke antrean tindak lanjut QC.
+                </div>
+              )}
               {isGrnReject && (
                 <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   Retur dari item ditolak saat Terima Barang (GRN) — qty ini tidak pernah masuk stok/tertagih, jadi tanpa credit note vendor.
@@ -751,10 +770,10 @@ export default function ReturVendorPage() {
                       <th className="px-2 py-1.5 text-left">Lot</th>
                       <th className="px-2 py-1.5 text-right">Harga</th>
                       <th className="px-2 py-1.5 text-right">Jumlah</th>
-                      {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
+                      {!isDraft && !linesLocked && str(detail.status) === 'POSTED' && (
                         <th className="px-2 py-1.5 text-center">Keputusan Vendor</th>
                       )}
-                      {isDraft && !isGrnReject && <th className="px-2 py-1.5 w-10" />}
+                      {isDraft && !linesLocked && <th className="px-2 py-1.5 w-10" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -771,7 +790,7 @@ export default function ReturVendorPage() {
                         <td className="px-2 py-1.5 font-mono text-xs">{str(it.localKode)}</td>
                         <td className="px-2 py-1.5 text-xs">{str(it.localNama)}</td>
                         <td className="px-2 py-1.5 text-xs">
-                          {isDraft && !isGrnReject ? (
+                          {isDraft && !linesLocked ? (
                             <Input
                               className="h-8 w-40 text-xs"
                               value={str(it.reason)}
@@ -783,7 +802,7 @@ export default function ReturVendorPage() {
                         <td className="px-2 py-1.5 text-center text-xs">{str(it.satuan)}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatNumber(maxQty)}</td>
                         <td className="px-2 py-1.5 text-right">
-                          {isDraft && !isGrnReject ? (
+                          {isDraft && !linesLocked ? (
                             <Input
                               type="number"
                               min={0}
@@ -796,7 +815,7 @@ export default function ReturVendorPage() {
                           ) : formatNumber(num(it.qty))}
                         </td>
                         <td className="px-2 py-1.5">
-                          {isDraft && !isGrnReject ? (
+                          {isDraft && !linesLocked ? (
                             <select
                               className="h-8 border rounded px-1 text-xs"
                               value={str(it.gudangKode) || 'GKERING'}
@@ -809,7 +828,7 @@ export default function ReturVendorPage() {
                           ) : warehouseName(str(it.gudangKode))}
                         </td>
                         <td className="px-2 py-1.5">
-                          {isDraft && !isGrnReject ? (
+                          {isDraft && !linesLocked ? (
                             <Input
                               className="h-8 w-28 text-xs font-mono"
                               value={str(it.lotNo)}
@@ -821,7 +840,7 @@ export default function ReturVendorPage() {
                         </td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.harga))}</td>
                         <td className="px-2 py-1.5 text-right text-xs">{formatIDR(num(it.jumlah))}</td>
-                        {!isDraft && !isGrnReject && str(detail.status) === 'POSTED' && (
+                        {!isDraft && !linesLocked && str(detail.status) === 'POSTED' && (
                           <td className="px-2 py-1.5 text-center">
                             <span
                               title={
@@ -845,7 +864,7 @@ export default function ReturVendorPage() {
                             </span>
                           </td>
                         )}
-                        {isDraft && !isGrnReject && (
+                        {isDraft && !linesLocked && (
                           <td className="px-2 py-1.5 text-center">
                             <Button
                               type="button"

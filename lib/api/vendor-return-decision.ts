@@ -9,6 +9,7 @@ import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildVendorReturnTransitRestoreJournalLines } from '@/lib/api/journal-lines';
 import { planFefoRestore } from '@/lib/food-production/fefo-allocate';
 import { vendorReturnUnitCostBase } from '@/lib/api/vendor-return-stock';
+import { loadStockUomMapper, resolveStockProducts } from '@/lib/api/product-merge';
 import { VENDOR_RETURNS_COLLECTION, aggregateVendorDecision, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 
 /** Cocokkan alokasi FEFO Post ke baris yang ditolak — prioritaskan identity baris, bukan SKU+gudang. */
@@ -155,6 +156,11 @@ export async function applyVendorReturnDecision(
     return { action: 'already_applied', returnId, vendorDecision: header };
   }
 
+  // Baris RTV memegang salinan katalog vendor; stok kembali ke item persediaan kanonik.
+  const targetRes = await resolveStockProducts(db, tenantId, newlyRejectedLines.map((l) => String(l.localStokId || '')));
+  if ('error' in targetRes) return { error: targetRes.error, status: 409, code: 'CONFLICT' };
+  const stockUomOf = await loadStockUomMapper(db, tenantId, targetRes.targets);
+
   try {
     await runInTransactionOrFallback(async ({ db: txDb, session }) => {
       // 1) Restore stok + reverse transit GL untuk baris REJECTED.
@@ -192,7 +198,7 @@ export async function applyVendorReturnDecision(
             const restores = prior?.allocations?.length ? planFefoRestore(qtyBase, prior.allocations) : [];
             const mut = await postStockMutation(txDb, {
               tenantId,
-              productId: line.localStokId,
+              productId: targetRes.targets.get(String(line.localStokId))?.productId || line.localStokId,
               warehouseKode: line.gudangKode,
               deltaQtyBase: qtyBase,
               sourceType: 'VENDOR_RETURN_REJECTED',
@@ -202,7 +208,7 @@ export async function applyVendorReturnDecision(
               keterangan: `Vendor tolak retur ${doc.noReturn} baris ${line.localKode || line.localStokId} — stok dikembalikan`,
               hargaSatuan: vendorReturnUnitCostBase(line.harga, parseFloat(String(line.qty)) || 0, qtyBase),
               qtyEntered: line.qty,
-              uomId: line.uomId,
+              uomId: stockUomOf(String(line.localStokId), line.uomId),
               satuan: line.satuan,
               actor: {
                 userId: payload.decidedBy?.userId || 'vendor-decision',

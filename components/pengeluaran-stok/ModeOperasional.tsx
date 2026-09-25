@@ -44,7 +44,7 @@ import {
   type ReleaseFormItem,
   type ReleaseFormState,
 } from '@/lib/pengeluaran-stok/release-form-items';
-import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
+import { ISSUE_ELIGIBLE_PLAN_STATUSES, referenceSourceLabel } from '@/lib/food-production/material-issue';
 import { looksLikeProductionKeperluan } from '@/lib/food-production/production-keperluan';
 import type { ReleasePrefill, ReleasePrefillSkipReason } from '@/lib/food-production/release-prefill';
 import { getClientFeatureFlags } from '@/lib/feature-flags-client';
@@ -873,7 +873,7 @@ export function ModeOperasional() {
                       </div>
                       {acuan && (
                         <div className="text-xs text-slate-600">
-                          Acuan {acuan.sumber} {formatNumber(acuan.acuanQty)} · sudah RL {formatNumber(acuan.rlPosted)}
+                          Acuan {referenceSourceLabel(acuan.sumber)} {formatNumber(acuan.acuanQty)} · sudah RL {formatNumber(acuan.rlPosted)}
                           {acuan.rlPending > 0 ? ` · menunggu ${formatNumber(acuan.rlPending)}` : ''}
                           {' '}· sisa {formatNumber(acuan.sisa)} {acuan.satuan || ''}
                           {acuan.display ? ` (≈ ${formatNumber(acuan.display.qty)} ${acuan.display.satuan})` : ''}
@@ -906,6 +906,19 @@ export function ModeOperasional() {
                           }}
                         />
                       )}
+                      <Input
+                          className="h-8 text-xs"
+                          maxLength={300}
+                          placeholder="Alasan ambil cadangan rencana lain (wajib bila mengambilnya)"
+                          value={it.reservationOverrideReason || ''}
+                          onChange={(e) => {
+                            const reservationOverrideReason = e.target.value;
+                            setForm((prev) => ({
+                              ...prev,
+                              items: prev.items.map((x, idx) => (idx === i ? { ...x, reservationOverrideReason } : x)),
+                            }));
+                          }}
+                        />
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <Input
@@ -1090,6 +1103,9 @@ export function ModeOperasional() {
                             {str(line.nama).trim() || str(line.kode) || '—'}
                             {!!str(line.overReason) && (
                               <div className="text-[11px] text-red-700">Alasan lebih: {str(line.overReason)}</div>
+                            )}
+                            {!!str(line.reservationOverrideReason) && (
+                              <div className="text-[11px] text-amber-800">Alasan ambil cadangan: {str(line.reservationOverrideReason)}</div>
                             )}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatNumber(num(line.qty))}</td>

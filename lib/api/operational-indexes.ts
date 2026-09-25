@@ -2,6 +2,8 @@
 
 import type { Db, IndexSpecification } from 'mongodb';
 import { FP_OPEN_DOC_STATUSES } from '@/lib/food-production/document';
+import { PRODUCT_KODE_UNIQUE_FILTER, PRODUCT_KODE_UNIQUE_INDEX } from '@/lib/api/product-merge';
+import { logger } from '@/lib/api/logger';
 
 const FP_OPEN_STATUS_FILTER = {
   status: { $in: [...FP_OPEN_DOC_STATUSES] },
@@ -9,6 +11,9 @@ const FP_OPEN_STATUS_FILTER = {
 
 let operationalIndexesEnsured = false;
 let operationalIndexesInFlight: Promise<void> | null = null;
+/** Index unik gagal (data dobel) — coba lagi berkala, bukan tiap request. */
+const UNIQUE_INDEX_RETRY_MS = 10 * 60 * 1000;
+let operationalIndexesRetryAt = 0;
 
 interface IndexSpec {
   collection: string;
@@ -43,17 +48,49 @@ const INDEX_SPECS: IndexSpec[] = [
     name: 'uniq_stok_lokasi',
     unique: true,
   },
+  // Revisi resep: nomor revisi unik per resep (menahan dua penulis revisi yang sama).
+  {
+    collection: 'recipe_revisions',
+    index: { tenantId: 1, recipeId: 1, revision: 1 },
+    name: 'uniq_recipe_revisions_recipe_rev',
+    unique: true,
+  },
+  { collection: 'recipe_revisions', index: { tenantId: 1, id: 1 }, name: 'uniq_recipe_revisions_id', unique: true },
+  // Pembalik GRN (RVS): satu pengajuan aktif (menunggu/terposting) per GRN.
+  {
+    collection: 'grn_reversals',
+    index: { tenantId: 1, grnId: 1 },
+    name: 'uniq_grn_reversal_active',
+    unique: true,
+    partialFilterExpression: { active: true },
+  },
+  { collection: 'grn_reversals', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_grn_reversals_tenant_status' },
+  { collection: 'grn_reversals', index: { tenantId: 1, id: 1 }, name: 'uniq_grn_reversals_id', unique: true },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_penyesuaian_tenant_tanggal' },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, noPenyesuaian: 1 }, name: 'uniq_penyesuaian_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, supplierId: 1, status: 1 }, name: 'idx_hutang_tenant_supplier' },
   { collection: 'hutang', index: { tenantId: 1, noHutang: 1 }, name: 'uniq_hutang_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, vendorInvoiceId: 1 }, name: 'idx_hutang_vendor_invoice' },
+  {
+    collection: 'hutang',
+    index: { tenantId: 1, vendorInvoiceId: 1 },
+    name: 'uniq_hutang_tenant_vendor_invoice',
+    unique: true,
+    partialFilterExpression: { vendorInvoiceId: { $type: 'string', $gt: '' } },
+  },
   { collection: 'hutang', index: { tenantId: 1, approvalStatus: 1, approvedAt: -1 }, name: 'idx_hutang_tenant_approval_at' },
   { collection: 'hutang', index: { tenantId: 1, noPO: 1 }, name: 'idx_hutang_tenant_nopo' },
   { collection: 'hutang', index: { tenantId: 1, noDO: 1 }, name: 'idx_hutang_tenant_nodo' },
   { collection: 'hutang', index: { tenantId: 1, referenceType: 1, approvalStatus: 1 }, name: 'idx_hutang_tenant_ref_approval' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_cpo_tenant_tanggal' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, noPO: 1 }, name: 'idx_cpo_tenant_nopo' },
+  {
+    collection: 'customer_purchase_orders',
+    index: { tenantId: 1, noPO: 1 },
+    name: 'uniq_cpo_tenant_nopo',
+    unique: true,
+    partialFilterExpression: { noPO: { $type: 'string', $gt: '' } },
+  },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, vendorSoId: 1 }, name: 'idx_cpo_tenant_vendor_so' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, vendorNoSO: 1 }, name: 'idx_cpo_tenant_vendor_noso' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, maintenanceRequestId: 1 }, name: 'idx_cpo_tenant_mwr' },
@@ -144,6 +181,9 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, kode: 1 }, name: 'uniq_products_tenant_vendor_kode', unique: true, partialFilterExpression: { syncSource: 'sales.app' } },
   { collection: 'products', index: { tenantId: 1, vendorTenantId: 1, vendorStokId: 1 }, name: 'uniq_products_tenant_vendor_stok', unique: true, partialFilterExpression: { syncSource: 'sales.app', vendorStokId: { $exists: true, $type: 'string' } } },
   { collection: 'products', index: { tenantId: 1, kode: 1 }, name: 'uniq_products_tenant_local_kode', unique: true, partialFilterExpression: { syncSource: 'local' } },
+  // Satu kode = satu item persediaan aktif. Gagal (peringatan) selama kode ganda belum digabung migrasi 0003.
+  { collection: 'products', index: { tenantId: 1, kode: 1 }, name: PRODUCT_KODE_UNIQUE_INDEX, unique: true, partialFilterExpression: { ...PRODUCT_KODE_UNIQUE_FILTER } },
+  { collection: 'products', index: { tenantId: 1, mergedInto: 1 }, name: 'idx_products_tenant_merged_into', partialFilterExpression: { mergedInto: { $type: 'string' } } },
   { collection: 'products', index: { tenantId: 1, barcode: 1 }, name: 'idx_products_tenant_barcode' },
   { collection: 'products', index: { tenantId: 1, id: 1 }, name: 'idx_products_tenant_id' },
   { collection: 'products', index: { tenantId: 1, nama: 1, id: 1 }, name: 'idx_products_tenant_nama_id' },
@@ -248,6 +288,38 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'ingredient_lots', index: { tenantId: 1, productId: 1, warehouseKode: 1, status: 1, expiryDate: 1 }, name: 'idx_ilot_fefo_product_wh' },
   { collection: 'ingredient_lots', index: { tenantId: 1, expiryDate: 1 }, name: 'idx_ilot_tenant_expiry' },
   { collection: 'ingredient_lot_reconcile_reports', index: { tenantId: 1, createdAt: -1 }, name: 'idx_ilot_recon_tenant_created' },
+  // Fase 3.2 QC lot: antrean karantina/ditolak & riwayat inspeksi
+  {
+    collection: 'ingredient_lots',
+    index: { tenantId: 1, qcStatus: 1, status: 1, createdAt: 1 },
+    name: 'idx_ilot_tenant_qc_queue',
+    partialFilterExpression: { qcStatus: { $exists: true } },
+  },
+  {
+    collection: 'ingredient_lots',
+    index: { tenantId: 1, qcInspectedAt: -1 },
+    name: 'idx_ilot_tenant_qc_inspected',
+    partialFilterExpression: { qcInspectionId: { $exists: true } },
+  },
+  { collection: 'lot_inspections', index: { tenantId: 1, noInspeksi: 1 }, name: 'uniq_lot_insp_tenant_no', unique: true },
+  { collection: 'lot_inspections', index: { tenantId: 1, lotId: 1 }, name: 'idx_lot_insp_tenant_lot' },
+  { collection: 'lot_inspections', index: { tenantId: 1, inspectedAt: -1 }, name: 'idx_lot_insp_tenant_inspected' },
+  {
+    collection: 'lot_inspections',
+    index: { tenantId: 1, rejectedLotId: 1 },
+    name: 'idx_lot_insp_tenant_rejected_lot',
+    partialFilterExpression: { rejectedLotId: { $exists: true } },
+  },
+  { collection: 'stock_allocations', index: { tenantId: 1, lotId: 1 }, name: 'idx_alloc_tenant_lot' },
+  {
+    collection: 'stock_allocations',
+    index: { tenantId: 1, lotId: 1 },
+    name: 'uniq_alloc_tenant_lot_active',
+    unique: true,
+    partialFilterExpression: { status: 'ACTIVE' },
+  },
+  { collection: 'stock_allocations', index: { tenantId: 1, productionPlanId: 1, status: 1 }, name: 'idx_alloc_tenant_plan_status' },
+  { collection: 'stock_allocations', index: { tenantId: 1, productId: 1, warehouseKode: 1, status: 1 }, name: 'idx_alloc_tenant_product_wh' },
   // W2-16 warehouse bins (addressing; stock grain remains warehouse)
   {
     collection: 'warehouse_bins',
@@ -513,19 +585,30 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'dashboard_snapshots', index: { expiresAt: 1 }, name: 'idx_dashboard_snapshot_expires', expireAfterSeconds: 0 },
 ];
 
+/** Mengembalikan false bila index unik gagal dibuat (mis. data dobel) — perlindungan belum aktif. */
 async function safeCreateIndex(
   db: Db,
   collection: string,
   index: Record<string, number | string>,
   options: Record<string, unknown>,
-) {
+): Promise<boolean> {
   try {
     await db.collection(collection).createIndex(index as IndexSpecification, options);
+    return true;
   } catch (e) {
     const err = e as { code?: number; message?: string };
-    if (err?.code !== 85 && err?.code !== 86) {
-      console.warn(`Index ${options.name}:`, err.message);
+    if (err?.code === 85 || err?.code === 86) return true;
+    if (options.unique) {
+      logger.error('unique_index_create_failed', {
+        collection,
+        index: String(options.name),
+        code: err?.code,
+        error: err?.message,
+      });
+      return false;
     }
+    console.warn(`Index ${options.name}:`, err.message);
+    return true;
   }
 }
 
@@ -590,12 +673,17 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
   await dropIndexIfExists(db, 'distribution_orders', 'uniq_dist_tenant_no');
   // Index non-unik lama mengalahkan uniq_stok_lokasi (satu key pattern). Tanpa unik, upsert paralel membuat dua baris saldo.
   await dropIndexIfExists(db, 'stok_lokasi', 'idx_stok_lokasi_tenant_stok_gudang');
+  let uniqueFailed = false;
   for (const spec of INDEX_SPECS) {
     const opts: Record<string, unknown> = { name: spec.name };
     if (spec.unique) opts.unique = true;
     if (spec.partialFilterExpression) opts.partialFilterExpression = spec.partialFilterExpression;
     if (spec.expireAfterSeconds != null) opts.expireAfterSeconds = spec.expireAfterSeconds;
-    await safeCreateIndex(db, spec.collection, spec.index, opts);
+    if (!(await safeCreateIndex(db, spec.collection, spec.index, opts))) uniqueFailed = true;
+  }
+  if (uniqueFailed) {
+    operationalIndexesRetryAt = Date.now() + UNIQUE_INDEX_RETRY_MS;
+    return;
   }
   operationalIndexesEnsured = true;
 }
@@ -603,6 +691,7 @@ async function runEnsureOperationalIndexes(db: Db): Promise<void> {
 /** Satu kali per proses — request paralel menunggu promise yang sama (hindari herd index ke Atlas). */
 export async function ensureOperationalIndexes(db: Db): Promise<void> {
   if (operationalIndexesEnsured) return;
+  if (!operationalIndexesInFlight && Date.now() < operationalIndexesRetryAt) return;
   if (!operationalIndexesInFlight) {
     operationalIndexesInFlight = runEnsureOperationalIndexes(db).finally(() => {
       operationalIndexesInFlight = null;

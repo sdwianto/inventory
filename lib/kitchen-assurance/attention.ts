@@ -207,13 +207,17 @@ export async function collectAttentions(
     if (!(rem > 0)) continue;
     const exp = String(r.expiryDate || '').slice(0, 10);
     const past = exp < today;
+    const qc = String(r.qcStatus || '');
+    const qcHeld = qc === 'QUARANTINE' || qc === 'REJECTED';
     out.push({
       key: `ilot-exp:${String(r.id)}`,
       pillar: 'FOOD',
       level: past ? 'CRITICAL' : 'ATTENTION',
-      label: `${past ? 'Expired' : 'Expiring'} ingredient · ${String(r.lotNo || r.productKode || r.id)}`,
+      label: qcHeld
+        ? `${qc === 'QUARANTINE' ? 'Karantina QC' : 'Ditolak QC'} · ${String(r.lotNo || r.productKode || r.id)}`
+        : `${past ? 'Expired' : 'Expiring'} ingredient · ${String(r.lotNo || r.productKode || r.id)}`,
       detail: `${String(r.productNama || r.productKode || '')} · expiry ${exp} · remaining ${rem}`,
-      href: '/penerimaan',
+      href: qcHeld ? '/penerimaan/qc' : '/penerimaan',
       source: 'FOOD_PRODUCTION',
     });
   }

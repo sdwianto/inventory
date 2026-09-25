@@ -39,7 +39,7 @@ import { fetchTenantSettings } from '@/lib/tenant-client';
 import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
 import WorkerHealthBanner from '@/components/WorkerHealthBanner';
 
-type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue' | 'rtvNeedsAttention';
+type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue' | 'rtvNeedsAttention' | 'lotQcPending';
 
 interface NavLeaf {
   href: string;
@@ -71,6 +71,7 @@ interface AppShellProps {
 const NAV: NavEntry[] = [
   { type: 'item', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { type: 'item', href: '/penerimaan', label: 'Penerimaan (GRN)', icon: Truck, highlight: true, badgeKey: 'grnPending' },
+  { type: 'item', href: '/penerimaan/qc', label: 'QC Penerimaan', icon: ShieldCheck, badgeKey: 'lotQcPending' },
   { type: 'item', href: '/pembelian-po', label: 'PO ke Vendor', icon: ShoppingBag },
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
   { type: 'item', href: '/retur-vendor', label: 'Retur Vendor', icon: Undo2, badgeKey: 'rtvNeedsAttention' },
@@ -233,19 +234,19 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     '/food-production/distribution',
     '/maintenance/permintaan',
   ],
-  GUDANG: ['/dashboard', '/penerimaan', '/pembelian-po', '/retur-vendor', '/produk',
+  GUDANG: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/retur-vendor', '/produk',
     ...FP_OPS_ROUTES,
     ...KA_OPS_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/transfer', '/stok/bins', '/stok/putaway'],
-  SUPERVISOR: ['/dashboard', '/penerimaan', '/pembelian-po', '/retur-vendor', '/produk',
+  SUPERVISOR: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/retur-vendor', '/produk',
     ...FP_ROUTES,
     ...KA_OPS_ROUTES,
     ...LOGISTICS_ROUTES,
     ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
-  ADMIN: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
+  ADMIN: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
@@ -253,7 +254,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
-  OWNER: ['/dashboard', '/penerimaan', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
+  OWNER: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
@@ -394,11 +395,14 @@ export default function AppShell({ children }: AppShellProps) {
     : 0;
   const grnNewPending = showGrnBadge ? (Number(badgeSource?.grnPending) || 0) : 0;
   const navBadges: Record<NavBadgeKey, number> = {
-    grnPending: grnNewPending + (showGrnBadge ? (Number(badgeSource?.grnRejectedPending) || 0) : 0),
+    grnPending: grnNewPending + (showGrnBadge
+      ? (Number(badgeSource?.grnRejectedPending) || 0) + (Number(badgeSource?.grnReversalPending) || 0)
+      : 0),
     hutangReview: showHutangBadge ? (Number(badgeSource?.hutangReview) || 0) : 0,
     wrPending: showWrBadge ? (Number(badgeSource?.wrPending) || 0) : 0,
     pmOverdue: pmBadgeCount,
     rtvNeedsAttention: showRtvBadge ? (Number(badgeSource?.rtvNeedsAttention) || 0) : 0,
+    lotQcPending: showRtvBadge ? (Number(badgeSource?.lotQcPending) || 0) : 0,
   };
 
   useEffect(() => {

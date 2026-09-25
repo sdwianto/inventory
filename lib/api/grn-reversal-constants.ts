@@ -1,0 +1,2 @@
+export const GRN_REVERSALS_COLLECTION = 'grn_reversals';
+export const GRN_ACCRUAL_REVERSAL_SOURCE = 'AUTO_GRN_ACCRUAL_REVERSAL';

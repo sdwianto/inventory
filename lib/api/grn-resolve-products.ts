@@ -106,7 +106,7 @@ export async function resolveGrnItemProduct(
 }
 
 export async function refreshGrnProducts(db: Db, grn: GrnDoc, productMaps: ProductMaps | null = null) {
-  if (!grn || grn.status === 'POSTED' || grn.status === 'POSTING') return grn;
+  if (!grn || grn.status === 'POSTED' || grn.status === 'POSTING' || grn.status === 'REVERSED') return grn;
 
   const tenantId = grn.tenantId || 'default';
   const vendorTenantId = grn.vendorTenantId || null;

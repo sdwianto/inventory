@@ -18,11 +18,30 @@ import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { storeBase64Image } from '@/lib/api/media-storage';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
   RL_OVER_TOLERANCE_SETTING,
   normalizeRlOverIssueTolerancePct,
 } from '@/lib/food-production/rl-over-issue';
+import {
+  PO_OVER_RECEIVE_TOLERANCE_SETTING,
+  normalizePoOverReceiveTolerancePct,
+} from '@/lib/api/po-receive-control';
+import {
+  DEFAULT_PRICE_TOLERANCE_PCT,
+  DEFAULT_QTY_TOLERANCE_PCT,
+  THREE_WAY_PRICE_TOLERANCE_SETTING,
+  THREE_WAY_QTY_TOLERANCE_SETTING,
+  normalizeThreeWayTolerancePct,
+} from '@/lib/api/three-way-match';
 import type { HandlerContext } from '@/types/api/handler';
+
+const TOLERANCE_SETTINGS = [
+  RL_OVER_TOLERANCE_SETTING,
+  PO_OVER_RECEIVE_TOLERANCE_SETTING,
+  THREE_WAY_QTY_TOLERANCE_SETTING,
+  THREE_WAY_PRICE_TOLERANCE_SETTING,
+] as const;
 import type { AuthContext } from '@/types/auth';
 
 interface TenantSettingsDoc extends Record<string, unknown> {
@@ -147,12 +166,27 @@ export async function handleTenants({
     // Feature flag dan toleransi kontrol hanya diubah MASTER; ADMIN tenant tidak boleh melonggarkan kontrolnya sendiri.
     if (!userAuth.isMaster) {
       delete update.features;
-      delete update[RL_OVER_TOLERANCE_SETTING];
+      for (const key of TOLERANCE_SETTINGS) delete update[key];
     } else {
+      if (THREE_WAY_QTY_TOLERANCE_SETTING in update) {
+        const tolerance = normalizeThreeWayTolerancePct(update[THREE_WAY_QTY_TOLERANCE_SETTING], DEFAULT_QTY_TOLERANCE_PCT);
+        if (tolerance === null) return err('Toleransi qty 3-way match harus angka 0–20 (%)', 400);
+        update[THREE_WAY_QTY_TOLERANCE_SETTING] = tolerance;
+      }
+      if (THREE_WAY_PRICE_TOLERANCE_SETTING in update) {
+        const tolerance = normalizeThreeWayTolerancePct(update[THREE_WAY_PRICE_TOLERANCE_SETTING], DEFAULT_PRICE_TOLERANCE_PCT);
+        if (tolerance === null) return err('Toleransi harga 3-way match harus angka 0–20 (%)', 400);
+        update[THREE_WAY_PRICE_TOLERANCE_SETTING] = tolerance;
+      }
       if (RL_OVER_TOLERANCE_SETTING in update) {
         const tolerance = normalizeRlOverIssueTolerancePct(update[RL_OVER_TOLERANCE_SETTING]);
         if (tolerance === null) return err('Toleransi RL melebihi acuan harus angka 0–100 (%)', 400);
         update[RL_OVER_TOLERANCE_SETTING] = tolerance;
+      }
+      if (PO_OVER_RECEIVE_TOLERANCE_SETTING in update) {
+        const tolerance = normalizePoOverReceiveTolerancePct(update[PO_OVER_RECEIVE_TOLERANCE_SETTING]);
+        if (tolerance === null) return err('Toleransi lebih terima PO harus angka 0–100 (%)', 400);
+        update[PO_OVER_RECEIVE_TOLERANCE_SETTING] = tolerance;
       }
       const features = update.features as Record<string, unknown> | undefined;
       if (features && features.pblReferenceMode === true && features.rlFromPoReference !== true) {
@@ -171,48 +205,49 @@ export async function handleTenants({
       update.logoBase64 = '';
     }
 
-    const controlKeys = ['features', RL_OVER_TOLERANCE_SETTING].filter((k) => k in update);
-    const before = controlKeys.length
-      ? await db.collection('tenant_settings').findOne(
-        { tenantId },
-        { projection: Object.fromEntries(controlKeys.map((k) => [k, 1])) },
-      )
-      : null;
+    const controlKeys = ['features', ...TOLERANCE_SETTINGS].filter((k) => k in update);
+    // Flag & toleransi mengubah perilaku posting stok — perubahan dan auditnya atomik.
+    const doc = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
+      const before = controlKeys.length
+        ? await txDb.collection('tenant_settings').findOne(
+          { tenantId },
+          { projection: Object.fromEntries(controlKeys.map((k) => [k, 1])), ...txOpts(session) },
+        )
+        : null;
 
-    await db.collection('tenant_settings').updateOne({ tenantId }, { $set: update }, { upsert: true });
-    await invalidateDashboardSnapshot(db, tenantId);
-    const doc = await db.collection<TenantSettingsDoc>('tenant_settings').findOne({ tenantId });
+      await txDb.collection('tenant_settings').updateOne({ tenantId }, { $set: update }, { upsert: true, ...txOpts(session) });
+      const after = await txDb.collection<TenantSettingsDoc>('tenant_settings').findOne({ tenantId }, txOpts(session));
 
-    // Flag & toleransi mengubah perilaku posting stok — setiap perubahan wajib terlacak.
-    const changes: Record<string, { from: unknown; to: unknown }> = {};
-    const beforeFeatures = (before?.features || {}) as Record<string, unknown>;
-    const afterFeatures = (doc?.features || {}) as Record<string, unknown>;
-    if (controlKeys.includes('features')) {
-      for (const key of new Set([...Object.keys(beforeFeatures), ...Object.keys(afterFeatures)])) {
-        if (beforeFeatures[key] !== afterFeatures[key]) {
-          changes[`features.${key}`] = { from: beforeFeatures[key] ?? null, to: afterFeatures[key] ?? null };
+      const changes: Record<string, { from: unknown; to: unknown }> = {};
+      const beforeFeatures = (before?.features || {}) as Record<string, unknown>;
+      const afterFeatures = (after?.features || {}) as Record<string, unknown>;
+      if (controlKeys.includes('features')) {
+        for (const key of new Set([...Object.keys(beforeFeatures), ...Object.keys(afterFeatures)])) {
+          if (beforeFeatures[key] !== afterFeatures[key]) {
+            changes[`features.${key}`] = { from: beforeFeatures[key] ?? null, to: afterFeatures[key] ?? null };
+          }
         }
       }
-    }
-    if (controlKeys.includes(RL_OVER_TOLERANCE_SETTING)
-      && before?.[RL_OVER_TOLERANCE_SETTING] !== doc?.[RL_OVER_TOLERANCE_SETTING]) {
-      changes[RL_OVER_TOLERANCE_SETTING] = {
-        from: before?.[RL_OVER_TOLERANCE_SETTING] ?? null,
-        to: doc?.[RL_OVER_TOLERANCE_SETTING] ?? null,
-      };
-    }
-    if (Object.keys(changes).length) {
-      await writeAuditLog(db, {
-        tenantId,
-        action: 'TENANT_CONTROLS_UPDATE',
-        entityType: 'tenant_settings',
-        entityId: tenantId,
-        summary: `Kontrol tenant diubah: ${Object.keys(changes).join(', ')}`,
-        userId: userAuth.userId,
-        userName: userAuth.name || userAuth.email || 'System',
-        metadata: { changes },
-      });
-    }
+      for (const key of TOLERANCE_SETTINGS) {
+        if (controlKeys.includes(key) && before?.[key] !== after?.[key]) {
+          changes[key] = { from: before?.[key] ?? null, to: after?.[key] ?? null };
+        }
+      }
+      if (Object.keys(changes).length) {
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'TENANT_CONTROLS_UPDATE',
+          entityType: 'tenant_settings',
+          entityId: tenantId,
+          summary: `Kontrol tenant diubah: ${Object.keys(changes).join(', ')}`,
+          userId: userAuth.userId,
+          userName: userAuth.name || userAuth.email || 'System',
+          metadata: { changes },
+        }, session);
+      }
+      return after;
+    });
+    await invalidateDashboardSnapshot(db, tenantId);
     return ok(clean(doc));
   }
 

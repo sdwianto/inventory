@@ -12,7 +12,7 @@ import type { ProductUom } from '@/lib/uom/types';
 import type { JsonObject } from '@/types/json';
 
 /** GRN yang sudah/sedang diposting — baris & status tidak boleh ditimpa webhook. */
-const GRN_LOCKED_STATUSES: readonly string[] = ['POSTED', 'POSTING'];
+const GRN_LOCKED_STATUSES: readonly string[] = ['POSTED', 'POSTING', 'REVERSED'];
 
 export async function resolveLocalUomForGrnLine(
   db: Db,

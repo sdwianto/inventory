@@ -24,8 +24,9 @@ export interface MaterialIssueLine {
   qtyIssued: number;
   /** Snapshot acuan (PBL acuan). Semua qty dalam satuan dasar produk. */
   productIds?: string[];
-  sumber?: 'PO' | 'MRP';
+  sumber?: 'PO' | 'MRP' | 'NONE';
   acuanQty?: number;
+  poQtyOrdered?: number;
   poQtyReceived?: number;
   rlPosted?: number;
   /** PBL lama yang memutasi stok untuk rencana yang sama. */
@@ -59,6 +60,8 @@ export interface MaterialIssueDoc {
     rlPostedTotal?: number;
     sisaTotal?: number;
     sisaLineCount?: number;
+    /** Bahan acuan PO yang masih menunggu penerimaan barang. */
+    poOutstandingLineCount?: number;
   };
   stockMode?: MaterialIssueStockMode;
   /** PBL acuan: waktu snapshot acuan terakhir (buat / perbarui / selesai). */
@@ -70,6 +73,7 @@ export interface MaterialIssueDoc {
     reason: string;
     sisaLineCount: number;
     pendingRlCount: number;
+    poOutstandingLineCount?: number;
   };
   /** Hanya PBL lama: waktu stok diposting. PBL acuan tidak pernah mengisi ini. */
   stockPostedAt?: Date;
@@ -177,8 +181,9 @@ type ReferenceLineInput = {
   productKode?: string;
   productNama?: string;
   satuan?: string;
-  sumber: 'PO' | 'MRP';
+  sumber: 'PO' | 'MRP' | 'NONE';
   acuanQty: number;
+  poQtyOrdered?: number;
   poQtyReceived: number;
   rlPosted: number;
   pblPosted: number;
@@ -186,10 +191,20 @@ type ReferenceLineInput = {
   stockWarehouseKode?: string;
 };
 
+export function referenceSourceLabel(sumber: string | undefined): string {
+  return sumber === 'NONE' ? 'di luar rencana' : String(sumber || '');
+}
+
+/** Qty PO acuan yang belum diterima (acuan PO = qty diterima, jadi sisa RL belum mencakupnya). */
+export function poOutstandingQty(l: { sumber?: string; poQtyOrdered?: number; poQtyReceived?: number }): number {
+  if (l.sumber !== 'PO') return 0;
+  return Math.max(0, roundQty((Number(l.poQtyOrdered) || 0) - (Number(l.poQtyReceived) || 0)));
+}
+
 /** Baris PBL acuan dari `loadPlanReference` — qty keluar 0, acuan/RL/sisa sebagai snapshot. */
 export function buildReferenceIssueLines(refLines: ReferenceLineInput[]): MaterialIssueLine[] {
   return refLines
-    .filter((l) => l.acuanQty > 0 || l.rlPosted > 0 || l.pblPosted > 0)
+    .filter((l) => l.acuanQty > 0 || l.rlPosted > 0 || l.pblPosted > 0 || poOutstandingQty(l) > 0)
     .map((l) => ({
       productId: l.productId,
       productIds: l.productIds,
@@ -201,6 +216,7 @@ export function buildReferenceIssueLines(refLines: ReferenceLineInput[]): Materi
       qtyIssued: 0,
       sumber: l.sumber,
       acuanQty: roundQty(l.acuanQty),
+      ...(l.sumber === 'PO' ? { poQtyOrdered: roundQty(Number(l.poQtyOrdered) || 0) } : {}),
       poQtyReceived: roundQty(l.poQtyReceived),
       rlPosted: roundQty(l.rlPosted),
       pblPosted: roundQty(l.pblPosted),
@@ -214,6 +230,7 @@ export function summarizeReferenceIssueLines(lines: MaterialIssueLine[]): Materi
     rlPostedTotal: roundQty(lines.reduce((s, l) => s + (Number(l.rlPosted) || 0), 0)),
     sisaTotal: roundQty(lines.reduce((s, l) => s + (Number(l.sisa) || 0), 0)),
     sisaLineCount: lines.filter((l) => (Number(l.sisa) || 0) > 0).length,
+    poOutstandingLineCount: lines.filter((l) => poOutstandingQty(l) > 0).length,
   };
 }
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildIngredientLotNo,
-  defaultIngredientExpiryDate,
+  addShelfDays,
   effectiveIngredientQtyRemaining,
-  DEFAULT_INGREDIENT_SHELF_DAYS,
+  LEGACY_DEFAULT_SHELF_DAYS,
 } from '@/lib/food-production/ingredient-lot';
 import {
   detectIngredientLotMismatches,
@@ -24,9 +24,10 @@ describe('W2-5 ingredient lot helpers', () => {
     })).toBe('L-2401-BRS01-20260725-1');
   });
 
-  it('defaults expiry by shelf days', () => {
-    expect(defaultIngredientExpiryDate('2026-07-25', 30)).toBe('2026-08-24');
-    expect(DEFAULT_INGREDIENT_SHELF_DAYS).toBe(30);
+  it('adds shelf days to received date', () => {
+    expect(addShelfDays('2026-07-25', 30)).toBe('2026-08-24');
+    expect(addShelfDays('2026-12-31', 1)).toBe('2027-01-01');
+    expect(LEGACY_DEFAULT_SHELF_DAYS).toBe(30);
   });
 
   it('effective remaining defaults', () => {
@@ -60,13 +61,16 @@ describe('W2-5 ingredient lot Detect/Repair', () => {
       limit: () => findCursor,
       toArray: async () => lots,
     };
+    const countDocuments = vi.fn(async () => 2);
     const db = {
-      collection: () => ({ find: () => findCursor }),
+      collection: () => ({ find: () => findCursor, countDocuments }),
     };
 
     const report = await detectIngredientLotMismatches(db as never, 't1', {
       asOf: new Date('2026-07-25T12:00:00.000Z'),
     });
+    expect(report.summary.defaultExpiryLots).toBe(2);
+    expect(countDocuments).toHaveBeenCalledWith({ tenantId: 't1', expirySource: 'DEFAULT' });
     expect(report.summary.activePastExpiry).toBe(1);
     expect(report.summary.lotVsStok).toBe(1); // 10 > 5
     expect(report.mismatches.some((m) => m.kind === 'ACTIVE_PAST_EXPIRY')).toBe(true);
@@ -96,7 +100,7 @@ describe('W2-5 ingredient lot Detect/Repair', () => {
     const db = {
       collection: (name: string) => {
         if (name === 'ingredient_lots') {
-          return { find: () => findCursor, updateOne };
+          return { find: () => findCursor, updateOne, countDocuments: async () => 0 };
         }
         return { find: () => findCursor, insertOne };
       },

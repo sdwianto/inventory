@@ -34,6 +34,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'haccp-verifications': async () => (await import('@/lib/api/handlers/haccp-verifications')).handleHaccpVerifications,
   'supplier-price-book': async () => (await import('@/lib/api/handlers/supplier-price-book')).handleSupplierPriceBook,
   recipes: async () => (await import('@/lib/api/handlers/recipes')).handleRecipes,
+  'recipe-conversion': async () => (await import('@/lib/api/handlers/recipe-conversion')).handleRecipeConversion,
   'recipe-portion-exceptions': async () => (
     await import('@/lib/api/handlers/recipe-portion-exceptions')
   ).handleRecipePortionExceptions,
@@ -81,6 +82,8 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'putaway-moves': async () => (await import('@/lib/api/handlers/putaway-moves')).handlePutawayMoves,
   webhooks: async () => (await import('@/lib/api/handlers/webhooks')).handleWebhooks,
   'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
+  'grn-reversals': async () => (await import('@/lib/api/handlers/grn-reversals')).handleGrnReversals,
+  'lot-qc': async () => (await import('@/lib/api/handlers/lot-qc')).handleLotQc,
   sync: async () => (await import('@/lib/api/handlers/catalog-sync')).handleCatalogSync,
   hutang: async () => (await import('@/lib/api/handlers/vendor-hutang')).handleVendorHutang,
   'vendor-returns': async () => (await import('@/lib/api/handlers/vendor-returns')).handleVendorReturns,

@@ -37,11 +37,13 @@ export function useInvalidateHutangBadges() {
 export interface NavBadgesData {
   grnPending?: number;
   grnRejectedPending?: number;
+  grnReversalPending?: number;
   hutangReview?: number;
   wrPending?: number;
   pmOverdue?: number;
   pmDueSoon?: number;
   rtvNeedsAttention?: number;
+  lotQcPending?: number;
 }
 
 function navBadgesUrl(): string | null {

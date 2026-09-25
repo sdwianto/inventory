@@ -17,6 +17,12 @@ export const EMPTY_PRODUCT: JsonObject = {
   recipeBaseGrams: '',
   /** 1 satuan basis = N ml — konversi resep dapur ML→kemasan. */
   recipeBaseMl: '',
+  /** 1 satuan basis = N satuanIsi (mis. 1 RTG = 10 SACHET). */
+  isiPerKemasan: '',
+  satuanIsi: '',
+  /** Masa simpan (hari) — dasar kedaluwarsa lot bila GRN tidak mengisi tanggal. */
+  shelfLifeDays: '',
+  requiresLotNo: false,
   detailProduk: '',
   fotos: [],
 };

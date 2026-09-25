@@ -27,6 +27,8 @@ import {
   ISSUE_UI_STATUS_NEXT_LABEL,
   isIssueEditable,
   isIssueReconcilable,
+  poOutstandingQty,
+  referenceSourceLabel,
   type MaterialIssueStatus,
 } from '@/lib/food-production/material-issue';
 import {
@@ -70,8 +72,9 @@ interface ReconcileLineView {
 
 interface PlanReferenceLineView {
   productIds: string[];
-  sumber: 'PO' | 'MRP';
+  sumber: 'PO' | 'MRP' | 'NONE';
   acuanQty: number;
+  poQtyOrdered?: number;
   poQtyReceived?: number;
   rlPosted: number;
   pblPosted?: number;
@@ -97,7 +100,7 @@ interface IssueLine {
   qtyPlanned: number;
   qtyIssued: number;
   productIds?: string[];
-  sumber?: 'PO' | 'MRP';
+  sumber?: 'PO' | 'MRP' | 'NONE';
   acuanQty?: number;
   poQtyReceived?: number;
   rlPosted?: number;
@@ -124,7 +127,7 @@ interface IssueRow {
   kitchenNama?: string;
   warehouseKode: string;
   status: MaterialIssueStatus;
-  summary?: { lineCount: number; qtyIssuedTotal: number; rlPostedTotal?: number; sisaLineCount?: number };
+  summary?: { lineCount: number; qtyIssuedTotal: number; rlPostedTotal?: number; sisaLineCount?: number; poOutstandingLineCount?: number };
   lines: IssueLine[];
   history?: IssueHistoryEntry[];
   stockPostedAt?: string;
@@ -162,6 +165,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     completedIssueNo?: string | null;
     pblReferenceMode?: boolean;
     sisaLineCount?: number;
+    poOutstandingLineCount?: number;
   } | null>(null);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [overrideShortage, setOverrideShortage] = useState(false);
@@ -260,6 +264,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
           completedIssueNo: data.completedIssueNo ? String(data.completedIssueNo) : null,
           pblReferenceMode: data.pblReferenceMode === true,
           sisaLineCount: Number(data.sisaLineCount || 0),
+          poOutstandingLineCount: Number(data.poOutstandingLineCount || 0),
         });
       } catch {
         if (!cancelled) setPlanReadiness(null);
@@ -839,6 +844,8 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                 Bahan keluar dari gudang lewat Release (RL).
                 {(planReadiness.sisaLineCount || 0) > 0
                   && ` Saat ini ${planReadiness.sisaLineCount} bahan belum keluar penuh lewat RL.`}
+                {(planReadiness.poOutstandingLineCount || 0) > 0
+                  && ` ${planReadiness.poOutstandingLineCount} bahan acuan PO belum diterima penuh.`}
               </div>
             )}
             {mrpId && !planReadiness?.pblReferenceMode && (
@@ -934,6 +941,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                 const sisaCount = refLines
                   ? refLines.filter((l) => l.sisa > 0).length
                   : Number(detail.summary?.sisaLineCount || 0);
+                const poOutstandingCount = refLines
+                  ? refLines.filter((l) => poOutstandingQty(l) > 0).length
+                  : Number(detail.summary?.poOutstandingLineCount || 0);
                 return (
                   <>
                     <div className="rounded-md border border-sky-300 bg-sky-50 p-2 text-xs text-sky-900 space-y-1">
@@ -944,6 +954,11 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                       {detail.status !== 'COMPLETED' && sisaCount > 0 && (
                         <p className="text-amber-800">
                           {sisaCount} bahan belum keluar penuh lewat RL — buat RL dulu, atau isi catatan saat konfirmasi.
+                        </p>
+                      )}
+                      {detail.status !== 'COMPLETED' && poOutstandingCount > 0 && (
+                        <p className="text-amber-800">
+                          {poOutstandingCount} bahan acuan PO belum diterima penuh — tunggu GRN, atau isi catatan saat konfirmasi.
                         </p>
                       )}
                       {!refLines && detail.referenceSnapshotAt && (
@@ -992,7 +1007,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                                 </td>
                                 <td className="p-2 text-right">
                                   {acuan}
-                                  {sumber && <div className="text-[10px] text-muted-foreground">{sumber}</div>}
+                                  {sumber && <div className="text-[10px] text-muted-foreground">{referenceSourceLabel(sumber)}</div>}
                                 </td>
                                 <td className="p-2 text-right">{sumber === 'PO' ? (poReceived ?? 0) : '—'}</td>
                                 <td className="p-2 text-right">
@@ -1053,9 +1068,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                           {ref && (
                             <div
                               className="text-[10px] text-muted-foreground"
-                              title={`Acuan ${ref.sumber === 'PO' ? 'PO diterima' : 'MRP'} dikurangi RL yang sudah diposting (${ref.satuan || 'satuan dasar'})`}
+                              title={`Acuan ${ref.sumber === 'PO' ? 'PO diterima' : referenceSourceLabel(ref.sumber)} dikurangi RL yang sudah diposting (${ref.satuan || 'satuan dasar'})`}
                             >
-                              Acuan {ref.sumber} {ref.acuanQty} · sisa {ref.sisa}
+                              Acuan {referenceSourceLabel(ref.sumber)} {ref.acuanQty} · sisa {ref.sisa}
                             </div>
                           )}
                         </td>

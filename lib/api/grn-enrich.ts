@@ -4,6 +4,12 @@ import type { Db } from 'mongodb';
 import { getVendorTenantNameMap } from '@/lib/api/vendor-tenants';
 import { listActiveLinksForCustomer } from '@/lib/api/integration-links';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
+import {
+  INGREDIENT_LOTS_COLLECTION,
+  effectiveLotQcStatus,
+  normalizeShelfLifeDays,
+} from '@/lib/food-production/ingredient-lot';
 
 type GrnRow = Record<string, unknown> & {
   vendorTenantId?: string;
@@ -139,6 +145,9 @@ type ProductEmbed = {
   nama?: string;
   satuan?: string;
   gudangKode?: string;
+  /** Dari item kanonik (mergedInto) — itu yang dipakai posting lot GRN. */
+  shelfLifeDays?: number | null;
+  requiresLotNo?: boolean;
 };
 
 export async function enrichGrnDocWithProducts(
@@ -148,34 +157,86 @@ export async function enrichGrnDocWithProducts(
   const enriched = await enrichGrnDoc(db, grn);
   if (!enriched) return enriched;
 
+  const tid = String(enriched.tenantId || 'default');
+  const lotExpiryRequired = await isTenantFeatureEnabled(db, tid, 'lotExpiryRequired');
   const items = Array.isArray(enriched.items) ? enriched.items as Record<string, unknown>[] : [];
   const stokIds = [...new Set(
     items.map((it) => String(it.localStokId || '').trim()).filter(Boolean),
   )];
-  if (!stokIds.length) return enriched;
+  if (!stokIds.length) return { ...enriched, lotExpiryRequired };
 
-  const tid = String(enriched.tenantId || 'default');
   const products = await db.collection('products').find({
     tenantId: tid,
     id: { $in: stokIds },
   }).project({
-    id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1,
+    id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, shelfLifeDays: 1, requiresLotNo: 1, mergedInto: 1,
   }).toArray();
 
+  const canonicalIds = [...new Set(
+    products.map((p) => String(p.mergedInto || '').trim()).filter(Boolean),
+  )];
+  const canonicalRows = canonicalIds.length
+    ? await db.collection('products').find({ tenantId: tid, id: { $in: canonicalIds } })
+      .project({ id: 1, shelfLifeDays: 1, requiresLotNo: 1 }).toArray()
+    : [];
+  const canonicalMap = new Map(canonicalRows.map((c) => [String(c.id), c]));
+
   const prodMap = new Map<string, ProductEmbed>(
-    products.map((p) => [String(p.id), p as ProductEmbed]),
+    products.map((p) => {
+      const lotSource = (p.mergedInto && canonicalMap.get(String(p.mergedInto))) || p;
+      const shelf = normalizeShelfLifeDays(lotSource.shelfLifeDays);
+      const embed: ProductEmbed = {
+        id: p.id,
+        kode: p.kode,
+        nama: p.nama,
+        satuan: p.satuan,
+        gudangKode: p.gudangKode,
+        shelfLifeDays: typeof shelf === 'number' ? shelf : null,
+        requiresLotNo: lotSource.requiresLotNo === true,
+      };
+      return [String(p.id), embed];
+    }),
   );
+
+  // Status QC terkini lot per baris (lot pecahan ditolak ikut ditampilkan).
+  const lotQcByLotId = new Map<string, Array<Record<string, unknown>>>();
+  if (enriched.id && String(enriched.status) === 'POSTED') {
+    const lots = await db.collection(INGREDIENT_LOTS_COLLECTION).find({ tenantId: tid, grnId: String(enriched.id) })
+      .project({
+        id: 1, lotNo: 1, qcStatus: 1, qcSplitFromLotId: 1, qtyRemaining: 1, qty: 1, noInspeksi: 1,
+        qcRejectStatus: 1, qcRejectNoReturn: 1, satuan: 1,
+      })
+      .toArray();
+    for (const lot of lots) {
+      const rootId = String(lot.qcSplitFromLotId || lot.id);
+      const list = lotQcByLotId.get(rootId) || [];
+      list.push({
+        lotId: lot.id,
+        lotNo: lot.lotNo,
+        qcStatus: effectiveLotQcStatus(lot),
+        qty: lot.qty,
+        qtyRemaining: lot.qtyRemaining,
+        satuan: lot.satuan,
+        ...(lot.noInspeksi ? { noInspeksi: lot.noInspeksi } : {}),
+        ...(lot.qcRejectStatus ? { qcRejectStatus: lot.qcRejectStatus } : {}),
+        ...(lot.qcRejectNoReturn ? { qcRejectNoReturn: lot.qcRejectNoReturn } : {}),
+      });
+      lotQcByLotId.set(rootId, list);
+    }
+  }
 
   const itemsWithProducts = items.map((it) => {
     const localStokId = String(it.localStokId || '').trim();
     const product = localStokId ? prodMap.get(localStokId) || null : null;
     const gudangKode = product?.gudangKode || 'GKERING';
+    const lotQc = it.lotId ? lotQcByLotId.get(String(it.lotId)) : undefined;
     return {
       ...it,
       product,
       gudangKode,
+      ...(lotQc?.length ? { lotQc } : {}),
     };
   });
 
-  return { ...enriched, items: itemsWithProducts };
+  return { ...enriched, lotExpiryRequired, items: itemsWithProducts };
 }

@@ -9,6 +9,7 @@ import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 export async function runGrnPostSideEffects(db: Db, tenantId: string, grnId: string) {
   const grn = await db.collection('goods_receipts').findOne({ id: grnId }) as GrnDoc | null;
   if (!grn) return { error: 'GRN tidak ditemukan' };
+  if (grn.status !== 'POSTED') return { grnId, skipped: `status ${grn.status}` };
 
   const cpoSync = await syncCpoOnGrnPosted(db, grn);
   const wrLoop = await tryAutoCompleteWrFromGrn(db, grn);

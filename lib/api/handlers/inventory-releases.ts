@@ -8,7 +8,15 @@ import { requireRole, RELEASE_CREATE_ROLES, RELEASE_APPROVE_ROLES } from '@/lib/
 import { tenantIdForWrite, withTenantFilter, findMasterDoc, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
-import { getAvailableQtyAtLokasi, postStockMovements, qtyLt } from '@/lib/stock-ledger';
+import { getAvailableQtyAtLokasi, postStockMovements, qtyLt, roundQty } from '@/lib/stock-ledger';
+import { loadLotQcHeld, lotQcBlockedMessage, lotQcHeldTotal, lotQcPairKey } from '@/lib/stock-ledger/lot-qc';
+import {
+  loadReservationPools,
+  reservationBlockedMessage,
+  reservationBlockedQty,
+  reservationReasonOk,
+  sanitizeReservationReason,
+} from '@/lib/stock-ledger/plan-reservation';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { isValidWarehouseKode, warehouseLabel, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import { assertProductWarehouse } from '@/lib/api/product-warehouse';
@@ -60,6 +68,7 @@ interface ReleaseItemInput {
   uomId?: string;
   satuan?: string;
   overReason?: string;
+  reservationOverrideReason?: string;
 }
 
 interface ReleaseBody extends Record<string, unknown> {
@@ -87,6 +96,7 @@ interface ReleaseLineItem {
   uomId?: string;
   hargaBeli: number;
   overReason?: string;
+  reservationOverrideReason?: string;
 }
 
 interface ReleaseUserRef {
@@ -202,6 +212,7 @@ async function buildReleaseLineItems(
 ): Promise<{ lineItems: ReleaseLineItem[] } | { error: string; status?: number }> {
   if (!items.length) return { error: 'Minimal 1 item', status: 400 };
   const lineItems: ReleaseLineItem[] = [];
+  const qcUsedByProduct = new Map<string, number>();
   for (const it of items) {
     const prod = await findMasterDoc(db, 'products', scopeAuth, { id: it.stokId });
     if (!prod) return { error: `Produk tidak ditemukan: ${it.kode || it.stokId}`, status: 404 };
@@ -231,6 +242,24 @@ async function buildReleaseLineItems(
         status: 400,
       };
     }
+    const qcHeld = (await loadLotQcHeld(db, tenantId, [{ productId: prodRow.id, lokasiKode }]))
+      .get(lotQcPairKey(prodRow.id, lokasiKode));
+    const heldTotal = lotQcHeldTotal(qcHeld);
+    const already = qcUsedByProduct.get(prodRow.id) || 0;
+    if (heldTotal > 0 && qtyLt(roundQty(avail - heldTotal), roundQty(qtyBase + already))) {
+      return {
+        error: lotQcBlockedMessage({
+          label: String(prodRow.nama || prodRow.kode || prodRow.id),
+          lokasiKode,
+          need: roundQty(qtyBase + already),
+          releasedAvailable: roundQty(avail - heldTotal),
+          held: qcHeld!,
+          satuan: String(prodRow.satuan || '') || undefined,
+        }),
+        status: 400,
+      };
+    }
+    qcUsedByProduct.set(prodRow.id, roundQty(already + qtyBase));
     lineItems.push({
       stokId: prodRow.id,
       kode: String(prodRow.kode || ''),
@@ -242,9 +271,55 @@ async function buildReleaseLineItems(
       uomId: resolved.uomId,
       hargaBeli: parseInt(String(prodRow.hargaBeli || 0), 10),
       ...(sanitizeOverReason(it.overReason) ? { overReason: sanitizeOverReason(it.overReason) } : {}),
+      ...(reservationReasonOk(it.reservationOverrideReason)
+        ? { reservationOverrideReason: sanitizeReservationReason(it.reservationOverrideReason) }
+        : {}),
     });
   }
   return { lineItems };
+}
+
+/** Tolak RL yang mengambil cadangan rencana lain tanpa alasan. */
+async function assertReleaseReservation(
+  db: Db,
+  tenantId: string,
+  lokasiKode: string,
+  lines: ReleaseLineItem[],
+  planId?: string | null,
+): Promise<string | null> {
+  const pools = await loadReservationPools(
+    db,
+    tenantId,
+    lines.map((it) => ({ productId: it.stokId, lokasiKode })),
+  );
+  const used = new Map<string, number>();
+  for (const it of lines) {
+    const pool = pools.get(`${it.stokId}\u0000${lokasiKode}`);
+    if (!pool || !(pool.totalReleased > 0)) {
+      used.set(it.stokId, roundQty((used.get(it.stokId) || 0) + (it.qtyBase || 0)));
+      continue;
+    }
+    const override = reservationReasonOk(it.reservationOverrideReason);
+    const blocked = reservationBlockedQty(pool, { planId, override });
+    const avail = await getAvailableQtyAtLokasi(db, tenantId, it.stokId, lokasiKode);
+    const qcHeld = (await loadLotQcHeld(db, tenantId, [{ productId: it.stokId, lokasiKode }]))
+      .get(lotQcPairKey(it.stokId, lokasiKode));
+    const usable = roundQty(avail - lotQcHeldTotal(qcHeld) - blocked);
+    const already = used.get(it.stokId) || 0;
+    const need = roundQty((it.qtyBase || 0) + already);
+    if (!override && qtyLt(usable, need)) {
+      return reservationBlockedMessage({
+        label: String(it.nama || it.kode || it.stokId),
+        lokasiKode,
+        need,
+        usable: Math.max(0, usable),
+        blocked,
+        satuan: it.satuan,
+      });
+    }
+    used.set(it.stokId, need);
+  }
+  return null;
 }
 
 async function resolveReleaseProductionPlan(
@@ -582,6 +657,11 @@ export async function handleInventoryReleases({
     });
     if ('error' in planResolved) return err(planResolved.error, 400);
 
+    const reservationErr = await assertReleaseReservation(
+      db, tenantId, lokasiKode, lineItems, planResolved.productionPlanId,
+    );
+    if (reservationErr) return err(reservationErr, 400);
+
     const submitNow = releaseBody.submit === true;
     let overIssue: RlOverIssueSnapshot | undefined;
     if (submitNow) {
@@ -693,6 +773,11 @@ export async function handleInventoryReleases({
     });
     if ('error' in planResolved) return err(planResolved.error, 400);
 
+    const reservationErr = await assertReleaseReservation(
+      db, tenantId, lokasiKode, built.lineItems, planResolved.productionPlanId,
+    );
+    if (reservationErr) return err(reservationErr, 400);
+
     const submitNow = releaseBody.submit === true;
     let overIssue: RlOverIssueSnapshot | undefined;
     if (submitNow) {
@@ -776,6 +861,14 @@ export async function handleInventoryReleases({
       );
     }
     if (!scopeAuth) return err('Unauthorized', 401);
+    const reservationErr = await assertReleaseReservation(
+      db,
+      String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody)),
+      String(doc.lokasiKode || ''),
+      doc.items || [],
+      doc.productionPlanId,
+    );
+    if (reservationErr) return err(reservationErr, 400);
     const over = await submitOverIssueCheck(
       db,
       scopeAuth,
@@ -822,6 +915,17 @@ export async function handleInventoryReleases({
         'Release bahan produksi tanpa Rencana Produksi — edit draft & pilih RPN dulu, atau batalkan.',
         400,
       );
+    }
+
+    const reservationOverrides = (doc.items || [])
+      .filter((it) => reservationReasonOk(it.reservationOverrideReason))
+      .map((it) => ({
+        stokId: String(it.stokId),
+        nama: it.nama,
+        reason: sanitizeReservationReason(it.reservationOverrideReason),
+      }));
+    if (reservationOverrides.length && isReleaseMaker(doc, auth.userId)) {
+      return err('Release yang mengambil cadangan rencana lain wajib disetujui pengguna lain, bukan pembuat/pengaju/penyuntingnya.', 403);
     }
 
     const tenantId = doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody);
@@ -939,8 +1043,9 @@ export async function handleInventoryReleases({
           if (over.overCount) overSnapshot = rlOverIssueSnapshot(over, now);
         }
 
+        // updatedAt ikut dicek: RL yang ditolak → diedit → diajukan ulang sejak dibaca tidak boleh diposting dengan isi lama.
         const claim = await txDb.collection('inventory_releases').updateOne(
-          { id: doc.id, status: 'PENDING_APPROVAL' },
+          casEditFilter(doc),
           {
             $set: {
               status: 'POSTED',
@@ -1047,7 +1152,11 @@ export async function handleInventoryReleases({
             lokasiLabel: `${lokasiKode} - ${doc.lokasiNama}`,
             kartuExtra: kartuAllocations.get(idx),
             // W2-6: lot bahan ikut FEFO agar SOH Panduan Release tetap sinkron.
-            lotPolicy: { mode: 'FEFO_CONSUME' as const },
+            lotPolicy: {
+              mode: 'FEFO_CONSUME' as const,
+              reservationPlanId: planId || undefined,
+              reservationOverride: reservationReasonOk(it.reservationOverrideReason),
+            },
           })),
         });
         if (!posted.ok) throw new Error(posted.error);
@@ -1081,7 +1190,8 @@ export async function handleInventoryReleases({
           entityType: 'inventory_release',
           entityId: String(doc.id),
           summary: `Release ${doc.noRelease} disetujui`
-            + (overSnapshot ? ` · melebihi acuan ${overSnapshot.lines.length} produk` : ''),
+            + (overSnapshot ? ` · melebihi acuan ${overSnapshot.lines.length} produk` : '')
+            + (reservationOverrides.length ? ` · ambil cadangan rencana lain ${reservationOverrides.length} baris` : ''),
           userId: auth.userId,
           userName: auth.name || auth.email || 'System',
           metadata: {
@@ -1091,6 +1201,7 @@ export async function handleInventoryReleases({
             ...(planId ? { productionPlanId: planId, productionPlanNo: planNo } : {}),
             ...(autoLinkedAtApprove ? { autoLinkedAtApprove: true } : {}),
             ...(overSnapshot ? { overIssue: overSnapshot } : {}),
+            ...(reservationOverrides.length ? { reservationOverrides } : {}),
           },
         }, session);
       });

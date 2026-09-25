@@ -207,6 +207,7 @@ export async function handleGoodsReceipts({
     if (!grn) return err('GRN tidak ditemukan', 404);
 
     if (grn.status === 'POSTED') return err('GRN sudah diposting');
+    if (grn.status === 'REVERSED') return err('GRN sudah dibalik — penerimaan ulang lewat DO baru dari vendor', 409);
 
     if (isUnresolvedGrnStatus(grn.status || '')) {
       return err('Produk belum terdaftar di Master Produk. Daftarkan/sync kode barang yang sama dari sales.app.');
@@ -253,6 +254,9 @@ export async function handleGoodsReceipts({
     ) as GrnDoc | null;
     if (!grn) return err('GRN tidak ditemukan', 404);
     if (grn.status !== 'POSTED') return err('GRN harus POSTED dulu', 400);
+    if ((grn as { reversalPendingId?: string }).reversalPendingId) {
+      return err('GRN sedang diajukan pembalik — tolak/batalkan pengajuan pembalik dulu', 409);
+    }
 
     const tenantId = grn.tenantId || tenantIdForWrite(scopeAuth, grnBody);
     const result = await replayGrnInvoiceAsync(db, { grn, tenantId });

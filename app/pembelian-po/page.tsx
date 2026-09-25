@@ -85,6 +85,8 @@ function CustomerPoPageContent() {
     syncVendorForVendorPo,
     syncSoLinesPo,
     rejectPo,
+    shortClosePo,
+    canShortClose,
     submitPo,
     vendorNameById,
     closeFormDialog,
@@ -258,6 +260,7 @@ function CustomerPoPageContent() {
                       onDeleteDraft={() => deleteDraftPo(poId)}
                       canRevise={canRevisePo(po)}
                       onRevise={() => reviseCancelledPo(poId)}
+                      onShortClose={canShortClose ? (reason) => shortClosePo(poId, reason) : undefined}
                       tenantName={str(user?.tenantName || user?.name)}
                     />
                   );

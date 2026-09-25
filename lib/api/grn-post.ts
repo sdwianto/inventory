@@ -71,7 +71,7 @@ export async function postGoodsReceipt(
     // Klaim atomik dulu — dua post bersamaan tidak boleh keduanya apply stok.
     // linesRev: baris yang diposting harus sama dengan yang dibaca (webhook/resolve produk menaikkannya).
     const claim = await txDb.collection('goods_receipts').updateOne(
-      { id: grn.id, status: { $nin: ['POSTED', 'POSTING'] }, linesRev: grn.linesRev ?? null },
+      { id: grn.id, status: { $nin: ['POSTED', 'POSTING', 'REVERSED'] }, linesRev: grn.linesRev ?? null },
       { $set: { status: 'POSTING', postingStartedAt: now } },
       txOpts(session),
     );
@@ -87,6 +87,7 @@ export async function postGoodsReceipt(
       (body?.items ?? undefined) as JsonObject[] | undefined,
       session,
       receivedBy ? { userId: receivedBy.userId, userName: receivedBy.userName, role: receivedBy.role } : null,
+      { overReceiveReason: body?.overReceiveReason ? String(body.overReceiveReason) : null },
     );
     // Throw agar klaim POSTING ikut rollback (jangan return error yang tetap commit).
     if (stock.error) throw new Error(stock.error);
@@ -123,6 +124,7 @@ export async function postGoodsReceipt(
           postedAt: now,
           userName: receiverName,
           receivedBy,
+          ...(stock.overReceive ? { overReceive: { ...stock.overReceive, at: now } } : {}),
           ...(Array.isArray(body?.photoUrls) && body.photoUrls.length ? { photos: body.photoUrls } : {}),
           ...invoicePatch,
         },
@@ -149,13 +151,15 @@ export async function postGoodsReceipt(
       action: 'GRN_POSTED',
       entityType: 'goods_receipt',
       entityId: grn.id,
-      summary: `GRN ${grn.noGRN || grn.id} posted — DO ${grn.noDO || '—'}`,
+      summary: `GRN ${grn.noGRN || grn.id} posted — DO ${grn.noDO || '—'}`
+        + (stock.overReceive ? ` · lebih terima disetujui ${stock.overReceive.lines.length} baris` : ''),
       userName: receiverName,
       userId: receivedBy.userId,
       metadata: {
         noDO: grn.noDO,
         receivedTotal: stock.receivedTotal,
         lokasiKodes: [...lokasiSet],
+        ...(stock.overReceive ? { overReceive: stock.overReceive } : {}),
       },
     }, session);
 

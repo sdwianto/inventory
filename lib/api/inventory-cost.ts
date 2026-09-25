@@ -39,6 +39,22 @@ export function calcWeightedAvgHargaBeli(oldQty, oldHarga, newQty, newUnitCost) 
   return Math.round(weighted);
 }
 
+/**
+ * Kebalikan rata-rata tertimbang saat penerimaan dibatalkan:
+ * (stok × harga − qtyKeluar × hargaMasuk) / (stok − qtyKeluar).
+ * Stok sisa ≤ 0 atau hasil negatif: harga sekarang dipertahankan.
+ */
+export function reverseWeightedAvgHargaBeli(currentQty, currentHarga, reversedQty, reversedUnitCost) {
+  const stok = toQty(currentQty);
+  const harga = toHarga(currentHarga);
+  const qtyKeluar = toQty(reversedQty);
+  const hargaMasuk = toHarga(reversedUnitCost);
+  const sisa = stok - qtyKeluar;
+  if (qtyKeluar <= 0 || sisa <= 0) return harga;
+  const weighted = (stok * harga - qtyKeluar * hargaMasuk) / sisa;
+  return weighted > 0 ? Math.round(weighted) : harga;
+}
+
 /** Pertahankan margin % harga jual saat harga beli berubah. */
 export function repriceFromMargin(oldBeli, newBeli, oldPrice) {
   const beliLama = toHarga(oldBeli);

@@ -46,8 +46,12 @@ export type PoListCardProps = {
   onDeleteDraft?: () => void;
   onRevise?: () => void;
   canRevise?: boolean;
+  /** Tutup sisa backorder PO (SUPERVISOR+). */
+  onShortClose?: (reason: string) => void;
   tenantName?: string;
 };
+
+const SHORT_CLOSABLE_PO_STATUSES = ['CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED', 'PARTIAL_RECEIVED'];
 
 export default function PoListCard({
   po,
@@ -71,8 +75,11 @@ export default function PoListCard({
   onDeleteDraft,
   onRevise,
   canRevise = false,
+  onShortClose,
   tenantName,
 }: PoListCardProps) {
+  const [shortCloseOpen, setShortCloseOpen] = useState(false);
+  const [shortCloseReason, setShortCloseReason] = useState('');
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -96,6 +103,12 @@ export default function PoListCard({
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
   const hasRejectedQty = Boolean(po.hasRejectedQty) && ['RECEIVED', 'INVOICED'].includes(poStatus);
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
+  const openRemainingLines = poItems.filter((it) => !it.cancelled
+    && num(it.qty) - num(it.qtyShortClosed) - num(it.qtyReceived) > 0.0001);
+  const canShortCloseRow = Boolean(onShortClose) && !isOptimistic
+    && SHORT_CLOSABLE_PO_STATUSES.includes(poStatus)
+    && poItems.some((it) => num(it.qtyReceived) > 0)
+    && openRemainingLines.length > 0;
 
   const handleReject = () => {
     onReject(rejectReason || 'Ditolak admin');
@@ -188,6 +201,19 @@ export default function PoListCard({
           >
             <RefreshCw className={`w-3 h-3 mr-1 ${isSubmitting ? 'animate-spin' : ''}`} />
             Sync SO
+          </Button>
+        )}
+        {canShortCloseRow && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 border-amber-300 text-amber-800 hover:bg-amber-50"
+            onClick={() => setShortCloseOpen(true)}
+            disabled={isSubmitting}
+            title="Tutup sisa qty yang tidak akan dikirim — PO bisa selesai dan tagihan bisa disetujui"
+          >
+            <XCircle className="w-3 h-3 mr-1" />
+            Tutup sisa
           </Button>
         )}
         {canEdit && !isOptimistic && (
@@ -435,6 +461,11 @@ export default function PoListCard({
                     {cancelled
                       ? <span className="line-through">{formatNumber(num(it.qtyOriginal ?? it.qty))}</span>
                       : formatNumber(num(it.qty))}
+                    {!cancelled && num(it.qtyShortClosed) > 0 && (
+                      <div className="text-[10px] text-amber-700" title={str(po.shortCloseReason)}>
+                        sisa {formatNumber(num(it.qtyShortClosed))} ditutup
+                      </div>
+                    )}
                   </td>
                   <td className="py-1.5 text-center text-slate-600">{str(it.satuan) || '—'}</td>
                 </tr>
@@ -510,6 +541,49 @@ export default function PoListCard({
             </AlertDialogCancel>
             <AlertDialogAction onClick={handleReject}>
               Tolak
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={shortCloseOpen} onOpenChange={setShortCloseOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tutup sisa PO {str(po.noPO)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sisa qty berikut dianggap tidak akan dikirim. Penerimaan berikutnya untuk baris ini dihitung lebih-terima
+              dan butuh persetujuan SUPERVISOR. Minta vendor membatalkan sisa SO di sisi mereka.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="text-xs space-y-0.5 max-h-40 overflow-auto">
+            {openRemainingLines.map((it) => (
+              <li key={str(it.lineId || it.kode)}>
+                {str(it.nama || it.kode)}: sisa{' '}
+                <span className="font-medium">
+                  {formatNumber(num(it.qty) - num(it.qtyShortClosed) - num(it.qtyReceived))} {str(it.satuan)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="py-2">
+            <Label htmlFor="short-close-reason">Alasan (wajib)</Label>
+            <Input
+              id="short-close-reason"
+              value={shortCloseReason}
+              onChange={(e) => setShortCloseReason(e.target.value)}
+              placeholder="Contoh: vendor kehabisan stok, kebutuhan sudah terpenuhi"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShortCloseReason('')}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={shortCloseReason.trim().length < 3}
+              onClick={() => {
+                onShortClose?.(shortCloseReason.trim());
+                setShortCloseOpen(false);
+                setShortCloseReason('');
+              }}
+            >
+              Tutup sisa
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -910,6 +910,23 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
+  const shortClosePo = async (id: string, reason: string) => {
+    setSubmitting(id);
+    try {
+      const data = await fetchJson<JsonObject>(`/api/customer-purchase-orders/${encodeURIComponent(id)}/short-close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      const closed = asArray(asObject(data.shortClose).lines).length;
+      toast.success(`Sisa PO ${str(data.noPO) || id} ditutup (${closed} baris) — status ${str(data.status)}`);
+      await reloadList();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menutup sisa PO');
+    }
+    setSubmitting('');
+  };
+
   const rejectPo = async (id: string, reason = 'Ditolak admin') => {
     setSubmitting(id);
     try {
@@ -1082,6 +1099,8 @@ export function useCustomerPoPage() {
     syncVendorForVendorPo,
     syncSoLinesPo,
     rejectPo,
+    shortClosePo,
+    canShortClose: ['SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'].includes(String(user?.role || '')),
     submitPo,
     vendorNameById,
     closeFormDialog,

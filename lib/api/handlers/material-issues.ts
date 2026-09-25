@@ -311,7 +311,10 @@ async function postIssueStock(
       qtyEntered: needQty,
       keterangan: `Pengambilan bahan ${doc.noDokumen} — ${line.productNama || line.productKode || line.productId}`,
       // W2-6: FEFO consume ingredient lots when present (skip legacy stock without lots).
-      lotPolicy: { mode: 'FEFO_CONSUME' as const },
+      lotPolicy: {
+        mode: 'FEFO_CONSUME' as const,
+        reservationPlanId: doc.productionPlanId || undefined,
+      },
     }));
   if (!movementLines.length) return { ok: true, fefoConsume: [] };
 
@@ -884,10 +887,12 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             txOpts(session),
           );
           const sisaLineCount = summary.sisaLineCount || 0;
-          const needsAck = sisaLineCount > 0 || pendingRlCount > 0;
+          const poOutstandingLineCount = summary.poOutstandingLineCount || 0;
+          const needsAck = sisaLineCount > 0 || pendingRlCount > 0 || poOutstandingLineCount > 0;
           if (needsAck && ackNote.length < 5) {
             const parts = [
               sisaLineCount ? `${sisaLineCount} bahan belum keluar penuh lewat RL (${describeSisaLines(lines)})` : '',
+              poOutstandingLineCount ? `${poOutstandingLineCount} bahan acuan PO belum diterima penuh` : '',
               pendingRlCount ? `${pendingRlCount} RL belum diposting (draft/menunggu persetujuan)` : '',
             ].filter(Boolean).join('; ');
             throw Object.assign(
@@ -923,6 +928,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
                     reason: ackNote,
                     sisaLineCount,
                     pendingRlCount,
+                    poOutstandingLineCount,
                   },
                 } : {}),
               },
@@ -943,6 +949,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
               sisaTotal: summary.sisaTotal,
               sisaLineCount,
               pendingRlCount,
+              poOutstandingLineCount,
               ...(needsAck ? { reason: ackNote } : {}),
             },
             ...auditActor(auth),

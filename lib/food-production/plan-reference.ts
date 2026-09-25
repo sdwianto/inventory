@@ -8,7 +8,7 @@
 
 import type { ClientSession, Db } from 'mongodb';
 import { withTenantFilter } from '@/lib/api/tenant-master';
-import { lineQtyTarget, type CpoLine } from '@/lib/api/cpo-status-sync';
+import type { CpoLine } from '@/lib/api/cpo-status-sync';
 import { listProductUomsByProductIds } from '@/lib/api/product-uom';
 import { loadLiveProductMap } from '@/lib/api/resolve-live-catalog-product';
 import { pickBaseUom } from '@/lib/uom/conversion';
@@ -25,13 +25,15 @@ import { isPoAppliedStatus } from '@/lib/food-production/production-plan';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { roundQty } from '@/lib/stock-ledger/precision';
+import { loadPlanBlockedQty, planBlockedPairKey } from '@/lib/stock-ledger/plan-available';
 
 export const CUSTOMER_POS_COLLECTION = 'customer_purchase_orders';
 const RELEASES_COLLECTION = 'inventory_releases';
 
 type ScopeAuth = Parameters<typeof withTenantFilter>[0];
 
-export type PlanReferenceSource = 'PO' | 'MRP';
+/** `NONE`: bahan hanya muncul dari RL/PBL/probe — tidak ada di PO maupun MRP rencana. */
+export type PlanReferenceSource = 'PO' | 'MRP' | 'NONE';
 
 export interface PlanReferencePoRef {
   poId: string;
@@ -141,11 +143,13 @@ export const RL_PENDING_STATUSES = ['DRAFT', 'PENDING_APPROVAL'] as const;
 
 type StockEntry = { qtyOnHand: number; stockWarehouseKode?: string };
 
+/** Stok yang boleh dipakai rencana ini: stok gudang − tertahan QC − cadangan rencana lain. */
 async function loadCanonicalStock(
   db: Db,
   tenantId: string,
   ids: string[],
   canonical: (id: string) => string,
+  planId: string,
 ): Promise<Map<string, StockEntry>> {
   const unique = [...new Set(ids.filter(Boolean))];
   const out = new Map<string, StockEntry>();
@@ -158,11 +162,16 @@ async function loadCanonicalStock(
     getStokByWarehouseBatch(db, tenantId, unique),
   ]);
   const gudangById = new Map(products.map((p) => [String(p.id), resolveProductGudangKode(p)]));
+  const pairs = unique
+    .filter((id) => gudangById.get(id))
+    .map((id) => ({ productId: id, lokasiKode: String(gudangById.get(id)) }));
+  const blockedByPair = await loadPlanBlockedQty(db, tenantId, pairs, planId);
   for (const id of unique) {
     const wh = gudangById.get(id);
     if (!wh) continue;
     const key = canonical(id);
-    const qty = Number((stockMap.get(id) || {})[wh] || 0);
+    const gross = Number((stockMap.get(id) || {})[wh] || 0);
+    const qty = Math.max(0, roundQty(gross - (blockedByPair.get(planBlockedPairKey(id, wh)) || 0)));
     const prev = out.get(key);
     out.set(key, {
       qtyOnHand: roundQty((prev?.qtyOnHand || 0) + qty),
@@ -268,9 +277,19 @@ export async function loadPlanReference(
   const liveMap = rawIds.size ? await loadLiveProductMap(db, tenantId, [...rawIds]) : new Map();
   const canonical = (id: string) => String(liveMap.get(id)?.id || id);
   const canonicalIds = [...new Set([...rawIds].map(canonical))];
-  const uomsByProduct = canonicalIds.length
-    ? await listProductUomsByProductIds(db, tenantId, canonicalIds)
+  // Salinan vendor tergabung: satuan dasar sama dengan item kanonik, tetapi kemasan (SAK/DUS) bisa beda per vendor.
+  const mergedRawIds = rawIds.size
+    ? (await db.collection('products')
+      .find({ tenantId, id: { $in: [...rawIds] }, mergedInto: { $type: 'string' } }, s)
+      .project({ id: 1 })
+      .toArray()).map((p) => String(p.id))
+    : [];
+  const mergedRaw = new Set(mergedRawIds);
+  const uomIds = [...new Set([...canonicalIds, ...mergedRawIds])];
+  const uomsByProduct = uomIds.length
+    ? await listProductUomsByProductIds(db, tenantId, uomIds)
     : new Map<string, ProductUom[]>();
+  const uomOwner = (rawId: string, canonId: string) => (mergedRaw.has(rawId) ? rawId : canonId);
 
   const baseSatuanOf = (canonId: string, rawId: string): string | undefined => {
     const base = pickBaseUom(uomsByProduct.get(canonId) || []);
@@ -310,8 +329,8 @@ export async function loadPlanReference(
     if (rawId !== canonId && !row.aliasIds.includes(rawId)) row.aliasIds.push(rawId);
     return { row, canonId };
   };
-  const toBase = (row: Acc, canonId: string, src: QtySource, label: string): number => {
-    const res = qtyToProductBase(src, uomsByProduct.get(canonId) || [], row.satuan);
+  const toBase = (row: Acc, uomProductId: string, src: QtySource, label: string): number => {
+    const res = qtyToProductBase(src, uomsByProduct.get(uomProductId) || [], row.satuan);
     if (!res.converted) {
       row.warnings.push(`${label}: satuan ${src.satuan} tidak terkonversi ke ${row.satuan || 'satuan dasar'}`);
     }
@@ -326,15 +345,17 @@ export async function loadPlanReference(
 
   for (const po of appliedPos) {
     for (const it of po.items || []) {
-      if (!it.localStokId) continue;
-      const ordered = lineQtyTarget(it);
+      if (!it.localStokId || it.cancelled) continue;
+      const ordered = Math.max(0, (parseFloat(String(it.qty)) || 0) - (Number(it.qtyShortClosed) || 0));
       const received = Number(it.qtyReceived) || 0;
       if (!(ordered > 0) && !(received > 0)) continue;
-      const { row, canonId } = touch(String(it.localStokId), { kode: it.kode || it.vendorKode });
+      const rawId = String(it.localStokId);
+      const { row, canonId } = touch(rawId, { kode: it.kode || it.vendorKode });
       const src = { satuan: it.satuan, uomId: it.uomId };
       const label = `PO ${po.noPO || po.id}`;
-      row.poQtyOrdered = roundQty(row.poQtyOrdered + toBase(row, canonId, { ...src, qty: ordered }, label));
-      row.poQtyReceived = roundQty(row.poQtyReceived + toBase(row, canonId, { ...src, qty: received }, label));
+      const owner = uomOwner(rawId, canonId);
+      row.poQtyOrdered = roundQty(row.poQtyOrdered + toBase(row, owner, { ...src, qty: ordered }, label));
+      row.poQtyReceived = roundQty(row.poQtyReceived + toBase(row, owner, { ...src, qty: received }, label));
       row.poRefs.push({
         poId: String(po.id || ''),
         noPO: String(po.noPO || ''),
@@ -386,14 +407,14 @@ export async function loadPlanReference(
   for (const id of probeIds) touch(id);
 
   const stockById = opts.withStock
-    ? await loadCanonicalStock(db, tenantId, [...rawIds, ...canonicalIds], canonical)
+    ? await loadCanonicalStock(db, tenantId, [...rawIds, ...canonicalIds], canonical, planId)
     : new Map<string, StockEntry>();
 
   const lines: PlanReferenceLine[] = [...acc.values()]
     .filter((r) => r.poRefs.length || r.hasMrp || r.rlPosted > 0 || r.pblPosted > 0 || pendingRows.has(r))
     .map((r) => {
-      const sumber: PlanReferenceSource = r.poRefs.length ? 'PO' : 'MRP';
-      const acuanQty = sumber === 'PO' ? r.poQtyReceived : ceilProcurementQty(r.qtyMrp, r.satuan);
+      const sumber: PlanReferenceSource = r.poRefs.length ? 'PO' : r.hasMrp ? 'MRP' : 'NONE';
+      const acuanQty = sumber === 'PO' ? r.poQtyReceived : sumber === 'MRP' ? ceilProcurementQty(r.qtyMrp, r.satuan) : 0;
       const sisa = Math.max(0, roundQty(acuanQty - r.rlPosted - r.pblPosted));
       let stock: StockEntry | undefined;
       if (opts.withStock) {

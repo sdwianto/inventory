@@ -12,6 +12,7 @@ import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
 import { postStockMovements, type StockActor, type StockMovementLine } from '@/lib/stock-ledger';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
+import { releasePlanReservations } from '@/lib/stock-ledger/plan-reservation';
 import {
   PRODUCTION_RESULTS_COLLECTION,
   RESULT_ELIGIBLE_PLAN_STATUSES,
@@ -348,11 +349,18 @@ async function maybeCompletePlan(
   })) {
     return;
   }
-  await db.collection(PRODUCTION_PLANS_COLLECTION).updateOne(
+  const completed = await db.collection(PRODUCTION_PLANS_COLLECTION).findOneAndUpdate(
     withTenantFilter(scopeAuth, { id: planId, status: { $in: ['APPROVED', 'PROCESSING'] } }),
     { $set: { status: 'COMPLETED', updatedAt: new Date() } },
-    txOpts(session),
+    { projection: { tenantId: 1 }, ...txOpts(session) },
   );
+  if (completed) {
+    await releasePlanReservations(db, session, {
+      tenantId: String(completed.tenantId || ''),
+      productionPlanId: planId,
+      reason: 'PLAN_COMPLETED',
+    });
+  }
 }
 
 export async function handleProductionResults(ctx: HandlerContext): Promise<NextResponse | null> {

@@ -49,6 +49,16 @@ function makeDb(
           updateOne: vendorReturnsUpdateOne,
         };
       }
+      if (name === 'jurnal') {
+        return {
+          find: (filter: { sourceType?: string }) => ({
+            sort: () => ({
+              toArray: async () => (filter.sourceType === 'AUTO_HUTANG_VENDOR' ? [{ id: 'j-inv' }] : []),
+            }),
+          }),
+          countDocuments: async () => 0,
+        };
+      }
       throw new Error(`unexpected collection: ${name}`);
     },
   };

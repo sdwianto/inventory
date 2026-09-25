@@ -48,6 +48,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'customer_purchase_orders',
   'local_purchase_orders',
   'goods_receipts',
+  'grn_reversals',
   'vendor_returns',
   'inventory_releases',
   'maintenance_requests',
@@ -70,6 +71,8 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'stok_bin',
   'putaway_moves',
   'ingredient_lots',
+  'lot_inspections',
+  'stock_allocations',
   // Integrasi & jejak eksekusi
   'integration_outbox',
   'audit_log',

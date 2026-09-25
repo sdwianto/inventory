@@ -10,7 +10,8 @@ import {
   warehouseLabel,
   WAREHOUSE_CODES,
 } from '@/lib/api/warehouses';
-import { INGREDIENT_LOTS_COLLECTION, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
+import { INGREDIENT_LOTS_COLLECTION, LOT_QC_RELEASED_FILTER, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
+import { loadLotQcHeld, lotQcHeldTotal, lotQcPairKey } from '@/lib/stock-ledger/lot-qc';
 import { applyLedgerCapToWarehouseMap, ledgerSaldoForProducts } from '@/lib/api/stock-ledger';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import type { HandlerContext } from '@/types/api/handler';
@@ -113,6 +114,8 @@ export async function handlePanduanRelease({
     tenantId: tid,
     qtyRemaining: { $gt: 0 },
     status: { $in: ['ACTIVE', 'EXPIRED'] },
+    // Karantina/ditolak QC bukan stok yang boleh dikeluarkan.
+    ...LOT_QC_RELEASED_FILTER,
   };
   if (warehouseKode) lotFilter.warehouseKode = warehouseKode;
 
@@ -280,6 +283,24 @@ export async function handlePanduanRelease({
       purchaseRequirementNo: str(po?.purchaseRequirementNo),
     });
     lotsByKey.set(key, list);
+  }
+
+  const heldPairs: Array<{ productId: string; lokasiKode: string }> = [];
+  for (const key of stockByProductWh.keys()) {
+    const sep = key.indexOf('::');
+    if (sep <= 0) continue;
+    heldPairs.push({ productId: key.slice(0, sep), lokasiKode: key.slice(sep + 2) });
+  }
+  if (heldPairs.length) {
+    const held = await loadLotQcHeld(db, tid, heldPairs);
+    for (const pair of heldPairs) {
+      const total = lotQcHeldTotal(held.get(lotQcPairKey(pair.productId, pair.lokasiKode)));
+      if (!(total > 0)) continue;
+      const key = productWhKey(pair.productId, pair.lokasiKode);
+      const next = Math.round(((stockByProductWh.get(key) || 0) - total) * 1000) / 1000;
+      if (next > 0) stockByProductWh.set(key, next);
+      else stockByProductWh.delete(key);
+    }
   }
 
   const rows: PanduanRow[] = [];

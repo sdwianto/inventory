@@ -40,6 +40,11 @@ type IngredientLotReconcile = {
   activePastExpiry?: number;
   expiredWithQty?: number;
   lotVsStok?: number;
+  defaultExpiryLots?: number;
+  quarantineLots?: number;
+  quarantineOver24h?: number;
+  rejectedPending?: number;
+  quarantineConsumed?: number;
   mismatchSample?: Array<Record<string, unknown>>;
 };
 
@@ -586,6 +591,28 @@ export default function OpsDashboardPage() {
               <div className="rounded border p-3">
                 <div className="text-xs text-muted-foreground">lotVsStok</div>
                 <div className="font-semibold">{String(ingredientLotRec?.lotVsStok ?? '—')}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Lot kedaluwarsa default (+30)</div>
+                <div className="font-semibold">{String(ingredientLotRec?.defaultExpiryLots ?? '—')}</div>
+                <StatusBadge ok={!ingredientLotRec || Number(ingredientLotRec.defaultExpiryLots || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Lot karantina QC (&gt;24 jam)</div>
+                <div className="font-semibold">
+                  {String(ingredientLotRec?.quarantineLots ?? '—')} ({String(ingredientLotRec?.quarantineOver24h ?? '—')})
+                </div>
+                <StatusBadge ok={!ingredientLotRec || Number(ingredientLotRec.quarantineOver24h || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Lot ditolak QC menunggu tindak lanjut</div>
+                <div className="font-semibold">{String(ingredientLotRec?.rejectedPending ?? '—')}</div>
+                <StatusBadge ok={!ingredientLotRec || Number(ingredientLotRec.rejectedPending || 0) === 0} />
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Lot karantina terpakai (harus 0)</div>
+                <div className="font-semibold">{String(ingredientLotRec?.quarantineConsumed ?? '—')}</div>
+                <StatusBadge ok={!ingredientLotRec || Number(ingredientLotRec.quarantineConsumed || 0) === 0} />
               </div>
               <div className="rounded border p-3">
                 <div className="text-xs text-muted-foreground">Last report</div>

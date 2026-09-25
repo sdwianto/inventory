@@ -3,6 +3,8 @@ import {
   STOCK_ISSUE_FILTER,
   buildReferenceIssueLines,
   isReferenceIssue,
+  poOutstandingQty,
+  referenceSourceLabel,
   summarizeReferenceIssueLines,
 } from '@/lib/food-production/material-issue';
 import { isPblReferenceModeActive, mergeFeatureFlags } from '@/lib/api/feature-flags';
@@ -60,6 +62,21 @@ describe('PBL acuan (Fase 1.4)', () => {
       sisaTotal: 2,
       sisaLineCount: 1,
     });
+  });
+
+  it('PO yang belum diterima tetap tercatat sebagai baris dan dihitung di ringkasan', () => {
+    const lines = buildReferenceIssueLines([
+      ref({ productId: 'telur', productIds: ['telur'], acuanQty: 0, poQtyOrdered: 10, poQtyReceived: 0, rlPosted: 0, sisa: 0 }),
+      ref({ poQtyOrdered: 5 }),
+      ref({ productId: 'sabun', productIds: ['sabun'], sumber: 'NONE', acuanQty: 0, poQtyReceived: 0, rlPosted: 1, sisa: 0 }),
+    ]);
+    expect(lines.map((l) => l.productId)).toEqual(['telur', 'gula', 'sabun']);
+    expect(lines[0]).toMatchObject({ poQtyOrdered: 10, poQtyReceived: 0, sisa: 0 });
+    expect(poOutstandingQty(lines[0])).toBe(10);
+    expect(poOutstandingQty(lines[1])).toBe(0);
+    expect(poOutstandingQty(lines[2])).toBe(0);
+    expect(summarizeReferenceIssueLines(lines)).toMatchObject({ sisaLineCount: 1, poOutstandingLineCount: 1 });
+    expect(referenceSourceLabel('NONE')).toBe('di luar rencana');
   });
 
   it('penanda mode dokumen', () => {

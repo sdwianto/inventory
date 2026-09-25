@@ -42,12 +42,15 @@ import {
   saveSignatureDraft,
   type SignatureDraft,
 } from '@/lib/signature-draft';
+import { addShelfDays, businessDateIso } from '@/lib/food-production/ingredient-lot';
+import { GrnReversalSection, PendingGrnReversals } from '@/components/penerimaan/GrnReversal';
 
 const STATUS_STYLE = {
   DRAFT: 'bg-blue-100 text-blue-800',
   UNKNOWN_PRODUCT: 'bg-amber-100 text-amber-800',
   NEEDS_MAPPING: 'bg-amber-100 text-amber-800',
   POSTED: 'bg-green-100 text-green-800',
+  REVERSED: 'bg-slate-200 text-slate-700',
 };
 
 const STATUS_LABEL = {
@@ -55,6 +58,7 @@ const STATUS_LABEL = {
   UNKNOWN_PRODUCT: 'Produk belum terdaftar',
   NEEDS_MAPPING: 'Produk belum terdaftar',
   POSTED: 'POSTED',
+  REVERSED: 'Dibalik',
 };
 
 const isUnresolvedGrn = (status: string) => status === 'UNKNOWN_PRODUCT' || status === 'NEEDS_MAPPING';
@@ -64,6 +68,32 @@ const REJECT_STATUS_LABEL: Record<string, string> = {
   RTV_CREATED: 'RTV dibuat',
   RESOLVED: 'Selesai',
 };
+
+const LOT_QC_LABEL: Record<string, string> = {
+  QUARANTINE: 'Karantina QC',
+  RELEASED: 'Lolos QC',
+  REJECTED: 'Ditolak QC',
+};
+const LOT_QC_STYLE: Record<string, string> = {
+  QUARANTINE: 'bg-amber-100 text-amber-800',
+  RELEASED: 'bg-green-100 text-green-800',
+  REJECTED: 'bg-red-100 text-red-800',
+};
+
+const EXPIRY_SOURCE_LABEL: Record<string, string> = {
+  INPUT: 'diisi saat terima',
+  MASTER_SHELF: 'dari masa simpan',
+  DEFAULT: 'default +30 hari',
+};
+
+const receiveDateIso = () => businessDateIso();
+
+const lineShelfLifeDays = (it: JsonObject): number | null => {
+  const n = Number((it.product as JsonObject | undefined)?.shelfLifeDays);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const lineRequiresLotNo = (it: JsonObject) => (it.product as JsonObject | undefined)?.requiresLotNo === true;
 
 /** GRN lama (diposting sebelum rejectStatus ada) tidak punya field ini — anggap PENDING juga. */
 const effectiveRejectStatus = (it: JsonObject) => str(it.rejectStatus, 'PENDING');
@@ -108,7 +138,7 @@ function invoiceSyncLabel(row: JsonObject) {
 }
 
 const needsInvoiceReplay = (row: JsonObject): boolean => Boolean(
-  row?.status === 'POSTED' && row?.noDO && (
+  row?.status === 'POSTED' && row?.noDO && !row?.reversalPendingId && (
     !row?.noInvoice
     || row?.invoiceSyncStatus === 'FAILED'
     || row?.invoiceSyncStatus === 'PENDING'
@@ -166,12 +196,15 @@ export default function PenerimaanPage() {
     invalidateGrn,
   );
   const [posting, setPosting] = useState('');
+  const [overReceiveReason, setOverReceiveReason] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [detail, setDetail] = useState<JsonObject | null>(null);
   const [qtyMap, setQtyMap] = useState<JsonObject>({});
   const [gudangMap, setGudangMap] = useState<JsonObject>({});
   const [rejectQtyMap, setRejectQtyMap] = useState<JsonObject>({});
   const [rejectReasonMap, setRejectReasonMap] = useState<Record<string, string>>({});
+  const [expiryMap, setExpiryMap] = useState<Record<string, string>>({});
+  const [supplierLotMap, setSupplierLotMap] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<string[]>([]);
   const [uomMap, setUomMap] = useState<Record<string, { uomId?: string; satuan?: string; factorToBase?: number }>>({});
   const [receiverDraft, setReceiverDraft] = useState<SignatureDraft>(() => loadSignatureDraft(GRN_RECEIVER_SIG_KEY));
@@ -185,6 +218,7 @@ export default function PenerimaanPage() {
   const [pollInvoiceGrnId, setPollInvoiceGrnId] = useState<string | null>(null);
   const [activeSyncJobId, setActiveSyncJobId] = useState<string | null>(null);
   const [creatingRtvKey, setCreatingRtvKey] = useState('');
+  const [reversalTick, setReversalTick] = useState(0);
 
   const detailItems = useMemo(
     () => (detail ? asArray(detail.items) as JsonObject[] : []),
@@ -332,6 +366,25 @@ export default function PenerimaanPage() {
     setCreatingRtvKey('');
   };
 
+  const onReversalChanged = async () => {
+    setReversalTick((t) => t + 1);
+    invalidateGrn();
+    invalidateHutangBadges();
+    reload();
+    const openId = str(doView?.id);
+    if (!openId) return;
+    try {
+      const fresh = await queryClient.fetchQuery({
+        queryKey: queryKeys.goodsReceipts.detail(openId),
+        queryFn: () => fetchJson<JsonObject>(`/api/goods-receipts/${openId}`),
+        staleTime: 0,
+      });
+      setDoView(fresh);
+    } catch {
+      setDoView(null);
+    }
+  };
+
   const doTotal = (g: JsonObject | null | undefined) => (asArray(g?.items) as JsonObject[]).reduce(
     (s, it) => s + num(it.qtyOrdered) * (parseInt(str(it.harga), 10) || 0),
     0,
@@ -344,6 +397,7 @@ export default function PenerimaanPage() {
         queryFn: () => fetchJson<JsonObject>(`/api/goods-receipts/${id}`),
       });
       setDetail(data);
+      setOverReceiveReason('');
       const detailItems = asArray(data.items) as JsonObject[];
       const stokIds = detailItems.map((it) => str(it.localStokId)).filter(Boolean);
       const uomsByStok = stokIds.length
@@ -380,6 +434,8 @@ export default function PenerimaanPage() {
       setOrderedBaseMap(initOrderedBase);
       setRejectQtyMap({});
       setRejectReasonMap({});
+      setExpiryMap({});
+      setSupplierLotMap({});
       setPhotos([]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -409,6 +465,28 @@ export default function PenerimaanPage() {
       }
     }
 
+    const lotRequired = detail.lotExpiryRequired === true;
+    const today = receiveDateIso();
+    for (const [idx, it] of detailItems.entries()) {
+      const key = itemRowKey(it, idx);
+      if (num(qtyMap[key]) <= 0) continue;
+      const nama = str(it.localNama) || str(it.vendorNama) || str(it.nama) || 'item';
+      const expiry = str(expiryMap[key]).trim();
+      if (expiry && expiry < today) {
+        toast.error(`${nama} sudah kedaluwarsa (${expiry}) — tolak barangnya`);
+        return;
+      }
+      if (!lotRequired) continue;
+      if (!expiry && lineShelfLifeDays(it) == null) {
+        toast.error(`Isi tanggal kedaluwarsa untuk ${nama} (masa simpan di master produk kosong)`);
+        return;
+      }
+      if (lineRequiresLotNo(it) && !str(supplierLotMap[key]).trim()) {
+        toast.error(`Isi no. lot pemasok untuk ${nama}`);
+        return;
+      }
+    }
+
     const grnId = str(detail.id);
     setPosting(grnId);
     const items = detailItems.map((it, idx) => {
@@ -416,6 +494,8 @@ export default function PenerimaanPage() {
       const uom = uomMap[key];
       const rejectQty = num(rejectQtyMap[key]);
       const reason = str(rejectReasonMap[key]).trim();
+      const expiryDate = str(expiryMap[key]).trim();
+      const supplierLotNo = str(supplierLotMap[key]).trim();
       return {
         lineId: it.lineId,
         lineIndex: idx,
@@ -424,6 +504,8 @@ export default function PenerimaanPage() {
         uomId: uom?.uomId || str(it.uomId) || undefined,
         satuan: uom?.satuan || str(it.satuan) || undefined,
         ...(rejectQty > 0 ? { qtyRejected: rejectQty, rejectReason: reason } : {}),
+        ...(expiryDate ? { expiryDate } : {}),
+        ...(supplierLotNo ? { supplierLotNo } : {}),
       };
     }).filter((it) => it.qty > 0 || (it.qtyRejected ?? 0) > 0);
 
@@ -432,7 +514,7 @@ export default function PenerimaanPage() {
         userName: receiverDraft.userName.trim(),
         jabatan: receiverDraft.jabatan.trim() || undefined,
         nik: receiverDraft.nik.trim(),
-      });
+      }, overReceiveReason);
       const from = supplierLabel(data);
       toast.success(`Barang diterima dari ${from} — stok diperbarui`);
       if (data.noInvoice || data.invoiceSyncStatus === 'DONE') {
@@ -500,6 +582,14 @@ export default function PenerimaanPage() {
               title="Ada item ditolak yang belum ditindaklanjuti — klik baris untuk buat RTV"
             >
               Item ditolak
+            </span>
+          )}
+          {!!r.reversalPendingId && (
+            <span
+              className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800"
+              title={`Pengajuan pembalik ${str(r.reversalPendingNo)} menunggu persetujuan`}
+            >
+              Pembalik diajukan
             </span>
           )}
         </div>
@@ -578,6 +668,7 @@ export default function PenerimaanPage() {
             . Klik baris GRN untuk lihat detail dan buat RTV (retur ke vendor).
           </div>
         )}
+        <PendingGrnReversals refreshKey={reversalTick} onChanged={onReversalChanged} />
         {error && (
           <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2">
             <span>{error}</span>
@@ -762,6 +853,50 @@ export default function PenerimaanPage() {
                   </div>
                 )}
               </div>
+              {(() => {
+                const lotRequired = detail?.lotExpiryRequired === true;
+                const shelf = lineShelfLifeDays(it);
+                const expiryRequired = lotRequired && shelf == null;
+                const supplierLotRequired = lotRequired && lineRequiresLotNo(it);
+                const shelfHint = shelf != null ? addShelfDays(receiveDateIso(), shelf) : null;
+                return (
+                  <div className="grid grid-cols-[10rem_minmax(0,1fr)] gap-3 items-end text-sm">
+                    <div className="min-w-0 flex flex-col gap-1">
+                      <Label className="text-xs block">
+                        Kedaluwarsa{expiryRequired ? <span className="text-red-600"> *</span> : null}
+                      </Label>
+                      <Input
+                        type="date"
+                        className="h-9"
+                        min={receiveDateIso()}
+                        value={expiryMap[rowKey] || ''}
+                        onChange={(e) => setExpiryMap({ ...expiryMap, [rowKey]: e.target.value })}
+                      />
+                    </div>
+                    <div className="min-w-0 flex flex-col gap-1">
+                      <Label className="text-xs block">
+                        No. lot pemasok{supplierLotRequired ? <span className="text-red-600"> *</span> : null}
+                      </Label>
+                      <Input
+                        className="h-9"
+                        maxLength={64}
+                        placeholder="dari label kemasan"
+                        value={supplierLotMap[rowKey] || ''}
+                        onChange={(e) => setSupplierLotMap({ ...supplierLotMap, [rowKey]: e.target.value })}
+                      />
+                    </div>
+                    {!expiryMap[rowKey] && (
+                      <p className="col-span-2 text-[11px] text-slate-500">
+                        {shelfHint
+                          ? `Kosong = ${shelfHint} (masa simpan ${shelf} hari)`
+                          : lotRequired
+                            ? 'Masa simpan belum diisi di master produk — tanggal kedaluwarsa wajib'
+                            : 'Kosong = default +30 hari'}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               </div>
               );
             })}
@@ -774,6 +909,16 @@ export default function PenerimaanPage() {
             maxPhotos={5}
             disabled={!!posting}
           />
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Alasan lebih terima dari sisa PO</Label>
+            <Input
+              className="h-9"
+              maxLength={300}
+              placeholder="Wajib bila qty diterima melebihi sisa PO (disetujui Supervisor/Admin/Master)"
+              value={overReceiveReason}
+              onChange={(e) => setOverReceiveReason(e.target.value)}
+            />
+          </div>
           <DialogFooter className="flex-col sm:flex-row gap-2 sm:justify-between sm:items-center">
             <Button
               type="button"
@@ -951,7 +1096,34 @@ export default function PenerimaanPage() {
                     className={`border-t border-slate-100 ${!it.localStokId ? 'bg-amber-50' : ''}`}
                   >
                     <td className="px-2 py-1.5 font-mono">{str(it.vendorKode) || str(it.localKode) || '—'}</td>
-                    <td className="px-2 py-1.5">{str(it.localNama) || str(it.vendorNama) || str(it.nama)}</td>
+                    <td className="px-2 py-1.5">
+                      {str(it.localNama) || str(it.vendorNama) || str(it.nama)}
+                      {(str(it.expiryDate) || str(it.supplierLotNo)) && (
+                        <div className="text-[11px] text-slate-500">
+                          {str(it.expiryDate) ? `Exp ${formatDate(str(it.expiryDate))}` : null}
+                          {str(it.expiryDate) && str(it.expirySource)
+                            ? ` (${EXPIRY_SOURCE_LABEL[str(it.expirySource)] || str(it.expirySource)})`
+                            : null}
+                          {str(it.supplierLotNo) ? ` · Lot ${str(it.supplierLotNo)}` : null}
+                        </div>
+                      )}
+                      {(asArray(it.lotQc) as JsonObject[]).map((lq) => (
+                        <div key={str(lq.lotId)} className="text-[11px] mt-0.5 flex flex-wrap items-center gap-1">
+                          <span className={`px-1.5 rounded ${LOT_QC_STYLE[str(lq.qcStatus)] || 'bg-slate-100 text-slate-700'}`}>
+                            {LOT_QC_LABEL[str(lq.qcStatus)] || str(lq.qcStatus)}
+                          </span>
+                          <span className="font-mono text-slate-500">{str(lq.lotNo)}</span>
+                          <span className="text-slate-500">
+                            {formatNumber(num(lq.qtyRemaining))}/{formatNumber(num(lq.qty))} {str(lq.satuan)}
+                          </span>
+                          {str(lq.noInspeksi) && <span className="text-slate-500">· {str(lq.noInspeksi)}</span>}
+                          {str(lq.qcRejectNoReturn) && <span className="text-orange-700">· {str(lq.qcRejectNoReturn)}</span>}
+                          {str(lq.qcStatus) === 'QUARANTINE' && (
+                            <Link href="/penerimaan/qc" className="text-emerald-700 underline">periksa</Link>
+                          )}
+                        </div>
+                      ))}
+                    </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{formatNumber(num(it.qtyOrdered))}</td>
                     <td className="px-2 py-1.5 text-center text-slate-500">{str(it.satuan) || '—'}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{it.harga ? formatIDR(num(it.harga)) : '—'}</td>
@@ -1015,7 +1187,7 @@ export default function PenerimaanPage() {
                         >
                           {REJECT_STATUS_LABEL[rejectStatus] || rejectStatus}
                         </span>
-                        {rejectStatus === 'PENDING' && lineId && (
+                        {rejectStatus === 'PENDING' && lineId && str(doView?.status) === 'POSTED' && !doView?.reversalPendingId && (
                           <Button
                             type="button"
                             size="sm"
@@ -1040,9 +1212,16 @@ export default function PenerimaanPage() {
             </div>
           )}
 
+          {(str(doView?.status) === 'REVERSED' || !!doView?.reversalPendingId) && (
+            <GrnReversalSection grn={doView} onChanged={onReversalChanged} />
+          )}
+
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDoView(null)}>Tutup</Button>
-            {str(doView?.status) === 'POSTED' && !!doView?.noDO && (
+            {str(doView?.status) === 'POSTED' && !doView?.reversalPendingId && (
+              <GrnReversalSection grn={doView} onChanged={onReversalChanged} />
+            )}
+            {str(doView?.status) === 'POSTED' && !!doView?.noDO && !doView?.reversalPendingId && (
               <Button
                 variant="outline"
                 className="text-orange-700 border-orange-300"

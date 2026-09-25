@@ -69,6 +69,13 @@ export const PO_EDIT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 export const RTV_CREATE_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 /** RTV: setujui & post (stok OUT + CN) — SUPERVISOR+; pembuat tidak boleh approve sendiri (kecuali ADMIN/MASTER). */
 export const RTV_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+/** Pembalik GRN (RVS): ajukan — GUDANG+; setujui — SUPERVISOR+, pengaju tidak boleh menyetujui sendiri (kecuali ADMIN/MASTER). */
+export const GRN_REVERSAL_REQUEST_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+export const GRN_REVERSAL_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 export const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+/** Fase 3.2 — lihat antrean QC lot (gudang ikut memantau). */
+export const LOT_QC_VIEW_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+/** Inspeksi & pemusnahan lot — pemeriksa ≠ penerima GRN (kecuali ADMIN/MASTER). */
+export const LOT_QC_INSPECT_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 export const PRODUCT_MANAGE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];

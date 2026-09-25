@@ -60,6 +60,7 @@ function fakeDb(state: { products: Row[]; lokasi: Row[]; kartu: Row[] }): Db {
         project: () => ({
           toArray: async () => (name === 'products' ? state.products : name === 'stok_lokasi' ? state.lokasi : []),
         }),
+        toArray: async () => [],
       }),
       findOne: async () => null,
       insertMany: async (docs: Row[]) => {

@@ -119,7 +119,7 @@ export function evaluateRlOverIssue(
         productKode: ref?.productKode || item.kode,
         productNama: ref?.productNama || item.nama,
         satuan: ref?.satuan,
-        sumber: ref?.sumber || 'DI_LUAR_ACUAN',
+        sumber: ref && ref.sumber !== 'NONE' ? ref.sumber : 'DI_LUAR_ACUAN',
         lineIndexes: [],
         acuanQty,
         consumedBefore,

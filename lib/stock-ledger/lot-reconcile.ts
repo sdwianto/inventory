@@ -6,11 +6,13 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   INGREDIENT_LOTS_COLLECTION,
+  businessDateIso,
   effectiveIngredientQtyRemaining,
   type IngredientLotDoc,
 } from '@/lib/food-production/ingredient-lot';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { consumeIngredientLotsFefo } from '@/lib/stock-ledger/lot-consume';
+import { summarizeLotQc, type LotQcSummary } from '@/lib/stock-ledger/lot-qc';
 import { STOCK_QTY_EPS, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export const INGREDIENT_LOT_RECONCILE_REPORTS_COLLECTION = 'ingredient_lot_reconcile_reports';
@@ -36,7 +38,9 @@ export type IngredientLotReconcileReport = {
     activePastExpiry: number;
     expiredWithQty: number;
     lotVsStok: number;
-  };
+    /** Lot dengan kedaluwarsa jalur lama (+30, `expirySource: 'DEFAULT'`) — target Fase 3.1 = 0. */
+    defaultExpiryLots: number;
+  } & LotQcSummary;
   mismatches: IngredientLotMismatch[];
 };
 
@@ -47,7 +51,7 @@ export async function detectIngredientLotMismatches(
 ): Promise<IngredientLotReconcileReport> {
   const tid = String(tenantId || 'default').trim() || 'default';
   const asOf = opts?.asOf ?? new Date();
-  const today = asOf.toISOString().slice(0, 10);
+  const today = businessDateIso(asOf);
   const limit = Math.min(Math.max(opts?.limit ?? 80, 1), 200);
 
   const lots = await db
@@ -105,6 +109,11 @@ export async function detectIngredientLotMismatches(
     byKey.set(key, cur);
   }
 
+  const defaultExpiryLots = await db
+    .collection(INGREDIENT_LOTS_COLLECTION)
+    .countDocuments({ tenantId: tid, expirySource: 'DEFAULT' });
+  const qc = await summarizeLotQc(db, tid);
+
   let lotVsStok = 0;
   for (const { productId, warehouseKode, sum } of byKey.values()) {
     if (mismatches.length >= limit) break;
@@ -133,6 +142,8 @@ export async function detectIngredientLotMismatches(
       activePastExpiry,
       expiredWithQty,
       lotVsStok,
+      defaultExpiryLots,
+      ...qc,
     },
     mismatches: mismatches.slice(0, limit),
   };
@@ -212,6 +223,7 @@ export async function repairIngredientLotMismatches(
         asOf: now,
         allowExpired: true,
         noDokumen: `LOT-REPAIR-${detect.id.slice(0, 8)}`,
+        qcHeld: 'LAST',
       });
       if (fefo.allocated > 0) {
         repaired += 1;

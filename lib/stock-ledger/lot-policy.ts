@@ -4,8 +4,12 @@ import type { ClientSession, Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { txOpts } from '@/lib/api/transaction';
 import type { FefoAllocation } from '@/lib/food-production/fefo-allocate';
-import { INGREDIENT_LOTS_COLLECTION, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
-import { consumeIngredientLotsFefo, restoreIngredientLotsFromAllocations } from '@/lib/stock-ledger/lot-consume';
+import { INGREDIENT_LOTS_COLLECTION, parseIsoDateOnly, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
+import {
+  consumeIngredientLotsFefo,
+  restoreIngredientLotsFromAllocations,
+  type LotQcHeldMode,
+} from '@/lib/stock-ledger/lot-consume';
 import { relocateLotsFefo } from '@/lib/stock-ledger/lot-relocate';
 import { syncLotsOnVariance } from '@/lib/stock-ledger/lot-cycle-count';
 import { parseLokasiKode } from '@/lib/api/stok-lokasi';
@@ -14,7 +18,14 @@ import { roundStockQty } from '@/lib/stock-ledger/precision';
 export type StockLotPolicy =
   | { mode: 'NONE' }
   /** Keluar: konsumsi lot FEFO (tanpa lot / kurang = lunak, dilaporkan Detect). */
-  | { mode: 'FEFO_CONSUME'; allowExpired?: boolean; preferredLotNo?: string | null }
+  | {
+    mode: 'FEFO_CONSUME';
+    allowExpired?: boolean;
+    preferredLotNo?: string | null;
+    qcHeld?: LotQcHeldMode;
+    reservationPlanId?: string | null;
+    reservationOverride?: boolean;
+  }
   /** Keluar: pindahkan lot FEFO ke gudang tujuan (baris masuk pasangannya tanpa lotPolicy). */
   | { mode: 'RELOCATE'; toWarehouseKode: string; allowExpired?: boolean }
   /** Masuk: kembalikan qty ke lot dari alokasi konsumsi sebelumnya. */
@@ -46,7 +57,7 @@ interface ApplyLotPolicyInput {
   noTransaksi: string;
   postingDate: Date;
   productId: string;
-  product: { kode?: string; nama?: string };
+  product: { kode?: string; nama?: string; shelfLifeDays?: number | null };
   lokasiKode: string;
   delta: number;
   policy: StockLotPolicy;
@@ -73,7 +84,18 @@ export async function applyLotPolicy(
         issueId: sourceId,
         noDokumen: noTransaksi,
         preferredLotNo: policy.preferredLotNo,
+        qcHeld: policy.qcHeld,
+        reservationPlanId: policy.reservationPlanId,
+        reservationOverride: policy.reservationOverride,
       }, session);
+      if (policy.qcHeld === 'PREFERRED' && (r.shortfall > 0 || r.skippedNoLots)) {
+        const which = String(policy.preferredLotNo || '').trim();
+        return {
+          error: which
+            ? `Lot ${which} tidak terpakai penuh (${r.allocated} dari ${qty}). Retur dan pemusnahan QC hanya boleh mengambil lot itu.`
+            : `Lot ditolak QC tidak terpakai penuh (${r.allocated} dari ${qty}).`,
+        };
+      }
       return {
         mode: policy.mode,
         allocated: r.allocated,
@@ -137,6 +159,13 @@ export async function applyLotPolicy(
         updatedAt: postingDate,
       };
       if (!String(lot.lotNo || '').trim()) return { error: 'Nomor lot wajib' };
+      const expiry = parseIsoDateOnly(lot.expiryDate);
+      if (!expiry) return { error: `Tanggal kedaluwarsa lot ${lot.lotNo} tidak valid (format YYYY-MM-DD)` };
+      const received = parseIsoDateOnly(lot.receivedAt);
+      if (received && expiry < received) {
+        return { error: `Lot ${lot.lotNo} kedaluwarsa (${expiry}) sebelum tanggal terima ${received}` };
+      }
+      lot.expiryDate = expiry;
       await db.collection(INGREDIENT_LOTS_COLLECTION).insertOne(lot, txOpts(session));
       return {
         mode: policy.mode,
@@ -160,8 +189,10 @@ export async function applyLotPolicy(
         penyesuaianId: sourceId,
         productKode: input.product.kode,
         productNama: input.product.nama,
+        shelfLifeDays: input.product.shelfLifeDays,
         satuan: input.satuan,
       }, session);
+      if ('error' in r) return { error: r.error };
       const moved = roundStockQty(r.consumed ?? r.increased ?? 0);
       return {
         mode: policy.mode,

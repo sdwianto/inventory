@@ -11,8 +11,16 @@ import { poEstimasiForHutang, resolveSoSnapshotForPo } from '@/lib/api/hutang-va
 import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
-import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines, buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } from '@/lib/api/journal-lines';
+import { createJournalIfNotExists } from '@/lib/api/journal';
+import { buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } from '@/lib/api/journal-lines';
+import {
+  buildHutangPostingBase,
+  findActiveVendorHutangJournal,
+  journalMatchesBase,
+  postOrDeferNoteJournal,
+  postVendorHutangJournal,
+  voidVendorHutangJournal,
+} from '@/lib/api/hutang-vendor-journal';
 import { CasConflictError, isCasConflict } from '@/lib/api/cas';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog } from '@/lib/api/audit-log';
@@ -265,7 +273,23 @@ async function findExistingVendorHutang(
       ...tenantFilter,
     });
     if (scoped) return scoped;
-    return null;
+    // Hutang lama: vendorTenantId kosong atau beda huruf besar/kecil — tetap invoice yang sama
+    // (unik per tenant), jadi diperbarui, tidak dibuat ganda.
+    const legacy = await db.collection('hutang').findOne({
+      vendorInvoiceId: invoiceId,
+      $and: [
+        tenantFilter,
+        {
+          $or: [
+            { vendorTenantId: { $exists: false } },
+            { vendorTenantId: null },
+            { vendorTenantId: '' },
+            { vendorTenantId: { $regex: `^${vid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } },
+          ],
+        },
+      ],
+    });
+    return legacy || null;
   }
 
   const byTenant = await db.collection('hutang').findOne({
@@ -274,15 +298,19 @@ async function findExistingVendorHutang(
   });
   if (byTenant) return byTenant;
 
-  const global = await db.collection('hutang').findOne({ vendorInvoiceId: invoiceId });
-  if (global && normalizeTenantId(global.tenantId) !== normalizeTenantId(tid)) {
-    await db.collection('hutang').updateOne(
-      { id: global.id },
-      { $set: { tenantId: normalizeTenantId(tid), updatedAt: new Date() } },
-    );
-    return { ...global, tenantId: normalizeTenantId(tid) };
-  }
-  return global;
+  // Hanya hutang lama tanpa tenant yang boleh diklaim; milik tenant lain tidak pernah dipindah.
+  const orphan = await db.collection('hutang').findOne({
+    vendorInvoiceId: invoiceId,
+    $or: [{ tenantId: { $exists: false } }, { tenantId: null }, { tenantId: '' }],
+  });
+  if (!orphan) return null;
+  const claimed = await db.collection('hutang').updateOne(
+    { id: orphan.id, $or: [{ tenantId: { $exists: false } }, { tenantId: null }, { tenantId: '' }] },
+    { $set: { tenantId: normalizeTenantId(tid), updatedAt: new Date() } },
+  );
+  if (claimed.modifiedCount === 0) return null;
+  logger.warn('hutang_orphan_claimed', { tenantId: normalizeTenantId(tid), hutangId: orphan.id, invoiceId });
+  return { ...orphan, tenantId: normalizeTenantId(tid) };
 }
 
 export type HutangSettlementFields = {
@@ -373,6 +401,45 @@ async function syncExistingVendorHutangFromPayload(
     };
   }
 
+  // Sinkron ulang menulis terbayar = 0. Hutang yang sudah punya pembayaran atau credit note
+  // tidak boleh ditimpa otomatis: tandai untuk review manual, nilai lama tetap.
+  const paymentCount = await db.collection('hutang_pembayaran').countDocuments(
+    { hutangId: existing.id },
+    { limit: 1 },
+  );
+  const cnApplied = (Array.isArray(existing.creditNotes) ? existing.creditNotes : [])
+    .some((n: { amount?: unknown }) => (Number(n?.amount) || 0) > 0);
+  const dnApplied = (Array.isArray(existing.debitNotes) ? existing.debitNotes : [])
+    .some((n: { amount?: unknown }) => (Number(n?.amount) || 0) > 0);
+  if (paymentCount > 0 || cnApplied || dnApplied) {
+    const now = new Date();
+    const pending = {
+      total,
+      noInvoice: payload.noInvoice || null,
+      reason: paymentCount > 0 ? 'HAS_PAYMENT' : cnApplied ? 'HAS_CREDIT_NOTE' : 'HAS_DEBIT_NOTE',
+      at: now,
+    };
+    await db.collection('hutang').updateOne(
+      { id: existing.id },
+      { $set: { vendorResyncPending: pending, updatedAt: now } },
+    );
+    await writeAuditLog(db, {
+      tenantId: tid,
+      action: 'HUTANG_UPDATED',
+      entityType: 'hutang',
+      entityId: String(existing.id),
+      summary: `Hutang ${existing.noHutang}: invoice vendor berubah setelah ada pembayaran/CN/DN — perlu review manual`,
+      metadata: { ...pending, previousTotal: existing.total, previousNoInvoice: existing.noInvoice },
+    });
+    logger.warn('hutang_vendor_resync_blocked', { tenantId: tid, hutangId: existing.id, ...pending });
+    return {
+      action: 'resync_blocked',
+      hutangId: existing.id,
+      noHutang: existing.noHutang,
+      approvalStatus: existing.approvalStatus || existing.status,
+    };
+  }
+
   const match = await validateInvoiceAgainstGrn(db, tid, payload, { excludeHutangId: existing.id });
   const matchOk = match.ok === true;
   // matchStatus tetap dihitung dari payload asli (histori apa yang ditagih vendor) —
@@ -388,6 +455,7 @@ async function syncExistingVendorHutangFromPayload(
   const existingTanggal = existing.tanggal as string | Date | undefined;
   const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
   const settlement = resolveHutangSettlement(total, payload.jatuhTempo, txnDate);
+  const postingBase = buildHutangPostingBase(total, parseInt(String(payload.ppn || 0), 10));
 
   try {
     await runInTransactionOrFallback(async ({ db: txDb, session }) => {
@@ -416,6 +484,7 @@ async function syncExistingVendorHutangFromPayload(
             subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
             ppn: parseInt(String(payload.ppn || 0), 10),
             total,
+            glPostingBase: postingBase,
             terbayar: settlement.terbayar,
             sisa: settlement.sisa,
             status: settlement.status,
@@ -451,6 +520,19 @@ async function syncExistingVendorHutangFromPayload(
         txOpts(session),
       );
       if (res.matchedCount === 0) throw new CasConflictError('Hutang berubah bersamaan (dibayar/di-review) — sinkron invoice diulang');
+      const refreshed = { ...existing, total, ppn: postingBase.ppn, glPostingBase: postingBase, noInvoice: payload.noInvoice || existing.noInvoice, noDO: payload.noDO || existing.noDO };
+      const active = await findActiveVendorHutangJournal(txDb, tid, String(existing.id), session);
+      if (active && (!matchOk || !journalMatchesBase(active, postingBase))) {
+        await voidVendorHutangJournal(txDb, refreshed, {
+          userName: payload.userName || 'System',
+          keterangan: matchOk
+            ? `Nilai tagihan vendor ${refreshed.noInvoice || existing.noHutang} berubah`
+            : `Tagihan vendor ${refreshed.noInvoice || existing.noHutang} jadi EXCEPTION`,
+        }, session);
+      }
+      if (matchOk) {
+        await postVendorHutangJournal(txDb, refreshed, { userName: payload.userName || 'System' }, session);
+      }
       await writeAuditLog(txDb, {
         tenantId: tid,
         action: 'HUTANG_UPDATED',
@@ -601,7 +683,7 @@ export async function createHutangFromVendorInvoice(
     tanggal,
     supplierId: sup.id,
     supplierName: sup.nama,
-    vendorTenantId: vendorTenantId || null,
+    vendorTenantId: hutangVendorKey(vendorTenantId) || null,
     vendorBillingSnapshot: billingSnap,
     billToName: payload.pelangganName || payload.customerName || null,
     referenceType: 'VENDOR_INVOICE',
@@ -609,6 +691,7 @@ export async function createHutangFromVendorInvoice(
     subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
     ppn: parseInt(String(payload.ppn || 0), 10),
     total,
+    glPostingBase: buildHutangPostingBase(total, parseInt(String(payload.ppn || 0), 10)),
     terbayar: settlement.terbayar,
     sisa: settlement.sisa,
     jatuhTempo: settlement.jatuhTempo,
@@ -631,49 +714,51 @@ export async function createHutangFromVendorInvoice(
     createdAt: now,
   });
 
+  try {
+    await insertVendorHutangTx();
+  } catch (e) {
+    if (!isDuplicateVendorInvoiceError(e)) throw e;
+    const winner = await findExistingVendorHutang(db, tid, invoiceId, vendorTenantId)
+      ?? await db.collection('hutang').findOne({ vendorInvoiceId: invoiceId, ...tenantIdMatchFilter(tid) });
+    if (!winner) throw e;
+    logger.warn('hutang_duplicate_invoice_race', { tenantId: tid, invoiceId, hutangId: winner.id });
+    return {
+      action: 'exists',
+      hutangId: winner.id,
+      noHutang: winner.noHutang,
+      approvalStatus: winner.approvalStatus || winner.status,
+    };
+  }
+
+  logger.info('hutang_created', { tenantId: tid, hutangId: hutang.id, noHutang, invoiceId });
+
+  await markGrnInvoiceSyncDone(db, tid, payload, hutang.id, invoiceId, vendorTenantId);
+
+  return {
+    action: 'created',
+    hutangId: hutang.id,
+    noHutang: hutang.noHutang,
+    total,
+    approvalStatus: hutang.approvalStatus,
+    matchStatus: hutang.matchStatus,
+    paymentTerms,
+  };
+
+  async function insertVendorHutangTx() {
   await runInTransactionOrFallback(async ({ db: txDb, session }) => {
     noHutang = await nextDocNumber(txDb, tid, 'HUTANG', 'HT', session);
     hutang.noHutang = noHutang;
     await txDb.collection('hutang').insertOne(hutang, txOpts(session));
 
-    const ppnAmt = parseInt(String(hutang.ppn || 0), 10);
-    const totalAmt = parseInt(String(hutang.total || 0), 10);
-    const subTotal = Math.max(0, totalAmt - ppnAmt);
-    let clearGrni = false;
-    if (payload.noDO) {
-      const grn = await txDb.collection('goods_receipts').findOne(
-        { tenantId: tid, noDO: payload.noDO },
-        txOpts(session),
-      );
-      if (grn?.id) {
-        const accrual = await txDb.collection('jurnal').findOne({
-          tenantId: tid,
-          sourceType: 'AUTO_GRN_ACCRUAL',
-          sourceId: String(grn.id),
-        }, txOpts(session));
-        clearGrni = Boolean(accrual);
-      }
+    if (matchOk) {
+      await postVendorHutangJournal(txDb, hutang, { userName: payload.userName || 'System' }, session);
     }
-    await createJournal(txDb, {
-      tanggal: hutang.tanggal,
-      keterangan: `Tagihan vendor ${payload.noInvoice || noHutang}`,
-      sourceType: 'AUTO_HUTANG_VENDOR',
-      sourceId: hutang.id,
-      userName: payload.userName || 'System',
-      details: buildVendorHutangJournalLines({
-        noDoc: payload.noInvoice || noHutang,
-        subTotal,
-        ppn: ppnAmt,
-        total: totalAmt,
-        clearGrni,
-      }),
-      tenantId: tid,
-    }, session);
 
     if (payload.noDO) {
       const grnFilter: Record<string, unknown> = {
-        tenantId: tid,
+        ...tenantIdMatchFilter(tid),
         noDO: payload.noDO,
+        status: 'POSTED',
         vendorInvoiceId: { $exists: false },
       };
       const vid = hutangVendorKey(vendorTenantId || hutang.vendorTenantId);
@@ -703,20 +788,14 @@ export async function createHutangFromVendorInvoice(
       metadata: { noDO: payload.noDO, total, matchStatus: hutang.matchStatus },
     }, session);
   });
+  }
+}
 
-  logger.info('hutang_created', { tenantId: tid, hutangId: hutang.id, noHutang, invoiceId });
-
-  await markGrnInvoiceSyncDone(db, tid, payload, hutang.id, invoiceId, vendorTenantId);
-
-  return {
-    action: 'created',
-    hutangId: hutang.id,
-    noHutang: hutang.noHutang,
-    total,
-    approvalStatus: hutang.approvalStatus,
-    matchStatus: hutang.matchStatus,
-    paymentTerms,
-  };
+function isDuplicateVendorInvoiceError(e: unknown): boolean {
+  const err = e as { code?: number; message?: string; keyPattern?: Record<string, unknown> } | null;
+  if (!err || err.code !== 11000) return false;
+  if (err.keyPattern) return 'vendorInvoiceId' in err.keyPattern;
+  return /uniq_hutang_tenant_vendor_invoice/.test(String(err.message || ''));
 }
 
 export type CreditNoteApplyOptions = {
@@ -880,19 +959,22 @@ export async function applyCreditNoteFromVendor(
       clearTransit,
     });
     if (cnLines.length) {
-      await createJournalIfNotExists(txDb, {
-        tanggal: now,
-        keterangan: `Credit note vendor ${payload.noCN || payload.creditNoteId}`,
-        sourceType: 'AUTO_CN_VENDOR',
-        sourceId: cnSourceId,
-        userName: opts.appliedVia === 'credit-note-posted-push'
-          ? 'credit-note-push'
-          : opts.appliedVia === 'check-decision-pull'
-            ? 'check-decision-pull'
-            : 'credit-note-webhook',
-        details: cnLines,
+      await postOrDeferNoteJournal(txDb, session, {
         tenantId: tid,
-      }, session);
+        hutangId: String(hutang.id),
+        journal: {
+          tanggal: now,
+          keterangan: `Credit note vendor ${payload.noCN || payload.creditNoteId}`,
+          sourceType: 'AUTO_CN_VENDOR',
+          sourceId: cnSourceId,
+          userName: opts.appliedVia === 'credit-note-posted-push'
+            ? 'credit-note-push'
+            : opts.appliedVia === 'check-decision-pull'
+              ? 'check-decision-pull'
+              : 'credit-note-webhook',
+          details: cnLines,
+        },
+      });
     }
   });
 
@@ -1041,17 +1123,20 @@ export async function applyDebitNoteFromVendor(
       invoiceTotal: oldTotal,
     });
     if (dnLines.length) {
-      await createJournalIfNotExists(txDb, {
-        tanggal: now,
-        keterangan: `Debit note vendor ${payload.noDN || debitNoteId}`,
-        sourceType: 'AUTO_DN_VENDOR',
-        sourceId: dnSourceId,
-        details: dnLines,
-        userName: opts.appliedVia === 'debit-note-posted-push'
-          ? 'debit-note-push'
-          : 'debit-note-webhook',
+      await postOrDeferNoteJournal(txDb, session, {
         tenantId: tid,
-      }, session);
+        hutangId: String(hutang.id),
+        journal: {
+          tanggal: now,
+          keterangan: `Debit note vendor ${payload.noDN || debitNoteId}`,
+          sourceType: 'AUTO_DN_VENDOR',
+          sourceId: dnSourceId,
+          details: dnLines,
+          userName: opts.appliedVia === 'debit-note-posted-push'
+            ? 'debit-note-push'
+            : 'debit-note-webhook',
+        },
+      });
     }
   });
 

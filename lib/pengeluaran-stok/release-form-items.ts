@@ -12,6 +12,8 @@ export type ReleaseFormItem = {
   stokByWarehouse: Record<string, unknown>;
   /** Wajib bila total RL rencana melebihi acuan (flag rlFromPoReference). */
   overReason?: string;
+  /** Wajib bila qty mengambil cadangan rencana lain. Disetujui lewat approve RL. */
+  reservationOverrideReason?: string;
   /** Key lokal untuk patch UOM setelah add optimistic. */
   clientKey?: string;
 };
@@ -205,6 +207,9 @@ export function mergePrefillIntoReleaseItems(
   const prefillIds = new Set(lines.map((l) => l.stokId));
   const kept = items.filter((it) => !prefillIds.has(it.stokId));
   const reasonById = new Map(items.filter((it) => it.overReason).map((it) => [it.stokId, it.overReason]));
+  const reserveReasonById = new Map(
+    items.filter((it) => it.reservationOverrideReason).map((it) => [it.stokId, it.reservationOverrideReason]),
+  );
   const wh = lokasiKode.trim().toUpperCase();
   return [
     ...kept,
@@ -218,6 +223,7 @@ export function mergePrefillIntoReleaseItems(
       stokAvail: l.stokAvail,
       stokByWarehouse: { [wh]: l.stokAvail },
       ...(reasonById.get(l.stokId) ? { overReason: reasonById.get(l.stokId) } : {}),
+      ...(reserveReasonById.get(l.stokId) ? { reservationOverrideReason: reserveReasonById.get(l.stokId) } : {}),
     })),
   ];
 }
@@ -264,6 +270,9 @@ export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
         stokAvail: 0,
         stokByWarehouse: {},
         ...(str(line.overReason) ? { overReason: str(line.overReason) } : {}),
+        ...(str(line.reservationOverrideReason)
+          ? { reservationOverrideReason: str(line.reservationOverrideReason) }
+          : {}),
       };
     }),
   };

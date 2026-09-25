@@ -221,6 +221,7 @@ interface MaterialReadiness {
   pblReferenceMode?: boolean;
   rlFulfilled?: boolean;
   sisaLineCount?: number;
+  poOutstandingLineCount?: number;
   shortageCount: number;
   lineCount: number;
   linkedPo?: { id: string; noPO: string; status: string } | null;
@@ -1120,6 +1121,7 @@ function FoodProductionPlanPageContent() {
           pblReferenceMode: Boolean(data.pblReferenceMode),
           rlFulfilled: Boolean(data.rlFulfilled),
           sisaLineCount: Number(data.sisaLineCount || 0),
+          poOutstandingLineCount: Number(data.poOutstandingLineCount || 0),
           shortageCount: Number(data.shortageCount || 0),
           lineCount: Number(data.lineCount || 0),
           linkedPo: data.linkedPo || null,
@@ -3041,6 +3043,8 @@ function FoodProductionPlanPageContent() {
                                   title="Bahan keluar dari gudang hanya lewat Release (RL). PBL mengonfirmasi acuan."
                                 >
                                   Sisa RL {ready.sisaLineCount || 0} bahan
+                                  {(ready.poOutstandingLineCount || 0) > 0
+                                    && ` · PO belum diterima ${ready.poOutstandingLineCount} bahan`}
                                 </span>
                                 <Button
                                   variant="default"

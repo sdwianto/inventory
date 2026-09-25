@@ -4,6 +4,7 @@
  */
 
 import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
+import { businessDateIso } from '@/lib/food-production/ingredient-lot';
 
 export type FefoBatchCandidate = {
   id: string;
@@ -58,7 +59,7 @@ export function allocateFefo(
     return { allocations: [], allocated: 0, shortfall: 0 };
   }
 
-  const asOfIso = (opts?.asOf ?? new Date()).toISOString().slice(0, 10);
+  const asOfIso = businessDateIso(opts?.asOf ?? new Date());
   const allowExpired = opts?.allowExpired === true;
   const rejectHold = opts?.rejectFoodSafetyHold === true;
   const ordered = sortFefo(batches);

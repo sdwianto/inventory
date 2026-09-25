@@ -16,6 +16,14 @@ vi.mock('@/lib/stock-ledger', async (importOriginal) => ({
   postStockMovements: (...args: unknown[]) => postStockMovements(...args),
 }));
 
+vi.mock('@/lib/api/product-merge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/product-merge')>()),
+  resolveStockProducts: async (_db: unknown, _tid: string, ids: string[]) => ({
+    targets: new Map(ids.map((id) => [id, { sourceId: id, productId: id, merged: false, product: { id } }])),
+  }),
+  loadStockUomMapper: async () => (_sourceId: string, uomId: string | undefined) => uomId,
+}));
+
 import { applyVendorReturnStock, vendorReturnUnitCostBase } from '@/lib/api/vendor-return-stock';
 
 const LINE = {

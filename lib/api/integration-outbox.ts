@@ -347,6 +347,30 @@ export async function drainEnsureGrnInvoice(
       alreadyDone: false,
     };
   }
+  if (grn.status === 'REVERSED') {
+    await markOutboxDone(db, claimed.id, { lastError: 'GRN dibalik — faktur tidak dibuat' });
+    return {
+      invoiceSync: { status: 'SKIPPED', reason: 'grn_reversed' },
+      outboxId: claimed.id,
+      claimed: true,
+      alreadyDone: false,
+    };
+  }
+  if (grn.reversalPendingId) {
+    const msg = 'GRN sedang diajukan pembalik — faktur ditunda sampai pengajuan ditolak/dibatalkan';
+    // Penundaan bukan kegagalan: jatah auto-recovery (attempts) dikembalikan.
+    const now = new Date();
+    await db.collection(INTEGRATION_OUTBOX_COLLECTION).updateOne(
+      { id: claimed.id },
+      { $set: { status: 'FAILED', lastError: msg, updatedAt: now, processedAt: now }, $inc: { attempts: -1 } },
+    );
+    return {
+      invoiceSync: { error: msg, code: 'GRN_REVERSAL_PENDING' },
+      outboxId: claimed.id,
+      claimed: true,
+      alreadyDone: false,
+    };
+  }
 
   const { notifyGrnPostedToSales } = await import('@/lib/api/grn-notify-sales');
   let invoiceSync: Record<string, unknown>;

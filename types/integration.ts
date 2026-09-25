@@ -63,6 +63,17 @@ export interface ThreeWayMatchOptions {
   siblingInvoices?: { noInvoice?: string; items?: VendorInvoiceLine[] }[];
   /** hutang.id yang sedang disinkron ulang — dikecualikan saat query sibling supaya tidak menandai dirinya sendiri. */
   excludeHutangId?: string;
+  /**
+   * Retur vendor POSTED (bukan tolak-saat-terima) yang tidak terikat invoice hidup pada DO ini.
+   * Retur yang terikat invoice dikreditkan lewat CN invoice itu, jadi tidak ikut di sini.
+   */
+  postedReturns?: { items?: VendorInvoiceLine[] }[];
+  /** Baris PO: qty pesanan dan harga yang disepakati (SO vendor). Kosong = tidak dicek. */
+  poLines?: VendorInvoiceLine[];
+  /** Invoice hutang lain (belum REJECTED) pada PO yang sama — mengurangi sisa qty PO. */
+  poSiblingInvoices?: { noInvoice?: string; items?: VendorInvoiceLine[] }[];
+  /** Retur POSTED milik poSiblingInvoices — qty yang sudah dikreditkan kembali ke PO. */
+  poSiblingReturns?: { items?: VendorInvoiceLine[] }[];
 }
 
 export interface ThreeWayMatchResult {

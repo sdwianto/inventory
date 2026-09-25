@@ -58,9 +58,12 @@ export function useGrnMutations(
       satuan?: string;
       qtyRejected?: number;
       rejectReason?: string;
+      expiryDate?: string;
+      supplierLotNo?: string;
     }>,
     photos: string[] | undefined,
     receivedBy: { userName: string; jabatan?: string; nik: string },
+    overReceiveReason?: string,
   ) => {
     const previous = qc.getQueryData<GrnPages>(listKey);
     qc.setQueryData<GrnPages>(listKey, (old) => patchGrnInCache(old, grnId, {
@@ -76,6 +79,7 @@ export function useGrnMutations(
         body: JSON.stringify({
           items,
           ...(photos?.length ? { photos } : {}),
+          ...(overReceiveReason?.trim() ? { overReceiveReason: overReceiveReason.trim() } : {}),
           receivedBy,
         }),
         offlineLabel: `Post GRN ${grnId}`,
