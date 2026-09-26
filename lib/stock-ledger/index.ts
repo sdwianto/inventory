@@ -68,6 +68,14 @@ export {
 export { migrateStokLokasiFromProducts, migrateLegacyStokLokasi } from '@/lib/stock-ledger/legacy-migrations';
 
 export {
+  planLotRealign,
+  applyLotRealign,
+  type LotRealignPlan,
+  type LotRealignLine,
+  type LotRealignApplied,
+} from '@/lib/stock-ledger/lot-realign';
+
+export {
   mergeProductStock,
   type MergeProductStockInput,
   type MergeProductStockResult,

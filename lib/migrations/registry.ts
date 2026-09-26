@@ -3,6 +3,8 @@ import { recomputeRecipeConversionMigration } from '@/lib/migrations/0001-recomp
 import { backfillRecipeRevisionsMigration } from '@/lib/migrations/0002-backfill-recipe-revisions';
 import { mergeDuplicateProductsMigration } from '@/lib/migrations/0003-merge-duplicate-products';
 import { fixMasterStockDriftMigration } from '@/lib/migrations/0004-fix-master-stock-drift';
+import { realignOrphanLotsMigration } from '@/lib/migrations/0005-realign-orphan-lots';
+import { removeRecipeLinesMigration } from '@/lib/migrations/0006-remove-recipe-lines';
 
 /** Penanda kerangka aktif. Tidak mengubah data bisnis. */
 export const frameworkNoopMigration: Migration = {
@@ -19,6 +21,8 @@ export const MIGRATIONS: readonly Migration[] = [
   backfillRecipeRevisionsMigration,
   mergeDuplicateProductsMigration,
   fixMasterStockDriftMigration,
+  realignOrphanLotsMigration,
+  removeRecipeLinesMigration,
 ];
 
 export function findMigration(id: string): Migration | undefined {
