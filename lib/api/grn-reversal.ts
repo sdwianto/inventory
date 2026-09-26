@@ -94,13 +94,10 @@ function isOwnRequest(actor: GrnReversalActor, doc: Pick<GrnReversalDoc, 'reques
   return !!doc.requestedBy?.userId && doc.requestedBy.userId === actor.userId;
 }
 
-function isMasterActor(actor: GrnReversalActor) {
-  return !!actor.isMaster || String(actor.role || '') === 'MASTER';
-}
 
 /** Maker-checker ketat: pengaju tidak boleh menyetujui sendiri apa pun rolenya; MASTER dikecualikan (diaudit). */
 export function grnReversalSelfApproveBlocked(actor: GrnReversalActor, doc: Pick<GrnReversalDoc, 'requestedBy'>): string | null {
-  if (!isOwnRequest(actor, doc) || isMasterActor(actor)) return null;
+  if (!isOwnRequest(actor, doc) || actor.isMaster) return null;
   return 'Pengaju pembalik tidak boleh menyetujui sendiri — minta penyetuju lain';
 }
 

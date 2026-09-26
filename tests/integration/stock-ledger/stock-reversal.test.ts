@@ -129,6 +129,10 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5c pembalik stok (RVS)', { timeout: 1
 
   it('RL: maker-checker ketat, stok + lot + rata-rata kembali, jurnal dibalik, RL REVERSED', async () => {
     await postedRelease('rl-1', 'beras', 4);
+    await db.collection('jurnal').insertOne({
+      id: 'j-rl-1', tenantId: TID, sourceType: 'AUTO_RL_CONSUMPTION', sourceId: 'rl-1', tanggal: new Date(),
+      details: [{ rekeningKode: '50100', debet: 4000, kredit: 0 }, { rekeningKode: '10310', debet: 0, kredit: 4000 }],
+    });
     expect(await lokasiQty('beras')).toBe(6);
     expect(await lotRemaining('beras')).toBe(6);
     // Pembelian sesudah RL mengubah rata-rata; pembalik tetap masuk pada harga kartu RL (1000).
@@ -206,6 +210,8 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5c pembalik stok (RVS)', { timeout: 1
     expect(ok.status).toBe(200);
     expect(ok.data.selfApprovedByMaster).toBe(true);
     expect(await lokasiQty('minyak')).toBe(20);
+    // RL tanpa jurnal pemakaian dan belum ada cutover: pembalik tidak menjurnal (dinetralkan di cutover).
+    expect(await db.collection('jurnal').countDocuments({ tenantId: TID, sourceType: 'AUTO_RVS_CONSUMPTION', sourceId: id3 })).toBe(0);
     const audit = await db.collection('audit_log').findOne({ tenantId: TID, action: 'STOCK_REVERSAL_SELF_APPROVED', entityId: id3 });
     expect(audit).toBeTruthy();
   });

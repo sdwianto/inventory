@@ -16,6 +16,7 @@ import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { selfApprovalState } from '@/lib/api/stock-adjustment';
 import {
   CONSUMPTION_JOURNAL_SOURCE,
+  INVENTORY_CUTOVER_JOURNAL_SOURCE,
   buildConsumptionJournalLines,
   postedLinesValue,
 } from '@/lib/api/stock-cost-journal';
@@ -166,6 +167,7 @@ export function isStockReversalSourceType(v: unknown): v is StockReversalSourceT
 
 type KartuRow = {
   id: string;
+  tenantId?: string;
   stokId: string;
   lokasiKode: string;
   lineRef: string;
@@ -223,13 +225,17 @@ export async function checkStockReversible(
   const rows = await db.collection('stok_kartu')
     .find({ ...tenantIdMatchFilter(tenantId), sourceType, sourceId }, txOpts(session))
     .project<KartuRow>({
-      id: 1, stokId: 1, lokasiKode: 1, lineRef: 1, masuk: 1, keluar: 1, hargaSatuan: 1, satuan: 1,
+      id: 1, tenantId: 1, stokId: 1, lokasiKode: 1, lineRef: 1, masuk: 1, keluar: 1, hargaSatuan: 1, satuan: 1,
       ingredientLotAllocations: 1, fefoAllocations: 1,
     })
     .sort({ lineRef: 1 })
     .toArray();
   const moved = rows.filter((r) => roundStockQty((Number(r.keluar) || 0) - (Number(r.masuk) || 0)) !== 0);
   if (!moved.length) return { ok: false, error: `${spec.label} ini tidak punya mutasi kartu stok untuk dibalik`, status: 400 };
+  // Saldo lokasi dikunci per tenantId persis; kartu dengan ejaan tenant lain akan dibalik ke saldo yang salah.
+  if (moved.some((r) => r.tenantId && r.tenantId !== tenantId)) {
+    return { ok: false, error: `Kartu stok ${spec.label} tercatat dengan kode tenant berbeda — hubungi admin sistem`, status: 409 };
+  }
 
   const ids = [...new Set(moved.map((r) => String(r.stokId)))];
   const products = await db.collection('products')
@@ -446,7 +452,15 @@ async function postReversalJournals(
       { tenantId, sourceType: CONSUMPTION_JOURNAL_SOURCE[rev.sourceType], sourceId: rev.sourceId },
       { projection: { _id: 0, id: 1 }, ...txOpts(session) },
     );
-    if (!costingV2 && !original) return ids;
+    if (!original) {
+      if (!costingV2) return ids;
+      // Tanpa jurnal asli, pemakaiannya baru dibebankan lewat cutover; sebelum cutover, RL + pembalik bersih nol di sana.
+      const cutover = await db.collection('jurnal').findOne(
+        { tenantId, sourceType: INVENTORY_CUTOVER_JOURNAL_SOURCE },
+        { projection: { _id: 0, id: 1 }, ...txOpts(session) },
+      );
+      if (!cutover) return ids;
+    }
     const consumption = buildConsumptionJournalLines({ noDoc: rev.sourceNo, amount: postedLinesValue(posted) });
     if (!consumption.length) return ids;
     const j = await createJournalIfNotExists(db, {

@@ -246,6 +246,7 @@ export default function PenyesuaianPage() {
   const detailStatus = docStatus(detail);
   const makers = [
     asObject(detail?.createdBy),
+    asObject(detail?.updatedBy),
     asObject(detail?.submittedBy),
     ...asArray(detail?.editorIds).map((userId) => ({ userId })),
   ];

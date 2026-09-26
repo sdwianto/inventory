@@ -14,7 +14,7 @@ function hasDateInput(value: unknown): boolean {
 
 /**
  * Block postings when either the server date or the document date falls on or before the
- * locked period end. A document date that is present but unparseable is rejected.
+ * locked period end. While a lock is active, a document date that is present but unparseable is rejected.
  */
 export async function assertPeriodNotLocked(
   db: Db,
@@ -22,19 +22,19 @@ export async function assertPeriodNotLocked(
   body: Record<string, unknown> = {},
   tanggal: string | Date | null = null,
 ): Promise<NextResponse | null> {
-  const docDateInput = hasDateInput(tanggal) ? tanggal : hasDateInput(body?.tanggal) ? body.tanggal : null;
-  let docDate: Date | null = null;
-  if (docDateInput != null) {
-    docDate = docDateInput instanceof Date ? docDateInput : new Date(String(docDateInput));
-    if (Number.isNaN(docDate.getTime())) return err('Tanggal dokumen tidak valid.', 400);
-  }
-
   const tenantId = tenantIdForWrite(auth, body);
   const settings = await db.collection('tenant_settings').findOne({ tenantId });
   if (!settings?.periodLockedUntil) return null;
 
   const lockUntil = new Date(String(settings.periodLockedUntil));
   if (Number.isNaN(lockUntil.getTime())) return null;
+
+  const docDateInput = hasDateInput(tanggal) ? tanggal : hasDateInput(body?.tanggal) ? body.tanggal : null;
+  let docDate: Date | null = null;
+  if (docDateInput != null) {
+    docDate = docDateInput instanceof Date ? docDateInput : new Date(String(docDateInput));
+    if (Number.isNaN(docDate.getTime())) return err('Tanggal dokumen tidak valid.', 400);
+  }
   const serverDate = new Date();
   const lockedDate = [serverDate, docDate].find((d) => d != null && d.getTime() <= lockUntil.getTime());
   if (lockedDate) {

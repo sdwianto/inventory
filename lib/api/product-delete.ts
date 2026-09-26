@@ -32,7 +32,7 @@ async function productIdsWithStock(db: Db, tenantId: string, ids: string[], sess
     .find({ ...tenantIdMatchFilter(tenantId), stokId: { $in: ids } }, txOpts(session))
     .project<{ stokId: string; qty?: number | string }>({ stokId: 1, qty: 1 })
     .toArray();
-  return [...new Set(rows.filter((r) => roundStockQty(r.qty) > 0).map((r) => r.stokId))];
+  return [...new Set(rows.filter((r) => roundStockQty(r.qty) !== 0).map((r) => r.stokId))];
 }
 
 /**
@@ -62,7 +62,7 @@ export async function softDeleteProducts(
       const rowIds = rows.map((r) => String(r.id));
       const withStock = await productIdsWithStock(txDb, tenantId, rowIds, session);
       if (withStock.length) {
-        throw new DeleteAbort(400, `${withStock.length} produk masih punya stok — kosongkan lewat penyesuaian stok sebelum dihapus`);
+        throw new DeleteAbort(400, `${withStock.length} produk masih punya saldo stok (positif atau minus) — nolkan lewat penyesuaian stok sebelum dihapus`);
       }
       const canonical = await txDb.collection('products').distinct(
         'mergedInto',

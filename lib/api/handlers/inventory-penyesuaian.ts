@@ -51,6 +51,7 @@ type AdjustmentDoc = {
   items?: AdjustmentLine[];
   createdBy?: { userId?: string; userName?: string };
   submittedBy?: { userId?: string; userName?: string };
+  updatedBy?: { userId?: string; userName?: string };
   /** Semua pengguna yang pernah mengubah draft — ikut dihitung pembuat untuk maker-checker. */
   editorIds?: string[];
   updatedAt?: Date | null;
@@ -60,7 +61,7 @@ type AdjustmentDoc = {
 type ParsedLine = AdjustmentLine;
 
 function adjustmentMakers(doc: AdjustmentDoc) {
-  return [doc.createdBy, doc.submittedBy, ...(doc.editorIds || []).map((userId) => ({ userId }))];
+  return [doc.createdBy, doc.updatedBy, doc.submittedBy, ...(doc.editorIds || []).map((userId) => ({ userId }))];
 }
 
 /** Susun baris dari body: produk, gudang home, konversi satuan ke base. qtyAktual boleh kosong untuk draft. */
@@ -306,6 +307,14 @@ export async function handlePenyesuaian({
     if ('error' in access) return access.error;
     const doc = access.doc as unknown as AdjustmentDoc;
     if (doc.status !== 'DRAFT') return err('Hanya draft yang bisa diubah', 400);
+    const expectedUpdatedAt = (invBody as { updatedAt?: unknown }).updatedAt;
+    if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== null && expectedUpdatedAt !== '') {
+      const expected = new Date(String(expectedUpdatedAt)).getTime();
+      const actual = doc.updatedAt ? new Date(doc.updatedAt).getTime() : NaN;
+      if (!Number.isFinite(expected) || expected !== actual) {
+        return casConflict('Draft sudah diubah pengguna lain sejak dibuka — muat ulang lalu simpan lagi');
+      }
+    }
     const tenantId = String(doc.tenantId || tenantIdForWrite(scopeAuth, invBody));
     const items = invBody.items || [];
     if (items.length === 0) return err('Tidak ada item');

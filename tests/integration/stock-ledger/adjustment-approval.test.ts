@@ -176,6 +176,8 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5 penyesuaian maker-checker', { timeo
     const edit = await call('PUT', ['stok', 'penyesuaian', id], { reasonCode: 'OPNAME', items: [{ stokId: 'garam', qtyAktual: 4 }] }, SPV);
     expect(edit.status).toBe(200);
     expect(edit.data.editorIds).toEqual(['u-spv']);
+    const stale = await call('PUT', ['stok', 'penyesuaian', id], { updatedAt: draft.data.updatedAt, items: [{ stokId: 'garam', qtyAktual: 1 }] }, GUDANG);
+    expect(stale.status).toBe(409);
     expect((await call('POST', ['stok', 'penyesuaian', id, 'submit'], {}, GUDANG)).status).toBe(200);
 
     const byEditor = await call('POST', ['stok', 'penyesuaian', id, 'approve'], {}, SPV);
@@ -201,9 +203,11 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5 penyesuaian maker-checker', { timeo
     await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $set: { periodLockedUntil: new Date(Date.now() + 86_400_000).toISOString() } });
     const res = await call('POST', ['stok', 'penyesuaian', String(draft.data.id), 'approve'], {}, SPV);
     expect(res.status).toBe(423);
-    await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $unset: { periodLockedUntil: '' } });
     await setFlag(false);
+    const past = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $set: { periodLockedUntil: past } });
     const invalidDate = await call('POST', ['stok', 'penyesuaian'], { tanggal: 'bukan-tanggal', reasonCode: 'OPNAME', items: [{ stokId: 'gula', qtyAktual: 6 }] }, SPV);
     expect(invalidDate.status).toBe(400);
+    await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $unset: { periodLockedUntil: '' } });
   });
 });

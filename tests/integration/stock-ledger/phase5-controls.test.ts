@@ -108,6 +108,14 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5a kontrol master & posting', { timeo
     if (!grn.ok) expect(grn.error).toMatch(/sudah dihapus/);
   });
 
+  it('hapus produk ditolak bila saldo stok minus', async () => {
+    await insertProduct('p-minus', 'MNS');
+    await db.collection('stok_lokasi').insertOne({ tenantId: TID, stokId: 'p-minus', lokasiKode: 'GKERING', qty: -2 });
+    const res = await products('DELETE', ['products', 'p-minus'], undefined);
+    expect(res.status).toBe(400);
+    expect((await db.collection('products').findOne({ id: 'p-minus' }))?.deletedAt).toBeFalsy();
+  });
+
   it('soft delete produk legacy tanpa tenantId (tenant default), UOM ikut terhapus, tenant lain tidak tersentuh', async () => {
     await db.collection('products').insertOne({
       id: 'p-legacy', kode: 'LGC', nama: 'legacy', satuan: 'KG', aktif: true, syncSource: 'local', stok: 0, mergedInto: null,
@@ -171,5 +179,6 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5a kontrol master & posting', { timeo
     await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $set: { periodLockedUntil: 'rusak' } });
     expect(await assertPeriodNotLocked(db, ADMIN, {})).toBeNull();
     await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $unset: { periodLockedUntil: '' } });
+    expect(await assertPeriodNotLocked(db, ADMIN, { tanggal: 'bukan-tanggal' })).toBeNull();
   });
 });

@@ -34,7 +34,7 @@ describe('grnReversalSelfApproveBlocked', () => {
   });
   it('MASTER dikecualikan (darurat, diaudit)', () => {
     expect(grnReversalSelfApproveBlocked({ userId: 'u1', isMaster: true }, doc)).toBeNull();
-    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'MASTER' }, doc)).toBeNull();
+    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'MASTER', isMaster: true }, doc)).toBeNull();
   });
   it('penyetuju lain boleh', () => {
     expect(grnReversalSelfApproveBlocked({ userId: 'u2', role: 'SUPERVISOR' }, doc)).toBeNull();
