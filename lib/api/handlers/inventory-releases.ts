@@ -46,6 +46,7 @@ import {
 } from '@/lib/food-production/material-issue-reconcile';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { casConflict, casEditFilter, casStatusFilter, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import { planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
 import {
   computeRlOverIssue,
@@ -1183,7 +1184,7 @@ export async function handleInventoryReleases({
         }
 
         await txDb.collection('inventory_releases').updateOne(
-          { id: doc.id },
+          docIdFilter(doc),
           {
             $set: {
               fefoConsume: fefoLines,

@@ -83,6 +83,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   webhooks: async () => (await import('@/lib/api/handlers/webhooks')).handleWebhooks,
   'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
   'grn-reversals': async () => (await import('@/lib/api/handlers/grn-reversals')).handleGrnReversals,
+  'stock-reversals': async () => (await import('@/lib/api/handlers/stock-reversals')).handleStockReversals,
   'lot-qc': async () => (await import('@/lib/api/handlers/lot-qc')).handleLotQc,
   sync: async () => (await import('@/lib/api/handlers/catalog-sync')).handleCatalogSync,
   hutang: async () => (await import('@/lib/api/handlers/vendor-hutang')).handleVendorHutang,

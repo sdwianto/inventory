@@ -24,6 +24,7 @@ import { flattenTransferDocLines } from '@/lib/export/flatten-doc-lines';
 import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
+import { StockReversalSection, PendingStockReversals } from '@/components/stok/StockReversal';
 
 function qtyAtLokasi(p: JsonObject, lokasiKode: string): number {
   const byWh = asObject(p.stokByWarehouse);
@@ -61,7 +62,7 @@ export default function TransferPage() {
     });
   }, [form.lokasiAsal, form.items.length]);
 
-  const { data: listData = [] } = useApiQuery<JsonObject[]>(
+  const { data: listData = [], refetch: refetchList } = useApiQuery<JsonObject[]>(
     queryKeys.transfer.list,
     '/api/stok/transfer',
   );
@@ -177,6 +178,8 @@ export default function TransferPage() {
 
         <OperationalScopeBar />
 
+        <PendingStockReversals sourceType="TRANSFER" refreshKey={list.length} onChanged={() => { void refetchList(); }} />
+
         <ListSummaryCards
           items={[
             { label: 'Jumlah Transfer', value: list.length },
@@ -186,9 +189,9 @@ export default function TransferPage() {
 
         <div className="bg-white border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-slate-100 text-xs uppercase text-slate-600"><tr><th className="px-3 py-2 text-left">Tanggal</th><th className="px-3 py-2 text-left">No.</th><th className="px-3 py-2 text-left">Dari</th><th className="px-3 py-2 text-left">Ke</th><th className="px-3 py-2 text-right">Item</th><th className="px-3 py-2 text-left">Catatan</th></tr></thead>
+            <thead className="bg-slate-100 text-xs uppercase text-slate-600"><tr><th className="px-3 py-2 text-left">Tanggal</th><th className="px-3 py-2 text-left">No.</th><th className="px-3 py-2 text-left">Dari</th><th className="px-3 py-2 text-left">Ke</th><th className="px-3 py-2 text-right">Item</th><th className="px-3 py-2 text-left">Catatan</th><th className="px-3 py-2 text-left">Pembalik</th></tr></thead>
             <tbody>
-              {list.length === 0 && <tr><td colSpan={6} className="text-center py-10 text-slate-400">Belum ada transfer</td></tr>}
+              {list.length === 0 && <tr><td colSpan={7} className="text-center py-10 text-slate-400">Belum ada transfer</td></tr>}
               {list.map(d => (
                 <tr key={str(d.id)} className="border-t hover:bg-slate-50">
                   <td className="px-3 py-2 text-xs">{formatDateTime(str(d.tanggal))}</td>
@@ -197,6 +200,9 @@ export default function TransferPage() {
                   <td className="px-3 py-2">{str(d.lokasiTujuanNama)}</td>
                   <td className="px-3 py-2 text-right">{asArray(d.items).length}</td>
                   <td className="px-3 py-2 text-xs">{str(d.keterangan) || '-'}</td>
+                  <td className="px-3 py-2 text-xs">
+                    <StockReversalSection sourceType="TRANSFER" doc={d} eligible={!d.status} onChanged={() => { void refetchList(); }} />
+                  </td>
                 </tr>
               ))}
             </tbody>

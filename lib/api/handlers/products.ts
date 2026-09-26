@@ -12,7 +12,7 @@ import {
 } from '@/lib/api/tenant-master';
 import { assertMasterAccess } from '@/lib/api/tenant-validate';
 import { buildProductSearchFilter, mergeProductSearchWithVendorName, applyProductCatalogFilters, PRODUCT_LIST_PROJECTION } from '@/lib/api/product-query';
-import { bulkDeleteMaster } from '@/lib/api/bulk-delete-master';
+import { NOT_DELETED_PRODUCT_FILTER, softDeleteProducts } from '@/lib/api/product-delete';
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import {
@@ -24,7 +24,6 @@ import { applyLedgerCapToWarehouseMap } from '@/lib/api/stock-ledger';
 import {
   ledgerSaldoForProducts,
   postStockMovements,
-  applyMasterProductStockChange,
   formatMasterStokDisplay,
   recomputeProductStok,
   relocateProductWarehouseWithAudit,
@@ -51,7 +50,6 @@ import {
   insertProductUoms,
   planProductUomDocs,
   replaceProductUoms,
-  deleteProductUoms,
   listProductUoms,
   listProductUomsByProductIds,
   findProductUomByBarcode,
@@ -84,6 +82,12 @@ const VENDOR_LOCKED_FIELDS = [
 ];
 
 const VENDOR_PRICE_FIELDS = ['hargaEcer', 'hargaGrosir', 'hargaSpesial'];
+
+/** Diisi hanya oleh buku stok / proses server; tidak boleh ditulis lewat edit master. */
+const PRODUCT_SERVER_OWNED_FIELDS = [
+  'stok', 'stokDisplay', 'avgCost', 'avgCostUpdatedAt', 'deletedAt', 'deletedBy', 'kodeAsli',
+  'mergedInto', 'mergedAt', 'createdAt', 'uomCount',
+];
 
 interface ProductBody extends Record<string, unknown> {
   kode?: string;
@@ -192,16 +196,6 @@ async function loadProductWithUoms(db: Db, tenantId: string, product: Record<str
   return attachUomSummary(product, uoms);
 }
 
-/** Produk yang masih punya saldo di stok_lokasi (tidak boleh dihapus: saldo & kartu jadi yatim). */
-async function productIdsWithStock(db: Db, tenantId: string, ids: string[]): Promise<string[]> {
-  if (!ids.length) return [];
-  const rows = await db.collection('stok_lokasi')
-    .find({ tenantId, stokId: { $in: ids } })
-    .project<{ stokId: string; qty?: number | string }>({ stokId: 1, qty: 1 })
-    .toArray();
-  return [...new Set(rows.filter((r) => roundStockQty(r.qty) > 0).map((r) => r.stokId))];
-}
-
 export async function handleProducts({
   db,
   route,
@@ -249,6 +243,7 @@ export async function handleProducts({
     // Salinan vendor tergabung hanya untuk pemilih pembelian (PO) atau lookup id eksplisit.
     const includeVendorSources = url.searchParams.get('includeVendorSources') === '1' || !!idsParam;
     if (!includeVendorSources) Object.assign(filter, NOT_MERGED_PRODUCT_FILTER);
+    if (!idsParam) Object.assign(filter, NOT_DELETED_PRODUCT_FILTER);
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithUomBarcode(db, tenantId, q, filter);
     filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
@@ -473,21 +468,11 @@ export async function handleProducts({
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: productBody, request });
     if (denied) return denied;
     if (!scopeAuth) return err('Scope tidak valid', 400);
-    const unique = [...new Set((productBody.ids || []).map(String).filter(Boolean))];
-    const tenantId = scopeAuth.tenantId || 'default';
-    if (unique.length) {
-      const rows = await db.collection('products').find({ tenantId, id: { $in: unique } }).toArray();
-      const vendorLocked = rows.filter((r) => isVendorSyncedProduct(r));
-      if (vendorLocked.length) {
-        return err(`${vendorLocked.length} produk dari sales.app tidak bisa dihapus di inventory`, 400);
-      }
-      const withStock = await productIdsWithStock(db, tenantId, unique);
-      if (withStock.length) {
-        return err(`${withStock.length} produk masih punya stok — kosongkan lewat penyesuaian stok sebelum dihapus`, 400);
-      }
-      await deleteProductUoms(db, tenantId, unique);
-    }
-    return bulkDeleteMaster(db, scopeAuth, 'products', productBody.ids);
+    const tenantId = tenantIdForWrite(scopeAuth, productBody);
+    const removed = await softDeleteProducts(db, tenantId, (productBody.ids || []).map(String), auth);
+    if (!removed.ok) return err(removed.error, removed.status);
+    await invalidateDashboardSnapshot(db, tenantId);
+    return ok({ deleted: removed.deleted, requested: (productBody.ids || []).length });
   }
 
   if (route === '/products/lookup' && method === 'GET') {
@@ -584,9 +569,13 @@ export async function handleProducts({
       if (isGudang) {
         return err('Role GUDANG tidak boleh mengubah master produk', 403);
       }
+      if (existing.deletedAt) return err('Produk sudah dihapus', 400);
+      if (productBody.stok !== undefined || productBody.stokAlasan !== undefined) {
+        return err('Stok tidak bisa diubah lewat master produk — gunakan Penyesuaian Stok', 400);
+      }
       const canAdjustStock = userAuth.isMaster || STOCK_ADJUST_ROLES.includes(userAuth.role);
-      if (!canAdjustStock && (productBody.stok !== undefined || productBody.minStok !== undefined)) {
-        return err('Hanya Supervisor/Admin yang boleh mengubah stok produk', 403);
+      if (!canAdjustStock && productBody.minStok !== undefined) {
+        return err('Hanya Supervisor/Admin yang boleh mengubah stok minimum produk', 403);
       }
       if (isVendorSyncedProduct(existing)) {
         for (const k of VENDOR_LOCKED_FIELDS) {
@@ -608,6 +597,7 @@ export async function handleProducts({
       delete update._id;
       delete update.tenantId;
       delete update.uoms;
+      for (const k of PRODUCT_SERVER_OWNED_FIELDS) delete update[k];
       VENDOR_LOCKED_FIELDS.forEach((k) => delete update[k]);
       if (isVendorSyncedProduct(existing)) {
         VENDOR_PRICE_FIELDS.forEach((k) => delete update[k]);
@@ -781,43 +771,7 @@ export async function handleProducts({
       ) {
         return err(`Satuan dasar tidak bisa diubah: ${vendorSources} sumber vendor tergabung ke item ini memakai satuan ${existing.satuan}`, 400);
       }
-      const stokDiubah = update.stok !== undefined;
-      if (stokDiubah) {
-        if (!Number.isFinite(update.stok as number) || (update.stok as number) < 0) {
-          return err('Stok harus angka ≥ 0', 400);
-        }
-        const gudang = resolveProductGudangKode({ ...existing, ...update });
-        const qtyAfter = roundStockQty(update.stok as number);
-        const mergedProduct = { ...existing, ...update, id };
-        delete update.stok;
-        delete update.stokDisplay;
-        try {
-          await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-            if (uomToWrite) {
-              await replaceProductUoms(txDb, tid, id, uomToWrite, session);
-            }
-            await txDb.collection('products').updateOne(
-              withTenantFilter(scopeAuth, { id }),
-              { $set: update },
-              txOpts(session),
-            );
-            const changed = await applyMasterProductStockChange(txDb, {
-              tenantId: tid,
-              product: mergedProduct,
-              gudangKode: gudang,
-              qtyAfter,
-              auth: userAuth,
-              reason: productBody.stokAlasan || 'Penyesuaian via edit master produk',
-              session,
-            });
-            if (!changed.ok) throw new Error(changed.error);
-          });
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : 'Gagal menyimpan perubahan stok produk';
-          return err(msg, 400);
-        }
-      } else if (uomToWrite) {
-        delete update.stokDisplay;
+      if (uomToWrite) {
         try {
           await runInTransactionOrFallback(async ({ db: txDb, session }) => {
             await replaceProductUoms(txDb, tid, id, uomToWrite!, session);
@@ -833,7 +787,6 @@ export async function handleProducts({
           return err(msg, 400);
         }
       } else {
-        delete update.stokDisplay;
         await db.collection('products').updateOne(
           withTenantFilter(scopeAuth, { id }),
           { $set: update },
@@ -944,15 +897,9 @@ export async function handleProducts({
         return err('Produk dari sales.app tidak bisa dihapus di inventory — nonaktifkan di vendor', 400);
       }
       const tid = String(access.doc.tenantId || auth?.tenantId || 'default');
-      if ((await productIdsWithStock(db, tid, [id])).length) {
-        return err('Produk masih punya stok — kosongkan lewat penyesuaian stok sebelum dihapus', 400);
-      }
-      if (await db.collection('products').countDocuments({ tenantId: tid, mergedInto: id }, { limit: 1 })) {
-        return err('Produk ini item persediaan untuk sumber vendor tergabung — tidak bisa dihapus', 400);
-      }
-      await deleteProductUoms(db, tid, id);
-      await db.collection('products').deleteOne(withTenantFilter(scopeAuth, { id }));
-      await invalidateDashboardSnapshot(db, String(access.doc.tenantId || auth?.tenantId || 'default'));
+      const removed = await softDeleteProducts(db, tid, [id], auth);
+      if (!removed.ok) return err(removed.error, removed.status);
+      await invalidateDashboardSnapshot(db, tid);
       return ok({ message: 'deleted' });
     }
   }

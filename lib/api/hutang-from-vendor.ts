@@ -4,6 +4,7 @@ import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { docIdFilter, idInTenant } from '@/lib/api/doc-filter';
 import { ensureVendorSupplier } from '@/lib/api/vendor-supplier';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
@@ -385,7 +386,7 @@ async function syncExistingVendorHutangFromPayload(
   if (vendorNameStale && !staleStatus && !totalMismatch && !invoiceMismatch) {
     await ensureVendorSupplier(db, tid, vid || existing.vendorTenantId, displayName);
     await db.collection('hutang').updateOne(
-      { id: existing.id },
+      docIdFilter(existing),
       {
         $set: {
           supplierName: displayName,
@@ -421,7 +422,7 @@ async function syncExistingVendorHutangFromPayload(
       at: now,
     };
     await db.collection('hutang').updateOne(
-      { id: existing.id },
+      docIdFilter(existing),
       { $set: { vendorResyncPending: pending, updatedAt: now } },
     );
     await writeAuditLog(db, {
@@ -462,7 +463,7 @@ async function syncExistingVendorHutangFromPayload(
     await runInTransactionOrFallback(async ({ db: txDb, session }) => {
       const res = await txDb.collection('hutang').updateOne(
         {
-          id: existing.id,
+          ...docIdFilter(existing),
           status: existing.status ?? null,
           approvalStatus: existing.approvalStatus ?? null,
           terbayar: existing.terbayar ?? null,
@@ -617,7 +618,7 @@ export async function createHutangFromVendorInvoice(
     const cid = opts.correlationId ? String(opts.correlationId).trim() : '';
     if (cid && result.hutangId) {
       await db.collection('hutang').updateOne(
-        { id: result.hutangId },
+        idInTenant(result.hutangId, tid),
         { $set: { correlationId: cid } },
       );
     }
@@ -888,7 +889,7 @@ export async function applyCreditNoteFromVendor(
   if (reduce <= 0) {
     if (creditNoteId) {
       await db.collection('hutang').updateOne(
-        { id: hutang.id, creditNotes: { $not: { $elemMatch: { creditNoteId } } } },
+        docIdFilter(hutang, { creditNotes: { $not: { $elemMatch: { creditNoteId } } } }),
         { $push: { creditNotes: cnTrail }, $set: { updatedAt: now } } as never,
       );
     }
@@ -906,7 +907,7 @@ export async function applyCreditNoteFromVendor(
   let claimed = false;
   await runInTransactionOrFallback(async ({ db: txDb, session }) => {
     // Atomic claim: skip if creditNoteId already present (concurrent push/webhook).
-    const filter: Record<string, unknown> = { id: hutang.id };
+    const filter: Record<string, unknown> = docIdFilter(hutang);
     if (creditNoteId) {
       filter.creditNotes = { $not: { $elemMatch: { creditNoteId } } };
     }
@@ -1097,7 +1098,7 @@ export async function applyDebitNoteFromVendor(
 
   let claimed = false;
   await runInTransactionOrFallback(async ({ db: txDb, session }) => {
-    const filter: Record<string, unknown> = { id: hutang.id };
+    const filter: Record<string, unknown> = docIdFilter(hutang);
     if (debitNoteId) {
       filter.debitNotes = { $not: { $elemMatch: { debitNoteId } } };
     }
@@ -1208,7 +1209,7 @@ export async function maybeStampVendorReturnFullAcceptFromCn(
   }
 
   await db.collection('vendor_returns').updateOne(
-    { id: rtv.id, vendorDecision: 'PENDING' },
+    docIdFilter(rtv, { vendorDecision: 'PENDING' }),
     {
       $set: {
         vendorDecision: 'ACCEPTED',

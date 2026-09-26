@@ -27,7 +27,23 @@ export async function unjournaledConsumptionValue(db: Db, tenantId: string, sess
   // Cutover pertama sudah membebankan seluruh pemakaian historis.
   if (await db.collection('jurnal').findOne({ tenantId, sourceType: INVENTORY_CUTOVER_JOURNAL_SOURCE }, opts)) return 0;
   const rows = await db.collection('stok_kartu').aggregate<{ _id: { sourceType: string; sourceId: string }; value: number }>([
-    { $match: { tenantId, sourceType: { $in: ['RELEASE', 'FP_ISSUE'] }, costSource: { $ne: 'NON_INVENTORY' } } },
+    {
+      $match: {
+        tenantId,
+        costSource: { $ne: 'NON_INVENTORY' },
+        $or: [
+          { sourceType: { $in: ['RELEASE', 'FP_ISSUE'] } },
+          // Pembalik RL / PBL mengembalikan stok: bersih terhadap dokumen asalnya.
+          { sourceType: 'STOCK_REVERSAL', reversalOfSourceType: { $in: ['RELEASE', 'FP_ISSUE'] } },
+        ],
+      },
+    },
+    {
+      $set: {
+        sourceType: { $ifNull: ['$reversalOfSourceType', '$sourceType'] },
+        sourceId: { $ifNull: ['$reversalOfSourceId', '$sourceId'] },
+      },
+    },
     { $lookup: { from: 'products', let: { sid: '$stokId' }, pipeline: [
       { $match: { $expr: { $and: [{ $eq: ['$id', '$$sid'] }, { $eq: ['$tenantId', tenantId] }] } } },
       { $project: { _id: 0, itemRole: 1 } },

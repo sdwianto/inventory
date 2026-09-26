@@ -28,10 +28,13 @@ describe('grnReversalSelfApproveBlocked', () => {
   it('pengaju SUPERVISOR tidak boleh menyetujui sendiri', () => {
     expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'SUPERVISOR' }, doc)).toMatch(/tidak boleh/);
   });
-  it('ADMIN/OWNER/MASTER boleh menyetujui pengajuannya sendiri', () => {
-    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'ADMIN' }, doc)).toBeNull();
-    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'OWNER' }, doc)).toBeNull();
+  it('ADMIN/OWNER juga tidak boleh menyetujui pengajuannya sendiri', () => {
+    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'ADMIN' }, doc)).toMatch(/tidak boleh/);
+    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'OWNER' }, doc)).toMatch(/tidak boleh/);
+  });
+  it('MASTER dikecualikan (darurat, diaudit)', () => {
     expect(grnReversalSelfApproveBlocked({ userId: 'u1', isMaster: true }, doc)).toBeNull();
+    expect(grnReversalSelfApproveBlocked({ userId: 'u1', role: 'MASTER' }, doc)).toBeNull();
   });
   it('penyetuju lain boleh', () => {
     expect(grnReversalSelfApproveBlocked({ userId: 'u2', role: 'SUPERVISOR' }, doc)).toBeNull();

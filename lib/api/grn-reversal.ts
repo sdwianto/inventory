@@ -90,15 +90,18 @@ function grnLabel(grn: JsonObject) {
   return String(grn.noGRN || grn.id || '');
 }
 
-/** SoD: pengaju tidak boleh menyetujui sendiri (kecuali ADMIN / OWNER / MASTER). */
+function isOwnRequest(actor: GrnReversalActor, doc: Pick<GrnReversalDoc, 'requestedBy'>) {
+  return !!doc.requestedBy?.userId && doc.requestedBy.userId === actor.userId;
+}
+
+function isMasterActor(actor: GrnReversalActor) {
+  return !!actor.isMaster || String(actor.role || '') === 'MASTER';
+}
+
+/** Maker-checker ketat: pengaju tidak boleh menyetujui sendiri apa pun rolenya; MASTER dikecualikan (diaudit). */
 export function grnReversalSelfApproveBlocked(actor: GrnReversalActor, doc: Pick<GrnReversalDoc, 'requestedBy'>): string | null {
-  if (actor.isMaster) return null;
-  const role = String(actor.role || '');
-  if (role === 'ADMIN' || role === 'OWNER' || role === 'MASTER') return null;
-  if (doc.requestedBy?.userId && doc.requestedBy.userId === actor.userId) {
-    return 'Pengaju pembalik tidak boleh menyetujui sendiri — minta SUPERVISOR/ADMIN lain';
-  }
-  return null;
+  if (!isOwnRequest(actor, doc) || isMasterActor(actor)) return null;
+  return 'Pengaju pembalik tidak boleh menyetujui sendiri — minta penyetuju lain';
 }
 
 /** Tagihan vendor terkait GRN: yang masih aktif (belum ditolak) dan apakah ada tagihan sama sekali. */
@@ -450,6 +453,18 @@ export async function approveGrnReversal(
         actor: { userId: input.actor.userId, userName: input.actor.userName },
       });
 
+      if (isOwnRequest(input.actor, rev)) {
+        await writeAuditLog(txDb, {
+          tenantId: tid,
+          action: 'GRN_REVERSAL_SELF_APPROVED',
+          entityType: 'goods_receipt',
+          entityId: rev.grnId,
+          summary: `${rev.noReversal}: MASTER menyetujui pembalik GRN yang diajukannya sendiri (darurat)`,
+          userId: input.actor.userId,
+          userName: input.actor.userName,
+          metadata: { reversalId: rev.id, requestedBy: rev.requestedBy },
+        }, session);
+      }
       await writeAuditLog(txDb, {
         tenantId: tid,
         action: 'GRN_REVERSED',

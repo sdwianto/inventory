@@ -48,6 +48,7 @@ import { ISSUE_ELIGIBLE_PLAN_STATUSES, referenceSourceLabel } from '@/lib/food-p
 import { looksLikeProductionKeperluan } from '@/lib/food-production/production-keperluan';
 import type { ReleasePrefill, ReleasePrefillSkipReason } from '@/lib/food-production/release-prefill';
 import { getClientFeatureFlags } from '@/lib/feature-flags-client';
+import { StockReversalSection, PendingStockReversals } from '@/components/stok/StockReversal';
 
 type OverIssuePreviewLine = {
   productNama?: string;
@@ -92,6 +93,7 @@ const STATUS_STYLE: Record<string, string> = {
   POSTED: 'bg-green-100 text-green-800',
   REJECTED: 'bg-red-100 text-red-800',
   CANCELLED: 'bg-slate-100 text-slate-500',
+  REVERSED: 'bg-purple-100 text-purple-700',
 };
 
 const CAN_CREATE = ['GUDANG', 'ADMIN', 'MASTER'];
@@ -145,7 +147,7 @@ export function ModeOperasional() {
     });
   }, [form.lokasiKode, form.items.length]);
 
-  const { data: listData = [] } = useApiQuery<JsonObject[]>(
+  const { data: listData = [], refetch: refetchList } = useApiQuery<JsonObject[]>(
     queryKeys.inventoryReleases.list,
     '/api/inventory-releases',
   );
@@ -608,6 +610,15 @@ export function ModeOperasional() {
     }
   };
 
+  const reloadDetailAfterReversal = async () => {
+    void refetchList();
+    const id = str(detail?.id);
+    if (!id) return;
+    try {
+      setDetail(await fetchJson<JsonObject>(`/api/inventory-releases/${encodeURIComponent(id)}`));
+    } catch { /* detail tetap; daftar sudah dimuat ulang */ }
+  };
+
   const filteredProducts = products.filter((p) => {
     if (str(p.gudangKode, 'GKERING') !== form.lokasiKode) return false;
     if (qtyAtLokasi(p, form.lokasiKode) <= 0) return false;
@@ -651,6 +662,8 @@ export function ModeOperasional() {
           </div>
         </div>
         <OperationalScopeBar />
+
+        <PendingStockReversals sourceType="RELEASE" refreshKey={listData.length} onChanged={() => { void refetchList(); }} />
 
         <div className="bg-white border rounded-lg overflow-x-auto">
           <table className="w-full text-sm">
@@ -1119,6 +1132,12 @@ export function ModeOperasional() {
                   </tbody>
                 </table>
               </div>
+              <StockReversalSection
+                sourceType="RELEASE"
+                doc={detail}
+                eligible={str(detail.status) === 'POSTED'}
+                onChanged={() => { void reloadDetailAfterReversal(); }}
+              />
             </div>
           )}
           <DialogFooter className="gap-2 sm:justify-between">

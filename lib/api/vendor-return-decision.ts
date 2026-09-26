@@ -2,6 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import { postStockMutation } from '@/lib/api/stock-mutation';
@@ -141,7 +142,7 @@ export async function applyVendorReturnDecision(
     if (header === 'PENDING' && healedAgg !== 'PENDING' && healedAgg !== 'NONE') {
       const now = new Date();
       await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: returnId },
+        docIdFilter(doc),
         {
           $set: {
             vendorDecision: healedAgg,
@@ -176,7 +177,7 @@ export async function applyVendorReturnDecision(
               : null;
           if (!filter) return;
           await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-            { id: returnId },
+            docIdFilter(doc),
             {
               $set: {
                 'items.$[rest].stockRestoredAt': new Date(),
@@ -247,7 +248,7 @@ export async function applyVendorReturnDecision(
           // Stamp flag — prefer invoiceLineId arrayFilter; fallback lineId.
           if (inv) {
             await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-              { id: returnId },
+              docIdFilter(doc),
               {
                 $set: {
                   'items.$[rest].transitRestoredAt': new Date(),
@@ -258,7 +259,7 @@ export async function applyVendorReturnDecision(
             );
           } else if (lid) {
             await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-              { id: returnId },
+              docIdFilter(doc),
               {
                 $set: {
                   'items.$[rest].transitRestoredAt': new Date(),
@@ -274,7 +275,7 @@ export async function applyVendorReturnDecision(
       // 2) Stamp keputusan baris (setelah stok aman).
       if (Object.keys(setFields).length > 0 && arrayFilters.length > 0) {
         await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-          { id: returnId },
+          docIdFilter(doc),
           { $set: setFields },
           { arrayFilters, ...txOpts(session) },
         );
@@ -297,7 +298,7 @@ export async function applyVendorReturnDecision(
       const aggregateInTx = aggregateVendorDecision(mergedItems);
       const nowTx = new Date();
       await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: returnId },
+        docIdFilter(doc),
         {
           $set: {
             vendorDecision: aggregateInTx,
@@ -331,7 +332,7 @@ export async function applyVendorReturnDecision(
   }
 
   const refreshed = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(
-    { id: returnId },
+    docIdFilter(doc),
     { projection: { items: 1, vendorDecision: 1 } },
   );
   const aggregate = String(refreshed?.vendorDecision || aggregateVendorDecision(

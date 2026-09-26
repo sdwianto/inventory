@@ -415,7 +415,7 @@ export default function ProdukPage() {
   };
 
   const remove = async (id: string) => {
-    if (!(await confirm({ title: 'Hapus Produk?', description: 'Produk ini akan dihapus dari master data.', confirmText: 'Hapus' }))) return;
+    if (!(await confirm({ title: 'Hapus Produk?', description: 'Produk ini dihapus dari master data. Riwayat kartu stok & dokumen tetap tersimpan, kodenya bisa dipakai lagi.', confirmText: 'Hapus' }))) return;
     try {
       const row = products.find((p) => str(p.id) === id);
       const tid = str(row?.tenantId) || filterTenantId;
@@ -434,7 +434,7 @@ export default function ProdukPage() {
     if (ids.length === 0) return;
     if (!(await confirm({
       title: `Hapus ${ids.length} produk?`,
-      description: 'Produk terpilih akan dihapus permanen dari master data.',
+      description: 'Produk terpilih dihapus dari master data. Riwayat kartu stok & dokumen tetap tersimpan, kodenya bisa dipakai lagi.',
       confirmText: 'Hapus semua',
     }))) return;
     setBulkDeleting(true);

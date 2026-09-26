@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean } from '@/lib/api/db';
 import { requireRole, RTV_CREATE_ROLES, RTV_APPROVE_ROLES } from '@/lib/api/require-auth';
 import { resolveOperationalScope, tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
+import { docIdFilter, idInTenant } from '@/lib/api/doc-filter';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { nextDocNumber } from '@/lib/api/document-sequence';
@@ -219,7 +220,7 @@ async function createVendorReturnFromGrnReject(
       // GRN lama (diposting sebelum rejectStatus ada) tidak punya field ini sama sekali — anggap PENDING juga.
       const claim = await txDb.collection('goods_receipts').updateOne(
         {
-          id: grn.id,
+          ...docIdFilter(grn),
           status: 'POSTED',
           reversalPendingId: { $exists: false },
           items: {
@@ -274,7 +275,7 @@ async function createVendorReturnFromGrnReject(
       } catch (insertErr) {
         if (!session) {
           await txDb.collection('goods_receipts').updateOne(
-            { id: grn.id, 'items.lineId': lineId, 'items.rejectRtvId': rtvId },
+            docIdFilter(grn, { 'items.lineId': lineId, 'items.rejectRtvId': rtvId }),
             {
               $set: { 'items.$.rejectStatus': 'PENDING' },
               $unset: { 'items.$.rejectRtvId': '', 'items.$.rejectNoReturn': '' },
@@ -727,7 +728,7 @@ export async function handleVendorReturns({
     });
     if (submitConflict) return submitConflict;
 
-    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(docIdFilter(doc));
     return ok(clean(fresh as JsonObject));
   }
 
@@ -780,7 +781,7 @@ export async function handleVendorReturns({
     });
     if (backConflict) return backConflict;
 
-    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(docIdFilter(doc));
     return ok(clean(fresh as JsonObject));
   }
 
@@ -864,7 +865,7 @@ export async function handleVendorReturns({
       },
     );
     if (prep.matchedCount === 0) return casConflict();
-    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id }) as VendorReturnDoc | null;
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(docIdFilter(doc)) as VendorReturnDoc | null;
     if (!fresh) return err('Tidak ditemukan', 404);
     if (fresh.status !== 'PENDING_APPROVAL') {
       return err('Retur sudah tidak menunggu approval', 400);
@@ -1119,7 +1120,7 @@ export async function handleVendorReturns({
     }
     const edited = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(casEditFilter(doc), { $set: patch });
     if (edited.matchedCount === 0) return casConflict();
-    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne({ id: doc.id });
+    const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(docIdFilter(doc));
     return ok(clean(fresh as JsonObject));
   }
 
@@ -1139,7 +1140,7 @@ export async function handleVendorReturns({
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         const del = await txDb.collection(VENDOR_RETURNS_COLLECTION).deleteOne(
-          { id: doc.id, status: 'DRAFT' },
+          docIdFilter(doc, { status: 'DRAFT' }),
           txOpts(session),
         );
         if (del.deletedCount === 0) {
@@ -1149,7 +1150,7 @@ export async function handleVendorReturns({
           const grnLineId = String(doc.items?.[0]?.grnLineId || '').trim();
           if (grnLineId) {
             await txDb.collection('goods_receipts').updateOne(
-              { id: doc.grnId, 'items.lineId': grnLineId, 'items.rejectRtvId': doc.id },
+              idInTenant(doc.grnId, tenantId, { 'items.lineId': grnLineId, 'items.rejectRtvId': doc.id }),
               {
                 $set: { 'items.$.rejectStatus': 'PENDING' },
                 $unset: { 'items.$.rejectRtvId': '', 'items.$.rejectNoReturn': '' },

@@ -1,6 +1,6 @@
 'use client';
 
-/** Fase 3.6 — pembalik GRN (RVS): ajukan dari detail GRN POSTED, setujui/tolak/batal dari daftar menunggu. */
+/** Fase 5c — pembalik stok (RVS) untuk RL, PBL, penyesuaian, dan transfer: ajukan dari detail dokumen, setujui dari daftar menunggu. */
 
 import type { JsonObject } from '@/types/json';
 import { str, num, asArray } from '@/types/json';
@@ -18,13 +18,22 @@ import { getUser } from '@/lib/auth-client';
 import { useActingTenantId } from '@/lib/hooks/use-acting-tenant-id';
 import { withActingTenantQuery } from '@/lib/tenant-api';
 
+export type StockReversalSourceType = 'RELEASE' | 'FP_ISSUE' | 'PENYESUAIAN' | 'TRANSFER';
+
 const REQUEST_ROLES = new Set(['GUDANG', 'SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER']);
 
-export const GRN_REVERSAL_STATUS_LABEL: Record<string, string> = {
-  PENDING_APPROVAL: 'Menunggu persetujuan',
-  POSTED: 'Terposting',
-  REJECTED: 'Ditolak',
-  CANCELLED: 'Dibatalkan',
+export const STOCK_REVERSAL_SOURCE_LABEL: Record<StockReversalSourceType, string> = {
+  RELEASE: 'RL',
+  FP_ISSUE: 'PBL',
+  PENYESUAIAN: 'Penyesuaian',
+  TRANSFER: 'Transfer',
+};
+
+const SOURCE_EFFECT: Record<StockReversalSourceType, string> = {
+  RELEASE: 'Seluruh bahan RL dikembalikan ke gudang dan lot asalnya; jurnal pemakaian dibalik.',
+  FP_ISSUE: 'Seluruh bahan PBL dikembalikan ke gudang dan lot asalnya; jurnal pemakaian dibalik; PBL menjadi CANCELLED.',
+  PENYESUAIAN: 'Selisih penyesuaian dibatalkan dengan mutasi lawan; jurnal penyesuaian dibalik.',
+  TRANSFER: 'Stok dan lot dipindah kembali dari gudang tujuan ke gudang asal.',
 };
 
 function useScoped() {
@@ -38,8 +47,12 @@ function useScoped() {
   return { scoped, scopeReady };
 }
 
-export function canRequestGrnReversal() {
+function canRequest() {
   return REQUEST_ROLES.has(String(getUser()?.role || ''));
+}
+
+function asObjectSafe(v: unknown): JsonObject {
+  return v && typeof v === 'object' ? v as JsonObject : {};
 }
 
 function LinesTable({ lines }: { lines: JsonObject[] }) {
@@ -49,26 +62,28 @@ function LinesTable({ lines }: { lines: JsonObject[] }) {
       <thead className="bg-slate-100 text-slate-600">
         <tr>
           <th className="px-2 py-1 text-left">Produk</th>
-          <th className="px-2 py-1 text-left">Lot</th>
           <th className="px-2 py-1 text-left">Gudang</th>
-          <th className="px-2 py-1 text-right">Qty keluar</th>
+          <th className="px-2 py-1 text-right">Mutasi lawan</th>
         </tr>
       </thead>
       <tbody>
-        {lines.map((l) => (
-          <tr key={`${str(l.productId)}-${str(l.warehouseKode)}-${str(l.lotNo)}`} className="border-t">
-            <td className="px-2 py-1">{str(l.productNama) || str(l.productKode) || str(l.productId)}</td>
-            <td className="px-2 py-1 font-mono">{str(l.lotNo)}</td>
-            <td className="px-2 py-1">{str(l.warehouseKode)}</td>
-            <td className="px-2 py-1 text-right tabular-nums">{formatNumber(num(l.qty))} {str(l.satuan)}</td>
-          </tr>
-        ))}
+        {lines.map((l) => {
+          const q = num(l.deltaQtyBase);
+          return (
+            <tr key={`${str(l.lineRef)}-${str(l.productId)}`} className="border-t">
+              <td className="px-2 py-1">{str(l.productNama) || str(l.productKode) || str(l.productId)}</td>
+              <td className="px-2 py-1">{str(l.warehouseKode)}</td>
+              <td className={`px-2 py-1 text-right tabular-nums ${q > 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                {q > 0 ? '+' : ''}{formatNumber(q)} {str(l.satuan)}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
 }
 
-/** Aksi pengajuan menunggu: setujui / tolak (penyetuju) atau batal (pengaju). */
 function PendingActions({ rev, onDone }: { rev: JsonObject; onDone: () => void }) {
   const { scoped } = useScoped();
   const [busy, setBusy] = useState('');
@@ -79,14 +94,14 @@ function PendingActions({ rev, onDone }: { rev: JsonObject; onDone: () => void }
   const run = async (action: 'approve' | 'reject' | 'cancel', body: Record<string, unknown> = {}) => {
     setBusy(action);
     try {
-      await fetchJson<JsonObject>(scoped(`/api/grn-reversals/${id}/${action}`), {
+      await fetchJson<JsonObject>(scoped(`/api/stock-reversals/${id}/${action}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       toast.success(
         action === 'approve'
-          ? `${str(rev.noReversal)} disetujui — GRN ${str(rev.noGRN)} dibalik`
+          ? `${str(rev.noReversal)} disetujui — ${str(rev.sourceNo)} dibalik`
           : action === 'reject' ? `${str(rev.noReversal)} ditolak` : `${str(rev.noReversal)} dibatalkan`,
       );
       setRejectOpen(false);
@@ -120,8 +135,8 @@ function PendingActions({ rev, onDone }: { rev: JsonObject; onDone: () => void }
             <DialogTitle>Tolak pembalik {str(rev.noReversal)}</DialogTitle>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="rvs-reject-reason">Alasan penolakan</Label>
-            <Textarea id="rvs-reject-reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} rows={3} maxLength={500} />
+            <Label htmlFor="stock-rvs-reject-reason">Alasan penolakan</Label>
+            <Textarea id="stock-rvs-reject-reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} rows={3} maxLength={500} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectOpen(false)}>Batal</Button>
@@ -135,20 +150,26 @@ function PendingActions({ rev, onDone }: { rev: JsonObject; onDone: () => void }
   );
 }
 
-function asObjectSafe(v: unknown): JsonObject {
-  return v && typeof v === 'object' ? v as JsonObject : {};
-}
-
-/** Bagian pembalik di detail GRN: status pembalik + tombol ajukan. */
-export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null; onChanged: () => void }) {
+/** Bagian pembalik di detail dokumen: status pembalik atau tombol ajukan. */
+export function StockReversalSection({
+  sourceType,
+  doc,
+  eligible,
+  onChanged,
+}: {
+  sourceType: StockReversalSourceType;
+  doc: JsonObject | null;
+  /** Dokumen dalam status yang bisa dibalik (mis. RL POSTED). */
+  eligible: boolean;
+  onChanged: () => void;
+}) {
   const { scoped, scopeReady } = useScoped();
-  const grnId = str(grn?.id);
-  const status = str(grn?.status);
-  const pendingUrl = grnId && scopeReady && grn?.reversalPendingId
-    ? scoped(`/api/grn-reversals?grnId=${encodeURIComponent(grnId)}&status=PENDING_APPROVAL`)
+  const sourceId = str(doc?.id);
+  const pendingUrl = sourceId && scopeReady && doc?.reversalPendingId
+    ? scoped(`/api/stock-reversals?sourceType=${sourceType}&sourceId=${encodeURIComponent(sourceId)}&status=PENDING_APPROVAL`)
     : null;
-  const { data: pendingRows } = useApiQuery<JsonObject[]>(
-    ['grn-reversals', 'pending-for-grn', pendingUrl || ''],
+  const { data: pendingRows, refetch } = useApiQuery<JsonObject[]>(
+    ['stock-reversals', 'pending-for-doc', pendingUrl || ''],
     pendingUrl,
     { staleTime: 0 },
   );
@@ -158,6 +179,7 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
   const [check, setCheck] = useState<JsonObject | null>(null);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const label = STOCK_REVERSAL_SOURCE_LABEL[sourceType];
 
   const openRequest = async () => {
     setOpen(true);
@@ -165,7 +187,7 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
     setCheck(null);
     setChecking(true);
     try {
-      setCheck(await fetchJson<JsonObject>(scoped(`/api/grn-reversals/check?grnId=${encodeURIComponent(grnId)}`)));
+      setCheck(await fetchJson<JsonObject>(scoped(`/api/stock-reversals/check?sourceType=${sourceType}&sourceId=${encodeURIComponent(sourceId)}`)));
     } catch (e) {
       setCheck({ reversible: false, reason: e instanceof Error ? e.message : String(e) });
     }
@@ -175,10 +197,10 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
   const submit = async () => {
     setSubmitting(true);
     try {
-      const created = await fetchJson<JsonObject>(scoped('/api/grn-reversals'), {
+      const created = await fetchJson<JsonObject>(scoped('/api/stock-reversals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grnId, reason: reason.trim() }),
+        body: JSON.stringify({ sourceType, sourceId, reason: reason.trim() }),
       });
       toast.success(`${str(created.noReversal)} diajukan — menunggu persetujuan penyetuju lain`);
       setOpen(false);
@@ -189,48 +211,47 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
     setSubmitting(false);
   };
 
-  if (!grn) return null;
+  if (!doc) return null;
 
-  if (status === 'REVERSED') {
-    const by = asObjectSafe(grn.reversedBy);
+  if (doc.reversedBy) {
+    const by = asObjectSafe(doc.reversedBy);
     return (
       <div className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-        GRN ini sudah dibalik lewat <strong className="font-mono">{str(by.noReversal)}</strong>
-        {str(grn.reversedAt) ? ` pada ${formatDateTime(str(grn.reversedAt))}` : ''}. Stok, qty PO, dan akrual GRNI sudah dikembalikan.
+        {label} ini sudah dibalik lewat <strong className="font-mono">{str(by.noReversal)}</strong>
+        {str(doc.reversedAt) ? ` pada ${formatDateTime(str(doc.reversedAt))}` : ''}. Kartu stok memuat mutasi lawannya.
       </div>
     );
   }
-  if (status !== 'POSTED') return null;
 
-  if (grn.reversalPendingId) {
+  if (doc.reversalPendingId) {
     return (
       <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 space-y-2">
         <div>
-          Pengajuan pembalik <strong className="font-mono">{str(grn.reversalPendingNo)}</strong> menunggu persetujuan
+          Pengajuan pembalik <strong className="font-mono">{str(doc.reversalPendingNo)}</strong> menunggu persetujuan
           {pending ? ` — diajukan ${str(asObjectSafe(pending.requestedBy).userName)}: "${str(pending.reason)}"` : ''}.
         </div>
-        {pending && <PendingActions rev={pending} onDone={onChanged} />}
+        {pending && <PendingActions rev={pending} onDone={() => { void refetch(); onChanged(); }} />}
       </div>
     );
   }
 
-  if (!canRequestGrnReversal()) return null;
+  if (!eligible || !canRequest()) return null;
 
   const lines = asArray(check?.lines) as JsonObject[];
   return (
     <>
-      <Button variant="outline" className="text-red-700 border-red-300 hover:bg-red-50" onClick={openRequest}>
+      <Button variant="outline" size="sm" className="text-red-700 border-red-300 hover:bg-red-50" onClick={openRequest}>
         <Undo2 className="w-4 h-4 mr-1" />
         Ajukan pembalik
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Ajukan pembalik GRN {str(grn.noGRN)}</DialogTitle>
+            <DialogTitle>Ajukan pembalik {label} {str(doc.noRelease || doc.noDokumen || doc.noPenyesuaian || doc.noTransfer)}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm">
             <p className="text-xs text-slate-600">
-              Pembalik mengeluarkan seluruh qty GRN dari lot aslinya, mengurangi qty diterima di PO, dan membalik akrual GRNI.
+              {SOURCE_EFFECT[sourceType]} Mutasi lawan diposting hari ini dengan harga kartu asli.
               Perlu persetujuan SUPERVISOR/ADMIN selain pengaju (pengaju tidak bisa menyetujui sendiri, termasuk ADMIN).
             </p>
             {checking && <p className="text-xs text-slate-500 flex items-center gap-1"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Memeriksa kelayakan…</p>}
@@ -241,8 +262,8 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
               <>
                 <LinesTable lines={lines} />
                 <div className="space-y-1.5">
-                  <Label htmlFor="rvs-reason">Alasan pembalik</Label>
-                  <Textarea id="rvs-reason" value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={500} placeholder="mis. DO salah diterima, barang milik dapur lain" />
+                  <Label htmlFor="stock-rvs-reason">Alasan pembalik</Label>
+                  <Textarea id="stock-rvs-reason" value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={500} placeholder="mis. salah gudang, salah item, dokumen dobel" />
                 </div>
               </>
             )}
@@ -263,37 +284,44 @@ export function GrnReversalSection({ grn, onChanged }: { grn: JsonObject | null;
   );
 }
 
-/** Daftar pengajuan pembalik yang menunggu persetujuan (di atas tabel GRN). */
-export function PendingGrnReversals({ refreshKey, onChanged }: { refreshKey?: unknown; onChanged: () => void }) {
+/** Daftar pengajuan pembalik stok yang menunggu persetujuan (opsional difilter per jenis sumber). */
+export function PendingStockReversals({
+  sourceType,
+  refreshKey,
+  onChanged,
+}: {
+  sourceType?: StockReversalSourceType;
+  refreshKey?: unknown;
+  onChanged: () => void;
+}) {
   const { scoped, scopeReady } = useScoped();
-  const url = scopeReady && canRequestGrnReversal() ? scoped('/api/grn-reversals?status=PENDING_APPROVAL') : null;
+  const qs = `status=PENDING_APPROVAL${sourceType ? `&sourceType=${sourceType}` : ''}`;
+  const url = scopeReady && canRequest() ? scoped(`/api/stock-reversals?${qs}`) : null;
   const { data, refetch } = useApiQuery<JsonObject[]>(
-    ['grn-reversals', 'pending', url || '', String(refreshKey ?? '')],
+    ['stock-reversals', 'pending', url || '', String(refreshKey ?? '')],
     url,
     { staleTime: 15_000 },
   );
   const rows = data || [];
-  const load = () => { void refetch(); };
-
   if (!rows.length) return null;
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900 space-y-2">
       <div className="font-medium flex items-center gap-1.5">
-        <Undo2 className="w-4 h-4" /> {rows.length} pengajuan pembalik GRN menunggu persetujuan
+        <Undo2 className="w-4 h-4" /> {rows.length} pengajuan pembalik stok menunggu persetujuan
       </div>
       <div className="space-y-2">
         {rows.map((r) => (
           <div key={str(r.id)} className="bg-white/70 border border-amber-200 rounded px-3 py-2 space-y-1.5">
             <div className="text-xs">
               <span className="font-mono font-medium">{str(r.noReversal)}</span>
-              {' · GRN '}<span className="font-mono">{str(r.noGRN)}</span>
-              {str(r.noPO) ? <> · PO <span className="font-mono">{str(r.noPO)}</span></> : null}
+              {' · '}{STOCK_REVERSAL_SOURCE_LABEL[str(r.sourceType) as StockReversalSourceType] || str(r.sourceType)}
+              {' '}<span className="font-mono">{str(r.sourceNo)}</span>
               {' · diajukan '}{str(asObjectSafe(r.requestedBy).userName) || '—'}
               {str(r.requestedAt) ? ` (${formatDateTime(str(r.requestedAt))})` : ''}
               {' — '}<span className="italic">{str(r.reason)}</span>
             </div>
             <LinesTable lines={asArray(r.lines) as JsonObject[]} />
-            <PendingActions rev={r} onDone={() => { load(); onChanged(); }} />
+            <PendingActions rev={r} onDone={() => { void refetch(); onChanged(); }} />
           </div>
         ))}
       </div>

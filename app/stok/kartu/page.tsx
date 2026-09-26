@@ -255,6 +255,7 @@ export default function KartuStokPage() {
                         str(r.sourceType) === 'PENJUALAN' ? 'bg-red-50 text-red-700' :
                         str(r.sourceType) === 'PENYESUAIAN' ? 'bg-yellow-50 text-yellow-700' :
                         str(r.sourceType) === 'PRODUKSI' ? 'bg-blue-50 text-blue-700' :
+                        str(r.sourceType) === 'STOCK_REVERSAL' || str(r.sourceType) === 'GRN_REVERSAL' ? 'bg-purple-50 text-purple-700' :
                         'bg-slate-100 text-slate-700'
                       }`}>{str(r.sourceType)}</span>
                     </td>

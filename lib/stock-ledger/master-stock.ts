@@ -28,6 +28,7 @@ import { ledgerSaldoForProducts } from '@/lib/stock-ledger/ledger-saldo';
 import { buildKartuDoc, type StockActor, type StockCostSource } from '@/lib/stock-ledger/kartu';
 import { isMemoCostItem } from '@/lib/stock-ledger/cost';
 import { postStockMovements } from '@/lib/stock-ledger/post-stock-movements';
+import { stockPeriodLockError } from '@/lib/stock-ledger/period-guard';
 
 export type { SetWarehouseStockResult };
 
@@ -381,6 +382,8 @@ async function clearNegativeLedgerWithAdjustment(
   const tid = tenantId || 'default';
   const need = roundStockQty(-negativeSaldo);
   const now = new Date();
+  const locked = await stockPeriodLockError(db, tid, now, session);
+  if (locked) return { error: locked };
   const noPS = await nextDocNumber(db, tid, 'PS', 'PS', session);
   const gudang = resolveProductGudangKode(product);
   const lokasiLabel = `${gudang} - ${warehouseLabel(gudang)}`;

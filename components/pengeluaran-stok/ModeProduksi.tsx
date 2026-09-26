@@ -19,6 +19,8 @@ import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import { useConfirm } from '@/components/ConfirmProvider';
+import { StockReversalSection } from '@/components/stok/StockReversal';
+import type { JsonObject } from '@/types/json';
 import { ArrowUpFromLine, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
   ISSUE_STATUS_LABELS,
@@ -1213,6 +1215,12 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
                   </Button>
                 )}
               </div>
+              <StockReversalSection
+                sourceType="FP_ISSUE"
+                doc={detail as unknown as JsonObject}
+                eligible={detail.status === 'COMPLETED' && !isReferenceRow(detail) && !!detail.stockPostedAt}
+                onChanged={() => { void load(); void openDetail(detail); }}
+              />
             </div>
           )}
         </DialogContent>

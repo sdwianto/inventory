@@ -53,6 +53,7 @@ export type StockSourceType =
   | 'FP_ADJUST'
   | 'FP_XFER'
   | 'RELOKASI_GUDANG'
+  | 'STOCK_REVERSAL'
   | (string & {});
 
 export interface StockMovementLine {
@@ -125,6 +126,7 @@ type ProductRow = {
   avgCost?: number | null;
   itemRole?: string | null;
   mergedInto?: string | null;
+  deletedAt?: Date | null;
   shelfLifeDays?: number | null;
   satuan?: string;
 };
@@ -330,7 +332,7 @@ async function postInSession(
   const ids = [...productIds];
   const products = await db.collection<ProductRow>('products')
     .find(productsFilter(tid, ids), txOpts(session))
-    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, mergedInto: 1, shelfLifeDays: 1, satuan: 1 })
+    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, mergedInto: 1, deletedAt: 1, shelfLifeDays: 1, satuan: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
 
@@ -343,6 +345,9 @@ async function postInSession(
         `Produk ${product.kode || line.productId} sudah digabung ke item persediaan lain — muat ulang dokumen lalu pilih item yang aktif`,
         line.lineRef,
       );
+    }
+    if (product.deletedAt) {
+      return fail(`Produk ${product.kode || line.productId} sudah dihapus — mutasi stok ditolak`, line.lineRef);
     }
     const lokasiKode = parseLokasiKode(line.warehouseKode);
     const whErr = assertProductWarehouse(product, lokasiKode);

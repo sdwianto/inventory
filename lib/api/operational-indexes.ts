@@ -75,6 +75,24 @@ const INDEX_SPECS: IndexSpec[] = [
   },
   { collection: 'grn_reversals', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_grn_reversals_tenant_status' },
   { collection: 'grn_reversals', index: { tenantId: 1, id: 1 }, name: 'uniq_grn_reversals_id', unique: true },
+  // Pembalik stok (RVS): satu pengajuan aktif (menunggu/terposting) per dokumen sumber.
+  {
+    collection: 'stock_reversals',
+    index: { tenantId: 1, sourceType: 1, sourceId: 1 },
+    name: 'uniq_stock_reversal_active',
+    unique: true,
+    partialFilterExpression: { active: true },
+  },
+  { collection: 'stock_reversals', index: { tenantId: 1, status: 1, createdAt: -1 }, name: 'idx_stock_reversals_tenant_status' },
+  { collection: 'stock_reversals', index: { tenantId: 1, id: 1 }, name: 'uniq_stock_reversals_id', unique: true },
+  {
+    // Urutan key berbeda dari uniq_jurnal_tenant_stock_cost_source agar filter parsial sendiri tidak bentrok.
+    collection: 'jurnal',
+    index: { tenantId: 1, sourceId: 1, sourceType: 1 },
+    name: 'uniq_jurnal_tenant_rvs_source',
+    unique: true,
+    partialFilterExpression: { sourceType: { $in: ['AUTO_RVS_CONSUMPTION', 'AUTO_RVS_PENYESUAIAN'] } },
+  },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, tanggal: -1 }, name: 'idx_penyesuaian_tenant_tanggal' },
   { collection: 'penyesuaian_stok', index: { tenantId: 1, noPenyesuaian: 1 }, name: 'uniq_penyesuaian_tenant_no', unique: true },
   { collection: 'hutang', index: { tenantId: 1, supplierId: 1, status: 1 }, name: 'idx_hutang_tenant_supplier' },

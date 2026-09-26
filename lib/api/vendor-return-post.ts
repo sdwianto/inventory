@@ -13,6 +13,7 @@ import { assertReturnQtyWithinMax, buildReturableLines } from '@/lib/api/vendor-
 import { findInflightVendorReturnSibling } from '@/lib/api/vendor-return-inflight';
 import { vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildVendorReturnTransitOutJournalLines } from '@/lib/api/journal-lines';
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
@@ -51,7 +52,7 @@ export async function postVendorReturn(
     txResult = await runInTransactionOrFallback(async ({ db: txDb, session }) => {
       const now = new Date();
       const claim = await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: doc.id, status: 'PENDING_APPROVAL', updatedAt: doc.updatedAt ?? null },
+        docIdFilter(doc, { status: 'PENDING_APPROVAL', updatedAt: doc.updatedAt ?? null }),
         { $set: { status: 'POSTING', postingStartedAt: now, updatedAt: now } },
         txOpts(session),
       );
@@ -137,7 +138,7 @@ export async function postVendorReturn(
         stockApplied = true;
         // Persist segera (sebelum outbox/POSTED) agar fallback non-TX tetap idempotent.
         await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-          { id: doc.id },
+          docIdFilter(doc),
           {
             $set: {
               stockAppliedAt: now,
@@ -180,7 +181,7 @@ export async function postVendorReturn(
               transitAppliedAt: now,
             };
             await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-              { id: doc.id },
+              docIdFilter(doc),
               { $set: { ...transitPatch, updatedAt: now } },
               txOpts(session),
             );
@@ -215,7 +216,7 @@ export async function postVendorReturn(
           : null);
 
       const finalized = await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-        { id: doc.id, status: 'POSTING' },
+        docIdFilter(doc, { status: 'POSTING' }),
         {
           $set: {
             status: 'POSTED',
@@ -267,7 +268,7 @@ export async function postVendorReturn(
       } catch (inner) {
         if (!session) {
           await txDb.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-            { id: doc.id, status: 'POSTING' },
+            docIdFilter(doc, { status: 'POSTING' }),
             { $set: { status: priorStatus, postingStartedAt: null, updatedAt: new Date() } },
           );
         }
@@ -349,7 +350,7 @@ export async function retryVendorReturnCn(
   }
 
   await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
-    { id: doc.id },
+    docIdFilter(doc),
     { $set: { cnSyncStatus: 'SYNCING', cnSyncError: null, updatedAt: new Date() } },
   );
 

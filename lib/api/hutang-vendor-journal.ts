@@ -7,6 +7,7 @@ import { COA, buildVendorHutangJournalLines, reverseJournalDetails } from '@/lib
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { txOpts } from '@/lib/api/transaction';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { idInTenant } from '@/lib/api/doc-filter';
 import { hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import type { JournalDetail } from '@/types/finance';
 
@@ -185,7 +186,7 @@ export async function voidVendorHutangJournal(
   if (!active?.details?.length) return false;
   const now = new Date();
   const marked = await db.collection('jurnal').updateOne(
-    { id: active.id, voidedAt: { $exists: false } },
+    idInTenant(active.id, tenantId, { voidedAt: { $exists: false } }),
     { $set: { voidedAt: now, voidReason: keterangan } },
     txOpts(session),
   );
@@ -200,7 +201,7 @@ export async function voidVendorHutangJournal(
     tenantId,
   }, session);
   await db.collection('jurnal').updateOne(
-    { id: reversal.id },
+    idInTenant(reversal.id, tenantId),
     { $set: { voidOfJournalId: active.id } },
     txOpts(session),
   );
@@ -246,7 +247,7 @@ async function postNoteJournal(
   if (!entry) return;
   const posted: PostedNoteJournal = { journalId: String(entry.id), sourceType: journal.sourceType, sourceId };
   await db.collection('hutang').updateOne(
-    { id: hutangId },
+    idInTenant(hutangId, tenantId),
     { $addToSet: { postedNoteJournals: posted } } as never,
     txOpts(session),
   );
@@ -265,7 +266,7 @@ export async function postOrDeferNoteJournal(
     const { tanggal: _tanggal, ...deferred } = input.journal;
     void _tanggal;
     await db.collection('hutang').updateOne(
-      { id: input.hutangId },
+      idInTenant(input.hutangId, input.tenantId),
       { $push: { deferredNoteJournals: deferred } } as never,
       txOpts(session),
     );
@@ -282,13 +283,13 @@ export async function postDeferredVendorNoteJournals(
   session?: ClientSession,
 ): Promise<number> {
   const row = await db.collection('hutang').findOne(
-    { id: hutangId },
+    idInTenant(hutangId, tenantId),
     { projection: { deferredNoteJournals: 1 }, ...txOpts(session) },
   ) as { deferredNoteJournals?: VendorNoteJournal[] } | null;
   const list = Array.isArray(row?.deferredNoteJournals) ? row.deferredNoteJournals : [];
   if (!list.length) return 0;
   for (const j of list) await postNoteJournal(db, tenantId, hutangId, j, session);
-  await db.collection('hutang').updateOne({ id: hutangId }, { $unset: { deferredNoteJournals: '' } }, txOpts(session));
+  await db.collection('hutang').updateOne(idInTenant(hutangId, tenantId), { $unset: { deferredNoteJournals: '' } }, txOpts(session));
   return list.length;
 }
 
@@ -301,7 +302,7 @@ export async function voidVendorNoteJournals(
   session?: ClientSession,
 ): Promise<number> {
   const row = await db.collection('hutang').findOne(
-    { id: hutangId },
+    idInTenant(hutangId, tenantId),
     { projection: { postedNoteJournals: 1, creditNotes: 1, debitNotes: 1 }, ...txOpts(session) },
   ) as {
     postedNoteJournals?: PostedNoteJournal[];
@@ -327,7 +328,7 @@ export async function voidVendorNoteJournals(
   for (const j of journals) {
     if (!j.details?.length) continue;
     const marked = await db.collection('jurnal').updateOne(
-      { id: j.id, voidedAt: { $exists: false } },
+      idInTenant(j.id, tenantId, { voidedAt: { $exists: false } }),
       { $set: { voidedAt: now, voidReason: keterangan } },
       txOpts(session),
     );
@@ -341,7 +342,7 @@ export async function voidVendorNoteJournals(
       userName,
       tenantId,
     }, session);
-    await db.collection('jurnal').updateOne({ id: reversal.id }, { $set: { voidOfJournalId: j.id } }, txOpts(session));
+    await db.collection('jurnal').updateOne(idInTenant(reversal.id, tenantId), { $set: { voidOfJournalId: j.id } }, txOpts(session));
     redeferred.push({
       sourceType: j.sourceType,
       sourceId: String(j.sourceId).replace(/#\d+$/, ''),
@@ -351,7 +352,7 @@ export async function voidVendorNoteJournals(
     });
   }
   await db.collection('hutang').updateOne(
-    { id: hutangId },
+    idInTenant(hutangId, tenantId),
     {
       $set: { postedNoteJournals: [] },
       ...(redeferred.length ? { $push: { deferredNoteJournals: { $each: redeferred } } } : {}),

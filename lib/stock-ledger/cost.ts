@@ -22,7 +22,9 @@ const AVG_NEUTRAL_INBOUND = new Set([
   'FP_DIST_RETURN',
 ]);
 
-const PURCHASE_REVERSAL_OUTBOUND = new Set(['GRN_REVERSAL', 'VENDOR_RETURN']);
+// STOCK_REVERSAL keluar pada harga kartu asli; masuknya (harga baris > 0) mencampur rata-rata pada harga itu,
+// sehingga pasangan posting + pembalik mengembalikan rata-rata ke nilai semula.
+const PURCHASE_REVERSAL_OUTBOUND = new Set(['GRN_REVERSAL', 'VENDOR_RETURN', 'STOCK_REVERSAL']);
 
 /** Masuk pembelian: harga baris Rp0 yang dikirim eksplisit (barang bonus) tetap harga beli, menurunkan rata-rata. */
 export const PURCHASE_INBOUND = new Set(['GRN', 'VENDOR_RETURN_REJECTED']);

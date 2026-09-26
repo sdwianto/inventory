@@ -2,6 +2,7 @@
 
 import type { Db } from 'mongodb';
 import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import {
   isVendorInvoiceHutang,
   vendorInvoiceNeedsPendingReview,
@@ -120,7 +121,7 @@ async function normalizeVendorHutangDoc(
   if (haveTid !== wantTid && wantTid) patch.tenantId = wantTid;
   if (!Object.keys(patch).length) return hutang;
   await db.collection('hutang').updateOne(
-    { id: hutang.id },
+    docIdFilter(hutang),
     { $set: { ...patch, updatedAt: new Date() } },
   );
   return { ...hutang, ...patch };
@@ -136,7 +137,7 @@ async function resetVendorHutangToPendingReview(
   // Jangan reset tagihan yang statusnya/pembayarannya berubah sejak dibaca (mis. pembayaran bersamaan).
   const res = await db.collection('hutang').updateOne(
     {
-      id: hutang.id,
+      ...docIdFilter(hutang),
       status: hutang.status ?? null,
       approvalStatus: hutang.approvalStatus ?? null,
       terbayar: hutang.terbayar ?? null,
@@ -201,7 +202,7 @@ export async function fixHutangApprovalIfNeeded(
   if (!vendorInvoiceNeedsPendingReview(normalized, { fromPostedGrn })) {
     if (correctedTotal != null) {
       await db.collection('hutang').updateOne(
-        { id: normalized.id },
+        docIdFilter(normalized),
         {
           $set: {
             ...(correctedItems ? { items: correctedItems } : {}),
@@ -273,7 +274,7 @@ export async function ensureHutangForPostedGrn(
   if ('error' in result && result.error) return { error: result.error };
 
   await db.collection('goods_receipts').updateOne(
-    { id: grn.id },
+    docIdFilter(grn),
     {
       $set: {
         hutangId: result.hutangId,
@@ -394,7 +395,7 @@ export async function reconcileVendorHutangFromPostedGrns(
       const linkedHutang = hutangMaps.byId.get(grn.hutangId);
       if (linkedHutang && !hutangMatchesGrnVendor(linkedHutang, grn)) {
         await db.collection('goods_receipts').updateOne(
-          { id: grn.id },
+          docIdFilter(grn),
           { $unset: { hutangId: '', vendorInvoiceId: '', noInvoice: '' } },
         );
         grn = { ...grn, hutangId: undefined, vendorInvoiceId: undefined, noInvoice: undefined };
@@ -407,20 +408,20 @@ export async function reconcileVendorHutangFromPostedGrns(
     if (hutang) {
       hutang = await normalizeVendorHutangDoc(db, tid, hutang, grn);
       if (await fixHutangApprovalIfNeeded(db, hutang, grn)) {
-        const fresh = await db.collection('hutang').findOne({ id: hutang.id });
+        const fresh = await db.collection('hutang').findOne(docIdFilter(hutang));
         hutang = (fresh as HutangDoc | null) || hutang;
         fixed += 1;
       }
       if (!hutang?.id) continue;
       const hutangTid = normalizeTenantId(String(hutang.tenantId || ''));
       if (hutangTid !== tid) {
-        await db.collection('hutang').updateOne({ id: hutang.id }, { $set: { tenantId: tid } });
+        await db.collection('hutang').updateOne(docIdFilter(hutang), { $set: { tenantId: tid } });
         hutang = { ...hutang, tenantId: tid };
         fixed += 1;
       }
       if (grn.hutangId !== hutang.id || grn.noInvoice !== hutang.noInvoice) {
         await db.collection('goods_receipts').updateOne(
-          { id: grn.id },
+          docIdFilter(grn),
           {
             $set: {
               hutangId: hutang.id,

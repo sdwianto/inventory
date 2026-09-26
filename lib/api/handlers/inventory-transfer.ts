@@ -11,6 +11,7 @@ import {
   stampTenantId,
 } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
+import { requireRole, STOCK_TRANSFER_ROLES } from '@/lib/api/require-auth';
 import { parseLokasiKode } from '@/lib/api/stok-lokasi';
 import { isValidWarehouseKode } from '@/lib/api/warehouses';
 import { postStockMovements } from '@/lib/stock-ledger';
@@ -57,8 +58,11 @@ export async function handleTransfer({
   }
 
   if (route === '/stok/transfer' && method === 'POST') {
+    const deniedRole = requireRole(auth, [...STOCK_TRANSFER_ROLES]);
+    if (deniedRole) return deniedRole;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: invBody, request });
     if (denied) return denied;
+    const actorName = String(scopeAuth?.name || scopeAuth?.email || 'System');
     const locked = await guardPosting(db, scopeAuth, invBody);
     if (locked) return locked;
     if (!invBody?.lokasiAsal || !invBody?.lokasiTujuan) return err('Lokasi asal & tujuan wajib');
@@ -100,7 +104,7 @@ export async function handleTransfer({
       id: uuidv4(), noTransfer, tanggal: now,
       lokasiAsal: invBody.lokasiAsal, lokasiAsalNama: invBody.lokasiAsalNama || '',
       lokasiTujuan: invBody.lokasiTujuan, lokasiTujuanNama: invBody.lokasiTujuanNama || '',
-      keterangan: invBody.keterangan || '', items: transferLines, userName: invBody.userName || '', createdAt: now,
+      keterangan: invBody.keterangan || '', items: transferLines, userId: scopeAuth?.userId || '', userName: actorName, createdAt: now,
     });
 
     // ADR-004 P0G — gate dokumen transfer sebelum mutasi stok (relocate mewarisi HOLD).
@@ -226,7 +230,8 @@ export async function handleTransfer({
           entityType: 'transfer_stok',
           entityId: String(doc.id),
           summary: `Transfer ${noTransfer}`,
-          userName: String(invBody.userName || scopeAuth?.name || scopeAuth?.email || 'System'),
+          userId: scopeAuth?.userId,
+          userName: actorName,
           metadata: {
             noTransfer,
             lokasiAsal: invBody.lokasiAsal,

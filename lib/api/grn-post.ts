@@ -14,6 +14,7 @@ import { createJournal } from '@/lib/api/journal';
 import { buildGrnAccrualJournalLines } from '@/lib/api/journal-lines';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { CasConflictError, isCasConflict } from '@/lib/api/cas';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import { logger } from '@/lib/api/logger';
 import { drainEnsureGrnInvoice, insertEnsureGrnInvoiceOutbox } from '@/lib/api/integration-outbox';
 import type { JsonObject } from '@/types/json';
@@ -71,7 +72,7 @@ export async function postGoodsReceipt(
     // Klaim atomik dulu — dua post bersamaan tidak boleh keduanya apply stok.
     // linesRev: baris yang diposting harus sama dengan yang dibaca (webhook/resolve produk menaikkannya).
     const claim = await txDb.collection('goods_receipts').updateOne(
-      { id: grn.id, status: { $nin: ['POSTED', 'POSTING', 'REVERSED'] }, linesRev: grn.linesRev ?? null },
+      docIdFilter(grn, { status: { $nin: ['POSTED', 'POSTING', 'REVERSED'] }, linesRev: grn.linesRev ?? null }),
       { $set: { status: 'POSTING', postingStartedAt: now } },
       txOpts(session),
     );
@@ -113,7 +114,7 @@ export async function postGoodsReceipt(
     }
     const receiverName = receivedBy.userName.trim();
     await txDb.collection('goods_receipts').updateOne(
-      { id: grn.id, status: 'POSTING' },
+      docIdFilter(grn, { status: 'POSTING' }),
       {
         $set: {
           status: 'POSTED',
@@ -191,7 +192,7 @@ export async function postGoodsReceipt(
       // Fallback non-TX: revert klaim POSTING agar GRN tidak macet.
       if (!session) {
         await txDb.collection('goods_receipts').updateOne(
-          { id: grn.id, status: 'POSTING' },
+          docIdFilter(grn, { status: 'POSTING' }),
           { $set: { status: priorStatus, postingStartedAt: null } },
         );
       }
@@ -288,7 +289,7 @@ export async function replayGrnInvoiceAsync(
   { grn, tenantId }: ReplayGrnInvoiceParams,
 ): Promise<Record<string, unknown>> {
   await db.collection('goods_receipts').updateOne(
-    { id: grn.id },
+    docIdFilter(grn),
     { $set: { invoiceSyncStatus: 'SYNCING', invoiceSyncError: null } },
   );
 

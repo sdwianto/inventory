@@ -74,6 +74,12 @@ export const GRN_REVERSAL_REQUEST_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MAS
 export const GRN_REVERSAL_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 
 export const STOCK_ADJUST_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
+/** Penyesuaian dengan persetujuan: GUDANG boleh menyusun & mengajukan, persetujuan tetap SUPERVISOR+. */
+export const STOCK_ADJUST_DRAFT_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+export const STOCK_TRANSFER_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+/** Dokumen pembalik stok (RL, penyesuaian, transfer, PBL): ajukan GUDANG+, setujui SUPERVISOR+. */
+export const STOCK_REVERSAL_REQUEST_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
+export const STOCK_REVERSAL_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 /** Fase 3.2 — lihat antrean QC lot (gudang ikut memantau). */
 export const LOT_QC_VIEW_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 /** Inspeksi & pemusnahan lot — pemeriksa ≠ penerima GRN (kecuali ADMIN/MASTER). */

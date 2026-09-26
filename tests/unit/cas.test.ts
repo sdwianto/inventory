@@ -19,6 +19,11 @@ describe('cas filters', () => {
     expect(casStatusFilter({ id: 'a' }, 'X', { tenantId: 't' })).toEqual({ tenantId: 't', id: 'a', status: 'X' });
   });
 
+  it('casStatusFilter mengunci tenant dokumen yang dibaca', () => {
+    expect(casStatusFilter({ id: 'a', status: 'DRAFT', tenantId: 'sppg' })).toEqual({ tenantId: 'sppg', id: 'a', status: 'DRAFT' });
+    expect(casEditFilter({ id: 'a', status: 'DRAFT', tenantId: 'sppg' })).toEqual({ tenantId: 'sppg', id: 'a', status: 'DRAFT', updatedAt: null });
+  });
+
   it('casEditFilter mengunci status + updatedAt (null cocok dengan field hilang)', () => {
     const at = new Date('2026-09-24T00:00:00Z');
     expect(casEditFilter({ id: 'a', status: 'DRAFT', updatedAt: at })).toEqual({ id: 'a', status: 'DRAFT', updatedAt: at });

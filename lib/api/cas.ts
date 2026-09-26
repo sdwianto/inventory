@@ -25,16 +25,21 @@ export function casConflict(message = CAS_CONFLICT_MESSAGE) {
   return err(message, 409);
 }
 
-type CasDoc = { id?: unknown; status?: unknown; updatedAt?: unknown };
+type CasDoc = { id?: unknown; status?: unknown; updatedAt?: unknown; tenantId?: unknown };
 
-/** Filter transisi status: dokumen harus masih berstatus `expected`. */
+/**
+ * Filter transisi status: dokumen harus masih berstatus `expected`.
+ * Dokumen yang membawa `tenantId` dikunci ke tenant itu agar update by-id tidak pernah lintas tenant.
+ */
 export function casStatusFilter<T extends object>(
   doc: T,
   expected: string | readonly string[] = String((doc as CasDoc).status ?? ''),
   extra: Filter<Document> = {},
 ): Filter<Document> {
+  const d = doc as CasDoc;
   const status = Array.isArray(expected) ? { $in: [...expected] } : expected;
-  return { ...extra, id: (doc as CasDoc).id, status } as Filter<Document>;
+  const tenant = typeof d.tenantId === 'string' && d.tenantId ? { tenantId: d.tenantId } : {};
+  return { ...tenant, ...extra, id: d.id, status } as Filter<Document>;
 }
 
 /**

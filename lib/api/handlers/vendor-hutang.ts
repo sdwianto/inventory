@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ok, err, clean, connectToMongo } from '@/lib/api/db';
 import { requireRole } from '@/lib/api/require-auth';
 import { resolveOperationalScope, withTenantFilter } from '@/lib/api/tenant-master';
+import { docIdFilter } from '@/lib/api/doc-filter';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { enrichHutangDetail, assertCanApproveInvoice, actorSnapshot, parseKnowingSignature } from '@/lib/api/hutang-approval';
@@ -41,8 +42,8 @@ import { auditActor, writeAuditLog } from '@/lib/api/audit-log';
 import type { HandlerContext } from '@/types/api/handler';
 
 /** Status, approvalStatus, dan sisa persis seperti saat dibaca (null cocok dengan field hilang). */
-function hutangStateFilter(h: { id?: unknown; status?: unknown; approvalStatus?: unknown; sisa?: unknown }) {
-  return { id: h.id, status: h.status ?? null, approvalStatus: h.approvalStatus ?? null, sisa: h.sisa ?? null };
+function hutangStateFilter(h: { id?: unknown; tenantId?: unknown; status?: unknown; approvalStatus?: unknown; sisa?: unknown }) {
+  return docIdFilter(h, { status: h.status ?? null, approvalStatus: h.approvalStatus ?? null, sisa: h.sisa ?? null });
 }
 
 const HUTANG_ADMIN_ROLES = ['ADMIN', 'MASTER'];
@@ -253,7 +254,7 @@ export async function handleVendorHutang({
       || (doc.grnReceivedTotal || 0) !== variance.grnReceivedTotal
     ) {
       await db.collection('hutang').updateOne(
-        { id: doc.id },
+        docIdFilter(doc),
         {
           $set: {
             poEstimasiTotal: variance.poEstimasiTotal,
@@ -371,7 +372,7 @@ export async function handleVendorHutang({
       /* price book sync must not block invoice approve */
     }
     await invalidateDashboardSnapshot(db, String(hutang.tenantId || 'default'));
-    const updated = await db.collection('hutang').findOne({ id: hutang.id });
+    const updated = await db.collection('hutang').findOne(docIdFilter(hutang));
     return ok(clean(updated));
   }
 
@@ -427,7 +428,7 @@ export async function handleVendorHutang({
       throw e;
     }
     await invalidateDashboardSnapshot(db, tenantId);
-    const updated = await db.collection('hutang').findOne({ id: hutang.id });
+    const updated = await db.collection('hutang').findOne(docIdFilter(hutang));
     return ok(clean(updated));
   }
 
@@ -494,7 +495,7 @@ export async function handleVendorHutang({
       return err(msg, 400);
     }
     await invalidateDashboardSnapshot(db, tenantId);
-    const updated = await db.collection('hutang').findOne({ id: hutang.id });
+    const updated = await db.collection('hutang').findOne(docIdFilter(hutang));
     return ok(clean(updated));
   }
 
@@ -536,7 +537,7 @@ export async function handleVendorHutang({
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         updated = await txDb.collection('hutang').findOneAndUpdate(
-          { id: hutang.id, sisa: { $gte: amount } },
+          docIdFilter(hutang, { sisa: { $gte: amount } }),
           [
             {
               $set: {
@@ -650,7 +651,7 @@ export async function handleVendorHutang({
       return err(result.error || 'Gagal membuat draft CN di Sales', result.status || 502);
     }
 
-    const refreshed = await db.collection('hutang').findOne({ id: doc.id });
+    const refreshed = await db.collection('hutang').findOne(docIdFilter(doc));
     return ok(clean({
       ...refreshed,
       priceCn: {
@@ -720,7 +721,7 @@ export async function handleVendorHutang({
       return err(result.error || 'Gagal membuat draft DN di Sales', result.status || 502);
     }
 
-    const refreshed = await db.collection('hutang').findOne({ id: doc.id });
+    const refreshed = await db.collection('hutang').findOne(docIdFilter(doc));
     return ok(clean({
       ...refreshed,
       priceDn: {
