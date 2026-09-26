@@ -18,6 +18,78 @@ export const MASTER_ADJUSTMENT_JOURNAL_SOURCE = 'AUTO_MASTER_PENYESUAIAN';
 
 export const INVENTORY_CUTOVER_JOURNAL_SOURCE = 'AUTO_INVENTORY_CUTOVER';
 
+/**
+ * Nilai kartu RL / PBL (keluar − masuk) yang belum punya jurnal pemakaian: pemakaian bahan sebelum costingV2
+ * yang tidak pernah mengkredit Persediaan. Barang memo tidak dihitung.
+ */
+export async function unjournaledConsumptionValue(db: Db, tenantId: string, session?: ClientSession): Promise<number> {
+  const opts = session ? { session } : {};
+  // Cutover pertama sudah membebankan seluruh pemakaian historis.
+  if (await db.collection('jurnal').findOne({ tenantId, sourceType: INVENTORY_CUTOVER_JOURNAL_SOURCE }, opts)) return 0;
+  const rows = await db.collection('stok_kartu').aggregate<{ _id: { sourceType: string; sourceId: string }; value: number }>([
+    { $match: { tenantId, sourceType: { $in: ['RELEASE', 'FP_ISSUE'] }, costSource: { $ne: 'NON_INVENTORY' } } },
+    { $lookup: { from: 'products', let: { sid: '$stokId' }, pipeline: [
+      { $match: { $expr: { $and: [{ $eq: ['$id', '$$sid'] }, { $eq: ['$tenantId', tenantId] }] } } },
+      { $project: { _id: 0, itemRole: 1 } },
+    ], as: 'p' } },
+    { $match: { 'p.itemRole': { $nin: ['FINISHED_GOOD', 'SEMI_FINISHED'] } } },
+    {
+      $group: {
+        _id: { sourceType: '$sourceType', sourceId: '$sourceId' },
+        value: {
+          $sum: {
+            $multiply: [
+              { $subtract: [{ $ifNull: ['$keluar', 0] }, { $ifNull: ['$masuk', 0] }] },
+              { $ifNull: ['$hargaSatuan', 0] },
+            ],
+          },
+        },
+      },
+    },
+  ], opts).toArray();
+  if (!rows.length) return 0;
+  const journaled = await db.collection('jurnal').find(
+    { tenantId, sourceType: { $in: Object.values(CONSUMPTION_JOURNAL_SOURCE) } },
+    { projection: { _id: 0, sourceType: 1, sourceId: 1 }, ...opts },
+  ).toArray();
+  const done = new Set(journaled.map((j) => `${j.sourceType}\u0000${j.sourceId}`));
+  let total = 0;
+  for (const r of rows) {
+    const src = CONSUMPTION_JOURNAL_SOURCE[r._id.sourceType as keyof typeof CONSUMPTION_JOURNAL_SOURCE];
+    if (done.has(`${src}\u0000${r._id.sourceId}`)) continue;
+    total += Number(r.value) || 0;
+  }
+  return Math.max(0, Math.round(total));
+}
+
+/**
+ * Jurnal cutover: Persediaan bergeser sebesar diff (nilai stok − GL), pemakaian historis ke Beban Bahan Baku,
+ * sisanya ke Penyesuaian Persediaan. Baris bernilai 0 dibuang.
+ */
+export function buildInventoryCutoverJournalLines({
+  noDoc,
+  diff,
+  consumption,
+}: { noDoc: string; diff: number; consumption: number }): JournalDetail[] {
+  const d = Math.round(diff);
+  if (d === 0) return [];
+  const c = Math.max(0, Math.round(consumption));
+  const nets: Array<[{ kode: string; nama: string }, number, string]> = [
+    [COA.PERSEDIAAN, d, `Cutover persediaan ${noDoc}`],
+    [COA.BEBAN_BAHAN, c, `Pemakaian bahan sebelum costingV2 ${noDoc}`],
+    [COA.PENYESUAIAN, -(d + c), `Selisih cutover persediaan ${noDoc}`],
+  ];
+  return nets
+    .filter(([, net]) => net !== 0)
+    .map(([coa, net, keterangan]) => ({
+      rekeningKode: coa.kode,
+      rekeningNama: coa.nama,
+      debet: net > 0 ? net : 0,
+      kredit: net < 0 ? -net : 0,
+      keterangan,
+    }));
+}
+
 /** Saldo akun Persediaan (debet − kredit) dari seluruh jurnal tenant. */
 export async function inventoryGlBalance(db: Db, tenantId: string, session?: ClientSession): Promise<number> {
   const kode = COA.PERSEDIAAN.kode;

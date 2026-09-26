@@ -6,7 +6,7 @@ import {
   COA,
 } from '@/lib/api/journal-lines';
 import { journalMatchesBase } from '@/lib/api/hutang-vendor-journal';
-import { buildConsumptionJournalLines, postedLinesValue } from '@/lib/api/stock-cost-journal';
+import { buildConsumptionJournalLines, buildInventoryCutoverJournalLines, postedLinesValue } from '@/lib/api/stock-cost-journal';
 
 const sum = (lines: Array<{ debet: number; kredit: number }>) => ({
   debet: lines.reduce((s, l) => s + l.debet, 0),
@@ -69,6 +69,28 @@ describe('Fase 4 — jurnal nilai persediaan', () => {
     expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-1', amount: 5_000, priceVariance: true }))).toEqual([COA.SELISIH_HARGA_BELI.kode]);
     expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-2', amount: 5_000, clearTransit: true, priceVariance: true }))).toEqual([COA.BARANG_DALAM_RETUR.kode]);
     expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-3', amount: 5_000 }))).toEqual([COA.PERSEDIAAN.kode]);
+  });
+
+  it('jurnal cutover: pemakaian historis ke Beban Bahan, sisa ke Penyesuaian, selalu seimbang', () => {
+    const rows = (l: ReturnType<typeof buildInventoryCutoverJournalLines>) => l.map((x) => [x.rekeningKode, x.debet, x.kredit]);
+    expect(rows(buildInventoryCutoverJournalLines({ noDoc: 'C', diff: -208_600, consumption: 205_000 }))).toEqual([
+      [COA.PERSEDIAAN.kode, 0, 208_600],
+      [COA.BEBAN_BAHAN.kode, 205_000, 0],
+      [COA.PENYESUAIAN.kode, 3_600, 0],
+    ]);
+    // Pemakaian > kredit persediaan: kelebihan dikreditkan ke Penyesuaian.
+    expect(rows(buildInventoryCutoverJournalLines({ noDoc: 'C', diff: -1_000, consumption: 1_500 }))).toEqual([
+      [COA.PERSEDIAAN.kode, 0, 1_000],
+      [COA.BEBAN_BAHAN.kode, 1_500, 0],
+      [COA.PENYESUAIAN.kode, 0, 500],
+    ]);
+    expect(rows(buildInventoryCutoverJournalLines({ noDoc: 'C', diff: 700, consumption: 0 }))).toEqual([
+      [COA.PERSEDIAAN.kode, 700, 0],
+      [COA.PENYESUAIAN.kode, 0, 700],
+    ]);
+    expect(sum(buildInventoryCutoverJournalLines({ noDoc: 'C', diff: -1_000, consumption: 1_000 })))
+      .toEqual({ debet: 1_000, kredit: 1_000 });
+    expect(buildInventoryCutoverJournalLines({ noDoc: 'C', diff: 0, consumption: 9_000 })).toEqual([]);
   });
 
   it('tanpa nilai akrual: perilaku lama (Dr GRNI = subTotal, tanpa PPV)', () => {

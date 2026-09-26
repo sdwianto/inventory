@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
 import { mergeProductStock, postStockMovements, valueInventoryAtAvg, type StockMovementLine } from '@/lib/stock-ledger';
 import { applyMasterProductStockChange, reconcileProductStockFromLedger } from '@/lib/stock-ledger/master-stock';
-import { inventoryGlBalance, postConsumptionJournal } from '@/lib/api/stock-cost-journal';
+import { inventoryGlBalance, postConsumptionJournal, unjournaledConsumptionValue } from '@/lib/api/stock-cost-journal';
 import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
 import { runInTransactionOnDb } from '@/lib/api/transaction';
 import { COA } from '@/lib/api/journal-lines';
@@ -175,11 +175,17 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
     const valueNow = async () => Math.round((await valueInventoryAtAvg(db, ON)).value);
 
     const dry = await inventoryGlCutoverMigration.run(ctx(ON, true));
-    const before = dry.before as { glBalance: number; stockValue: number; diff: number; memoSkipped: number };
+    const before = dry.before as {
+      glBalance: number; stockValue: number; diff: number; memoSkipped: number; unjournaledConsumption: number;
+      journalPreview: Array<{ rekeningKode: string; debet: number; kredit: number }>;
+    };
     expect(before.glBalance).toBe(await inventoryGlBalance(db, ON));
     expect(before.stockValue).toBe(await valueNow());
     expect(before.diff).not.toBe(0);
     expect(before.memoSkipped).toBe(1);
+    // Hanya RL-KECAP (3 × 700) yang belum dijurnal; RL-1 sudah punya jurnal pemakaian, RL-FG barang memo.
+    expect(before.unjournaledConsumption).toBe(2100);
+    expect(before.journalPreview).toContainEqual({ rekeningKode: COA.BEBAN_BAHAN.kode, debet: 2100, kredit: 0 });
     expect(await db.collection('jurnal').countDocuments({ tenantId: ON, sourceType: 'AUTO_INVENTORY_CUTOVER' })).toBe(0);
 
     const applied = await inventoryGlCutoverMigration.run(ctx(ON, false));
@@ -189,6 +195,7 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
 
     const again = await inventoryGlCutoverMigration.run(ctx(ON, false));
     expect(again.changed).toBe(0);
+    expect(await unjournaledConsumptionValue(db, ON)).toBe(0);
 
     await expect(inventoryGlCutoverMigration.run(ctx(OFF, false))).rejects.toThrow(/costingV2/);
     expect((await inventoryGlCutoverMigration.run(ctx(OFF, true))).changed).toBe(0);
