@@ -1,6 +1,7 @@
 /**
- * plan-issue-recon (flag `rlFromPoReference`): RL belum tertaut rencana, pemakaian rencana melebihi acuan
- * tanpa alasan yang disetujui, dan PBL lama yang memutasi stok pada rencana yang juga punya RL.
+ * plan-issue-recon: RL belum tertaut rencana dan PBL yang memutasi stok pada rencana yang juga punya RL
+ * (selalu), serta pemakaian melebihi acuan tanpa alasan disetujui (hanya flag `rlFromPoReference`, karena
+ * alur alasan lebih-keluar baru ada di mode itu).
  */
 
 import type { Db } from 'mongodb';
@@ -31,9 +32,7 @@ export async function detectPlanIssueRecon(
   tenantId: string,
   opts: { now?: Date } = {},
 ): Promise<ReconDetectResult> {
-  if (!(await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference'))) {
-    return { findings: [], skippedReason: 'Flag rlFromPoReference belum aktif' };
-  }
+  const overReferenceActive = await isTenantFeatureEnabled(db, tenantId, 'rlFromPoReference');
   const now = opts.now ?? new Date();
   const to = businessDateIso(now);
   const from = shiftIsoDate(to, -PLAN_ISSUE_WINDOW_DAYS) || to;
@@ -72,6 +71,7 @@ export async function detectPlanIssueRecon(
       .toArray() as unknown as ReleaseRow[];
     if (!releases.length) continue;
     plansWithRl.push(plan);
+    if (!overReferenceActive) continue;
 
     const approved = new Set<string>();
     for (const rl of releases) {
@@ -134,6 +134,13 @@ export async function detectPlanIssueRecon(
 
   return {
     findings,
-    meta: { windowFrom: from, windowTo: to, plansScanned: plans.length, plansWithRl: plansWithRl.length, tolerancePct },
+    meta: {
+      windowFrom: from,
+      windowTo: to,
+      plansScanned: plans.length,
+      plansWithRl: plansWithRl.length,
+      tolerancePct,
+      overReferenceChecked: overReferenceActive,
+    },
   };
 }

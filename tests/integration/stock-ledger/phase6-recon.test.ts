@@ -10,7 +10,7 @@ import type { AuthContext } from '@/types/auth';
 import { postStockMovements } from '@/lib/stock-ledger';
 import { syncCpoOnGrnPosted } from '@/lib/api/cpo-status-sync';
 import { runRecon, runReconJobPayload } from '@/lib/recon/run';
-import { ALL_RECON_KINDS, RECON_KINDS } from '@/lib/recon/types';
+import { ALL_RECON_KINDS, RECON_JOBS, RECON_KINDS } from '@/lib/recon/types';
 import { RECON_REPORTS_COLLECTION } from '@/lib/recon/reports';
 import { refreshReconGauges } from '@/lib/recon/metrics';
 import { buildHealthResponse } from '@/lib/api/health';
@@ -56,7 +56,8 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
     .insertOne({ id: `${stokId}-${lokasiKode}`, tenantId, stokId, lokasiKode, qty });
   const kartu = (tenantId: string, stokId: string, row: Record<string, unknown>) => db.collection('stok_kartu').insertOne({
     id: `k-${stokId}-${Math.random()}`, tenantId, stokId, lokasiKode: 'GKERING', masuk: 0, keluar: 0,
-    tanggal: ago(2 * D), hargaSatuan: 10, costSource: 'LINE', ...row,
+    tanggal: ago(2 * D), hargaSatuan: 10, costSource: 'LINE',
+    sourceType: 'SEED', sourceId: `seed-${stokId}`, lineRef: '1', ...row,
   });
   const journal = (tenantId: string, row: Record<string, unknown>) => db.collection('jurnal').insertOne({
     id: `j-${Math.random()}`, tenantId, tanggal: row.createdAt, ...row,
@@ -70,7 +71,7 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
     // Stok: gudang ≠ kartu dan master ≠ gudang.
     await product(TID, 'p-drift', { stok: 10 });
     await lokasi(TID, 'p-drift', 8);
-    await kartu(TID, 'p-drift', { masuk: 10 });
+    await kartu(TID, 'p-drift', { masuk: 10, lineRef: null });
     // Stok di gudang selain gudang produk.
     await product(TID, 'p-phantom', { stok: 2 });
     await lokasi(TID, 'p-phantom', 2, 'GBASAH');
@@ -189,6 +190,51 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
       id: 'pbl-x', tenantId: TID, noDokumen: 'PBL-X', productionPlanId: 'plan-x', status: 'COMPLETED', stockMode: 'STOCK',
       stockPostedAt: ago(H), lines: [{ productId: 'gula', qtyIssued: 0 }],
     });
+
+    // Kontrol: lot kedaluwarsa default, kode ganda, konversi resep tidak valid.
+    await db.collection('ingredient_lots').insertMany([
+      {
+        id: 'lot-def', tenantId: TID, productId: 'p-lot', productKode: 'P-LOT', warehouseKode: 'GBASAH', status: 'CONSUMED',
+        qty: 1, qtyRemaining: 0, expiryDate: '2099-01-01', expirySource: 'DEFAULT', grnId: 'g-lot', noGRN: 'GRN-LOT', createdAt: ago(H),
+      },
+      {
+        id: 'lot-in', tenantId: TID, productId: 'p-lot', productKode: 'P-LOT', warehouseKode: 'GBASAH', status: 'CONSUMED',
+        qty: 1, qtyRemaining: 0, expiryDate: '2099-01-01', expirySource: 'INPUT', grnId: 'g-lot2', noGRN: 'GRN-LOT2', createdAt: ago(H),
+      },
+    ]);
+    await product(TID, 'dup-a', { kode: 'DUP', nama: 'Dup A' });
+    await product(TID, 'dup-b', { kode: 'DUP', nama: 'Dup B' });
+    await product(TID, 'dup-merged', { kode: 'DUP', nama: 'Dup lama', mergedInto: 'dup-a' });
+    await product(TID, 'saori', { kode: 'SAORI', nama: 'Saori', satuan: 'BTL' });
+    await db.collection('recipes').insertOne({
+      id: 'rcp-1', tenantId: TID, kode: 'RCP-1', nama: 'Ayam saus', aktif: true, version: 1, yieldQty: 1, wastePct: 0,
+      lines: [{ productId: 'saori', productKode: 'SAORI', productNama: 'Saori', qty: 10, satuan: 'GR', factorToBase: 0.01, baseSatuan: 'BTL', factorSource: 'NUTRITION' }],
+    });
+
+    // Kontrol: penyesuaian disetujui pembuatnya; pembanding disetujui orang lain / langsung (flag mati).
+    const actor = (userId: string) => ({ userId, userName: userId });
+    await db.collection('penyesuaian_stok').insertMany([
+      { id: 'ps-self', tenantId: TID, noPenyesuaian: 'PS-SELF', status: 'POSTED', postedAt: ago(H), createdBy: actor('u1'), submittedBy: actor('u1'), approvedBy: actor('u1') },
+      { id: 'ps-ok', tenantId: TID, noPenyesuaian: 'PS-OK', status: 'POSTED', postedAt: ago(H), createdBy: actor('u1'), submittedBy: actor('u1'), approvedBy: actor('u2') },
+      { id: 'ps-direct', tenantId: TID, noPenyesuaian: 'PS-DIRECT', status: 'POSTED', postedAt: ago(H), createdBy: actor('u1') },
+    ]);
+    // Kontrol: RL disetujui pembuatnya (tanpa baris, tidak memengaruhi acuan plan-y).
+    await db.collection('inventory_releases').insertOne({
+      id: 'rl-self', tenantId: TID, noRelease: 'RL-SELF', status: 'POSTED', productionPlanId: 'plan-y', tanggal: new Date(),
+      keperluan: 'Masak menu produksi', lokasiKode: 'GKERING', items: [],
+      createdBy: { ...actor('u1'), role: 'ADMIN' }, approvedBy: { ...actor('u1'), role: 'ADMIN' }, approvedAt: ago(H),
+    });
+    // Kontrol: tagihan EXCEPTION berjurnal tanpa override; pembanding dengan override.
+    await db.collection('hutang').insertMany([
+      { id: 'h-exc', tenantId: TID, noHutang: 'HT-EXC', noInvoice: 'INV-EXC', matchStatus: 'EXCEPTION', matchError: 'Harga beda', total: 500 },
+      { id: 'h-ovr', tenantId: TID, noHutang: 'HT-OVR', noInvoice: 'INV-OVR', matchStatus: 'EXCEPTION', matchOverride: true, total: 500 },
+    ]);
+    for (const hid of ['h-exc', 'h-ovr']) {
+      await journal(TID, {
+        sourceType: 'AUTO_HUTANG_VENDOR', sourceId: hid, noJurnal: `JU-${hid}`, createdAt: ago(2 * D),
+        details: [{ rekeningKode: '10410', debet: 500, kredit: 0 }, { rekeningKode: '20010', debet: 0, kredit: 500 }],
+      });
+    }
   }
 
   async function seedClean() {
@@ -227,10 +273,10 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
   });
 
   it('setiap jenis anomali sintetis terdeteksi di laporan tenant', async () => {
-    const result = await runRecon(db, { jobs: ['stock', 'po-receipt', 'grni', 'plan-issue'], tenantId: TID });
+    const result = await runRecon(db, { jobs: [...RECON_JOBS], tenantId: TID });
     expect(result.errors).toBe(0);
     const reports = await db.collection(RECON_REPORTS_COLLECTION).find({ tenantId: TID }).toArray();
-    expect(reports).toHaveLength(4);
+    expect(reports).toHaveLength(RECON_JOBS.length);
     const summary: Record<string, number> = {};
     for (const r of reports) Object.assign(summary, r.summary);
     for (const kind of ALL_RECON_KINDS) {
@@ -247,7 +293,13 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
       expect.objectContaining({ kind: 'STOCK_LOT_GT_LOKASI', productId: 'p-lot', expected: 3, actual: 5 }),
       expect.objectContaining({ kind: 'STOCK_BIN_GT_LOKASI', productId: 'p-bin', expected: 4, actual: 6 }),
       expect.objectContaining({ kind: 'STOCK_ZERO_COST_OUT', productId: 'p-zero', kode: 'P-ZERO' }),
+      expect.objectContaining({ kind: 'STOCK_LEDGER_ROW_WITHOUT_REF', productId: 'p-drift' }),
     ]));
+    expect(stock.summary.STOCK_LEDGER_ROW_WITHOUT_REF).toBe(1);
+    // Baris kartu gula tanpa lineRef berumur 10+ hari: di luar jendela 7 hari.
+    expect(stock.findings.some((f: { kind: string; productId?: string }) => (
+      f.kind === 'STOCK_LEDGER_ROW_WITHOUT_REF' && f.productId === 'gula'
+    ))).toBe(false);
     expect(stock.summary.STOCK_FLOAT_DUST).toBe(3);
     expect(stock.findings.filter((f: { productId?: string }) => f.productId === 'p-dust').every(
       (f: { kind: string }) => f.kind === 'STOCK_FLOAT_DUST',
@@ -266,6 +318,7 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
       expect.objectContaining({ kind: 'GRNI_BILL_RESIDUAL', refId: 'h1', expected: 900, actual: 1000, delta: 100 }),
       expect.objectContaining({ kind: 'GRNI_UNBILLED_AGED', refId: 'g6', actual: 500 }),
       expect.objectContaining({ kind: 'GL_INVENTORY_VS_VALUATION', refId: TID }),
+      expect.objectContaining({ kind: 'GL_CONSUMPTION_UNJOURNALED', refType: 'RELEASE', refId: 'rl-x', actual: 96 }),
     ]));
     expect(grni.findings.filter((f: { kind: string }) => f.kind === 'GRNI_UNBILLED_AGED')).toHaveLength(1);
 
@@ -276,18 +329,56 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
       expect.objectContaining({ kind: 'RL_OVER_REFERENCE_UNAPPROVED', refId: 'plan-x', expected: 5, actual: 8 }),
       expect.objectContaining({ kind: 'PBL_MUTATING_WITH_RL', refNo: 'PBL-X' }),
     ]));
+
+    const controls = find('controls');
+    expect(controls.summary).toMatchObject({
+      LOT_DEFAULT_EXPIRY: 1,
+      PRODUCT_DUPLICATE_KODE: 1,
+      RECIPE_CONVERSION_UNVERIFIED: 1,
+      ADJUSTMENT_NO_INDEPENDENT_APPROVAL: 1,
+      RL_SELF_APPROVED: 1,
+      INVOICE_EXCEPTION_POSTED: 1,
+    });
+    expect(controls.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'LOT_DEFAULT_EXPIRY', refNo: 'GRN-LOT', actual: 1 }),
+      expect.objectContaining({ kind: 'PRODUCT_DUPLICATE_KODE', kode: 'DUP', actual: 2 }),
+      expect.objectContaining({ kind: 'RECIPE_CONVERSION_UNVERIFIED', productId: 'saori' }),
+      expect.objectContaining({ kind: 'ADJUSTMENT_NO_INDEPENDENT_APPROVAL', refNo: 'PS-SELF' }),
+      expect.objectContaining({ kind: 'RL_SELF_APPROVED', refNo: 'RL-SELF' }),
+      expect.objectContaining({ kind: 'INVOICE_EXCEPTION_POSTED', refId: 'h-exc' }),
+    ]));
+    expect(controls.meta).toMatchObject({ adjustmentApprovalRequired: false, adjustmentsPostedWithoutApprover: 1 });
+  });
+
+  it('plan-issue tetap memeriksa RL tanpa tautan dan PBL + RL walau flag rlFromPoReference mati', async () => {
+    await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $set: { 'features.rlFromPoReference': false } });
+    try {
+      await runRecon(db, { jobs: ['plan-issue'], tenantId: TID });
+      const [r] = await db.collection(RECON_REPORTS_COLLECTION).find({ tenantId: TID, job: 'plan-issue' }).sort({ createdAt: -1 }).limit(1).toArray();
+      expect(r.status).toBe('OK');
+      expect(r.summary).toMatchObject({ RL_UNLINKED: 1, RL_OVER_REFERENCE_UNAPPROVED: 0, PBL_MUTATING_WITH_RL: 1 });
+      expect(r.meta).toMatchObject({ overReferenceChecked: false });
+    } finally {
+      await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $set: { 'features.rlFromPoReference': true } });
+    }
   });
 
   it('tenant bersih dari jalur posting asli tidak menghasilkan temuan', async () => {
-    const result = await runRecon(db, { jobs: ['stock', 'po-receipt', 'grni', 'plan-issue'], tenantId: CLEAN });
+    const result = await runRecon(db, { jobs: [...RECON_JOBS], tenantId: CLEAN });
     expect(result.errors).toBe(0);
     const reports = await db.collection(RECON_REPORTS_COLLECTION).find({ tenantId: CLEAN }).toArray();
+    expect(reports).toHaveLength(RECON_JOBS.length);
     expect(reports.map((r) => [r.job, r.totalMismatch, r.findings])).toEqual(
-      expect.arrayContaining(['stock', 'po-receipt', 'grni', 'plan-issue'].map((j) => [j, 0, []])),
+      expect.arrayContaining(RECON_JOBS.map((j) => [j, 0, []])),
     );
   });
 
   it('job INVENTORY_RECON semua tenant, panel ops, metrik, dan health menampilkan anomali', async () => {
+    // Laporan tenant yang sudah tidak dipindai (dihapus) tidak boleh ikut panel, metrik, dan health.
+    await db.collection(RECON_REPORTS_COLLECTION).insertOne({
+      id: 'ghost-stock', tenantId: 'ghost', job: 'stock', status: 'OK', createdAt: ago(5 * D), durationMs: 1,
+      summary: { STOCK_FLOAT_DUST: 999 }, totalMismatch: 999, findings: [], truncated: false,
+    });
     const out = await runReconJobPayload(db, 'system', { job: 'all', allTenants: true });
     expect(out.error).toBeUndefined();
     expect(out.tenants).toBe(2);
@@ -296,7 +387,8 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
     const url = new URL('http://x/api/ops/recon');
     const res = await handleOpsDashboard({ db, route: '/ops/recon', method: 'GET', path: ['ops', 'recon'], body: {}, url, auth: MASTER, request: new Request(url) } as never);
     const panel = await res!.json() as { reports: Array<{ tenantId: string; job: string; id: string }>; totals: Record<string, number> };
-    expect(panel.reports.filter((r) => r.tenantId === TID)).toHaveLength(4);
+    expect(panel.reports.filter((r) => r.tenantId === TID)).toHaveLength(RECON_JOBS.length);
+    expect(panel.reports.some((r) => r.tenantId === 'ghost')).toBe(false);
     for (const kind of ALL_RECON_KINDS) expect(panel.totals[kind], kind).toBeGreaterThan(0);
     const denied = await handleOpsDashboard({ db, route: '/ops/recon', method: 'GET', path: ['ops', 'recon'], body: {}, url, auth: ADMIN, request: new Request(url) } as never);
     expect(denied!.status).toBe(403);
@@ -307,15 +399,28 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
     const full = await detail!.json() as { findings: unknown[] };
     expect(full.findings.length).toBeGreaterThan(0);
 
+    const runUrl = new URL('http://x/api/ops/recon/run');
+    const unknown = await handleOpsDashboard({ db, route: '/ops/recon/run', method: 'POST', path: ['ops', 'recon', 'run'], body: { job: 'stock', tenantId: 'ghost' }, url: runUrl, auth: MASTER, request: new Request(runUrl) } as never);
+    expect(unknown!.status).toBe(404);
+    expect(await db.collection(RECON_REPORTS_COLLECTION).countDocuments({ tenantId: 'ghost' })).toBe(1);
+
     await refreshReconGauges(db);
     const metric = await executionMetricRegistry.getSingleMetric('inventory_recon_mismatch_total')!.get();
     const byKind = new Map(metric.values.map((v) => [String(v.labels.kind), v.value]));
-    for (const kind of RECON_KINDS.stock) expect(byKind.get(kind), kind).toBeGreaterThan(0);
+    for (const kind of ALL_RECON_KINDS) expect(byKind.get(kind), kind).toBeGreaterThan(0);
     expect(byKind.get('GRNI_BILL_RESIDUAL')).toBe(1);
+    expect(byKind.get('STOCK_FLOAT_DUST')).toBeLessThan(999);
+    const age = await executionMetricRegistry.getSingleMetric('inventory_recon_last_run_age_seconds')!.get();
+    for (const job of RECON_JOBS) {
+      const v = age.values.find((x) => x.labels.job === job);
+      expect(v?.value, job).toBeLessThan(600);
+    }
 
     const health = await buildHealthResponse(db, 'inventory');
     expect(health.checks.stockRecon).toMatchObject({ tenants: 2, errors: 0 });
+    expect(health.checks.stockRecon!.stale).toBeUndefined();
     expect(health.checks.stockRecon!.totalMismatch).toBeGreaterThan(0);
+    expect(health.checks.stockRecon!.totalMismatch).toBeLessThan(999);
   });
 
   it('varians rencana: MRP vs PO vs RL aktual, qty dan rupiah', async () => {

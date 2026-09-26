@@ -200,6 +200,38 @@ async function detectZeroCostOut(db: Db, tenantId: string, cutoverAt: Date): Pro
   return out;
 }
 
+const MISSING_STR = { $in: [null, ''] };
+
+/** Kartu baru tanpa dokumen sumber / lineRef: mutasi di luar `postStockMovements` (invariant satu pintu). */
+async function detectLedgerRowsWithoutRef(
+  db: Db,
+  tenantId: string,
+  since: Date,
+): Promise<{ findings: ReconFinding[]; count: number }> {
+  const filter = { tenantId, tanggal: { $gte: since }, $or: [{ sourceId: MISSING_STR }, { lineRef: MISSING_STR }] };
+  const [rows, count] = await Promise.all([
+    db.collection('stok_kartu').aggregate<{ _id: { stokId: string; sourceType: string }; n: number; docs: string[] }>([
+      { $match: filter },
+      { $group: { _id: { stokId: '$stokId', sourceType: '$sourceType' }, n: { $sum: 1 }, docs: { $addToSet: '$noTransaksi' } } },
+      { $sort: { n: -1 } },
+      { $limit: 200 },
+    ]).toArray(),
+    db.collection('stok_kartu').countDocuments(filter),
+  ]);
+  const findings = rows.map((r): ReconFinding => {
+    const docs = (r.docs || []).filter(Boolean).slice(0, 5);
+    return {
+      kind: 'STOCK_LEDGER_ROW_WITHOUT_REF',
+      refType: 'PRODUCT',
+      refId: String(r._id.stokId || ''),
+      productId: String(r._id.stokId || ''),
+      actual: r.n,
+      detail: `${r.n} baris kartu ${r._id.sourceType || 'tanpa sourceType'} tanpa sourceId/lineRef (${docs.join(', ') || '—'})`,
+    };
+  });
+  return { findings, count };
+}
+
 export async function detectStockRecon(
   db: Db,
   tenantId: string,
@@ -207,11 +239,12 @@ export async function detectStockRecon(
 ): Promise<ReconDetectResult> {
   const now = opts.now ?? new Date();
   const since = new Date(now.getTime() - FLOAT_DUST_WINDOW_DAYS * 86_400_000);
-  const [drift, lot, bin, dust, cutoverAt] = await Promise.all([
+  const [drift, lot, bin, dust, noRef, cutoverAt] = await Promise.all([
     auditTenantStockDrift(db, tenantId),
     detectLotVsLokasi(db, tenantId),
     detectStokBinVsLokasi(db, tenantId, { limit: 200 }),
     detectFloatDust(db, tenantId, since),
+    detectLedgerRowsWithoutRef(db, tenantId, since),
     resolveCostingCutoverAt(db, tenantId),
   ]);
 
@@ -262,6 +295,7 @@ export async function detectStockRecon(
     });
   }
   findings.push(...dust.findings);
+  findings.push(...noRef.findings);
   if (cutoverAt) findings.push(...(await detectZeroCostOut(db, tenantId, cutoverAt)));
 
   await fillProductLabels(db, tenantId, findings);
@@ -275,6 +309,7 @@ export async function detectStockRecon(
       productsScanned: drift.scanned,
       costingCutoverAt: cutoverAt ? cutoverAt.toISOString() : null,
       floatDustWindowDays: FLOAT_DUST_WINDOW_DAYS,
+      ledgerRowsWithoutRef: noRef.count,
     },
   };
 }

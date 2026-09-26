@@ -4,6 +4,7 @@ import { detectStockRecon } from '@/lib/recon/stock-recon';
 import { detectPoReceiptRecon } from '@/lib/recon/po-receipt-recon';
 import { detectGrniRecon } from '@/lib/recon/grni-recon';
 import { detectPlanIssueRecon } from '@/lib/recon/plan-issue-recon';
+import { detectControlsRecon } from '@/lib/recon/controls-recon';
 import { listReconTenantIds } from '@/lib/recon/context';
 import { buildReconReport, saveReconReport } from '@/lib/recon/reports';
 import { RECON_JOBS, type ReconDetectResult, type ReconJob, type ReconReport } from '@/lib/recon/types';
@@ -15,6 +16,7 @@ const DETECTORS: Record<ReconJob, Detector> = {
   'po-receipt': detectPoReceiptRecon,
   grni: detectGrniRecon,
   'plan-issue': detectPlanIssueRecon,
+  controls: detectControlsRecon,
 };
 
 export function parseReconJobs(value: unknown): ReconJob[] | null {
@@ -86,7 +88,7 @@ export async function runRecon(
   };
 }
 
-/** Payload bg job INVENTORY_RECON: `{ job: 'stock' | 'po-receipt' | 'grni' | 'plan-issue' | 'all', allTenants?, tenantId? }`. */
+/** Payload bg job INVENTORY_RECON: `{ job: ReconJob | 'a,b' | 'all', allTenants?, tenantId? }`. */
 export async function runReconJobPayload(
   db: Db,
   tenantId: string,

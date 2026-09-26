@@ -24,10 +24,12 @@ export const DEFAULT_INVENTORY_SCHEDULED_TASKS: ScheduledTaskInput[] = [
     dedupeKey: 'integration-reconcile:daily',
   },
   ...([
-    ['stock-recon:daily', '30 2 * * *', 'stock'],
-    ['po-receipt-recon:daily', '40 2 * * *', 'po-receipt'],
-    ['grni-recon:daily', '50 2 * * *', 'grni'],
-    ['plan-issue-recon:daily', '0 3 * * *', 'plan-issue'],
+    // Cron UTC: 18:30–19:10 UTC = 01:30–02:10 WIB, di luar jam operasional dapur.
+    ['stock-recon:daily', '30 18 * * *', 'stock'],
+    ['po-receipt-recon:daily', '40 18 * * *', 'po-receipt'],
+    ['grni-recon:daily', '50 18 * * *', 'grni'],
+    ['plan-issue-recon:daily', '0 19 * * *', 'plan-issue'],
+    ['controls-recon:daily', '10 19 * * *', 'controls'],
   ] as const).map(([id, cronExpr, job]): ScheduledTaskInput => ({
     id,
     cronExpr,

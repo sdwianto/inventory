@@ -78,22 +78,50 @@ export type ReconReportSummary = Omit<ReconReport, 'findings'> & { findingCount:
 /** Laporan terbaru per (tenant, job). `tenantId` kosong = semua tenant. */
 export async function latestReconReports(
   db: Db,
-  opts: { tenantId?: string; jobs?: ReconJob[] } = {},
+  opts: { tenantId?: string; jobs?: ReconJob[]; since?: Date } = {},
 ): Promise<ReconReportSummary[]> {
   await ensureReconReportIndexes(db);
   const jobs = opts.jobs?.length ? opts.jobs : [...RECON_JOBS];
   const match: Record<string, unknown> = { job: { $in: jobs } };
   if (opts.tenantId) match.tenantId = opts.tenantId;
+  if (opts.since) match.createdAt = { $gte: opts.since };
   const rows = await db.collection(RECON_REPORTS_COLLECTION).aggregate<ReconReportSummary>([
     { $match: match },
+    // Temuan dibuang sebelum sort/group: laporan utuh bisa ratusan KB dan melewati batas memori $group.
+    { $addFields: { findingCount: { $size: { $ifNull: ['$findings', []] } } } },
+    { $project: { _id: 0, findings: 0 } },
     { $sort: { createdAt: -1 } },
     { $group: { _id: { tenantId: '$tenantId', job: '$job' }, doc: { $first: '$$ROOT' } } },
     { $replaceRoot: { newRoot: '$doc' } },
-    { $addFields: { findingCount: { $size: { $ifNull: ['$findings', []] } } } },
-    { $project: { _id: 0, findings: 0 } },
     { $sort: { tenantId: 1, job: 1 } },
   ]).toArray();
   return rows;
+}
+
+/**
+ * Laporan tenant yang tidak lagi dipindai (tenant dihapus / sandbox) berhenti diperbarui. Ringkasan aktif hanya
+ * memakai laporan sejauh ini supaya anomali lama tenant mati tidak ikut ke metrik dan alert.
+ */
+export const RECON_ACTIVE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+export function reconActiveSince(now = Date.now()): Date {
+  return new Date(now - RECON_ACTIVE_WINDOW_MS);
+}
+
+/** Waktu laporan terbaru per job (lintas tenant) — dasar deteksi task terjadwal berhenti. */
+export async function lastReconRunAt(db: Db, jobs: readonly ReconJob[] = RECON_JOBS): Promise<Map<ReconJob, Date>> {
+  await ensureReconReportIndexes(db);
+  const out = new Map<ReconJob, Date>();
+  await Promise.all(jobs.map(async (job) => {
+    const doc = await db.collection(RECON_REPORTS_COLLECTION)
+      .find({ job })
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .project({ createdAt: 1 })
+      .next();
+    if (doc?.createdAt) out.set(job, new Date(doc.createdAt as Date));
+  }));
+  return out;
 }
 
 export async function getReconReport(db: Db, id: string): Promise<ReconReport | null> {

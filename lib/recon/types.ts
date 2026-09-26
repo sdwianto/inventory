@@ -3,7 +3,7 @@
  * Detektor hanya membaca; perbaikan tetap lewat dokumen koreksi di worklist masing-masing.
  */
 
-export const RECON_JOBS = ['stock', 'po-receipt', 'grni', 'plan-issue'] as const;
+export const RECON_JOBS = ['stock', 'po-receipt', 'grni', 'plan-issue', 'controls'] as const;
 export type ReconJob = typeof RECON_JOBS[number];
 
 export const RECON_KINDS = {
@@ -16,6 +16,7 @@ export const RECON_KINDS = {
     'STOCK_BIN_GT_LOKASI',
     'STOCK_FLOAT_DUST',
     'STOCK_ZERO_COST_OUT',
+    'STOCK_LEDGER_ROW_WITHOUT_REF',
   ],
   'po-receipt': [
     'PO_QTY_RECEIVED_MISMATCH',
@@ -26,11 +27,20 @@ export const RECON_KINDS = {
     'GRNI_BILL_RESIDUAL',
     'GRNI_UNBILLED_AGED',
     'GL_INVENTORY_VS_VALUATION',
+    'GL_CONSUMPTION_UNJOURNALED',
   ],
   'plan-issue': [
     'RL_UNLINKED',
     'RL_OVER_REFERENCE_UNAPPROVED',
     'PBL_MUTATING_WITH_RL',
+  ],
+  controls: [
+    'LOT_DEFAULT_EXPIRY',
+    'PRODUCT_DUPLICATE_KODE',
+    'RECIPE_CONVERSION_UNVERIFIED',
+    'ADJUSTMENT_NO_INDEPENDENT_APPROVAL',
+    'RL_SELF_APPROVED',
+    'INVOICE_EXCEPTION_POSTED',
   ],
 } as const satisfies Record<ReconJob, readonly string[]>;
 
@@ -46,6 +56,8 @@ export type ReconRefType =
   | 'RELEASE'
   | 'MATERIAL_ISSUE'
   | 'PLAN'
+  | 'ADJUSTMENT'
+  | 'RECIPE'
   | 'JOURNAL'
   | 'TENANT';
 

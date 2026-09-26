@@ -6,7 +6,7 @@ import { checkMongoReplicaSet } from '@/lib/api/mongo-replica';
 import { isDistributedRateLimitEnabled } from '@/lib/api/rate-limit';
 import { distributedCacheHealthStatus, isRedisConfigured } from '@/lib/api/redis-rest';
 import { buildSloChecks, sloOverallOk } from '@/lib/api/slo-check';
-import { latestReconReports } from '@/lib/recon/reports';
+import { lastReconRunAt, latestReconReports, reconActiveSince } from '@/lib/recon/reports';
 
 const startedAt = Date.now();
 export const WORKER_STALE_THRESHOLD_SEC = 300;
@@ -71,6 +71,8 @@ export interface HealthPayload {
       tenants: number;
       errors: number;
       checkedAt?: string;
+      lastRunAt?: string;
+      stale?: boolean;
       neverRun?: boolean;
       message?: string;
     };
@@ -119,18 +121,29 @@ export async function buildBgJobsHealth(db: Db): Promise<BgJobsHealth> {
   };
 }
 
+/** Jadwal harian + jeda job; lebih tua dari ini berarti task terjadwal berhenti. */
+const STOCK_RECON_STALE_MS = 26 * 60 * 60 * 1000;
+
 async function buildStockReconHealth(db: Db): Promise<HealthPayload['checks']['stockRecon']> {
   try {
-    const reports = await latestReconReports(db, { jobs: ['stock'] });
-    if (!reports.length) {
+    const now = Date.now();
+    const [reports, lastRun] = await Promise.all([
+      latestReconReports(db, { jobs: ['stock'], since: reconActiveSince(now) }),
+      lastReconRunAt(db, ['stock']),
+    ]);
+    const last = lastRun.get('stock');
+    if (!last) {
       return { totalMismatch: 0, tenants: 0, errors: 0, neverRun: true, message: 'stock-recon belum pernah dijalankan' };
     }
-    const oldest = reports.reduce((min, r) => Math.min(min, new Date(r.createdAt).getTime()), Date.now());
+    const stale = now - last.getTime() > STOCK_RECON_STALE_MS;
+    const times = reports.map((r) => new Date(r.createdAt).getTime());
     return {
       totalMismatch: reports.reduce((s, r) => s + (Number(r.totalMismatch) || 0), 0),
       tenants: reports.length,
       errors: reports.filter((r) => r.status === 'ERROR').length,
-      checkedAt: new Date(oldest).toISOString(),
+      ...(times.length ? { checkedAt: new Date(Math.min(...times)).toISOString() } : {}),
+      lastRunAt: last.toISOString(),
+      ...(stale ? { stale: true, message: 'stock-recon tidak berjalan lebih dari 26 jam' } : {}),
     };
   } catch {
     return undefined;

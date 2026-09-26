@@ -8,7 +8,7 @@ import type { Db } from 'mongodb';
 import { COA } from '@/lib/api/journal-lines';
 import { HUTANG_VENDOR_SOURCE } from '@/lib/api/hutang-vendor-journal';
 import { GRN_ACCRUAL_REVERSAL_SOURCE } from '@/lib/api/grn-reversal-constants';
-import { inventoryGlBalance } from '@/lib/api/stock-cost-journal';
+import { CONSUMPTION_JOURNAL_SOURCE, inventoryGlBalance } from '@/lib/api/stock-cost-journal';
 import { valueInventoryAtAvg } from '@/lib/stock-ledger/valuation';
 import { roundMoney } from '@/lib/stock-ledger/precision';
 import { resolveCostingCutoverAt } from '@/lib/recon/context';
@@ -22,6 +22,9 @@ export const GRNI_LOOKBACK_DAYS = 365;
 export const GRNI_RESIDUAL_TOLERANCE = 1;
 export const GL_VALUATION_TOLERANCE_MIN = 1000;
 export const GL_VALUATION_TOLERANCE_PCT = 0.1;
+export const CONSUMPTION_LOOKBACK_DAYS = 90;
+/** Jurnal pemakaian ditulis dalam transaksi posting; jeda ini hanya menyaring posting yang sedang berjalan. */
+export const CONSUMPTION_JOURNAL_GRACE_MS = 60 * 60 * 1000;
 
 type JournalDetail = { rekeningKode?: string; debet?: number; kredit?: number };
 type JournalRow = { id?: string; noJurnal?: string; sourceId?: string; sourceType?: string; createdAt?: Date; details?: JournalDetail[] };
@@ -201,6 +204,72 @@ async function detectGlVsValuation(db: Db, tenantId: string): Promise<{ finding:
   };
 }
 
+/** RL / PBL berbiaya sesudah cutover yang tidak punya jurnal pemakaian (Persediaan tidak dikredit). */
+async function detectConsumptionUnjournaled(
+  db: Db,
+  tenantId: string,
+  cutoverAt: Date,
+  now: Date,
+): Promise<ReconFinding[]> {
+  const from = new Date(Math.max(cutoverAt.getTime(), now.getTime() - CONSUMPTION_LOOKBACK_DAYS * 86_400_000));
+  const rows = await db.collection('stok_kartu').aggregate<{
+    _id: { sourceType: keyof typeof CONSUMPTION_JOURNAL_SOURCE; sourceId: string };
+    value: number;
+    noTransaksi: string;
+  }>([
+    {
+      $match: {
+        tenantId,
+        sourceType: { $in: Object.keys(CONSUMPTION_JOURNAL_SOURCE) },
+        sourceId: { $nin: [null, ''] },
+        tanggal: { $gte: from, $lte: new Date(now.getTime() - CONSUMPTION_JOURNAL_GRACE_MS) },
+        costSource: { $ne: 'NON_INVENTORY' },
+      },
+    },
+    {
+      $group: {
+        _id: { sourceType: '$sourceType', sourceId: '$sourceId' },
+        value: {
+          $sum: {
+            $multiply: [
+              { $subtract: [{ $ifNull: ['$keluar', 0] }, { $ifNull: ['$masuk', 0] }] },
+              { $ifNull: ['$hargaSatuan', 0] },
+            ],
+          },
+        },
+        noTransaksi: { $first: '$noTransaksi' },
+      },
+    },
+    { $match: { value: { $gte: 1 } } },
+    { $limit: 1000 },
+  ]).toArray();
+  if (!rows.length) return [];
+  const journals = await db.collection('jurnal')
+    .find({
+      tenantId,
+      sourceType: { $in: Object.values(CONSUMPTION_JOURNAL_SOURCE) },
+      sourceId: { $in: rows.map((r) => r._id.sourceId) },
+    })
+    .project({ sourceType: 1, sourceId: 1 })
+    .toArray();
+  const done = new Set(journals.map((j) => `${j.sourceType}\u0000${j.sourceId}`));
+  const out: ReconFinding[] = [];
+  for (const r of rows) {
+    if (done.has(`${CONSUMPTION_JOURNAL_SOURCE[r._id.sourceType]}\u0000${r._id.sourceId}`)) continue;
+    const value = roundMoney(r.value);
+    const label = r.noTransaksi || r._id.sourceId;
+    out.push({
+      kind: 'GL_CONSUMPTION_UNJOURNALED',
+      refType: r._id.sourceType === 'RELEASE' ? 'RELEASE' : 'MATERIAL_ISSUE',
+      refId: r._id.sourceId,
+      refNo: label,
+      actual: value,
+      detail: `${r._id.sourceType === 'RELEASE' ? 'RL' : 'PBL'} ${label} bernilai ${value} tanpa jurnal pemakaian`,
+    });
+  }
+  return out;
+}
+
 export async function detectGrniRecon(
   db: Db,
   tenantId: string,
@@ -213,6 +282,7 @@ export async function detectGrniRecon(
   let glMeta: Record<string, number> | undefined;
   if (cutoverAt) {
     findings.push(...(await detectBillResiduals(db, tenantId, cutoverAt, now)));
+    findings.push(...(await detectConsumptionUnjournaled(db, tenantId, cutoverAt, now)));
     const gl = await detectGlVsValuation(db, tenantId);
     glMeta = gl.meta;
     if (gl.finding) findings.push(gl.finding);

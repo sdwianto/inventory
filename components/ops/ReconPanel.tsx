@@ -10,7 +10,7 @@ import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { setActingTenantId } from '@/lib/acting-tenant-client';
-import type { ReconFinding, ReconJob, ReconKind, ReconReport } from '@/lib/recon/types';
+import { RECON_JOBS, type ReconFinding, type ReconJob, type ReconKind, type ReconReport } from '@/lib/recon/types';
 
 type ReportRow = Omit<ReconReport, 'findings'> & { findingCount: number };
 type ReconOverview = {
@@ -25,6 +25,7 @@ const JOB_LABEL: Record<ReconJob, string> = {
   'po-receipt': 'Terima PO',
   grni: 'GRNI',
   'plan-issue': 'Rencana vs RL',
+  controls: 'Master & kontrol',
 };
 
 const KIND_LABEL: Record<ReconKind, string> = {
@@ -36,21 +37,30 @@ const KIND_LABEL: Record<ReconKind, string> = {
   STOCK_BIN_GT_LOKASI: 'Bin > gudang',
   STOCK_FLOAT_DUST: 'Float dust',
   STOCK_ZERO_COST_OUT: 'Keluar tanpa harga',
+  STOCK_LEDGER_ROW_WITHOUT_REF: 'Kartu tanpa dokumen',
   PO_QTY_RECEIVED_MISMATCH: 'Qty diterima PO ≠ GRN',
   PO_GRN_NOT_APPLIED: 'GRN belum ke PO',
   PO_GRN_REVERSAL_NOT_APPLIED: 'Pembalik GRN belum ke PO',
   GRNI_BILL_RESIDUAL: 'Sisa GRNI per tagihan',
   GRNI_UNBILLED_AGED: 'GRN lama belum ditagih',
   GL_INVENTORY_VS_VALUATION: 'GL Persediaan ≠ nilai stok',
+  GL_CONSUMPTION_UNJOURNALED: 'Pemakaian tanpa jurnal',
   RL_UNLINKED: 'RL belum tertaut',
   RL_OVER_REFERENCE_UNAPPROVED: 'Melebihi acuan tanpa alasan',
   PBL_MUTATING_WITH_RL: 'PBL memotong stok + RL',
+  LOT_DEFAULT_EXPIRY: 'Lot kedaluwarsa default',
+  PRODUCT_DUPLICATE_KODE: 'Kode produk ganda',
+  RECIPE_CONVERSION_UNVERIFIED: 'Konversi resep belum valid',
+  ADJUSTMENT_NO_INDEPENDENT_APPROVAL: 'Penyesuaian tanpa penyetuju lain',
+  RL_SELF_APPROVED: 'RL disetujui pembuatnya',
+  INVOICE_EXCEPTION_POSTED: 'Tagihan EXCEPTION berjurnal',
 };
 
 /** Worklist tempat temuan diperbaiki lewat dokumen koreksi. */
 function worklistHref(f: ReconFinding): { href: string; label: string } | null {
   switch (f.refType) {
     case 'PRODUCT':
+      if (f.kind === 'PRODUCT_DUPLICATE_KODE') return { href: '/produk', label: 'Master produk' };
       return f.refId ? { href: `/stok/kartu?productId=${encodeURIComponent(f.refId)}`, label: 'Kartu stok' } : null;
     case 'PO':
       return { href: '/pembelian-po', label: 'Pembelian PO' };
@@ -59,13 +69,17 @@ function worklistHref(f: ReconFinding): { href: string; label: string } | null {
     case 'HUTANG':
       return { href: '/hutang', label: 'Hutang' };
     case 'RELEASE':
-      return { href: '/stok/pengeluaran', label: 'Pengeluaran (RL)' };
+      return { href: '/stok/pengeluaran?mode=operasional', label: 'Pengeluaran (RL)' };
     case 'MATERIAL_ISSUE':
       return { href: '/food-production/issue', label: 'Pengambilan bahan' };
     case 'PLAN':
       return f.refId
         ? { href: `/food-production/plan?productionPlanId=${encodeURIComponent(f.refId)}`, label: 'Rencana' }
         : null;
+    case 'ADJUSTMENT':
+      return { href: '/stok/penyesuaian', label: 'Penyesuaian' };
+    case 'RECIPE':
+      return { href: '/food-production/recipe/konversi', label: 'Review konversi' };
     default:
       return null;
   }
@@ -165,7 +179,7 @@ export default function ReconPanel() {
       Object.values(row).reduce((s, r) => s + (r?.totalMismatch || 0) + (r?.status === 'ERROR' ? 1e9 : 0), 0);
     return [...map.entries()].sort((a, b) => weight(b[1]) - weight(a[1]) || a[0].localeCompare(b[0]));
   }, [data?.reports]);
-  const jobs = data?.jobs || (['stock', 'po-receipt', 'grni', 'plan-issue'] as ReconJob[]);
+  const jobs = data?.jobs || [...RECON_JOBS];
   const totalAll = Object.values(data?.totals || {}).reduce((s, n) => s + (Number(n) || 0), 0);
 
   const trigger = async (body: { job: string; tenantId?: string; allTenants?: boolean }) => {
@@ -202,7 +216,7 @@ export default function ReconPanel() {
 
       {data && (
         <>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {jobs.map((job) => (
               <div key={job} className="rounded border p-3">
                 <div className="text-xs text-muted-foreground mb-1">{JOB_LABEL[job]}</div>

@@ -56,8 +56,9 @@ import {
   repairKaFollowUpOrphans,
   runKaFollowUpOrphanDetect,
 } from '@/lib/api/ka-follow-up-orphan-reconcile';
-import { getReconReport, latestReconReports } from '@/lib/recon/reports';
+import { getReconReport, latestReconReports, reconActiveSince } from '@/lib/recon/reports';
 import { parseReconJobs, runRecon } from '@/lib/recon/run';
+import { listReconTenantIds } from '@/lib/recon/context';
 import { RECON_JOBS, RECON_KINDS } from '@/lib/recon/types';
 import {
   KA_OPEN_CASE_MISSING_FU_RECONCILE_REPORTS_COLLECTION,
@@ -73,7 +74,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
     const denied = requireRole(auth, ['MASTER']);
     if (denied) return denied;
     const tenantId = String(ctx.url.searchParams.get('tenantId') || '').trim() || undefined;
-    const reports = await latestReconReports(db, { tenantId });
+    const reports = await latestReconReports(db, tenantId ? { tenantId } : { since: reconActiveSince() });
     const totals: Record<string, number> = {};
     for (const r of reports) {
       for (const [kind, n] of Object.entries(r.summary || {})) totals[kind] = (totals[kind] || 0) + (Number(n) || 0);
@@ -114,6 +115,7 @@ export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextRespo
       scheduleJobProcessing(db, { limit: 3 });
       return ok({ enqueued: true, jobId, reused, jobs, at: new Date().toISOString() });
     }
+    if (!(await listReconTenantIds(db)).includes(tenantId)) return err(`Tenant ${tenantId} tidak dikenal`, 404);
     const result = await runRecon(db, { jobs, tenantId });
     return ok({ enqueued: false, ...result, at: new Date().toISOString() });
   }
