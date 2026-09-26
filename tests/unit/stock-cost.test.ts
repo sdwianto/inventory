@@ -64,6 +64,26 @@ describe('Fase 4 — biaya rata-rata bergerak', () => {
       .toMatchObject({ unitCost: 0, costSource: 'NON_INVENTORY', next: { qty: 0, avg: 0 } });
   });
 
+  it('GRN bonus Rp0 masuk pada Rp0 dan menurunkan rata-rata; harga kosong tetap dinilai rata-rata', () => {
+    const bonus = applyLineCost({ qty: 10, avg: 1200 }, { sourceType: 'GRN', delta: 2, lineUnitCost: 0 });
+    expect(bonus).toMatchObject({ unitCost: 0, costSource: 'LINE', next: { qty: 12, avg: 1000 } });
+    expect(applyLineCost({ qty: 0, avg: 0 }, { sourceType: 'GRN', delta: 5, lineUnitCost: 0 }))
+      .toMatchObject({ unitCost: 0, costSource: 'LINE', next: { qty: 5, avg: 0 } });
+    expect(applyLineCost({ qty: 10, avg: 1200 }, { sourceType: 'GRN', delta: 2 }))
+      .toMatchObject({ unitCost: 1200, costSource: 'AVG', next: { qty: 12, avg: 1200 } });
+    // Penyesuaian Rp0 bukan pembelian: tetap netral pada rata-rata.
+    expect(applyLineCost({ qty: 10, avg: 1200 }, { sourceType: 'PENYESUAIAN', delta: 2, lineUnitCost: 0 }))
+      .toMatchObject({ unitCost: 1200, costSource: 'AVG' });
+  });
+
+  it('mutasi hasil produksi / distribusi selalu memo walau itemRole bahan; rata-rata bahan tidak diubah', () => {
+    for (const sourceType of ['FP_RESULT', 'FP_RESULT_WASTE', 'FP_DIST', 'FP_DIST_RETURN']) {
+      const delta = sourceType === 'FP_RESULT' || sourceType === 'FP_DIST_RETURN' ? 4 : -4;
+      expect(applyLineCost({ qty: 10, avg: 800 }, { sourceType, delta, itemRole: 'INGREDIENT', lineUnitCost: 5000 }))
+        .toMatchObject({ unitCost: 0, costSource: 'NON_INVENTORY', next: { avg: 800 } });
+    }
+  });
+
   it('presisi 4 desimal', () => {
     const r = applyLineCost({ qty: 3, avg: 1000 }, { sourceType: 'GRN', delta: 7, lineUnitCost: 1333.3333 });
     expect(r.next.avg).toBe(1233.3333);

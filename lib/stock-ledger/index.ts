@@ -83,6 +83,12 @@ export {
 } from '@/lib/stock-ledger/cost-backfill';
 
 export {
+  valueInventoryAtAvg,
+  type InventoryValuation,
+  type InventoryValuationRow,
+} from '@/lib/stock-ledger/valuation';
+
+export {
   mergeProductStock,
   type MergeProductStockInput,
   type MergeProductStockResult,

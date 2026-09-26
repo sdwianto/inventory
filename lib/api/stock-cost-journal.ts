@@ -16,6 +16,25 @@ export const CONSUMPTION_JOURNAL_SOURCE = {
 
 export const MASTER_ADJUSTMENT_JOURNAL_SOURCE = 'AUTO_MASTER_PENYESUAIAN';
 
+export const INVENTORY_CUTOVER_JOURNAL_SOURCE = 'AUTO_INVENTORY_CUTOVER';
+
+/** Saldo akun Persediaan (debet − kredit) dari seluruh jurnal tenant. */
+export async function inventoryGlBalance(db: Db, tenantId: string, session?: ClientSession): Promise<number> {
+  const kode = COA.PERSEDIAAN.kode;
+  const [row] = await db.collection('jurnal').aggregate<{ saldo: number }>([
+    { $match: { tenantId, 'details.rekeningKode': kode } },
+    { $unwind: '$details' },
+    { $match: { 'details.rekeningKode': kode } },
+    {
+      $group: {
+        _id: null,
+        saldo: { $sum: { $subtract: [{ $ifNull: ['$details.debet', 0] }, { $ifNull: ['$details.kredit', 0] }] } },
+      },
+    },
+  ], session ? { session } : {}).toArray();
+  return Math.round(Number(row?.saldo) || 0);
+}
+
 /** Σ |qty| × harga baris kartu (barang memo tanpa nilai tidak ikut). */
 export function postedLinesValue(lines: Array<Pick<PostedStockLine, 'deltaQtyBase' | 'unitCost' | 'costSource'>>): number {
   let v = 0;
@@ -67,7 +86,14 @@ export async function postConsumptionJournal(
 export async function postMasterAdjustmentJournal(
   db: Db,
   session: ClientSession | undefined,
-  input: { tenantId: string; sourceId: string; noDoc: string; tanggal: Date; userName?: string; line: PostedStockLine },
+  input: {
+    tenantId: string;
+    sourceId: string;
+    noDoc: string;
+    tanggal: Date;
+    userName?: string;
+    line: Pick<PostedStockLine, 'deltaQtyBase' | 'unitCost' | 'costSource'>;
+  },
 ): Promise<JournalEntry | null> {
   if (!(await isTenantFeatureEnabled(db, input.tenantId, 'costingV2'))) return null;
   const details = buildPenyesuaianJournalLines({

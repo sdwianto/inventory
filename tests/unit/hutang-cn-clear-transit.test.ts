@@ -62,6 +62,7 @@ describe('applyCreditNoteFromVendor — clearTransit race-safe', () => {
           };
         }
         if (name === 'jurnal') return approvedInvoiceJournal;
+        if (name === 'tenant_settings') return { findOne: async () => null };
         throw new Error(name);
       },
     };

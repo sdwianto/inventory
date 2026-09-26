@@ -31,6 +31,7 @@ import {
   roundStockQty,
   setProductWarehouseStock,
 } from '@/lib/stock-ledger';
+import { postMasterAdjustmentJournal } from '@/lib/api/stock-cost-journal';
 import { isVendorSyncedProduct } from '@/lib/api/product-sync';
 import { NOT_MERGED_PRODUCT_FILTER, isDuplicateKodeError, normalizeBaseSatuan } from '@/lib/api/product-merge';
 import { normalizeDetailProduk, persistProductFotos } from '@/lib/api/product-media';
@@ -441,6 +442,14 @@ export async function handleProducts({
             }],
           });
           if (!posted.ok) throw new Error(posted.error);
+          await postMasterAdjustmentJournal(txDb, session, {
+            tenantId,
+            sourceId: doc.id,
+            noDoc: `INIT-${doc.kode}`,
+            tanggal: doc.createdAt as Date,
+            userName: auth ? auth.name || auth.email : '',
+            line: posted.lines[0],
+          });
         }
       });
     } catch (e: unknown) {

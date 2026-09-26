@@ -2,10 +2,12 @@
 // dan migrasi backfill agar hasil replay sama persis dengan posting langsung.
 //
 // - Masuk berbiaya (GRN, stok awal, retur vendor ditolak, lainnya dengan harga baris > 0) mengubah rata-rata.
+//   Baris GRN berharga Rp0 (bonus) masuk pada Rp0 sehingga nilai kartu = nilai akrual GRN.
 // - Masuk netral (pindah gudang, hitung fisik, retur distribusi) dinilai pada rata-rata; rata-rata tetap.
 // - Keluar dinilai pada rata-rata, kecuali pembalik pembelian (pembalik GRN, retur vendor) yang keluar
 //   pada harga belinya sendiri dan menghitung ulang rata-rata sisa stok.
-// - Barang jadi / setengah jadi hasil produksi = memo qty tanpa nilai (biaya bahan dibebankan saat RL).
+// - Barang jadi / setengah jadi dan semua mutasi hasil produksi / distribusi = memo qty tanpa nilai
+//   (biaya bahan dibebankan saat RL / PBL).
 
 import { STOCK_QTY_EPS, roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 
@@ -22,10 +24,20 @@ const AVG_NEUTRAL_INBOUND = new Set([
 
 const PURCHASE_REVERSAL_OUTBOUND = new Set(['GRN_REVERSAL', 'VENDOR_RETURN']);
 
+/** Masuk pembelian: harga baris Rp0 yang dikirim eksplisit (barang bonus) tetap harga beli, menurunkan rata-rata. */
+export const PURCHASE_INBOUND = new Set(['GRN', 'VENDOR_RETURN_REJECTED']);
+
 const MEMO_ITEM_ROLES = new Set(['FINISHED_GOOD', 'SEMI_FINISHED']);
+
+/** Mutasi hasil produksi & distribusinya: selalu memo qty, apa pun itemRole produknya. */
+export const MEMO_SOURCE_TYPES = new Set(['FP_RESULT', 'FP_RESULT_WASTE', 'FP_DIST', 'FP_DIST_RETURN']);
 
 export function isMemoCostItem(product: { itemRole?: string | null }): boolean {
   return MEMO_ITEM_ROLES.has(String(product.itemRole || ''));
+}
+
+function hasExplicitCost(v: number | string | null | undefined): boolean {
+  return v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0;
 }
 
 export type AvgCostState = { qty: number; avg: number };
@@ -61,8 +73,14 @@ export function applyLineCost(state: AvgCostState, input: LineCostInput): LineCo
   const nextQty = roundStockQty(qty + delta);
   const lineCost = positive(input.lineUnitCost);
 
-  if (isMemoCostItem({ itemRole: input.itemRole })) {
-    return { unitCost: 0, costSource: 'NON_INVENTORY', next: { qty: nextQty, avg: 0 } };
+  if (isMemoCostItem({ itemRole: input.itemRole }) || MEMO_SOURCE_TYPES.has(input.sourceType)) {
+    return { unitCost: 0, costSource: 'NON_INVENTORY', next: { qty: nextQty, avg: isMemoCostItem({ itemRole: input.itemRole }) ? 0 : avg } };
+  }
+
+  if (delta > 0 && PURCHASE_INBOUND.has(input.sourceType) && !lineCost && hasExplicitCost(input.lineUnitCost)) {
+    const base = Math.max(0, qty);
+    const nextAvg = base + delta > STOCK_QTY_EPS ? roundUnitCost((base * avg) / (base + delta)) : avg;
+    return { unitCost: 0, costSource: 'LINE', next: { qty: nextQty, avg: nextAvg } };
   }
 
   if (delta > 0) {

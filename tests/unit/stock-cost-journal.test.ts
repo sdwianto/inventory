@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildVendorHutangJournalLines, COA } from '@/lib/api/journal-lines';
+import {
+  buildCreditNoteHutangJournalLines,
+  buildDebitNoteHutangJournalLines,
+  buildVendorHutangJournalLines,
+  COA,
+} from '@/lib/api/journal-lines';
 import { journalMatchesBase } from '@/lib/api/hutang-vendor-journal';
 import { buildConsumptionJournalLines, postedLinesValue } from '@/lib/api/stock-cost-journal';
 
@@ -49,6 +54,21 @@ describe('Fase 4 — jurnal nilai persediaan', () => {
     const journal = { id: 'j', details, totalDebet: t.debet };
     expect(journalMatchesBase(journal, { subTotal: 95_000, ppn: 0, total: 95_000 })).toBe(true);
     expect(journalMatchesBase(journal, { subTotal: 100_000, ppn: 0, total: 100_000 })).toBe(false);
+  });
+
+  it('DN / CN harga saat costingV2: Selisih Harga Beli; retur transit tetap 10315; default tetap Persediaan', () => {
+    const dn = buildDebitNoteHutangJournalLines({ noDoc: 'DN-1', amount: 11_100, ppn: 1_100, invoiceTotal: 11_100, priceVariance: true });
+    expect(dn.map((l) => [l.rekeningKode, l.debet, l.kredit])).toEqual([
+      [COA.SELISIH_HARGA_BELI.kode, 10_000, 0],
+      [COA.PPN_MASUKAN.kode, 1_100, 0],
+      [COA.HUTANG.kode, 0, 11_100],
+    ]);
+    expect(buildDebitNoteHutangJournalLines({ noDoc: 'DN-2', amount: 5_000 })[0].rekeningKode).toBe(COA.PERSEDIAAN.kode);
+
+    const inv = (l: Array<{ rekeningKode: string; kredit: number }>) => l.filter((x) => x.kredit > 0 && x.rekeningKode !== COA.PPN_MASUKAN.kode).map((x) => x.rekeningKode);
+    expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-1', amount: 5_000, priceVariance: true }))).toEqual([COA.SELISIH_HARGA_BELI.kode]);
+    expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-2', amount: 5_000, clearTransit: true, priceVariance: true }))).toEqual([COA.BARANG_DALAM_RETUR.kode]);
+    expect(inv(buildCreditNoteHutangJournalLines({ noDoc: 'CN-3', amount: 5_000 }))).toEqual([COA.PERSEDIAAN.kode]);
   });
 
   it('tanpa nilai akrual: perilaku lama (Dr GRNI = subTotal, tanpa PPV)', () => {

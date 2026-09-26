@@ -5,9 +5,10 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
-import { postStockMovements, type StockMovementLine } from '@/lib/stock-ledger';
-import { applyMasterProductStockChange } from '@/lib/stock-ledger/master-stock';
-import { postConsumptionJournal } from '@/lib/api/stock-cost-journal';
+import { mergeProductStock, postStockMovements, valueInventoryAtAvg, type StockMovementLine } from '@/lib/stock-ledger';
+import { applyMasterProductStockChange, reconcileProductStockFromLedger } from '@/lib/stock-ledger/master-stock';
+import { inventoryGlBalance, postConsumptionJournal } from '@/lib/api/stock-cost-journal';
+import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
 import { runInTransactionOnDb } from '@/lib/api/transaction';
 import { COA } from '@/lib/api/journal-lines';
 import { backfillStockCostMigration } from '@/lib/migrations/0007-backfill-stock-cost';
@@ -131,6 +132,66 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
     // 2 × 1258.3333 = 2516.67 → 2517
     expect(j?.details.map((d: { rekeningKode: string; debet: number; kredit: number }) => [d.rekeningKode, d.debet, d.kredit]))
       .toEqual([[COA.PENYESUAIAN.kode, 2517, 0], [COA.PERSEDIAAN.kode, 0, 2517]]);
+  });
+
+  it('GRN bonus Rp0: kartu Rp0 (= nilai akrual) dan rata-rata turun', async () => {
+    await db.collection('products').insertOne(product(ON, 'teh', { hargaBeli: 500 }));
+    await post(ON, 'GRN', 'GRN-TEH-1', [{ productId: 'teh', warehouseKode: 'GKERING', deltaQtyBase: 10, unitCost: 1200 }]);
+    await post(ON, 'GRN', 'GRN-TEH-2', [{ productId: 'teh', warehouseKode: 'GKERING', deltaQtyBase: 2, unitCost: 0 }]);
+    expect(await kartu(ON, 'GRN-TEH-2')).toEqual([{ lokasiKode: 'GKERING', hargaSatuan: 0, costSource: 'LINE' }]);
+    expect(await avgOf(ON, 'teh')).toBe(1000);
+  });
+
+  it('koreksi saldo negatif dari kartu: dinilai rata-rata dan dijurnal', async () => {
+    await db.collection('products').insertOne(product(ON, 'kecap', { hargaBeli: 700, avgCost: 900 }));
+    // Jejak lama: kartu keluar tanpa saldo gudang (oversell sebelum guard lokasi).
+    await db.collection('stok_kartu').insertOne({
+      id: 'k-kecap-1', tenantId: ON, stokId: 'kecap', lokasiKode: 'GKERING', sourceType: 'RELEASE', sourceId: 'RL-KECAP',
+      lineRef: '1', tanggal: new Date('2026-09-02T00:00:00Z'), createdAt: new Date('2026-09-02T00:00:00Z'), masuk: 0, keluar: 3, hargaSatuan: 700,
+    });
+    const prod = await db.collection('products').findOne({ tenantId: ON, id: 'kecap' });
+    const res = await reconcileProductStockFromLedger(db, ON, prod as never, { clearNegative: true });
+    expect(res).toMatchObject({ stok: 0, clearedNegative: true });
+    const fix = await db.collection('stok_kartu').findOne({ tenantId: ON, stokId: 'kecap', masuk: 3 });
+    expect(fix).toMatchObject({ hargaSatuan: 900, costSource: 'AVG', sourceType: 'PENYESUAIAN' });
+    const j = await db.collection('jurnal').findOne({ tenantId: ON, sourceType: 'AUTO_MASTER_PENYESUAIAN', sourceId: fix?.sourceId });
+    expect(j?.details.map((d: { rekeningKode: string; debet: number; kredit: number }) => [d.rekeningKode, d.debet, d.kredit]))
+      .toEqual([[COA.PERSEDIAAN.kode, 2700, 0], [COA.PENYESUAIAN.kode, 0, 2700]]);
+  });
+
+  it('gabung produk ganda: avgCost kanonik = rata-rata tertimbang qty kedua produk', async () => {
+    await db.collection('products').insertMany([product(ON, 'kopi-a'), product(ON, 'kopi-b')]);
+    await post(ON, 'GRN', 'GRN-KOPI-A', [{ productId: 'kopi-a', warehouseKode: 'GKERING', deltaQtyBase: 10, unitCost: 1000 }]);
+    await post(ON, 'GRN', 'GRN-KOPI-B', [{ productId: 'kopi-b', warehouseKode: 'GKERING', deltaQtyBase: 30, unitCost: 2000 }]);
+    const res = await runInTransactionOnDb(db, ({ db: txDb, session }) => mergeProductStock(txDb, session, {
+      tenantId: ON, fromId: 'kopi-b', toId: 'kopi-a', now: new Date(),
+    }));
+    expect(res).toMatchObject({ qtyMoved: 30, stokAfter: 40 });
+    expect(await avgOf(ON, 'kopi-a')).toBe(1750);
+  });
+
+  it('migrasi 0008: cutover GL Persediaan = nilai buku stok; apply hanya saat costingV2 menyala', async () => {
+    const ctx = (tenantId: string, dryRun: boolean) => ({ db, tenantId, dryRun, now: new Date('2026-09-26T05:00:00Z'), actor: 'it' });
+    const valueNow = async () => Math.round((await valueInventoryAtAvg(db, ON)).value);
+
+    const dry = await inventoryGlCutoverMigration.run(ctx(ON, true));
+    const before = dry.before as { glBalance: number; stockValue: number; diff: number; memoSkipped: number };
+    expect(before.glBalance).toBe(await inventoryGlBalance(db, ON));
+    expect(before.stockValue).toBe(await valueNow());
+    expect(before.diff).not.toBe(0);
+    expect(before.memoSkipped).toBe(1);
+    expect(await db.collection('jurnal').countDocuments({ tenantId: ON, sourceType: 'AUTO_INVENTORY_CUTOVER' })).toBe(0);
+
+    const applied = await inventoryGlCutoverMigration.run(ctx(ON, false));
+    expect(applied.changed).toBe(1);
+    expect(await inventoryGlBalance(db, ON)).toBe(await valueNow());
+    expect(await db.collection('audit_log').countDocuments({ tenantId: ON, action: 'INVENTORY_GL_CUTOVER' })).toBe(1);
+
+    const again = await inventoryGlCutoverMigration.run(ctx(ON, false));
+    expect(again.changed).toBe(0);
+
+    await expect(inventoryGlCutoverMigration.run(ctx(OFF, false))).rejects.toThrow(/costingV2/);
+    expect((await inventoryGlCutoverMigration.run(ctx(OFF, true))).changed).toBe(0);
   });
 
   it('migrasi 0007: replay kronologis mengisi harga kartu 0, harga historis tetap, idempoten', async () => {

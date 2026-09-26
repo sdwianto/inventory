@@ -13,6 +13,7 @@ import { runInTransactionOnDb, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { postMasterAdjustmentJournal } from '@/lib/api/stock-cost-journal';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import type { AuthContext } from '@/types/auth';
 import { isZeroQty, roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 import {
@@ -24,7 +25,8 @@ import {
   type SetWarehouseStockResult,
 } from '@/lib/stock-ledger/balance';
 import { ledgerSaldoForProducts } from '@/lib/stock-ledger/ledger-saldo';
-import { buildKartuDoc, type StockActor } from '@/lib/stock-ledger/kartu';
+import { buildKartuDoc, type StockActor, type StockCostSource } from '@/lib/stock-ledger/kartu';
+import { isMemoCostItem } from '@/lib/stock-ledger/cost';
 import { postStockMovements } from '@/lib/stock-ledger/post-stock-movements';
 
 export type { SetWarehouseStockResult };
@@ -404,7 +406,19 @@ async function clearNegativeLedgerWithAdjustment(
     }],
     createdAt: now,
   }), txOpts(session));
-  const harga = roundUnitCost(product?.hargaBeli);
+  const costingV2 = await isTenantFeatureEnabled(db, tid, 'costingV2');
+  const memo = isMemoCostItem({ itemRole: product?.itemRole as string | undefined });
+  const avg = roundUnitCost(product?.avgCost as number | string | undefined);
+  const fallback = roundUnitCost(product?.hargaBeli);
+  let harga = fallback;
+  let costSource: StockCostSource = fallback > 0 ? 'PRODUCT_AVG' : 'NONE';
+  if (costingV2 && memo) {
+    harga = 0;
+    costSource = 'NON_INVENTORY';
+  } else if (costingV2 && avg > 0) {
+    harga = avg;
+    costSource = 'AVG';
+  }
   await db.collection(STOK_KARTU).insertOne(buildKartuDoc({
     tenantId: tid,
     stokId,
@@ -418,9 +432,17 @@ async function clearNegativeLedgerWithAdjustment(
     keterangan: `Penyesuaian Stok (+) ${noPS} — koreksi drift lokasi vs kartu`,
     deltaQtyBase: need,
     unitCost: harga,
-    costSource: harga > 0 ? 'PRODUCT_AVG' : 'NONE',
+    costSource,
     actor: { userId: 'system', userName: 'system-reconcile' },
   }), txOpts(session));
+  await postMasterAdjustmentJournal(db, session, {
+    tenantId: tid,
+    sourceId: penyesuaianId,
+    noDoc: `${noPS}/${product?.kode || stokId}`,
+    tanggal: now,
+    userName: 'system-reconcile',
+    line: { deltaQtyBase: need, unitCost: harga, costSource },
+  });
   return { ok: true, noPS };
 }
 

@@ -210,12 +210,15 @@ export function buildCreditNoteHutangJournalLines({
    * Cr net ke transit (bukan Persediaan lagi). Legacy RTV tanpa transit → Persediaan.
    */
   clearTransit = false,
+  /** costingV2: CN harga (tanpa barang keluar) dikreditkan ke Selisih Harga Beli, nilai kartu tidak berubah. */
+  priceVariance = false,
 }: {
   noDoc: string;
   amount: number;
   ppn?: number;
   invoiceTotal?: number;
   clearTransit?: boolean;
+  priceVariance?: boolean;
 }): JournalDetail[] {
   const gross = Math.round(amount);
   if (gross <= 0) return [];
@@ -227,7 +230,9 @@ export function buildCreditNoteHutangJournalLines({
     ppnPart = Math.min(gross, Math.round((gross * invPpn) / invTotal));
   }
   const netPart = gross - ppnPart;
-  const inventoryCoa = clearTransit ? COA.BARANG_DALAM_RETUR : COA.PERSEDIAAN;
+  const inventoryCoa = clearTransit
+    ? COA.BARANG_DALAM_RETUR
+    : priceVariance ? COA.SELISIH_HARGA_BELI : COA.PERSEDIAAN;
 
   const lines: JournalDetail[] = [
     {
@@ -259,18 +264,24 @@ export function buildCreditNoteHutangJournalLines({
   return lines;
 }
 
-/** Debit Note vendor: naikkan hutang — Dr Persediaan (+ PPN) / Cr Hutang. Stok qty diam. */
+/**
+ * Debit Note vendor: naikkan hutang — Dr Persediaan (+ PPN) / Cr Hutang. Stok qty diam.
+ * costingV2 (priceVariance): Dr Selisih Harga Beli, karena nilai kartu tidak ikut naik.
+ */
 export function buildDebitNoteHutangJournalLines({
   noDoc,
   amount,
   ppn = 0,
   invoiceTotal = 0,
+  priceVariance = false,
 }: {
   noDoc: string;
   amount: number;
   ppn?: number;
   invoiceTotal?: number;
+  priceVariance?: boolean;
 }): JournalDetail[] {
+  const debitCoa = priceVariance ? COA.SELISIH_HARGA_BELI : COA.PERSEDIAAN;
   const gross = Math.round(amount);
   if (gross <= 0) return [];
   const invTotal = Math.round(Number(invoiceTotal) || 0);
@@ -283,8 +294,8 @@ export function buildDebitNoteHutangJournalLines({
   const lines: JournalDetail[] = [];
   if (netPart > 0) {
     lines.push({
-      rekeningKode: COA.PERSEDIAAN.kode,
-      rekeningNama: COA.PERSEDIAAN.nama,
+      rekeningKode: debitCoa.kode,
+      rekeningNama: debitCoa.nama,
       debet: netPart,
       kredit: 0,
       keterangan: `DN ${noDoc}`,

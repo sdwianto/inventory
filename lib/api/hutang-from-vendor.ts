@@ -12,6 +12,7 @@ import { resolveSoTotals } from '@/lib/api/vendor-so-snapshot';
 import { resolveVendorBillingForStorage } from '@/lib/api/hutang-detail-enrich';
 import { resolveVendorDisplayName } from '@/lib/api/resolve-vendor-display-name';
 import { createJournalIfNotExists } from '@/lib/api/journal';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } from '@/lib/api/journal-lines';
 import {
   buildHutangPostingBase,
@@ -932,6 +933,8 @@ export async function applyCreditNoteFromVendor(
     // Jangan hanya by creditNoteId: race Category A apply CN SEBELUM creditNoteId
     // ter-stamp di vendor_returns → clearTransit miss → Cr Persediaan ganda + 10315 terbuka.
     let clearTransit = opts.clearTransit === true;
+    // Retur yang benar-benar mengeluarkan stok tanpa transit: CN menutup Persediaan (nilai kartu sudah turun).
+    let stockLeftWithoutTransit = false;
     if (!clearTransit) {
       const noReturn = String(payload.noReturn || '').trim();
       const returnId = String(opts.returnId || '').trim();
@@ -945,9 +948,10 @@ export async function applyCreditNoteFromVendor(
             ...tenantIdMatchFilter(tid),
             $or: orClauses,
           },
-          { projection: { transitAppliedAt: 1, transitJournalId: 1 }, ...txOpts(session) },
+          { projection: { transitAppliedAt: 1, transitJournalId: 1, source: 1, stockAppliedAt: 1 }, ...txOpts(session) },
         );
         clearTransit = Boolean(rtvForTransit?.transitAppliedAt || rtvForTransit?.transitJournalId);
+        stockLeftWithoutTransit = Boolean(rtvForTransit?.stockAppliedAt) && rtvForTransit?.source !== 'grn-reject';
       }
     }
 
@@ -957,6 +961,7 @@ export async function applyCreditNoteFromVendor(
       ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
       invoiceTotal: parseInt(String(hutang.total || 0), 10) || 0,
       clearTransit,
+      priceVariance: !clearTransit && !stockLeftWithoutTransit && await isTenantFeatureEnabled(txDb, tid, 'costingV2'),
     });
     if (cnLines.length) {
       await postOrDeferNoteJournal(txDb, session, {
@@ -1121,6 +1126,7 @@ export async function applyDebitNoteFromVendor(
       amount: debitTotal,
       ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
       invoiceTotal: oldTotal,
+      priceVariance: await isTenantFeatureEnabled(txDb, tid, 'costingV2'),
     });
     if (dnLines.length) {
       await postOrDeferNoteJournal(txDb, session, {

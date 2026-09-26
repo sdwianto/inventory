@@ -6,6 +6,7 @@ import { fixMasterStockDriftMigration } from '@/lib/migrations/0004-fix-master-s
 import { realignOrphanLotsMigration } from '@/lib/migrations/0005-realign-orphan-lots';
 import { removeRecipeLinesMigration } from '@/lib/migrations/0006-remove-recipe-lines';
 import { backfillStockCostMigration } from '@/lib/migrations/0007-backfill-stock-cost';
+import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
 
 /** Penanda kerangka aktif. Tidak mengubah data bisnis. */
 export const frameworkNoopMigration: Migration = {
@@ -25,6 +26,7 @@ export const MIGRATIONS: readonly Migration[] = [
   realignOrphanLotsMigration,
   removeRecipeLinesMigration,
   backfillStockCostMigration,
+  inventoryGlCutoverMigration,
 ];
 
 export function findMigration(id: string): Migration | undefined {

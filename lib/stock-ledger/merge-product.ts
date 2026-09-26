@@ -6,7 +6,7 @@ import { txOpts } from '@/lib/api/transaction';
 import { applyLokasiDelta, recomputeProductStok, STOK_KARTU, STOK_LOKASI } from '@/lib/stock-ledger/balance';
 import { adjustStokBin, STOK_BIN_COLLECTION } from '@/lib/stock-ledger/bin';
 import { INGREDIENT_LOTS_COLLECTION } from '@/lib/food-production/ingredient-lot';
-import { roundStockQty } from '@/lib/stock-ledger/precision';
+import { roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 import { STOCK_ALLOCATIONS_COLLECTION } from '@/lib/stock-ledger/plan-reservation';
 
 export type MergeProductStockInput = {
@@ -31,6 +31,34 @@ export type MergeProductStockResult = {
 type LokasiRow = { lokasiKode: string; qty?: number | string; qtyReserved?: number | string };
 type BinRow = { warehouseKode: string; binKode: string; qty?: number | string };
 
+/** Rata-rata bergerak kanonik setelah gabung: tertimbang qty positif kedua produk (null = tidak berubah). */
+async function blendedAvgCost(
+  db: Db,
+  tenantId: string,
+  fromId: string,
+  toId: string,
+  fromLokasi: LokasiRow[],
+  session: ClientSession | undefined,
+): Promise<number | null> {
+  const opts = txOpts(session);
+  const products = await db.collection<{ id: string; avgCost?: number | string }>('products')
+    .find({ tenantId, id: { $in: [fromId, toId] } }, opts)
+    .project<{ id: string; avgCost?: number | string }>({ id: 1, avgCost: 1 })
+    .toArray();
+  const fromAvg = roundUnitCost(products.find((p) => p.id === fromId)?.avgCost);
+  const toAvg = roundUnitCost(products.find((p) => p.id === toId)?.avgCost);
+  if (fromAvg <= 0) return null;
+  const toLokasi = await db.collection<LokasiRow>(STOK_LOKASI)
+    .find({ tenantId, stokId: toId }, opts)
+    .project<LokasiRow>({ qty: 1 })
+    .toArray();
+  const sumQty = (rows: LokasiRow[]) => Math.max(0, roundStockQty(rows.reduce((s, r) => s + (Number(r.qty) || 0), 0)));
+  const fromQty = sumQty(fromLokasi);
+  const toQty = sumQty(toLokasi);
+  if (fromQty + toQty > 0) return roundUnitCost((fromQty * fromAvg + toQty * toAvg) / (fromQty + toQty));
+  return toAvg > 0 ? null : fromAvg;
+}
+
 export async function mergeProductStock(
   db: Db,
   session: ClientSession | undefined,
@@ -44,6 +72,7 @@ export async function mergeProductStock(
     .find({ tenantId, stokId: fromId }, opts)
     .project<LokasiRow>({ lokasiKode: 1, qty: 1, qtyReserved: 1 })
     .toArray();
+  const avgCost = await blendedAvgCost(db, tenantId, fromId, toId, lokasiRows, session);
   let qtyMoved = 0;
   // Kartu ikut pindah, jadi saldo negatif juga harus pindah agar saldo lokasi = jumlah kartu.
   const ordered = [...lokasiRows].sort((a, b) => roundStockQty(b.qty) - roundStockQty(a.qty));
@@ -112,6 +141,9 @@ export async function mergeProductStock(
     opts,
   );
 
+  if (avgCost !== null) {
+    await db.collection('products').updateOne({ tenantId, id: toId }, { $set: { avgCost } }, opts);
+  }
   await recomputeProductStok(db, tenantId, fromId, session);
   const stokAfter = await recomputeProductStok(db, tenantId, toId, session);
   return {

@@ -3,7 +3,7 @@
 
 import type { AnyBulkWriteOperation, ClientSession, Db, Document, ObjectId } from 'mongodb';
 import { txOpts } from '@/lib/api/transaction';
-import { applyLineCost, isMemoCostItem, type AvgCostState, type StockCostSource } from '@/lib/stock-ledger/cost';
+import { PURCHASE_INBOUND, applyLineCost, isMemoCostItem, type AvgCostState, type StockCostSource } from '@/lib/stock-ledger/cost';
 import { roundMoney, roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 import { STOK_KARTU, STOK_LOKASI } from '@/lib/stock-ledger/balance';
 
@@ -36,8 +36,12 @@ export type StockCostBackfillPlan = {
   updates: Array<{ _id: ObjectId; unitCost: number; costSource: StockCostSource }>;
 };
 
+/** Harga baris dipertahankan: > 0, atau Rp0 eksplisit pada masuk pembelian (barang bonus). */
 function hasCost(row: KartuRow): boolean {
-  return roundUnitCost(row.hargaSatuan) > 0;
+  if (roundUnitCost(row.hargaSatuan) > 0) return true;
+  return PURCHASE_INBOUND.has(String(row.sourceType || ''))
+    && (Number(row.masuk) || 0) > 0
+    && typeof row.hargaSatuan === 'number';
 }
 
 export async function planStockCostBackfill(
@@ -73,7 +77,7 @@ export async function planStockCostBackfill(
       itemRole: product.itemRole,
     });
     state = r.next;
-    if (costed || memo) continue;
+    if (costed || memo || r.costSource === 'NON_INVENTORY') continue;
     if (r.unitCost > 0) {
       updates.push({ _id: row._id, unitCost: r.unitCost, costSource: r.costSource });
       fillValue += Math.abs(delta) * r.unitCost;

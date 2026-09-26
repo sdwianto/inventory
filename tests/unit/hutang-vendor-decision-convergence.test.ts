@@ -59,6 +59,7 @@ function makeDb(
           countDocuments: async () => 0,
         };
       }
+      if (name === 'tenant_settings') return { findOne: async () => null };
       throw new Error(`unexpected collection: ${name}`);
     },
   };
