@@ -12,14 +12,13 @@ import { buildRecipeConversionReview } from '../../lib/api/recipe-conversion-rev
 import { isTenantFeatureEnabled, OPT_IN_FEATURE_FLAGS } from '../../lib/api/feature-flags';
 import { PRODUCT_KODE_UNIQUE_FILTER } from '../../lib/api/product-merge';
 import { MATERIAL_ISSUES_COLLECTION } from '../../lib/food-production/material-issue';
-import { unlinkedReleaseFilter } from '../../lib/food-production/rl-unlinked';
+import { listUnlinkedReleases, RL_UNLINKED_MAX_RANGE_DAYS, unlinkedReleaseFilter } from '../../lib/food-production/rl-unlinked';
+import type { AuthContext } from '../../types/auth';
 import { INVENTORY_RELEASES_COLLECTION } from '../../lib/food-production/material-issue-reconcile';
 import { listReconTenantIds, resolveCostingCutoverAt } from '../../lib/recon/context';
 import { detectStockRecon } from '../../lib/recon/stock-recon';
 import { detectGrniRecon } from '../../lib/recon/grni-recon';
 import { buildReconReport } from '../../lib/recon/reports';
-import { PLAN_ISSUE_WINDOW_DAYS } from '../../lib/recon/plan-issue-recon';
-
 type Metric = {
   key: string;
   label: string;
@@ -110,16 +109,20 @@ async function tenantMetrics(db: Db, tenantId: string): Promise<{ tenantId: stri
     : null;
   metrics.push(metric('pblMutatingNew', 'PBL baru yang memutasi stok', pblMutatingNew, 0,
     pblRefStart ? `sejak PBL acuan pertama ${pblRefStart.toISOString()}` : 'belum ada PBL mode acuan'));
-  const rlUnlinked = await db.collection(INVENTORY_RELEASES_COLLECTION).countDocuments({ tenantId, ...unlinkedReleaseFilter() });
-  const windowFrom = new Date(Date.now() - PLAN_ISSUE_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const rlUnlinkedWindow = await db.collection(INVENTORY_RELEASES_COLLECTION)
-    .countDocuments({ tenantId, ...unlinkedReleaseFilter({ tanggal: { $gte: windowFrom } }) });
+  const todayWib = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const worklistFrom = new Date(Date.parse(todayWib) - RL_UNLINKED_MAX_RANGE_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const rlUnlinked = (await listUnlinkedReleases(
+    db,
+    { tenantId, role: 'ADMIN', userId: 'verify', isMaster: false } as AuthContext,
+    { from: worklistFrom, to: todayWib },
+  )).length;
+  const rlUnlinkedAll = await db.collection(INVENTORY_RELEASES_COLLECTION).countDocuments({ tenantId, ...unlinkedReleaseFilter() });
   metrics.push(metric(
     'rlUnlinked',
     'RL produksi tanpa tautan rencana',
     rlUnlinked,
     0,
-    `seluruh riwayat; ${rlUnlinkedWindow} dalam ${PLAN_ISSUE_WINDOW_DAYS} hari terakhir seperti panel recon — tautkan atau tandai bukan produksi`,
+    `worklist ${RL_UNLINKED_MAX_RANGE_DAYS} hari (keperluan produksi / cocok rencana); ${rlUnlinkedAll} RL tanpa tautan seluruhnya termasuk non-produksi`,
   ));
 
   // 7. Penyesuaian POSTED tanpa penyetuju independen (sejak alur persetujuan dipakai).
