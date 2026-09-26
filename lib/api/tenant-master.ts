@@ -429,6 +429,17 @@ export async function bootstrapTenantMasterData(
             })),
           });
           if (!posted.ok) throw new Error(posted.error);
+          const { postMasterAdjustmentJournal } = await import('@/lib/api/stock-cost-journal');
+          for (const line of posted.lines) {
+            await postMasterAdjustmentJournal(txDb, session, {
+              tenantId: tid,
+              sourceId: `DEMO-${tid}:${line.productId}`,
+              noDoc: `INIT-DEMO/${line.productId}`,
+              tanggal: new Date(),
+              userName: actor?.userName || 'Sistem (seed demo)',
+              line,
+            });
+          }
         });
       }
     }

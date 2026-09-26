@@ -1,4 +1,5 @@
-import type { Migration } from '@/lib/migrations/types';
+import { MIGRATION_RUNS_COLLECTION, type Migration } from '@/lib/migrations/types';
+import { BACKFILL_STOCK_COST_ID } from '@/lib/migrations/0007-backfill-stock-cost';
 import { writeAuditLog } from '@/lib/api/audit-log';
 import { runInTransactionOnDb } from '@/lib/api/transaction';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
@@ -26,6 +27,9 @@ export const inventoryGlCutoverMigration: Migration = {
     const { db, tenantId } = ctx;
     const actor = ctx.actor || 'system';
     const costingV2 = await isTenantFeatureEnabled(db, tenantId, 'costingV2');
+    const backfillApplied = Boolean(await db.collection(MIGRATION_RUNS_COLLECTION).findOne({
+      migrationId: BACKFILL_STOCK_COST_ID, tenantId, mode: 'APPLY', status: 'OK',
+    }));
     const valuation = await valueInventoryAtAvg(db, tenantId);
     const glBalance = await inventoryGlBalance(db, tenantId);
     const consumption = await unjournaledConsumptionValue(db, tenantId);
@@ -37,6 +41,7 @@ export const inventoryGlCutoverMigration: Migration = {
     for (const r of valuation.rows) byBasis[r.costBasis] += 1;
     const before = {
       costingV2,
+      backfillApplied,
       glBalance,
       stockValue,
       diff,
@@ -56,6 +61,7 @@ export const inventoryGlCutoverMigration: Migration = {
     if (ctx.dryRun) {
       return {
         summary: `GL Persediaan ${glBalance} vs nilai stok ${stockValue}: akan jurnal ${preview}`
+          + (backfillApplied ? '' : ' (apply butuh 0007 diterapkan dulu; angka berubah setelahnya)')
           + (costingV2 ? '' : ' (apply butuh costingV2 menyala)')
           + (valuation.missingCost ? `; ${valuation.missingCost} produk tanpa harga` : ''),
         before,
@@ -63,6 +69,7 @@ export const inventoryGlCutoverMigration: Migration = {
         changed: 0,
       };
     }
+    if (!backfillApplied) throw new Error(`${BACKFILL_STOCK_COST_ID} belum diterapkan untuk tenant ini — cutover GL tidak dijalankan`);
     if (!costingV2) throw new Error('costingV2 belum menyala untuk tenant ini — cutover GL tidak dijalankan');
 
     const sourceId = `${INVENTORY_GL_CUTOVER_ID}:${ctx.now.getTime()}`;

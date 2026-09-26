@@ -6,6 +6,8 @@ import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
 import { COA, buildVendorHutangJournalLines, reverseJournalDetails } from '@/lib/api/journal-lines';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { txOpts } from '@/lib/api/transaction';
+import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import type { JournalDetail } from '@/types/finance';
 
 export const HUTANG_VENDOR_SOURCE = 'AUTO_HUTANG_VENDOR';
@@ -19,6 +21,8 @@ type HutangLike = {
   noInvoice?: unknown;
   noHutang?: unknown;
   noDO?: unknown;
+  vendorTenantId?: unknown;
+  vendorInvoiceId?: unknown;
   tanggal?: unknown;
   total?: unknown;
   ppn?: unknown;
@@ -83,18 +87,41 @@ async function resolveJournalDate(db: Db, tenantId: string, preferred: Date, ses
   return new Date();
 }
 
-/** Nilai akrual GRN (Cr GRNI) untuk DO ini, atau null bila GRN belum diakrualkan. */
-async function findGrnAccrualAmount(db: Db, tenantId: string, noDO: string, session?: ClientSession): Promise<number | null> {
-  if (!noDO) return null;
-  const grn = await db.collection('goods_receipts').findOne({ tenantId, noDO, status: 'POSTED' }, txOpts(session));
-  if (!grn?.id) return null;
-  const accrual = await db.collection('jurnal').findOne({
-    tenantId,
-    sourceType: 'AUTO_GRN_ACCRUAL',
-    sourceId: String(grn.id),
-  }, txOpts(session)) as { details?: JournalDetail[] } | null;
-  if (!accrual) return null;
-  return (accrual.details || [])
+/**
+ * Σ akrual GRN (Cr GRNI) milik tagihan ini, atau null bila belum ada yang diakrualkan. GRN milik tagihan:
+ * sudah ter-link (hutangId / vendorInvoiceId), atau POSTED belum ter-link dengan DO + vendor yang sama
+ * (link ditulis sesudah jurnal saat tagihan dibuat). noDO saja tidak unik: tiap vendor punya urutan sendiri.
+ */
+export async function findGrnAccrualAmount(db: Db, hutang: HutangLike, session?: ClientSession): Promise<number | null> {
+  const tenantId = String(hutang.tenantId || 'default');
+  const hutangId = String(hutang.id || '');
+  const invoiceId = String(hutang.vendorInvoiceId || '');
+  const noDO = String(hutang.noDO || '');
+  const findIds = async (clause: Record<string, unknown>) => (await db.collection('goods_receipts')
+    .find({ $and: [tenantIdMatchFilter(tenantId), { status: 'POSTED' }, clause] }, { projection: { id: 1 }, ...txOpts(session) })
+    .toArray()).map((g) => String(g.id || '')).filter(Boolean);
+  const linked: Record<string, unknown>[] = [];
+  if (hutangId) linked.push({ hutangId });
+  if (invoiceId) linked.push({ vendorInvoiceId: invoiceId });
+  let ids = linked.length ? await findIds({ $or: linked }) : [];
+  if (!ids.length && noDO) {
+    const vid = hutangVendorKey(hutang.vendorTenantId as string | undefined);
+    ids = await findIds({
+      noDO,
+      ...(vid ? { vendorTenantId: vid } : {}),
+      $and: [
+        { $or: [{ hutangId: { $exists: false } }, { hutangId: null }, { hutangId: '' }] },
+        { $or: [{ vendorInvoiceId: { $exists: false } }, { vendorInvoiceId: null }, { vendorInvoiceId: '' }] },
+      ],
+    });
+  }
+  if (!ids.length) return null;
+  const accruals = await db.collection('jurnal')
+    .find({ tenantId, sourceType: 'AUTO_GRN_ACCRUAL', sourceId: { $in: ids } }, txOpts(session))
+    .toArray() as unknown as Array<{ details?: JournalDetail[] }>;
+  if (!accruals.length) return null;
+  return accruals
+    .flatMap((a) => a.details || [])
     .filter((d) => d.rekeningKode === COA.GRNI.kode)
     .reduce((s, d) => s + (Number(d.kredit) || 0) - (Number(d.debet) || 0), 0);
 }
@@ -120,8 +147,10 @@ export async function postVendorHutangJournal(
     Number.isNaN(preferred.getTime()) ? new Date() : preferred,
     session,
   );
-  const grniAmount = await findGrnAccrualAmount(db, tenantId, String(hutang.noDO || ''), session);
-  const costingV2 = grniAmount != null && await isTenantFeatureEnabled(db, tenantId, 'costingV2');
+  const grniAmount = await findGrnAccrualAmount(db, hutang, session);
+  // costingV2: tagihan sebelum akrual mendebit GRNI (bukan Persediaan) agar akrual GRN berikutnya
+  // tidak menggandakan Persediaan; selisih harga tertinggal di GRNI untuk rekonsiliasi.
+  const costingV2 = await isTenantFeatureEnabled(db, tenantId, 'costingV2');
   await createJournal(db, {
     tanggal,
     keterangan: keterangan || `Tagihan vendor ${noDoc}`,
@@ -133,8 +162,8 @@ export async function postVendorHutangJournal(
       subTotal: base.subTotal,
       ppn: base.ppn,
       total: base.total,
-      clearGrni: grniAmount != null,
-      ...(costingV2 ? { grniAmount: grniAmount ?? undefined } : {}),
+      clearGrni: grniAmount != null || costingV2,
+      ...(costingV2 && grniAmount != null ? { grniAmount } : {}),
     }),
     tenantId,
   }, session);

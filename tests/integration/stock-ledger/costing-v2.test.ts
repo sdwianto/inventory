@@ -9,6 +9,7 @@ import { mergeProductStock, postStockMovements, valueInventoryAtAvg, type StockM
 import { applyMasterProductStockChange, reconcileProductStockFromLedger } from '@/lib/stock-ledger/master-stock';
 import { inventoryGlBalance, postConsumptionJournal, unjournaledConsumptionValue } from '@/lib/api/stock-cost-journal';
 import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
+import { findGrnAccrualAmount, postVendorHutangJournal } from '@/lib/api/hutang-vendor-journal';
 import { runInTransactionOnDb } from '@/lib/api/transaction';
 import { COA } from '@/lib/api/journal-lines';
 import { backfillStockCostMigration } from '@/lib/migrations/0007-backfill-stock-cost';
@@ -170,6 +171,46 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
     expect(await avgOf(ON, 'kopi-a')).toBe(1750);
   });
 
+  it('tagihan vendor: akrual dicari per GRN milik tagihan (noDO tidak unik antar vendor)', async () => {
+    const T = 'it-hutang-grni';
+    await db.collection('tenant_settings').insertOne({ tenantId: T, features: { costingV2: true } });
+    const grn = (id: string, vendorTenantId: string, extra: Record<string, unknown> = {}) => ({
+      id, tenantId: T, noGRN: id, noDO: 'DO-1', status: 'POSTED', vendorTenantId, ...extra,
+    });
+    const accrual = (grnId: string, amt: number) => ({
+      id: `acc-${grnId}`, tenantId: T, sourceType: 'AUTO_GRN_ACCRUAL', sourceId: grnId, totalDebet: amt, totalKredit: amt,
+      details: [
+        { rekeningKode: COA.PERSEDIAAN.kode, debet: amt, kredit: 0 },
+        { rekeningKode: COA.GRNI.kode, debet: 0, kredit: amt },
+      ],
+    });
+    await db.collection('goods_receipts').insertMany([
+      grn('G-A1', 'vendor-a'), grn('G-B1', 'vendor-b'), grn('G-A2', 'vendor-a', { hutangId: 'H-A2' }),
+    ]);
+    await db.collection('jurnal').insertMany([accrual('G-A1', 100_000), accrual('G-B1', 50_000), accrual('G-A2', 30_000)]);
+
+    // Belum ter-link: GRN POSTED DO + vendor sama yang belum punya tagihan.
+    expect(await findGrnAccrualAmount(db, { id: 'H-A1', tenantId: T, noDO: 'DO-1', vendorTenantId: 'vendor-a' })).toBe(100_000);
+    // Sudah ter-link: hanya GRN miliknya.
+    expect(await findGrnAccrualAmount(db, { id: 'H-A2', tenantId: T, noDO: 'DO-1', vendorTenantId: 'vendor-a' })).toBe(30_000);
+    expect(await findGrnAccrualAmount(db, { id: 'H-C', tenantId: T, noDO: 'DO-9', vendorTenantId: 'vendor-a' })).toBeNull();
+
+    const lines = async (id: string, extra: Record<string, unknown>) => {
+      await runInTransactionOnDb(db, ({ db: txDb, session }) => postVendorHutangJournal(txDb, {
+        id, tenantId: T, noInvoice: id, total: 105_000, ppn: 0, ...extra,
+      }, { userName: 'it' }, session));
+      const j = await db.collection('jurnal').findOne({ tenantId: T, sourceType: 'AUTO_HUTANG_VENDOR', sourceId: id });
+      return j?.details.map((d: { rekeningKode: string; debet: number; kredit: number }) => [d.rekeningKode, d.debet, d.kredit]);
+    };
+    expect(await lines('H-A1', { noDO: 'DO-1', vendorTenantId: 'vendor-a' })).toEqual([
+      [COA.GRNI.kode, 100_000, 0], [COA.SELISIH_HARGA_BELI.kode, 5_000, 0], [COA.HUTANG.kode, 0, 105_000],
+    ]);
+    // Tagihan sebelum akrual (costingV2): Dr GRNI, Persediaan tidak disentuh.
+    expect(await lines('H-C', { noDO: 'DO-9', vendorTenantId: 'vendor-a' })).toEqual([
+      [COA.GRNI.kode, 105_000, 0], [COA.HUTANG.kode, 0, 105_000],
+    ]);
+  });
+
   it('migrasi 0008: cutover GL Persediaan = nilai buku stok; apply hanya saat costingV2 menyala', async () => {
     const ctx = (tenantId: string, dryRun: boolean) => ({ db, tenantId, dryRun, now: new Date('2026-09-26T05:00:00Z'), actor: 'it' });
     const valueNow = async () => Math.round((await valueInventoryAtAvg(db, ON)).value);
@@ -188,6 +229,10 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
     expect(before.journalPreview).toContainEqual({ rekeningKode: COA.BEBAN_BAHAN.kode, debet: 2100, kredit: 0 });
     expect(await db.collection('jurnal').countDocuments({ tenantId: ON, sourceType: 'AUTO_INVENTORY_CUTOVER' })).toBe(0);
 
+    await expect(inventoryGlCutoverMigration.run(ctx(ON, false))).rejects.toThrow(/0007-backfill-stock-cost/);
+    await db.collection('migration_runs').insertOne({
+      migrationId: '0007-backfill-stock-cost', tenantId: ON, mode: 'APPLY', status: 'OK', activeClaim: true,
+    });
     const applied = await inventoryGlCutoverMigration.run(ctx(ON, false));
     expect(applied.changed).toBe(1);
     expect(await inventoryGlBalance(db, ON)).toBe(await valueNow());
@@ -197,6 +242,9 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 4 costingV2 (Mongo replica set)', { t
     expect(again.changed).toBe(0);
     expect(await unjournaledConsumptionValue(db, ON)).toBe(0);
 
+    await db.collection('migration_runs').insertOne({
+      migrationId: '0007-backfill-stock-cost', tenantId: OFF, mode: 'APPLY', status: 'OK', activeClaim: true,
+    });
     await expect(inventoryGlCutoverMigration.run(ctx(OFF, false))).rejects.toThrow(/costingV2/);
     expect((await inventoryGlCutoverMigration.run(ctx(OFF, true))).changed).toBe(0);
   });
