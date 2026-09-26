@@ -57,7 +57,7 @@ function normUnitText(v: unknown): string {
  * Qty baris GRN dalam satuan baris PO. Satuan sama → apa adanya; beda satuan → lewat qty dasar
  * (faktor satuan PO dari product_uom). Tidak terkonversi → null (qty PO tidak diubah, dicatat log).
  */
-async function grnQtyInPoUnit(
+export async function grnQtyInPoUnit(
   db: Db,
   tenantId: string,
   poLine: JsonObject,

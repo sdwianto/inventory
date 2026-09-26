@@ -8,6 +8,7 @@ import { captureException } from '@/lib/api/sentry';
 import { runWithRequestTrace } from '@/lib/execution/tracing/trace-context';
 import { getExecutionMetricsSnapshot } from '@/lib/execution/metrics/prometheus';
 import { refreshGrnInvoiceSyncGauges } from '@/lib/api/grn-invoice-sync-metrics';
+import { refreshReconGauges } from '@/lib/recon/metrics';
 import { ensureSeeded } from '@/lib/api/seed';
 import { resolveRequestContext } from '@/lib/api/resolve-context';
 import { isPublicRoute, requireAuth } from '@/lib/api/require-auth';
@@ -78,6 +79,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
           // Jangan panggil refreshObservabilityGauges di sini — snapshot di bawah
           // sudah refresh (hindari double Redis client / scrape leak).
           await refreshGrnInvoiceSyncGauges(metricsDb);
+          await refreshReconGauges(metricsDb).catch(() => undefined);
         }
       } catch {
         metricsDb = null;

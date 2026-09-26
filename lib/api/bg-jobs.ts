@@ -38,6 +38,7 @@ export const JOB_TYPES = {
   HUTANG_REPAIR: 'HUTANG_REPAIR',
   HUTANG_BACKFILL: 'HUTANG_BACKFILL',
   INTEGRATION_RECONCILE: 'INTEGRATION_RECONCILE',
+  INVENTORY_RECON: 'INVENTORY_RECON',
   SANDBOX_RESET: 'SANDBOX_RESET',
   AUDIT_LOG_PURGE: 'AUDIT_LOG_PURGE',
   PRODUCT_ENRICHMENT_SYNC: 'PRODUCT_ENRICHMENT_SYNC',
@@ -391,6 +392,9 @@ export async function processJob(db: Db, job: BgJob) {
       } else {
         outcome = { ...(await runIntegrationReconcile(db, job.tenantId)) };
       }
+    } else if (job.type === JOB_TYPES.INVENTORY_RECON) {
+      const { runReconJobPayload } = await import('@/lib/recon/run');
+      outcome = await runReconJobPayload(db, job.tenantId, (job.payload || {}) as Record<string, unknown>);
     } else if (job.type === JOB_TYPES.SANDBOX_RESET) {
       const { runSandboxResetJob } = await import('@/lib/api/sandbox-purge');
       outcome = await runSandboxResetJob(db, {

@@ -1,7 +1,8 @@
 'use client';
 
 import { str, num, asObject, asArray, type JsonObject } from '@/types/json';
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -23,7 +24,19 @@ import { qtyEq } from '@/lib/stock-ledger/precision';
 const KARTU_COL_SPAN = 9;
 
 export default function KartuStokPage() {
-  const [selectedProduct, setSelectedProduct] = useState<JsonObject | null>(null);
+  return (
+    <Suspense fallback={null}>
+      <KartuStokContent />
+    </Suspense>
+  );
+}
+
+function KartuStokContent() {
+  const searchParams = useSearchParams();
+  const [selectedProduct, setSelectedProduct] = useState<JsonObject | null>(() => {
+    const id = searchParams.get('productId');
+    return id ? { id } : null;
+  });
   const [showPicker, setShowPicker] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -62,6 +75,12 @@ export default function KartuStokPage() {
     };
   }, [kartuRaw]);
 
+  // Tautan ?productId= hanya membawa id; label diambil dari produk di respons kartu.
+  const shownProduct = selectedProduct && !selectedProduct.kode && data.product
+    && str(data.product.id) === str(selectedProduct.id)
+    ? data.product
+    : selectedProduct;
+
   const reconcileMutation = useApiMutation([
     queryKeys.stokKartu.all,
     queryKeys.products.all,
@@ -94,9 +113,9 @@ export default function KartuStokPage() {
       const json = await reconcileMutation.mutateAsync({
         url: '/api/stok/kartu/reconcile',
         body: { productId: str(selectedProduct.id) },
-        offlineLabel: `Samakan stok ${str(selectedProduct.kode)}`,
+        offlineLabel: `Samakan stok ${str(shownProduct?.kode)}`,
       }) as JsonObject;
-      toast.success(`Stok master disamakan ke ${formatNumber(num(json.ledgerSaldo))} ${str(selectedProduct.satuan)}`);
+      toast.success(`Stok master disamakan ke ${formatNumber(num(json.ledgerSaldo))} ${str(shownProduct?.satuan)}`);
       load();
     } catch (e) {
       if (e instanceof OfflineQueuedError) toast.message(e.message);
@@ -110,10 +129,10 @@ export default function KartuStokPage() {
       const rows = data.rows;
       if (!rows.length) { toast.error('Tidak ada data'); return; }
       const stamp = new Date().toISOString().slice(0, 10);
-      const productLabel = selectedProduct ? str(selectedProduct.kode) : 'produk';
+      const productLabel = shownProduct ? str(shownProduct.kode) : 'produk';
       await runListExport(format, {
         baseName: `kartu-stok-${productLabel}-${stamp}`,
-        title: `Kartu Stok${selectedProduct ? ` — ${str(selectedProduct.kode)} ${str(selectedProduct.nama)}` : ''}`,
+        title: `Kartu Stok${shownProduct ? ` — ${str(shownProduct.kode)} ${str(shownProduct.nama)}` : ''}`,
         columns: [
           { key: 'tanggal', label: 'Tanggal', value: (r) => formatDateTime(str(r.tanggal)) },
           { key: 'noTransaksi', label: 'No. Transaksi' },
@@ -158,7 +177,7 @@ export default function KartuStokPage() {
             <label className="text-xs text-slate-500 block mb-1">Produk</label>
             <Button variant="outline" onClick={() => setShowPicker(true)} className="min-w-[280px] justify-start">
               <Search className="w-4 h-4 mr-2" />
-              {selectedProduct ? `${str(selectedProduct.kode)} - ${str(selectedProduct.nama)}` : 'Pilih produk...'}
+              {shownProduct ? `${str(shownProduct.kode) || str(shownProduct.id)} - ${str(shownProduct.nama)}` : 'Pilih produk...'}
             </Button>
           </div>
           <div>

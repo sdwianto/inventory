@@ -42,8 +42,9 @@ import {
   CalendarDays, Plus, Pencil, RefreshCw, Trash2, Undo2, History,
   ArrowUpFromLine, Factory, ClipboardList, Truck, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, ShoppingBag,
-  UtensilsCrossed, FileText, Printer, Combine, ChefHat,
+  UtensilsCrossed, FileText, Printer, Combine, ChefHat, Scale,
 } from 'lucide-react';
+import PlanVarianceDialog from '@/components/food-production/PlanVarianceDialog';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import {
   ceilProcurementQty,
@@ -347,6 +348,7 @@ function FoodProductionPlanPageContent() {
   }>>({});
   const [stockFetchPending, setStockFetchPending] = useState<Record<string, boolean>>({});
   const [readinessById, setReadinessById] = useState<Record<string, MaterialReadiness>>({});
+  const [variancePlan, setVariancePlan] = useState<{ id: string; noDokumen?: string } | null>(null);
   const [procuringId, setProcuringId] = useState<string | null>(null);
   const [refreshingProcureId, setRefreshingProcureId] = useState<string | null>(null);
   const [regeneratingMrpId, setRegeneratingMrpId] = useState<string | null>(null);
@@ -3186,6 +3188,16 @@ function FoodProductionPlanPageContent() {
                             <ClipboardList className="h-4 w-4 mr-1" /> Laporan
                           </Button>
                         )}
+                        {canManage && (ISSUE_ELIGIBLE_PLAN_STATUSES.has(row.status) || row.status === 'COMPLETED') && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="Rencana MRP vs acuan PO vs RL aktual (qty & rupiah)"
+                            onClick={() => setVariancePlan({ id: row.id, noDokumen: row.noDokumen })}
+                          >
+                            <Scale className="h-4 w-4 mr-1" /> Varians
+                          </Button>
+                        )}
                         {(row.status === 'COMPLETED'
                           || ((row.status === 'APPROVED' || row.status === 'PROCESSING')
                             && readinessById[row.id]?.issueCompleted)) && (
@@ -4040,6 +4052,8 @@ function FoodProductionPlanPageContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PlanVarianceDialog plan={variancePlan} onClose={() => setVariancePlan(null)} />
     </div>
   );
 }

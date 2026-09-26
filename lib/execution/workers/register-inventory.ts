@@ -15,6 +15,7 @@ import {
   executeHutangRepairJob,
   executeHutangSyncJob,
   executeIntegrationReconcileJob,
+  executeInventoryReconJob,
   executeCancelSoPushRecoveryJob,
   executePoVendorSyncJob,
   executeSandboxResetJob,
@@ -200,6 +201,16 @@ export function registerInventoryHandlers(): void {
     requiredCapabilities: ['CPU_BATCH'],
     handler: async (ctx, payload) => assertExecutionHandlerSuccess(
       await executeIntegrationReconcileJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'INVENTORY_RECON',
+    domain: 'inventory',
+    classification: 'BATCH',
+    requiredCapabilities: ['CPU_BATCH'],
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeInventoryReconJob(ctx.db, ctx.tenantId, payload),
     ),
   });
 

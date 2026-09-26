@@ -152,6 +152,8 @@ export const queryKeys = {
   },
   ops: {
     dashboard: ['ops', 'dashboard'] as const,
+    recon: ['ops', 'recon'] as const,
+    reconReport: (id: string) => ['ops', 'recon', 'report', id] as const,
   },
   audit: {
     list: (params: Record<string, unknown>) => ['audit', 'list', params] as const,

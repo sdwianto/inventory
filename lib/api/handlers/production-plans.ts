@@ -68,6 +68,7 @@ import {
   poOutstandingQty,
 } from '@/lib/food-production/material-issue';
 import { loadReleasePrefill } from '@/lib/food-production/release-prefill';
+import { buildPlanVariance } from '@/lib/food-production/plan-variance';
 import { isPblReferenceModeEnabled, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { isValidWarehouseKode, normalizeWarehouseKode } from '@/lib/api/warehouses';
 import {
@@ -1169,6 +1170,23 @@ export async function handleProductionPlans({
       fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
     });
     return ok({ ...prefill, productionPlanNo: plan.noDokumen });
+  }
+
+  // GET /production-plans/:id/variance — rencana MRP vs acuan PO vs RL aktual (qty & rupiah)
+  if (path[0] === 'production-plans' && path[1] && path[2] === 'variance' && method === 'GET') {
+    const deniedRole = requireRole(auth, [...MANAGE_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return err('Rencana tidak ditemukan', 404);
+    const variance = await buildPlanVariance(db, scopeAuth, plan, {
+      fallbackMrpLines: await planFallbackMrpLines(db, scopeAuth, plan),
+    });
+    return ok({ ...variance, productionPlanNo: plan.noDokumen, tanggal: plan.tanggal, status: plan.status });
   }
 
   // GET /production-plans/:id/material-readiness — stok lengkap vs kekurangan (live explode)

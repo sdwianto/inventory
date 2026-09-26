@@ -10,6 +10,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { formatDateTime } from '@/lib/format';
 import { getUser } from '@/lib/auth-client';
 import { toast } from 'sonner';
+import ReconPanel from '@/components/ops/ReconPanel';
 
 type InvoiceReconcile = {
   reportId?: string;
@@ -274,6 +275,8 @@ export default function OpsDashboardPage() {
               ))}
             </ul>
           </section>
+
+          <ReconPanel />
 
           <section className="rounded-lg border p-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">

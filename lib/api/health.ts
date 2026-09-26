@@ -6,6 +6,7 @@ import { checkMongoReplicaSet } from '@/lib/api/mongo-replica';
 import { isDistributedRateLimitEnabled } from '@/lib/api/rate-limit';
 import { distributedCacheHealthStatus, isRedisConfigured } from '@/lib/api/redis-rest';
 import { buildSloChecks, sloOverallOk } from '@/lib/api/slo-check';
+import { latestReconReports } from '@/lib/recon/reports';
 
 const startedAt = Date.now();
 export const WORKER_STALE_THRESHOLD_SEC = 300;
@@ -64,6 +65,15 @@ export interface HealthPayload {
       neverRun?: boolean;
       message?: string;
     };
+    /** Informasional: anomali stock-recon terbaru semua tenant; tidak mengubah `status`. */
+    stockRecon?: {
+      totalMismatch: number;
+      tenants: number;
+      errors: number;
+      checkedAt?: string;
+      neverRun?: boolean;
+      message?: string;
+    };
     worker?: BgJobsHealth;
     slo?: import('@/lib/api/slo-check').SloChecks;
     execution?: ExecutionPlatformHealth;
@@ -107,6 +117,24 @@ export async function buildBgJobsHealth(db: Db): Promise<BgJobsHealth> {
     orphanLegacyCount,
     dispatchedCount,
   };
+}
+
+async function buildStockReconHealth(db: Db): Promise<HealthPayload['checks']['stockRecon']> {
+  try {
+    const reports = await latestReconReports(db, { jobs: ['stock'] });
+    if (!reports.length) {
+      return { totalMismatch: 0, tenants: 0, errors: 0, neverRun: true, message: 'stock-recon belum pernah dijalankan' };
+    }
+    const oldest = reports.reduce((min, r) => Math.min(min, new Date(r.createdAt).getTime()), Date.now());
+    return {
+      totalMismatch: reports.reduce((s, r) => s + (Number(r.totalMismatch) || 0), 0),
+      tenants: reports.length,
+      errors: reports.filter((r) => r.status === 'ERROR').length,
+      checkedAt: new Date(oldest).toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function buildHealthResponse(db: Db | null, appName: string): Promise<HealthPayload> {
@@ -168,6 +196,7 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
       integrationReconcile = undefined;
     }
   }
+  const stockRecon = db && database === 'ok' ? await buildStockReconHealth(db) : undefined;
 
   const dbReady = database === 'ok';
   const txReady = transactions !== 'fail';
@@ -191,6 +220,7 @@ export async function buildHealthResponse(db: Db | null, appName: string): Promi
       cache: isRedisConfigured() ? 'redis' : 'memory',
       cacheStatus,
       ...(integrationReconcile ? { integrationReconcile } : {}),
+      ...(stockRecon ? { stockRecon } : {}),
       ...(worker ? { worker } : {}),
       slo,
       execution: buildExecutionPlatformHealth(),

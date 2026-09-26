@@ -56,6 +56,9 @@ import {
   repairKaFollowUpOrphans,
   runKaFollowUpOrphanDetect,
 } from '@/lib/api/ka-follow-up-orphan-reconcile';
+import { getReconReport, latestReconReports } from '@/lib/recon/reports';
+import { parseReconJobs, runRecon } from '@/lib/recon/run';
+import { RECON_JOBS, RECON_KINDS } from '@/lib/recon/types';
 import {
   KA_OPEN_CASE_MISSING_FU_RECONCILE_REPORTS_COLLECTION,
   repairKaOpenCaseMissingFu,
@@ -64,6 +67,56 @@ import {
 
 export async function handleOpsDashboard(ctx: HandlerContext): Promise<NextResponse | null> {
   const { db, route, method, auth, body } = ctx;
+
+  // Fase 6: laporan rekonsiliasi terbaru per tenant × job.
+  if (route === '/ops/recon' && method === 'GET') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const tenantId = String(ctx.url.searchParams.get('tenantId') || '').trim() || undefined;
+    const reports = await latestReconReports(db, { tenantId });
+    const totals: Record<string, number> = {};
+    for (const r of reports) {
+      for (const [kind, n] of Object.entries(r.summary || {})) totals[kind] = (totals[kind] || 0) + (Number(n) || 0);
+    }
+    return ok({ jobs: RECON_JOBS, kinds: RECON_KINDS, reports: reports.map(clean), totals });
+  }
+
+  if (route === '/ops/recon/report' && method === 'GET') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const id = String(ctx.url.searchParams.get('id') || '').trim();
+    if (!id) return err('id laporan wajib', 400);
+    const report = await getReconReport(db, id);
+    if (!report) return err('Laporan tidak ditemukan', 404);
+    return ok(report);
+  }
+
+  // Satu tenant dijalankan langsung; semua tenant lewat bg job INVENTORY_RECON.
+  if (route === '/ops/recon/run' && method === 'POST') {
+    const denied = requireRole(auth, ['MASTER']);
+    if (denied) return denied;
+    const payload = (body || {}) as { job?: string; tenantId?: string; allTenants?: boolean };
+    const jobs = parseReconJobs(payload.job);
+    if (!jobs) return err(`Job rekonsiliasi tidak dikenal: ${String(payload.job)}`, 400);
+    const tenantId = String(payload.tenantId || '').trim();
+    if (payload.allTenants === true || !tenantId) {
+      const jobKey = jobs.length === RECON_JOBS.length ? 'all' : jobs.join(',');
+      const { jobId, reused } = await enqueueJob(db, {
+        type: JOB_TYPES.INVENTORY_RECON,
+        tenantId: 'system',
+        payload: {
+          dedupeKey: `inventory-recon:ops:${jobKey}:${new Date().toISOString().slice(0, 16)}`,
+          job: jobKey,
+          allTenants: true,
+          source: 'ops-dashboard',
+        },
+      });
+      scheduleJobProcessing(db, { limit: 3 });
+      return ok({ enqueued: true, jobId, reused, jobs, at: new Date().toISOString() });
+    }
+    const result = await runRecon(db, { jobs, tenantId });
+    return ok({ enqueued: false, ...result, at: new Date().toISOString() });
+  }
 
   // W1-5: MASTER triggers Invoice Detect (INTEGRATION_RECONCILE) — Compare/Repair via worker.
   if (route === '/ops/invoice-reconcile/run' && method === 'POST') {

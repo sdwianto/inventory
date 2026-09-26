@@ -34,6 +34,7 @@ export const EXECUTION_WAVE_2_TYPES = new Set([
 
 export const EXECUTION_WAVE_3_TYPES = new Set([
   'INTEGRATION_RECONCILE',
+  'INVENTORY_RECON',
   'AUDIT_LOG_PURGE',
   'SANDBOX_RESET',
 ]);

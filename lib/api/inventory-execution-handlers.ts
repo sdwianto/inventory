@@ -248,6 +248,15 @@ export async function executeProductEnrichmentSyncJob(
   return runProductEnrichmentSyncJob(db, { tenantId, payload });
 }
 
+export async function executeInventoryReconJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runReconJobPayload } = await import('@/lib/recon/run');
+  return runReconJobPayload(db, tenantId, payload);
+}
+
 export async function executeAuditLogPurgeJob(
   db: Db,
 ): Promise<Record<string, unknown>> {
