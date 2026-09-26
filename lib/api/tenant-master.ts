@@ -34,6 +34,8 @@ export const REKENING_DEFAULTS = [
   { kode: '30020', nama: 'Retur Penjualan', tipe: 'PENDAPATAN', posisi: 'DEBET' },
   { kode: '30030', nama: 'Diskon Penjualan', tipe: 'PENDAPATAN', posisi: 'DEBET' },
   { kode: '31010', nama: 'Harga Pokok Penjualan', tipe: 'HPP', posisi: 'DEBET' },
+  { kode: '31020', nama: 'Beban Bahan Baku', tipe: 'HPP', posisi: 'DEBET' },
+  { kode: '31030', nama: 'Selisih Harga Beli', tipe: 'HPP', posisi: 'DEBET' },
   { kode: '40010', nama: 'Beban Gaji', tipe: 'BEBAN', posisi: 'DEBET' },
   { kode: '40020', nama: 'Beban Listrik & Air', tipe: 'BEBAN', posisi: 'DEBET' },
   { kode: '40030', nama: 'Beban Sewa', tipe: 'BEBAN', posisi: 'DEBET' },

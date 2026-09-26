@@ -12,6 +12,7 @@ import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
 import { runInTransactionOnDb, txOpts } from '@/lib/api/transaction';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { nextDocNumber } from '@/lib/api/document-sequence';
+import { postMasterAdjustmentJournal } from '@/lib/api/stock-cost-journal';
 import type { AuthContext } from '@/types/auth';
 import { isZeroQty, roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 import {
@@ -190,6 +191,14 @@ async function applyMasterStockInSession(
     }],
   });
   if (!posted.ok) return { ok: false, error: posted.error };
+  await postMasterAdjustmentJournal(db, session, {
+    tenantId: tid,
+    sourceId: penyesuaianId,
+    noDoc: `${noPS}/${product.kode || stokId}`,
+    tanggal: now,
+    userName: auth?.name || auth?.email || '',
+    line: posted.lines[0],
+  });
 
   await writeAuditLog(db, {
     tenantId: tid,

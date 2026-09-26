@@ -25,6 +25,8 @@ import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildPenyesuaianJournalLines } from '@/lib/api/journal-lines';
 import { postStockMutation } from '@/lib/api/stock-mutation';
+import { postedLinesValue } from '@/lib/api/stock-cost-journal';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { syncBatchesOnVariance } from '@/lib/food-production/cycle-count-fefo';
 import type { HandlerContext } from '@/types/api/handler';
 import { asProductRow, itemStokId, type InventoryBody } from './inventory-shared';
@@ -117,6 +119,7 @@ export async function handlePenyesuaian({
       });
     }
 
+    const costingV2 = await isTenantFeatureEnabled(db, tenantId, 'costingV2');
     try {
       await runInTransactionOrFallback(async ({ db: txDb, session }) => {
         // Callback bisa diulang (transient error) — state dokumen dibangun ulang tiap percobaan.
@@ -131,6 +134,7 @@ export async function handlePenyesuaian({
           const selisih = isZeroQty(selisihRaw) ? 0 : selisihRaw;
           let fefoSync: Record<string, unknown> | undefined;
           let lotSync: Record<string, unknown> | undefined;
+          let postedValue = 0;
 
           // W2-4/W2-8: stock mutation + FG batch sync + ingredient lot sync.
           if (selisih !== 0) {
@@ -156,6 +160,7 @@ export async function handlePenyesuaian({
             if (!posted.ok) {
               throw new Error(posted.error || `Gagal penyesuaian ${prod.kode || prod.id}`);
             }
+            postedValue = postedLinesValue([posted.line]);
             lotSync = posted.lot?.kartuFields.lotSync as Record<string, unknown> | undefined;
             const syncInput = {
               tenantId,
@@ -185,7 +190,7 @@ export async function handlePenyesuaian({
           });
 
           if (selisih !== 0) {
-            const jAmt = Math.round(Math.abs(selisih) * hargaBeli);
+            const jAmt = Math.round(costingV2 ? postedValue : Math.abs(selisih) * hargaBeli);
             const jLines = buildPenyesuaianJournalLines({
               noDoc: `${noPS}/${prod.kode}`,
               amount: jAmt,

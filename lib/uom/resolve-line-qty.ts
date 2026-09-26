@@ -2,7 +2,7 @@ import type { Db } from 'mongodb';
 import { lineQtyToBase, legacyLineQtyToBase, pickBaseUom } from '@/lib/uom/conversion';
 import type { ProductUom } from '@/lib/uom/types';
 import { listProductUoms, listProductUomsByProductIds } from '@/lib/api/product-uom';
-import { roundQty } from '@/lib/stock-ledger/precision';
+import { roundQty, roundUnitCost } from '@/lib/stock-ledger/precision';
 
 export type LineQtyInput = {
   qty?: number | string;
@@ -130,5 +130,5 @@ export function unitCostPerBaseFromLine(
   lineTotal: number,
 ): number {
   if (resolved.qtyBase <= 0) return 0;
-  return Math.round(lineTotal / resolved.qtyBase);
+  return roundUnitCost(lineTotal / resolved.qtyBase);
 }

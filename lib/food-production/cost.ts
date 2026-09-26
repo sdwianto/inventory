@@ -278,6 +278,53 @@ export function analyzePlanStandardCost(input: {
   };
 }
 
+/**
+ * HPP standar rencana dari baris MRP (qtyGross): standar porsi SPPG, pengecualian porsi, porsi
+ * besar/kecil, override, dan revisi resep yang dipin sudah diterapkan oleh eksplosi MRP.
+ */
+export function analyzeMrpStandardCost(input: {
+  planId: string;
+  planNo?: string;
+  totalPorsi: number;
+  mrpLines: Array<{ productId: string; productKode?: string; productNama?: string; satuan?: string; qtyGross: number }>;
+  productsById: Map<string, ProductCostRef>;
+}): CostAnalysis {
+  const lines: CostLineBreakdown[] = [];
+  let total = 0;
+  let missing = 0;
+  for (const l of input.mrpLines) {
+    const qty = roundQty(Number(l.qtyGross) || 0);
+    if (!(qty > 0)) continue;
+    const product = input.productsById.get(l.productId);
+    const unit = unitCostOf(product);
+    const base = {
+      productId: l.productId,
+      productKode: l.productKode || product?.productKode,
+      productNama: l.productNama || product?.productNama,
+      qty,
+      satuan: l.satuan || product?.satuan,
+    };
+    if (unit == null) {
+      missing += 1;
+      lines.push({ ...base, unitCost: 0, amount: 0, missingPrice: true });
+      continue;
+    }
+    const amount = money(qty * unit);
+    total += amount;
+    lines.push({ ...base, unitCost: money(unit), amount });
+  }
+  const porsi = input.totalPorsi > 0 ? input.totalPorsi : 1;
+  total = money(total);
+  return {
+    scope: 'plan',
+    refId: input.planId,
+    refLabel: input.planNo,
+    standard: { totalCost: total, perPorsi: money(total / porsi), yieldPorsi: porsi, missingPriceCount: missing },
+    lines,
+    warnings: missing ? [`${missing} baris tanpa harga`] : [],
+  };
+}
+
 export function analyzeActualCost(input: {
   planId: string;
   planNo?: string;

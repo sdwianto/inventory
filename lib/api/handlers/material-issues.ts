@@ -11,6 +11,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { guardPosting } from '@/lib/api/period-lock';
 import { postStockMovements, type StockActor } from '@/lib/stock-ledger';
+import { postConsumptionJournal } from '@/lib/api/stock-cost-journal';
 import { runInTransactionOrFallback, txOpts } from '@/lib/api/transaction';
 import {
   MATERIAL_ISSUES_COLLECTION,
@@ -329,6 +330,15 @@ async function postIssueStock(
     lines: movementLines,
   });
   if (!posted.ok) return { error: posted.error };
+  await postConsumptionJournal(db, session, {
+    tenantId: doc.tenantId,
+    sourceType: 'FP_ISSUE',
+    sourceId: doc.id,
+    noDoc: doc.noDokumen,
+    tanggal: postingDate,
+    userName: actor?.userName || '',
+    lines: posted.lines,
+  });
 
   const fefoConsume: NonNullable<MaterialIssueDoc['fefoConsume']> = posted.lines.map((line) => ({
     stokId: line.productId,

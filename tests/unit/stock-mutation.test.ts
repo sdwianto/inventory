@@ -63,6 +63,15 @@ function fakeDb(state: { products: Row[]; lokasi: Row[]; kartu: Row[] }): Db {
         toArray: async () => [],
       }),
       findOne: async () => null,
+      aggregate: () => ({
+        toArray: async () => {
+          if (name !== 'stok_lokasi') return [];
+          const qty = new Map<string, number>();
+          for (const r of state.lokasi) qty.set(String(r.stokId), (qty.get(String(r.stokId)) || 0) + Number(r.qty || 0));
+          return [...qty].map(([_id, q]) => ({ _id, qty: q }));
+        },
+      }),
+      updateOne: async () => ({ matchedCount: 1, modifiedCount: 1 }),
       insertMany: async (docs: Row[]) => {
         state.kartu.push(...docs);
         return { insertedCount: docs.length };
@@ -122,7 +131,10 @@ describe('postStockMutation → postStockMovements', () => {
   it('masuk: update lokasi, putaway bin, kartu dengan harga baris', async () => {
     softPutawayBinOnWarehouseIn.mockResolvedValue({ allocated: 10, binKode: 'RCV', skippedNoDefaultBin: false });
     const r = await postStockMutation(db, { ...base, deltaQtyBase: 10, hargaSatuan: 1000 });
-    expect(r).toEqual({ ok: true, qtyAfter: 15, lokasiKode: 'GKERING', kartuId: 'uuid-test-1' });
+    expect(r).toEqual({
+      ok: true, qtyAfter: 15, lokasiKode: 'GKERING', kartuId: 'uuid-test-1',
+      line: expect.objectContaining({ productId: 'p1', deltaQtyBase: 10, unitCost: 1000, costSource: 'LINE' }),
+    });
     expect(applyLokasiDelta).toHaveBeenCalledWith(db, 't1', 'p1', 'GKERING', 10, expect.any(Date), undefined);
     expect(softConsumeBinOnWarehouseOut).not.toHaveBeenCalled();
     expect(softPutawayBinOnWarehouseIn).toHaveBeenCalledWith(db, 't1', 'p1', 'GKERING', 10, undefined);

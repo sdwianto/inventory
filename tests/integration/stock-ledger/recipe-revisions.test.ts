@@ -180,9 +180,12 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 2.2 versi resep (Mongo replica set)',
     expect(mrp!.lines[0].sources[0]).toMatchObject({ recipeId, recipeRevisionId: cur!.currentRevisionId });
 
     const before = await planCost('p-kolak');
-    expect(before).toMatchObject({ recipeSource: 'MRP', mrpNo: mrp!.noDokumen });
+    expect(before).toMatchObject({ recipeSource: 'MRP', mrpNo: mrp!.noDokumen, standardSource: 'MRP' });
     // 6 kg × Rp20.000 / 100 porsi × 100 porsi
     expect(before.standard.totalCost).toBe(120000);
+    // Qty HPP standar = qtyGross MRP (selisih 0).
+    expect((before.lines as Array<{ productId: string; qty: number }>).map((l) => [l.productId, l.qty]))
+      .toEqual(mrp!.lines.map((l: { productId: string; qtyGross: number }) => [l.productId, l.qtyGross]));
 
     const edit = await call(handleRecipes as Handler, 'PUT', ['recipes', recipeId], { lines: [gulaLine(10000)] });
     expect(edit.json.revision).toBe(3);

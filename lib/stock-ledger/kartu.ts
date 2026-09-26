@@ -2,14 +2,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { warehouseLabel } from '@/lib/api/warehouses';
 import { roundStockQty, roundUnitCost } from '@/lib/stock-ledger/precision';
+import type { StockCostSource } from '@/lib/stock-ledger/cost';
+
+export type { StockCostSource };
 
 export interface StockActor {
   userId?: string;
   userName?: string;
   role?: string;
 }
-
-export type StockCostSource = 'LINE' | 'PRODUCT_AVG' | 'NONE';
 
 export interface KartuDocInput {
   tenantId: string;

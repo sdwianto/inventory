@@ -16,6 +16,8 @@ export const COA = {
   PPN_MASUKAN: { kode: '10410', nama: 'PPN Masukan' },
   HUTANG: { kode: '20010', nama: 'Hutang Usaha' },
   GRNI: { kode: '20020', nama: 'Penerimaan Belum Ditagih' },
+  BEBAN_BAHAN: { kode: '31020', nama: 'Beban Bahan Baku' },
+  SELISIH_HARGA_BELI: { kode: '31030', nama: 'Selisih Harga Beli' },
   BEBAN_GAJI: { kode: '40010', nama: 'Beban Gaji' },
   PENYESUAIAN: { kode: '40060', nama: 'Penyesuaian Persediaan' },
 } as const;
@@ -78,16 +80,32 @@ export function buildVendorHutangJournalLines({
   ppn = 0,
   total,
   clearGrni = false,
-}: VendorHutangJournalParams & { clearGrni?: boolean }): JournalDetail[] {
+  grniAmount,
+}: VendorHutangJournalParams & {
+  clearGrni?: boolean;
+  /** Nilai akrual GRN yang dikliring; selisih terhadap subTotal masuk Selisih Harga Beli. */
+  grniAmount?: number;
+}): JournalDetail[] {
   const lines: JournalDetail[] = [];
   if (clearGrni) {
+    const grni = grniAmount != null && grniAmount > 0 ? Math.round(grniAmount) : subTotal;
+    const ppv = subTotal - grni;
     lines.push({
       rekeningKode: COA.GRNI.kode,
       rekeningNama: COA.GRNI.nama,
-      debet: subTotal,
+      debet: grni,
       kredit: 0,
       keterangan: `Clear GRNI ${noDoc}`,
     });
+    if (ppv !== 0) {
+      lines.push({
+        rekeningKode: COA.SELISIH_HARGA_BELI.kode,
+        rekeningNama: COA.SELISIH_HARGA_BELI.nama,
+        debet: ppv > 0 ? ppv : 0,
+        kredit: ppv < 0 ? -ppv : 0,
+        keterangan: `Selisih harga beli ${noDoc}`,
+      });
+    }
   } else {
     lines.push({
       rekeningKode: COA.PERSEDIAAN.kode,

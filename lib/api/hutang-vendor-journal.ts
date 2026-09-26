@@ -3,7 +3,8 @@ import type { ClientSession, Db } from 'mongodb';
 // saat sinkron ulang membuat tagihan jadi EXCEPTION atau nilainya berubah.
 
 import { createJournal, createJournalIfNotExists } from '@/lib/api/journal';
-import { buildVendorHutangJournalLines, reverseJournalDetails } from '@/lib/api/journal-lines';
+import { COA, buildVendorHutangJournalLines, reverseJournalDetails } from '@/lib/api/journal-lines';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { txOpts } from '@/lib/api/transaction';
 import type { JournalDetail } from '@/types/finance';
 
@@ -82,16 +83,20 @@ async function resolveJournalDate(db: Db, tenantId: string, preferred: Date, ses
   return new Date();
 }
 
-async function hasGrnAccrual(db: Db, tenantId: string, noDO: string, session?: ClientSession): Promise<boolean> {
-  if (!noDO) return false;
+/** Nilai akrual GRN (Cr GRNI) untuk DO ini, atau null bila GRN belum diakrualkan. */
+async function findGrnAccrualAmount(db: Db, tenantId: string, noDO: string, session?: ClientSession): Promise<number | null> {
+  if (!noDO) return null;
   const grn = await db.collection('goods_receipts').findOne({ tenantId, noDO, status: 'POSTED' }, txOpts(session));
-  if (!grn?.id) return false;
+  if (!grn?.id) return null;
   const accrual = await db.collection('jurnal').findOne({
     tenantId,
     sourceType: 'AUTO_GRN_ACCRUAL',
     sourceId: String(grn.id),
-  }, txOpts(session));
-  return Boolean(accrual);
+  }, txOpts(session)) as { details?: JournalDetail[] } | null;
+  if (!accrual) return null;
+  return (accrual.details || [])
+    .filter((d) => d.rekeningKode === COA.GRNI.kode)
+    .reduce((s, d) => s + (Number(d.kredit) || 0) - (Number(d.debet) || 0), 0);
 }
 
 /** Posting jurnal tagihan bila belum ada yang berlaku. */
@@ -115,6 +120,8 @@ export async function postVendorHutangJournal(
     Number.isNaN(preferred.getTime()) ? new Date() : preferred,
     session,
   );
+  const grniAmount = await findGrnAccrualAmount(db, tenantId, String(hutang.noDO || ''), session);
+  const costingV2 = grniAmount != null && await isTenantFeatureEnabled(db, tenantId, 'costingV2');
   await createJournal(db, {
     tanggal,
     keterangan: keterangan || `Tagihan vendor ${noDoc}`,
@@ -126,7 +133,8 @@ export async function postVendorHutangJournal(
       subTotal: base.subTotal,
       ppn: base.ppn,
       total: base.total,
-      clearGrni: await hasGrnAccrual(db, tenantId, String(hutang.noDO || ''), session),
+      clearGrni: grniAmount != null,
+      ...(costingV2 ? { grniAmount: grniAmount ?? undefined } : {}),
     }),
     tenantId,
   }, session);
@@ -326,5 +334,7 @@ export async function voidVendorNoteJournals(
 
 /** Jurnal berlaku harus sama dengan nilai tagihan sekarang. */
 export function journalMatchesBase(journal: JournalRow, base: HutangPostingBase): boolean {
-  return toInt(journal.totalDebet) === base.total;
+  const hutangLines = (journal.details || []).filter((d) => d.rekeningKode === COA.HUTANG.kode);
+  if (!hutangLines.length) return toInt(journal.totalDebet) === base.total;
+  return hutangLines.reduce((s, d) => s + toInt(d.kredit) - toInt(d.debet), 0) === base.total;
 }

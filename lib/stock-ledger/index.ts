@@ -76,6 +76,13 @@ export {
 } from '@/lib/stock-ledger/lot-realign';
 
 export {
+  planStockCostBackfill,
+  applyStockCostBackfill,
+  listProductsWithKartu,
+  type StockCostBackfillPlan,
+} from '@/lib/stock-ledger/cost-backfill';
+
+export {
   mergeProductStock,
   type MergeProductStockInput,
   type MergeProductStockResult,

@@ -6,7 +6,7 @@
 
 import type { Db } from 'mongodb';
 import { withTenantFilter } from '@/lib/api/tenant-master';
-import { isPblReferenceModeEnabled } from '@/lib/api/feature-flags';
+import { isPblReferenceModeEnabled, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { sumOutboundKartuBySource } from '@/lib/stock-ledger';
 import type { ActualKartuCost } from '@/lib/food-production/cost';
 import type { DailyConsumptionPoint } from '@/lib/food-production/forecast';
@@ -47,16 +47,17 @@ export interface PlanActualCostInput {
 
 /**
  * Baris konsumsi aktual rencana untuk analyzeActualCost.
- * Tanpa mode acuan: perilaku lama (PBL Selesai terakhir + RL tertaut, harga master).
- * Mode acuan: PBL ber-stok + RL POSTED, dinilai dari kartu stok (harga saat keluar).
+ * Tanpa mode acuan dan tanpa costingV2: perilaku lama (PBL Selesai terakhir + RL tertaut, harga master).
+ * Mode acuan atau costingV2: PBL ber-stok + RL POSTED, dinilai dari kartu stok (harga saat keluar).
  */
 export async function loadPlanActualCostInput(
   db: Db,
   scopeAuth: ScopeAuth,
   plan: Pick<ProductionPlanDoc, 'id' | 'tenantId'>,
 ): Promise<PlanActualCostInput> {
-  const [flagOn, issue] = await Promise.all([
+  const [flagOn, costingV2, issue] = await Promise.all([
     isPblReferenceModeEnabled(db, plan.tenantId),
+    isTenantFeatureEnabled(db, plan.tenantId, 'costingV2'),
     db.collection(MATERIAL_ISSUES_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { productionPlanId: plan.id, status: 'COMPLETED' }),
       { sort: { createdAt: -1 } },
@@ -68,7 +69,7 @@ export async function loadPlanActualCostInput(
   const rlLines = await loadOperationalReleaseLinesForPlan(db, scopeAuth, plan.id);
   const issueLines = mergeConsumptionLinesForCost(pblLines, rlLines);
   const productIds = [...new Set(issueLines.map((l) => l.productId))];
-  if (!referenceMode) return { referenceMode, issueLines, productIds };
+  if (!referenceMode && !costingV2) return { referenceMode, issueLines, productIds };
 
   const releases = await db.collection(INVENTORY_RELEASES_COLLECTION)
     .find(withTenantFilter(scopeAuth, {

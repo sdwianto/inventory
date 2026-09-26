@@ -33,6 +33,8 @@ import {
   reservationBlockedQty,
 } from '@/lib/stock-ledger/plan-reservation';
 import { buildKartuDoc, type StockActor, type StockCostSource } from '@/lib/stock-ledger/kartu';
+import { applyLineCost, legacyLineCost, type AvgCostState } from '@/lib/stock-ledger/cost';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 
 export type StockSourceType =
   | 'RELEASE'
@@ -61,7 +63,10 @@ export interface StockMovementLine {
   warehouseKode: string;
   /** Positif = masuk, negatif = keluar (satuan dasar). */
   deltaQtyBase: number;
-  /** Harga per satuan dasar. Keluar tanpa harga memakai rata-rata produk (hargaBeli). */
+  /**
+   * Harga per satuan dasar. costingV2 mati: keluar tanpa harga memakai hargaBeli. costingV2 aktif:
+   * hanya masuk berbiaya dan pembalik pembelian yang memakai harga ini; sisanya rata-rata bergerak.
+   */
   unitCost?: number;
   qtyEntered?: number;
   uomId?: string;
@@ -117,6 +122,8 @@ type ProductRow = {
   nama?: string;
   gudangKode?: string | null;
   hargaBeli?: number | string;
+  avgCost?: number | null;
+  itemRole?: string | null;
   mergedInto?: string | null;
   shelfLifeDays?: number | null;
   satuan?: string;
@@ -198,6 +205,31 @@ function consumeQcHeldAllowance(
   const releasedAvailable = roundStockQty(available - heldTotal);
   if (qtyLt(releasedAvailable, need)) return { releasedAvailable };
   return null;
+}
+
+/**
+ * Status rata-rata bergerak sebelum posting: qty = Σ stok_lokasi semua gudang, avg = products.avgCost.
+ * Produk yang belum pernah punya avgCost (sebelum migrasi backfill) memakai hargaBeli sebagai titik awal.
+ */
+async function loadAvgCostState(
+  db: Db,
+  tenantId: string,
+  ids: string[],
+  productById: Map<string, ProductRow>,
+  session: ClientSession | undefined,
+): Promise<Map<string, AvgCostState>> {
+  const rows = await db.collection(STOK_LOKASI).aggregate<{ _id: string; qty: number }>([
+    { $match: { tenantId, stokId: { $in: ids } } },
+    { $group: { _id: '$stokId', qty: { $sum: { $toDouble: { $ifNull: ['$qty', 0] } } } } },
+  ], txOpts(session)).toArray();
+  const qtyById = new Map(rows.map((r) => [String(r._id), roundStockQty(r.qty)]));
+  const state = new Map<string, AvgCostState>();
+  for (const id of ids) {
+    const p = productById.get(id);
+    const avg = typeof p?.avgCost === 'number' ? roundUnitCost(p.avgCost) : Math.max(0, roundUnitCost(p?.hargaBeli));
+    state.set(id, { qty: qtyById.get(id) ?? 0, avg });
+  }
+  return state;
 }
 
 class PostingAborted extends Error {
@@ -298,7 +330,7 @@ async function postInSession(
   const ids = [...productIds];
   const products = await db.collection<ProductRow>('products')
     .find(productsFilter(tid, ids), txOpts(session))
-    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, mergedInto: 1, shelfLifeDays: 1, satuan: 1 })
+    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, mergedInto: 1, shelfLifeDays: 1, satuan: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
 
@@ -419,6 +451,10 @@ async function postInSession(
     }
   }
 
+  const costingV2 = await isTenantFeatureEnabled(db, tid, 'costingV2');
+  const costState = await loadAvgCostState(db, tid, ids, productById, session);
+  const avgBefore = new Map([...costState].map(([id, s]) => [id, s.avg]));
+
   const posted: PostedStockLine[] = [];
   const kartuDocs: Record<string, unknown>[] = [];
   for (const l of prepared) {
@@ -459,18 +495,18 @@ async function postInSession(
       lot = applied;
     }
 
-    let unitCost = 0;
-    let costSource: StockCostSource = 'NONE';
-    if (l.unitCost !== undefined && l.unitCost !== null && Number.isFinite(Number(l.unitCost))) {
-      unitCost = roundUnitCost(l.unitCost);
-      costSource = 'LINE';
-    } else if (l.delta < 0) {
-      const avg = roundUnitCost(l.product.hargaBeli);
-      if (avg > 0) {
-        unitCost = avg;
-        costSource = 'PRODUCT_AVG';
-      }
-    }
+    const costInput = {
+      sourceType: String(input.sourceType),
+      delta: l.delta,
+      lineUnitCost: l.unitCost,
+      hargaBeli: l.product.hargaBeli,
+      itemRole: l.product.itemRole,
+    };
+    const moving = applyLineCost(costState.get(l.productId)!, costInput);
+    costState.set(l.productId, moving.next);
+    const { unitCost, costSource }: { unitCost: number; costSource: StockCostSource } = costingV2
+      ? moving
+      : legacyLineCost(costInput);
 
     const kartu = buildKartuDoc({
       tenantId: tid,
@@ -525,6 +561,15 @@ async function postInSession(
   const productStok: Record<string, number> = {};
   for (const id of ids) {
     productStok[id] = await recomputeProductStok(db, tid, id, session);
+    const avg = costState.get(id)!.avg;
+    const stored = productById.get(id)?.avgCost;
+    if (avg !== avgBefore.get(id) || typeof stored !== 'number') {
+      await db.collection('products').updateOne(
+        productsFilter(tid, [id]),
+        { $set: { avgCost: avg, avgCostUpdatedAt: postingDate } },
+        txOpts(session),
+      );
+    }
   }
 
   await writeAuditLog(db, {

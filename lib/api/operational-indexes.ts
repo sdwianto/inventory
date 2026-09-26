@@ -27,6 +27,15 @@ interface IndexSpec {
 const INDEX_SPECS: IndexSpec[] = [
   { collection: 'jurnal', index: { tenantId: 1, tanggal: -1 }, name: 'idx_jurnal_tenant_tanggal' },
   { collection: 'jurnal', index: { tenantId: 1, noJurnal: 1 }, name: 'uniq_jurnal_tenant_no', unique: true },
+  {
+    collection: 'jurnal',
+    index: { tenantId: 1, sourceType: 1, sourceId: 1 },
+    name: 'uniq_jurnal_tenant_stock_cost_source',
+    unique: true,
+    partialFilterExpression: {
+      sourceType: { $in: ['AUTO_RL_CONSUMPTION', 'AUTO_PBL_CONSUMPTION', 'AUTO_MASTER_PENYESUAIAN'] },
+    },
+  },
   { collection: 'stok_kartu', index: { tenantId: 1, stokId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_stok_tgl' },
   { collection: 'stok_kartu', index: { tenantId: 1, tanggal: 1 }, name: 'idx_stok_kartu_tenant_tanggal' },
   { collection: 'stok_kartu', index: { tenantId: 1, sourceType: 1, sourceId: 1 }, name: 'idx_stok_kartu_tenant_source' },

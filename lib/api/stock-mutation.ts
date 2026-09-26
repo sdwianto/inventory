@@ -34,7 +34,14 @@ export interface PostStockMutationInput {
 }
 
 export type PostStockMutationResult =
-  | { ok: true; qtyAfter: number; lokasiKode: string; kartuId: string; lot?: import('@/lib/stock-ledger').LotPostingResult }
+  | {
+    ok: true;
+    qtyAfter: number;
+    lokasiKode: string;
+    kartuId: string;
+    line: import('@/lib/stock-ledger').PostedStockLine;
+    lot?: import('@/lib/stock-ledger').LotPostingResult;
+  }
   | { ok: false; error: string };
 
 export async function postStockMutation(
@@ -72,6 +79,7 @@ export async function postStockMutation(
     qtyAfter: res.productStok[input.productId] ?? 0,
     lokasiKode: line.lokasiKode,
     kartuId: line.kartuId,
+    line,
     ...(line.lot ? { lot: line.lot } : {}),
   };
 }

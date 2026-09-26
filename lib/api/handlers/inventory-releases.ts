@@ -9,6 +9,7 @@ import { tenantIdForWrite, withTenantFilter, findMasterDoc, resolveOperationalSc
 import { stampTenantId } from '@/lib/api/tenant-operational';
 import { guardPosting } from '@/lib/api/period-lock';
 import { getAvailableQtyAtLokasi, postStockMovements, qtyLt, roundQty } from '@/lib/stock-ledger';
+import { postConsumptionJournal } from '@/lib/api/stock-cost-journal';
 import { loadLotQcHeld, lotQcBlockedMessage, lotQcHeldTotal, lotQcPairKey } from '@/lib/stock-ledger/lot-qc';
 import {
   loadReservationPools,
@@ -1160,6 +1161,15 @@ export async function handleInventoryReleases({
           })),
         });
         if (!posted.ok) throw new Error(posted.error);
+        await postConsumptionJournal(txDb, session, {
+          tenantId,
+          sourceType: 'RELEASE',
+          sourceId: String(doc.id),
+          noDoc: String(doc.noRelease),
+          tanggal: now,
+          userName: auth.name || auth.email || '',
+          lines: posted.lines,
+        });
         for (const line of posted.lines) {
           ingredientLotLines.push({
             stokId: line.productId,
