@@ -3,7 +3,7 @@ import type { Db } from 'mongodb';
 
 import { resolveSalesApiAccess } from '@/lib/api/integration-links';
 import { salesFetchErrorMessage } from '@/lib/api/integration-common';
-import { normalizeTenantId } from '@/lib/api/tenant-scope';
+import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { createIntegrationClient } from '@/lib/integration/client';
 import { IntegrationError } from '@/lib/integration/errors';
 import { randomUUID } from 'node:crypto';
@@ -66,7 +66,7 @@ export async function syncGrnDeliveryFromSales(db: Db, tenantId: string, grn: Re
   };
 
   if (grn.id) {
-    await db.collection('goods_receipts').updateOne({ id: grn.id }, { $set: patch });
+    await db.collection('goods_receipts').updateOne({ ...tenantIdMatchFilter(tid), id: grn.id }, { $set: patch });
   }
 
   return { grn: { ...grn, ...patch }, synced: true };

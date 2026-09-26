@@ -20,6 +20,7 @@ import {
   STOK_KARTU,
   STOK_LOKASI,
   purgeNonHomeLokasiRows,
+  findNonHomeLokasiStock,
   recomputeProductStok,
   setHomeWarehouseQty,
   type SetWarehouseStockResult,
@@ -136,6 +137,13 @@ async function applyMasterStockInSession(
   const after = roundStockQty(qtyAfter);
   if (after < 0) return { ok: false, error: 'Stok tidak boleh negatif' };
 
+  const stray = await findNonHomeLokasiStock(db, tid, stokId, lokasiKode, session);
+  if (stray.length) {
+    return {
+      ok: false,
+      error: `Stok masih tercatat di gudang lain (${stray.map((r) => `${r.lokasiKode}: ${r.qty}`).join(', ')}) — pindahkan lewat Transfer gudang dulu`,
+    };
+  }
   await purgeNonHomeLokasiRows(db, tid, stokId, lokasiKode, session);
   const before = roundStockQty(await getQtyStokLokasi(db, tid, stokId, lokasiKode, session));
   const selisih = roundStockQty(after - before);
@@ -328,7 +336,7 @@ export async function reconcileProductStockFromLedger(
   db: Db,
   tenantId: string,
   product: StockLedgerProduct | null | undefined,
-  opts: { clearNegative?: boolean } = {},
+  opts: { clearNegative?: boolean; actor?: { userId: string; userName: string } } = {},
 ): Promise<{ error: string } | { stok: number; gudangKode: string; clearedNegative?: boolean }> {
   return runInTransactionOnDb(db, ({ db: txDb, session }) => reconcileInSession(txDb, tenantId, product, opts, session));
 }
@@ -337,7 +345,7 @@ async function reconcileInSession(
   db: Db,
   tenantId: string,
   product: StockLedgerProduct | null | undefined,
-  opts: { clearNegative?: boolean },
+  opts: { clearNegative?: boolean; actor?: { userId: string; userName: string } },
   session?: ClientSession,
 ): Promise<{ error: string } | { stok: number; gudangKode: string; clearedNegative?: boolean }> {
   const tid = tenantId || product?.tenantId || 'default';
@@ -358,7 +366,7 @@ async function reconcileInSession(
   let saldo = info.saldo;
   let clearedNegative = false;
   if (saldo < 0 && !isZeroQty(saldo) && opts.clearNegative) {
-    const cleared = await clearNegativeLedgerWithAdjustment(db, tid, product, saldo, session);
+    const cleared = await clearNegativeLedgerWithAdjustment(db, tid, product, saldo, opts.actor, session);
     if ('error' in cleared) return cleared;
     saldo = 0;
     clearedNegative = true;
@@ -375,11 +383,16 @@ async function clearNegativeLedgerWithAdjustment(
   tenantId: string,
   product: StockLedgerProduct | null | undefined,
   negativeSaldo: number,
+  actorIn: { userId: string; userName: string } | undefined,
   session?: ClientSession,
 ): Promise<{ ok: true; noPS: string } | { error: string }> {
   const stokId = product?.id != null ? String(product.id) : '';
   if (!stokId || !(negativeSaldo < 0)) return { error: 'Saldo tidak valid untuk koreksi' };
   const tid = tenantId || 'default';
+  if (await isTenantFeatureEnabled(db, tid, 'adjustmentApproval')) {
+    return { error: 'Persetujuan penyesuaian aktif — koreksi saldo negatif lewat dokumen Penyesuaian (butuh penyetuju)' };
+  }
+  const actor = actorIn?.userId ? actorIn : { userId: 'system', userName: 'system-reconcile' };
   const need = roundStockQty(-negativeSaldo);
   const now = new Date();
   const locked = await stockPeriodLockError(db, tid, now, session);
@@ -395,8 +408,11 @@ async function clearNegativeLedgerWithAdjustment(
     lokasi: lokasiLabel,
     lokasiKode: gudang,
     keterangan: `Koreksi oversell / drift lokasi vs kartu (${product?.kode || stokId})`,
-    userId: 'system',
-    userName: 'system-reconcile',
+    status: 'POSTED',
+    postedAt: now,
+    userId: actor.userId,
+    userName: actor.userName,
+    createdBy: { userId: actor.userId, userName: actor.userName },
     source: 'REPAIR_LEDGER_LOKASI_DRIFT',
     items: [{
       stokId,
@@ -436,14 +452,14 @@ async function clearNegativeLedgerWithAdjustment(
     deltaQtyBase: need,
     unitCost: harga,
     costSource,
-    actor: { userId: 'system', userName: 'system-reconcile' },
+    actor,
   }), txOpts(session));
   await postMasterAdjustmentJournal(db, session, {
     tenantId: tid,
     sourceId: penyesuaianId,
     noDoc: `${noPS}/${product?.kode || stokId}`,
     tanggal: now,
-    userName: 'system-reconcile',
+    userName: actor.userName,
     line: { deltaQtyBase: need, unitCost: harga, costSource },
   });
   return { ok: true, noPS };

@@ -60,7 +60,7 @@ import {
   mergeProductSearchWithUomBarcode,
 } from '@/lib/api/product-uom';
 import { formatStockDualLabel } from '@/lib/uom/display';
-import { assertMultiUomAllowed } from '@/lib/api/feature-flags';
+import { assertMultiUomAllowed, isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import type { HandlerContext } from '@/types/api/handler';
 import type { AuthContext } from '@/types/auth';
 import { isItemRole, normalizeItemRole, type ItemRole } from '@/lib/food-production/item-role';
@@ -361,6 +361,9 @@ export async function handleProducts({
       return err('Stok awal harus angka ≥ 0', 400);
     }
     const initialStok = roundStockQty(initialStokRaw);
+    if (initialStok > 0 && await isTenantFeatureEnabled(db, tenantId, 'adjustmentApproval')) {
+      return err('Persetujuan penyesuaian aktif — simpan produk dengan stok 0, lalu isi stok awal lewat Penyesuaian', 400);
+    }
 
     const productId = uuidv4();
     const uomDocs = planProductUomDocs(tenantId, productId, uomParsed.uoms);
@@ -783,14 +786,20 @@ export async function handleProducts({
             await recomputeProductStok(txDb, tid, id, session);
           });
         } catch (e: unknown) {
+          if (isDuplicateKodeError(e)) return err('Kode sudah dipakai produk aktif lain di tenant ini', 409);
           const msg = e instanceof Error ? e.message : 'Gagal menyimpan satuan produk';
           return err(msg, 400);
         }
       } else {
-        await db.collection('products').updateOne(
-          withTenantFilter(scopeAuth, { id }),
-          { $set: update },
-        );
+        try {
+          await db.collection('products').updateOne(
+            withTenantFilter(scopeAuth, { id }),
+            { $set: update },
+          );
+        } catch (e: unknown) {
+          if (isDuplicateKodeError(e)) return err('Kode sudah dipakai produk aktif lain di tenant ini', 409);
+          throw e;
+        }
       }
       if (bridge.changed) {
         await writeAuditLog(db, {

@@ -5,7 +5,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
-import { postStockMovements } from '@/lib/stock-ledger';
+import { postStockMovements, reconcileProductStockFromLedger } from '@/lib/stock-ledger';
 import { handlePenyesuaian } from '@/lib/api/handlers/inventory-penyesuaian';
 import type { AuthContext } from '@/types/auth';
 
@@ -209,6 +209,43 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5 penyesuaian maker-checker', { timeo
     const invalidDate = await call('POST', ['stok', 'penyesuaian'], { tanggal: 'bukan-tanggal', reasonCode: 'OPNAME', items: [{ stokId: 'gula', qtyAktual: 6 }] }, SPV);
     expect(invalidDate.status).toBe(400);
     await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $unset: { periodLockedUntil: '' } });
+  });
+
+  it('koreksi saldo kartu negatif: ditolak saat approval aktif, tercatat atas nama pelaku saat nonaktif', async () => {
+    await db.collection('products').insertOne({
+      id: 'minus', tenantId: TID, kode: 'MINUS', nama: 'minus', satuan: 'KG', itemRole: 'INGREDIENT',
+      aktif: true, syncSource: 'local', gudangKode: 'GKERING', hargaBeli: 1000, stok: 0,
+    });
+    await db.collection('stok_kartu').insertOne({
+      id: 'k-minus', tenantId: TID, stokId: 'minus', lokasiKode: 'GKERING', masuk: 0, keluar: 2,
+      sourceType: 'SEED', sourceId: 'seed-minus', lineRef: '1', tanggal: new Date(), createdAt: new Date(),
+    });
+    const product = await db.collection('products').findOne({ tenantId: TID, id: 'minus' });
+    const actor = { userId: 'u-spv', userName: 'u-spv' };
+
+    await setFlag(true);
+    const blocked = await reconcileProductStockFromLedger(db, TID, product as never, { clearNegative: true, actor });
+    expect('error' in blocked && blocked.error).toMatch(/Persetujuan penyesuaian aktif/);
+    expect(await db.collection('penyesuaian_stok').countDocuments({ tenantId: TID, 'items.stokId': 'minus' })).toBe(0);
+
+    await setFlag(false);
+    const cleared = await reconcileProductStockFromLedger(db, TID, product as never, { clearNegative: true, actor });
+    expect('error' in cleared).toBe(false);
+    const doc = await db.collection('penyesuaian_stok').findOne({ tenantId: TID, 'items.stokId': 'minus' });
+    expect(doc?.status).toBe('POSTED');
+    expect(doc?.userId).toBe('u-spv');
+  });
+
+  it('penyesuaian ditolak bila SKU masih punya stok nyata di gudang non-home', async () => {
+    await setFlag(false);
+    await db.collection('stok_lokasi').insertOne({ id: 'stray-garam', tenantId: TID, stokId: 'garam', lokasiKode: 'GBASAH', qty: 2 });
+    const before = await lokasiQty('garam');
+    const res = await call('POST', ['stok', 'penyesuaian'], { reasonCode: 'OPNAME', items: [{ stokId: 'garam', qtyAktual: 1 }] }, SPV);
+    expect(res.status).toBe(400);
+    expect(String(res.data.error)).toMatch(/gudang lain/);
+    expect(await db.collection('stok_lokasi').countDocuments({ tenantId: TID, stokId: 'garam', lokasiKode: 'GBASAH' })).toBe(1);
+    expect(await lokasiQty('garam')).toBe(before);
+    await db.collection('stok_lokasi').deleteOne({ id: 'stray-garam' });
   });
 
   it('kartu mencatat qty mutasi dalam satuan input, bukan qty hitung fisik', async () => {

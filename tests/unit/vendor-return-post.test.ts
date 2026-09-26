@@ -50,7 +50,8 @@ describe('postVendorReturn', () => {
     const src = readFileSync(join(process.cwd(), 'lib/api/vendor-return-post.ts'), 'utf8');
     expect(src).toMatch(/RTV_TRANSIT_OUT/);
     expect(src).toMatch(/buildVendorReturnTransitOutJournalLines/);
-    expect(src).toMatch(/canSyncCn && !isGrnReject/);
+    expect(src).toMatch(/\(canSyncCn \|\| journalWithoutCn\) && !isGrnReject/);
+    expect(src).toMatch(/journalWithoutCn = !canSyncCn && await isTenantFeatureEnabled\(txDb, tenantId, 'costingV2'\)/);
     const transitIdx = src.indexOf('RTV_TRANSIT_OUT');
     const postedIdx = src.indexOf("status: 'POSTED'");
     expect(transitIdx).toBeGreaterThan(-1);

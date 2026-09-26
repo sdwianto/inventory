@@ -45,7 +45,7 @@ import {
   looksLikeProductionKeperluan,
 } from '@/lib/food-production/material-issue-reconcile';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
-import { casConflict, casEditFilter, casStatusFilter, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
+import { casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
 import { docIdFilter } from '@/lib/api/doc-filter';
 import { planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
 import {
@@ -831,14 +831,26 @@ export async function handleInventoryReleases({
     if (overIssue) patch.overIssue = overIssue;
     else unset.overIssue = '';
 
-    const edited = await db.collection('inventory_releases').updateOne(
-      casEditFilter(doc),
-      {
+    const editConflict = await casUpdateWithAudit({
+      db,
+      collection: 'inventory_releases',
+      filter: casEditFilter(doc),
+      update: {
         $set: patch,
         ...(Object.keys(unset).length ? { $unset: unset } : {}),
       },
-    );
-    if (edited.matchedCount === 0) return casConflict();
+      audit: {
+        tenantId: String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody)),
+        action: 'INVENTORY_RELEASE_UPDATE',
+        entityType: 'inventory_release',
+        entityId: String(doc.id),
+        summary: `Release ${doc.noRelease} diubah`,
+        userId: auth!.userId,
+        userName: auth!.name || auth!.email || 'System',
+        metadata: { noRelease: doc.noRelease, fromStatus: doc.status, fields: Object.keys(patch) },
+      },
+    });
+    if (editConflict) return editConflict;
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
@@ -880,9 +892,11 @@ export async function handleInventoryReleases({
     );
     if ('error' in over) return err(over.error, 400);
     const now = new Date();
-    const submitted = await db.collection('inventory_releases').updateOne(
-      casStatusFilter(doc, 'DRAFT'),
-      {
+    const submitConflict = await casUpdateWithAudit({
+      db,
+      collection: 'inventory_releases',
+      filter: casStatusFilter(doc, 'DRAFT'),
+      update: {
         $set: {
           status: 'PENDING_APPROVAL',
           submittedAt: now,
@@ -892,8 +906,18 @@ export async function handleInventoryReleases({
         },
         ...(over.snapshot ? {} : { $unset: { overIssue: '' } }),
       },
-    );
-    if (submitted.matchedCount === 0) return casConflict();
+      audit: {
+        tenantId: String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody)),
+        action: 'INVENTORY_RELEASE_SUBMIT',
+        entityType: 'inventory_release',
+        entityId: String(doc.id),
+        summary: `Release ${doc.noRelease} diajukan`,
+        userId: auth.userId,
+        userName: auth.name || auth.email || 'System',
+        metadata: { noRelease: doc.noRelease, overIssue: Boolean(over.snapshot) },
+      },
+    });
+    if (submitConflict) return submitConflict;
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 
@@ -1237,19 +1261,32 @@ export async function handleInventoryReleases({
     if (!doc) return err('Tidak ditemukan', 404);
     if (doc.status !== 'PENDING_APPROVAL') return err('Status harus PENDING_APPROVAL', 400);
     const now = new Date();
-    const rejected = await db.collection('inventory_releases').updateOne(
-      casStatusFilter(doc, 'PENDING_APPROVAL'),
-      {
+    const rejectReason = String(releaseBody.reason || 'Ditolak');
+    const rejectConflict = await casUpdateWithAudit({
+      db,
+      collection: 'inventory_releases',
+      filter: casStatusFilter(doc, 'PENDING_APPROVAL'),
+      update: {
         $set: {
           status: 'REJECTED',
           rejectedBy: { userId: auth.userId, userName: auth.name || auth.email },
           rejectedAt: now,
-          rejectReason: releaseBody.reason || 'Ditolak',
+          rejectReason,
           updatedAt: now,
         },
       },
-    );
-    if (rejected.matchedCount === 0) return casConflict();
+      audit: {
+        tenantId: String(doc.tenantId || tenantIdForWrite(scopeAuth, releaseBody)),
+        action: 'INVENTORY_RELEASE_REJECT',
+        entityType: 'inventory_release',
+        entityId: String(doc.id),
+        summary: `Release ${doc.noRelease} ditolak`,
+        userId: auth.userId,
+        userName: auth.name || auth.email || 'System',
+        metadata: { noRelease: doc.noRelease, reason: rejectReason },
+      },
+    });
+    if (rejectConflict) return rejectConflict;
     return ok(clean(await loadRelease(db, scopeAuth, doc.id)));
   }
 

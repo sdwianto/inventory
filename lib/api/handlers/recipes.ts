@@ -293,7 +293,7 @@ async function loadIngredientProducts(
       id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1,
       recipeBaseGrams: 1, recipeBaseMl: 1, isiPerKemasan: 1, satuanIsi: 1,
     })
-    .limit(2000)
+    .limit(20000)
     .toArray();
   return list
     .filter((p) => isIngredientRole(p.itemRole))

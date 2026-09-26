@@ -416,7 +416,7 @@ export async function syncCpoFromVendorEvent(
     patch.invoiceTotal = parseInt(String(payload.total || 0), 10);
   }
 
-  await db.collection('customer_purchase_orders').updateOne({ id: po.id }, { $set: patch });
+  await db.collection('customer_purchase_orders').updateOne({ ...tenantIdMatchFilter(po.tenantId), id: po.id }, { $set: patch });
   return { action: 'updated', poId: po.id, noPO: po.noPO, status: patch.status };
 }
 
@@ -501,11 +501,13 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject, session?: Clie
     const usedGrn = new Set<number>();
     const uomsCache = new Map<string, import('@/lib/uom/types').ProductUom[]>();
     const items: CpoLine[] = [];
+    const unconvertible: string[] = [];
     for (const line of po.items || []) {
       const recv = findMatchingGrnLine(line as LocalPoLineLike, grnItems, usedGrn);
       const qty = await grnQtyInPoUnit(db, String(grn.tenantId || ''), line as JsonObject, recv as JsonObject | undefined, uomsCache);
       if (!qty) {
         logger.warn('cpo_grn_line_unit_unconvertible', { poId: po.id, noPO: po.noPO, grnId, lineId: line.lineId });
+        unconvertible.push(String(line.kode || line.localKode || line.nama || line.lineId || '?'));
       }
       const next = {
         ...line,
@@ -513,6 +515,9 @@ export async function syncCpoOnGrnPosted(db: Db, grn: JsonObject, session?: Clie
         qtyRejected: roundQty((Number(line.qtyRejected) || 0) + (qty?.rejected || 0)),
       };
       items.push({ ...next, qtyBackorder: lineBackorderQty(next) });
+    }
+    if (unconvertible.length) {
+      return { action: 'skipped', reason: 'unit_unconvertible', grnId, poId: po.id, lines: unconvertible };
     }
 
     const unmatchedGrnItems = grnItems.filter((_, i) => !usedGrn.has(i));

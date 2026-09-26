@@ -41,7 +41,7 @@ export {
   type LedgerSaldoInfo,
 } from '@/lib/stock-ledger/ledger-saldo';
 
-export { recomputeProductStok, purgeNonHomeLokasiRows } from '@/lib/stock-ledger/balance';
+export { recomputeProductStok, purgeNonHomeLokasiRows, findNonHomeLokasiStock } from '@/lib/stock-ledger/balance';
 
 export {
   formatMasterStokDisplay,
@@ -74,6 +74,13 @@ export {
   type LotRealignLine,
   type LotRealignApplied,
 } from '@/lib/stock-ledger/lot-realign';
+
+export {
+  planStockDust,
+  applyStockDustNormalize,
+  STOCK_DUST_TARGETS,
+  type StockDustRow,
+} from '@/lib/stock-ledger/dust';
 
 export {
   planStockCostBackfill,

@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { writeProductMasterStock } from '@/lib/stock-ledger/master';
 import { normalizeWarehouseKode, WAREHOUSE_CODES, isValidWarehouseKode } from '@/lib/api/warehouses';
 import { txOpts } from '@/lib/api/transaction';
-import { STOCK_QTY_DP, STOCK_QTY_EPS, roundStockQty } from '@/lib/stock-ledger/precision';
+import { STOCK_QTY_DP, STOCK_QTY_EPS, isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
 export const STOK_LOKASI = 'stok_lokasi';
 export const STOK_KARTU = 'stok_kartu';
@@ -94,6 +94,27 @@ export async function setLokasiQtyAbsolute(
     { upsert: true, ...txOpts(session) },
   );
   return next;
+}
+
+/** Baris stok_lokasi ber-qty nyata di gudang selain gudang home. */
+export async function findNonHomeLokasiStock(
+  db: Db,
+  tenantId: string,
+  stokId: string,
+  homeGudang: string,
+  session?: ClientSession,
+): Promise<Array<{ lokasiKode: string; qty: number }>> {
+  const keep = normalizeWarehouseKode(homeGudang);
+  const rows = await db.collection(STOK_LOKASI)
+    .find({
+      tenantId,
+      stokId,
+      lokasiKode: { $in: WAREHOUSE_CODES.filter((k) => k !== keep) },
+    }, { projection: { lokasiKode: 1, qty: 1 }, ...txOpts(session) })
+    .toArray();
+  return rows
+    .map((r) => ({ lokasiKode: String(r.lokasiKode), qty: roundStockQty(r.qty) }))
+    .filter((r) => !isZeroQty(r.qty));
 }
 
 /** Hapus baris SKU di gudang selain gudang home (satu SKU = satu gudang). */

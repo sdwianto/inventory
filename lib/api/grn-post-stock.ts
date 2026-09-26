@@ -443,6 +443,10 @@ export async function applyGrnStockPosting(
     if (synced.action === 'skipped' && synced.reason === 'concurrent_conflict') {
       return { error: `PO ${noPO} berubah bersamaan — ulangi penerimaan` };
     }
+    if (synced.action === 'skipped' && synced.reason === 'unit_unconvertible') {
+      const lines = 'lines' in synced && Array.isArray(synced.lines) ? synced.lines.join(', ') : '';
+      return { error: `Satuan terima tidak bisa dikonversi ke satuan PO ${noPO}${lines ? ` (${lines})` : ''} — lengkapi konversi satuan produk dulu` };
+    }
   }
 
   const receivedTotal = itemsFull.reduce((s, it) => {

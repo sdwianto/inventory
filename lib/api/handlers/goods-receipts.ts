@@ -3,6 +3,7 @@ import type { NextResponse } from 'next/server';
 import { ok, err, clean } from '@/lib/api/db';
 import { resolveOperationalScope, tenantIdForWrite, withTenantFilter } from '@/lib/api/tenant-master';
 import { guardPosting } from '@/lib/api/period-lock';
+import { GRN_POST_ROLES, requireRole } from '@/lib/api/require-auth';
 import { syncShippedDeliveriesFromSales } from '@/lib/api/grn-sync-sales';
 import { isUnresolvedGrnStatus, refreshGrnProducts, refreshUnresolvedGrnsForTenant } from '@/lib/api/grn-resolve-products';
 import { enrichGrnList, enrichGrnDocWithProducts } from '@/lib/api/grn-enrich';
@@ -57,6 +58,8 @@ export async function handleGoodsReceipts({
   const grnBody = (body || {}) as GrnPostBody;
 
   if (route === '/goods-receipts/refresh-unresolved' && method === 'POST') {
+    const roleDenied = requireRole(auth, GRN_POST_ROLES);
+    if (roleDenied) return roleDenied;
     const { denied, tenantId } = resolveOperationalScope(auth, { url, request });
     if (denied) return denied;
     if (!tenantId) return err('Scope tidak valid', 400);
@@ -119,6 +122,8 @@ export async function handleGoodsReceipts({
   }
 
   if (route === '/goods-receipts/sync-shipped' && method === 'POST') {
+    const roleDenied = requireRole(auth, GRN_POST_ROLES);
+    if (roleDenied) return roleDenied;
     const { denied, tenantId } = resolveOperationalScope(auth, { url, body: grnBody, request });
     if (denied) return denied;
     if (!tenantId) return err('Scope tidak valid', 400);
@@ -193,6 +198,8 @@ export async function handleGoodsReceipts({
   }
 
   if (path[0] === 'goods-receipts' && path[2] === 'post' && method === 'POST') {
+    const roleDenied = requireRole(auth, GRN_POST_ROLES);
+    if (roleDenied) return roleDenied;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: grnBody, request });
     if (denied) return denied;
 
@@ -246,6 +253,8 @@ export async function handleGoodsReceipts({
   }
 
   if (path[0] === 'goods-receipts' && path[2] === 'replay-invoice' && method === 'POST') {
+    const roleDenied = requireRole(auth, GRN_POST_ROLES);
+    if (roleDenied) return roleDenied;
     const { denied, scopeAuth } = resolveOperationalScope(auth, { url, body: grnBody, request });
     if (denied) return denied;
 

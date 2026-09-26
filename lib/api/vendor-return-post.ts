@@ -15,6 +15,7 @@ import { vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { docIdFilter } from '@/lib/api/doc-filter';
 import { createJournalIfNotExists } from '@/lib/api/journal';
+import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { buildVendorReturnTransitOutJournalLines } from '@/lib/api/journal-lines';
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc, type VendorReturnLine } from '@/types/vendor-return';
 import { integrationCorrelationId } from '@/lib/api/integration-common';
@@ -151,10 +152,11 @@ export async function postVendorReturn(
         );
       }
 
-      // ADR-005 — transit GL hanya jika CN lifecycle diharapkan (canSyncCn).
-      // SKIPPED/unpaired: qty OUT tanpa transit (kompatibel perilaku lama).
+      // ADR-005 — transit GL bila CN lifecycle diharapkan (canSyncCn). Di costingV2 retur tanpa CN tetap
+      // mengkredit Persediaan ke Barang dalam Retur agar GL persediaan = nilai stok; saldo transit terbuka.
       let transitPatch: Record<string, unknown> = {};
-      if (canSyncCn && !isGrnReject) {
+      const journalWithoutCn = !canSyncCn && await isTenantFeatureEnabled(txDb, tenantId, 'costingV2');
+      if ((canSyncCn || journalWithoutCn) && !isGrnReject) {
         const itemsForAmt = stock.items || doc.items || [];
         const transitAmount = Math.round(
           itemsForAmt.reduce((s, it) => s + (parseInt(String(it.jumlah || 0), 10) || 0), 0)

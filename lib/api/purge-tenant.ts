@@ -19,6 +19,11 @@ const MASTER_COLLECTIONS = [
 const EXTRA_COLLECTIONS = [
   'stok_lokasi',
   'stok_bin',
+  'ingredient_lots',
+  'lot_inspections',
+  'recon_reports',
+  'ingredient_lot_reconcile_reports',
+  'fefo_batch_reconcile_reports',
   'warehouse_bins',
   'stok_bin_reconcile_reports',
   'ka_follow_up_orphan_reconcile_reports',

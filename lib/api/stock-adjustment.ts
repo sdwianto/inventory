@@ -3,7 +3,7 @@
 
 import type { ClientSession, Db } from 'mongodb';
 import { getQtyStokLokasi } from '@/lib/api/stok-lokasi';
-import { isZeroQty, purgeNonHomeLokasiRows, recomputeProductStok, roundStockQty } from '@/lib/stock-ledger';
+import { findNonHomeLokasiStock, isZeroQty, purgeNonHomeLokasiRows, recomputeProductStok, roundStockQty } from '@/lib/stock-ledger';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { createJournalIfNotExists } from '@/lib/api/journal';
 import { buildPenyesuaianJournalLines } from '@/lib/api/journal-lines';
@@ -149,6 +149,10 @@ export async function postAdjustmentLines(
     const lokasiKode = resolveProductGudangKode(prod);
     if (input.mode === 'SNAPSHOT' && lokasiKode !== line.gudangKode) {
       throw new Error(`Gudang ${line.kode || line.stokId} berubah sejak hitung dimulai (${line.gudangKode} → ${lokasiKode}) — buat ulang penyesuaian`);
+    }
+    const stray = await findNonHomeLokasiStock(txDb, tenantId, prod.id, lokasiKode, session);
+    if (stray.length) {
+      throw new Error(`Stok ${line.kode || line.stokId} masih tercatat di gudang lain (${stray.map((r) => `${r.lokasiKode}: ${r.qty}`).join(', ')}) — pindahkan lewat Transfer gudang dulu`);
     }
     await purgeNonHomeLokasiRows(txDb, tenantId, prod.id, lokasiKode, session);
     const qtyNow = await snapshotQtySistem(txDb, tenantId, prod.id, lokasiKode, session);

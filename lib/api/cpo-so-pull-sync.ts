@@ -18,6 +18,8 @@ import {
 } from '@/lib/api/customer-po-so-extract';
 import { buildVendorSoSnapshot } from '@/lib/api/vendor-so-snapshot';
 import type { JsonObject } from '@/types/json';
+import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { logger } from '@/lib/api/logger';
 
 /** Status PO yang tidak boleh diturunkan saat sync cancel baris dari SO. */
 const PRESERVE_PO_STATUS = new Set([
@@ -339,9 +341,11 @@ export async function enrichPoListWithSoCancelState(
       && !PRESERVE_PO_STATUS.has(String(row.status || ''))
     ) {
       void db.collection('customer_purchase_orders').updateOne(
-        { id: row.id },
+        { ...tenantIdMatchFilter(row.tenantId), id: row.id, status: row.status },
         { $set: { status: repairedStatus, updatedAt: new Date() }, ...(repairedStatus !== 'CANCELLED' ? { $unset: { cancelledAt: '', cancelReason: '' } } : {}) },
-      );
+      ).catch((e: unknown) => {
+        logger.warn('cpo_status_repair_failed', { poId: row.id, error: e instanceof Error ? e.message : String(e) });
+      });
       return { ...row, status: repairedStatus };
     }
     if (fresh) return fresh;

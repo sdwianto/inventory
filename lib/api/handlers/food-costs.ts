@@ -56,14 +56,26 @@ async function loadProducts(
   ids: string[],
 ) {
   if (!ids.length) return new Map<string, ProductCostRef>();
+  const projection = { id: 1, kode: 1, nama: 1, satuan: 1, hargaBeli: 1, avgCost: 1, mergedInto: 1 };
   const [products, useAvgCost] = await Promise.all([
     db.collection('products')
       .find(withTenantFilter(scopeAuth, { id: { $in: ids } }))
-      .project({ id: 1, kode: 1, nama: 1, satuan: 1, hargaBeli: 1, avgCost: 1 })
+      .project(projection)
       .toArray(),
     isTenantFeatureEnabled(db, tenantIdForWrite(scopeAuth, {}), 'costingV2'),
   ]);
-  return new Map(products.map((p) => [String(p.id), asCostRef(p as Record<string, unknown>, useAvgCost)]));
+  const mergedIds = [...new Set(products.map((p) => String(p.mergedInto || '')).filter(Boolean))];
+  const targets = mergedIds.length
+    ? new Map((await db.collection('products')
+      .find(withTenantFilter(scopeAuth, { id: { $in: mergedIds } }))
+      .project(projection)
+      .toArray()).map((p) => [String(p.id), p]))
+    : new Map();
+  return new Map(products.map((p) => {
+    const target = p.mergedInto ? targets.get(String(p.mergedInto)) : null;
+    const priced = target ? { ...p, hargaBeli: target.hargaBeli, avgCost: target.avgCost } : p;
+    return [String(p.id), asCostRef(priced as Record<string, unknown>, useAvgCost)];
+  }));
 }
 
 /** Baris kebutuhan rencana persis seperti MRP: dokumen MRP aktif, atau eksplosi live bila belum ada. */

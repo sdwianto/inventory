@@ -1,6 +1,7 @@
 import type { Db } from 'mongodb';
 import { resolveProductByKode } from '@/lib/api/resolve-product-by-kode';
 import { ensureUniqueLineIds } from '@/lib/api/grn-line-ids';
+import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import type { GrnDoc } from '@/types/documents';
 import { asArray, type JsonObject } from '@/types/json';
 
@@ -134,7 +135,7 @@ export async function refreshGrnProducts(db: Db, grn: GrnDoc, productMaps: Produ
   if (!statusChanged && !itemsChanged) return grn;
 
   const res = await db.collection('goods_receipts').updateOne(
-    { id: grn.id, status: grn.status, linesRev: grn.linesRev ?? null },
+    { ...tenantIdMatchFilter(grn.tenantId), id: grn.id, status: grn.status, linesRev: grn.linesRev ?? null },
     { $set: { items: uniqueItems, status: newStatus }, $inc: { linesRev: 1 } },
   );
   if (res.matchedCount === 0) {

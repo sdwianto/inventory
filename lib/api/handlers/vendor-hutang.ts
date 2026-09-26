@@ -484,7 +484,7 @@ export async function handleVendorHutang({
             sourceType: 'AUTO_PELUNASAN_EKSTERNAL',
             sourceId: hutang.id,
             details: payLines,
-            userName: hutangBody.userName || auth?.name || '',
+            userName: auth?.name || auth?.email || '',
             tenantId,
           }, session);
         }
@@ -567,7 +567,7 @@ export async function handleVendorHutang({
           metode: hutangBody.metode || 'TUNAI',
           kasRekeningKode: kasRek.kode,
           keterangan: hutangBody.keterangan || '',
-          userName: hutangBody.userName || '',
+          userName: auth?.name || auth?.email || '',
         }), txOpts(session));
 
         await createJournalIfNotExists(txDb, {
@@ -582,7 +582,7 @@ export async function handleVendorHutang({
             kasRekeningKode: kasRek.kode,
             kasRekeningNama: kasRek.nama,
           }),
-          userName: hutangBody.userName || '',
+          userName: auth?.name || auth?.email || '',
           tenantId,
         }, session);
       });

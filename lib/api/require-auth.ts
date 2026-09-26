@@ -70,6 +70,7 @@ export const RTV_CREATE_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 /** RTV: setujui & post (stok OUT + CN) — SUPERVISOR+; pembuat/pengubah/pengaju tidak boleh approve sendiri (hanya MASTER dikecualikan, tercatat di audit). */
 export const RTV_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 /** Pembalik GRN (RVS): ajukan — GUDANG+; setujui — SUPERVISOR+, pengaju tidak boleh menyetujui sendiri (hanya MASTER dikecualikan, tercatat di audit). */
+export const GRN_POST_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 export const GRN_REVERSAL_REQUEST_ROLES = ['GUDANG', 'SUPERVISOR', 'ADMIN', 'MASTER'];
 export const GRN_REVERSAL_APPROVE_ROLES = ['SUPERVISOR', 'ADMIN', 'MASTER'];
 

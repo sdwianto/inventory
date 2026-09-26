@@ -156,7 +156,7 @@ export type ReconcileTenantStockResult = {
 export async function reconcileTenantStockFromLedger(
   db: Db,
   tenantId: string,
-  opts: { dryRun?: boolean; clearNegative?: boolean } = {},
+  opts: { dryRun?: boolean; clearNegative?: boolean; actor?: { userId: string; userName: string } } = {},
 ): Promise<ReconcileTenantStockResult> {
   const tid = tenantId || 'default';
   const dryRun = opts.dryRun === true;
@@ -179,7 +179,7 @@ export async function reconcileTenantStockFromLedger(
 
   const products = await db.collection<StockLedgerProduct>('products')
     .find({ tenantId: tid, aktif: { $ne: false } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, hargaBeli: 1, gudangKode: 1, tenantId: 1, stok: 1 })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, gudangKode: 1, tenantId: 1, stok: 1 })
     .toArray();
 
   for (const product of products) {
@@ -189,7 +189,7 @@ export async function reconcileTenantStockFromLedger(
       continue;
     }
     try {
-      const out = await reconcileProductStockFromLedger(db, tid, product, { clearNegative });
+      const out = await reconcileProductStockFromLedger(db, tid, product, { clearNegative, actor: opts.actor });
       if ('error' in out) {
         result.errors.push({ productId: stokId, kode: String(product.kode || ''), error: out.error });
         continue;

@@ -149,7 +149,10 @@ export async function handleStokKartu({
     if (!p) return err('Produk tidak ditemukan', 404);
     const tid = p.tenantId || scopeAuth?.tenantId || 'default';
     const clearNegative = invBody.clearNegative === true;
-    const result = await reconcileProductStockFromLedger(db, tid, p, { clearNegative });
+    const result = await reconcileProductStockFromLedger(db, tid, p, {
+      clearNegative,
+      actor: { userId: auth!.userId, userName: auth!.name || auth!.email },
+    });
     if ('error' in result && result.error) return err(result.error, 400);
     const product = clean(await findMasterDoc(db, 'products', scopeAuth, { id: productId }));
     const ledgerSaldo = await ledgerSaldoForProduct(db, tid, productId);
@@ -168,7 +171,11 @@ export async function handleStokKartu({
       const locked = await guardPosting(db, scopeAuth, invBody);
       if (locked) return locked;
     }
-    const summary = await reconcileTenantStockFromLedger(db, tenantId, { dryRun, clearNegative });
+    const summary = await reconcileTenantStockFromLedger(db, tenantId, {
+      dryRun,
+      clearNegative,
+      actor: { userId: auth!.userId, userName: auth!.name || auth!.email || '' },
+    });
     return ok(summary);
   }
 

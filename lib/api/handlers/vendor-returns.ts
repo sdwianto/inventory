@@ -879,7 +879,7 @@ export async function handleVendorReturns({
       tenantId,
       body: {
         ...rtvBody,
-        userName: rtvBody.userName || auth?.name,
+        userName: auth?.name || auth?.email,
         userId: auth?.userId,
         userRole: auth?.role,
         approvedBy: approver,
