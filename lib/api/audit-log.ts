@@ -186,7 +186,8 @@ export type AuditAction =
   | 'VENDOR_RETURN_DECISION_APPLIED'
   | 'VENDOR_RETURN_SUBMITTED'
   | 'VENDOR_RETURN_RETURNED_TO_DRAFT'
-  | 'VENDOR_RETURN_APPROVED';
+  | 'VENDOR_RETURN_APPROVED'
+  | 'VENDOR_RETURN_SELF_APPROVED';
 
 export interface AuditLogEntry {
   tenantId: string;

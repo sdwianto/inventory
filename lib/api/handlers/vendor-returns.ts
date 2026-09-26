@@ -14,6 +14,7 @@ import { isValidWarehouseKode } from '@/lib/api/warehouses';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
 import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { writeAuditLog } from '@/lib/api/audit-log';
+import { selfApprovalState } from '@/lib/api/stock-adjustment';
 import { buildVendorReturnLinesFromHutang, vendorReturnSalesIdentityError } from '@/lib/api/vendor-return-map';
 import {
   assertReturnQtyWithinMax,
@@ -47,14 +48,15 @@ function rtvActor(auth: HandlerContext['auth'], body?: RtvBody) {
   };
 }
 
-/** SoD: pembuat tidak boleh approve sendiri (kecuali ADMIN / MASTER / OWNER). */
+function rtvMakers(doc: VendorReturnDoc) {
+  return [doc.createdBy, doc.submittedBy, ...(doc.editorIds || []).map((userId) => ({ userId }))];
+}
+
+/** Maker-checker ketat: pembuat / pengubah / pengaju tidak boleh menyetujui apa pun rolenya; MASTER dikecualikan (diaudit). */
 function rtvSelfApproveBlocked(auth: HandlerContext['auth'], doc: VendorReturnDoc): string | null {
   if (!auth?.userId) return 'Unauthorized';
-  if (auth.isMaster) return null;
-  const role = String(auth.role || '');
-  if (role === 'ADMIN' || role === 'OWNER') return null;
-  if (doc.createdBy?.userId && doc.createdBy.userId === auth.userId) {
-    return 'Pembuat retur tidak boleh menyetujui sendiri — minta SUPERVISOR/ADMIN lain';
+  if (selfApprovalState(auth, rtvMakers(doc)) === 'blocked') {
+    return 'Pembuat, pengubah, atau pengaju retur tidak boleh menyetujui sendiri — minta penyetuju lain';
   }
   return null;
 }
@@ -715,6 +717,7 @@ export async function handleVendorReturns({
           approvalRejectReason: null,
           updatedAt: now,
         },
+        ...(auth?.userId ? { $addToSet: { editorIds: auth.userId } } : {}),
       },
       audit: {
         tenantId,
@@ -893,6 +896,17 @@ export async function handleVendorReturns({
       },
     });
     if (result.error) return err(String(result.error), result.conflict ? 409 : 400);
+    if (selfApprovalState(auth, rtvMakers(doc)) === 'master_override') {
+      await writeAuditLog(db, {
+        tenantId,
+        action: 'VENDOR_RETURN_SELF_APPROVED',
+        entityType: 'vendor_return',
+        entityId: doc.id,
+        summary: `MASTER menyetujui RTV ${doc.noReturn} yang dibuat/diajukan sendiri`,
+        userId: auth?.userId,
+        userName: auth?.name,
+      });
+    }
 
     return ok(clean(result as JsonObject));
   }
@@ -1118,7 +1132,10 @@ export async function handleVendorReturns({
       patch.subTotal = subTotal;
       patch.total = total;
     }
-    const edited = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(casEditFilter(doc), { $set: patch });
+    const edited = await db.collection(VENDOR_RETURNS_COLLECTION).updateOne(
+      casEditFilter(doc),
+      { $set: patch, ...(auth?.userId ? { $addToSet: { editorIds: auth.userId } } : {}) },
+    );
     if (edited.matchedCount === 0) return casConflict();
     const fresh = await db.collection(VENDOR_RETURNS_COLLECTION).findOne(docIdFilter(doc));
     return ok(clean(fresh as JsonObject));

@@ -399,8 +399,13 @@ export default function ReturVendorPage() {
   const isDraft = str(detail?.status) === 'DRAFT';
   const isPendingApproval = str(detail?.status) === 'PENDING_APPROVAL';
   const isCreator = !!(user?.id && str(asObject(detail?.createdBy).userId) === user.id);
-  const canSelfApprove = !!user && ['ADMIN', 'MASTER', 'OWNER'].includes(str(user.role));
-  const canApproveThis = isPendingApproval && canApproveRole && (canSelfApprove || !isCreator);
+  const isMaker = !!user?.id && (
+    isCreator
+    || str(asObject(detail?.submittedBy).userId) === user.id
+    || asArray(detail?.editorIds).some((id) => str(id) === user.id)
+  );
+  const canSelfApprove = !!user && str(user.role) === 'MASTER';
+  const canApproveThis = isPendingApproval && canApproveRole && (canSelfApprove || !isMaker);
   const canWithdraw = isPendingApproval && (isCreator || canApproveRole);
   const isGrnReject = str(detail?.source) === 'grn-reject';
   const isQcReject = str(detail?.source) === 'qc-reject';
@@ -606,8 +611,8 @@ export default function ReturVendorPage() {
                   {str(asObject(detail.submittedBy).userName) && (
                     <> Diajukan oleh {str(asObject(detail.submittedBy).userName)}.</>
                   )}
-                  {isCreator && !canSelfApprove && canApproveRole && (
-                    <> Anda pembuat dokumen — minta SUPERVISOR/ADMIN lain untuk menyetujui.</>
+                  {isMaker && !canSelfApprove && canApproveRole && (
+                    <> Anda pembuat/pengubah/pengaju dokumen — minta penyetuju lain.</>
                   )}
                 </div>
               )}

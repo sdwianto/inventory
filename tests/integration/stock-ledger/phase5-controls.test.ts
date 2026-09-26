@@ -10,6 +10,7 @@ import { handleProducts } from '@/lib/api/handlers/products';
 import { handleTransfer } from '@/lib/api/handlers/inventory-transfer';
 import { assertPeriodNotLocked } from '@/lib/api/period-lock';
 import { softDeleteProducts } from '@/lib/api/product-delete';
+import { handleVendorReturns } from '@/lib/api/handlers/vendor-returns';
 import type { AuthContext } from '@/types/auth';
 
 type ReplSet = { getUri(): string; stop(): Promise<boolean> };
@@ -161,6 +162,34 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5a kontrol master & posting', { timeo
       body: { lokasiAsal: 'GKERING', lokasiTujuan: 'GBASAH', items: [] }, url, auth: auth('u-kasir', 'KASIR'), request: request(url),
     });
     expect(res?.status).toBe(403);
+  });
+
+  it('retur vendor: pembuat / pengubah / pengaju tidak boleh menyetujui, termasuk ADMIN dan OWNER', async () => {
+    const rtv = async (method: string, path: string[], body: unknown, who: AuthContext) => {
+      const url = new URL(`http://x/api/${path.join('/')}`);
+      const res = await handleVendorReturns({ db, route: `/${path.join('/')}`, method, path, body, url, auth: who, request: request(url) });
+      if (!res) throw new Error('handler tidak menangani route');
+      return { status: res.status, data: await res.json() as Record<string, unknown> };
+    };
+    const now = new Date();
+    await db.collection('vendor_returns').insertOne({
+      id: 'rtv-1', tenantId: TID, noReturn: 'RTV-1', status: 'DRAFT', reason: 'rusak', items: [{ stokId: 'p-isi', qty: 1 }],
+      createdBy: { userId: 'u-admin' }, createdAt: now, updatedAt: now,
+    });
+    const edit = await rtv('PATCH', ['vendor-returns', 'rtv-1'], { reason: 'rusak kemasan' }, auth('u-owner', 'OWNER'));
+    expect(edit.status).toBe(200);
+    expect(edit.data.editorIds).toEqual(['u-owner']);
+    await db.collection('vendor_returns').updateOne(
+      { id: 'rtv-1' },
+      { $set: { status: 'PENDING_APPROVAL', submittedBy: { userId: 'u-spv' } } },
+    );
+
+    for (const who of [ADMIN, auth('u-owner', 'OWNER'), auth('u-spv', 'SUPERVISOR')]) {
+      const res = await rtv('POST', ['vendor-returns', 'rtv-1', 'approve'], {}, who);
+      expect(res.status).toBe(403);
+    }
+    const other = await rtv('POST', ['vendor-returns', 'rtv-1', 'approve'], {}, auth('u-spv2', 'SUPERVISOR'));
+    expect(other.status).not.toBe(403);
   });
 
   it('kunci periode: tanggal server atau tanggal dokumen di periode terkunci ditolak', async () => {

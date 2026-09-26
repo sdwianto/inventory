@@ -134,6 +134,8 @@ export type VendorReturnDoc = {
   createdAt: Date;
   updatedAt: Date;
   createdBy?: VendorReturnActor;
+  /** Pengguna yang pernah mengubah draft atau mengajukan — ikut dihitung pembuat untuk maker-checker. */
+  editorIds?: string[];
 };
 
 /** Agregat keputusan vendor dari baris-baris RTV — PENDING (belum ada keputusan), PARTIAL (campuran), ACCEPTED/REJECTED (semua baris sama). */
