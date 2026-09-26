@@ -18,6 +18,7 @@ import { listReconTenantIds, resolveCostingCutoverAt } from '../../lib/recon/con
 import { detectStockRecon } from '../../lib/recon/stock-recon';
 import { detectGrniRecon } from '../../lib/recon/grni-recon';
 import { buildReconReport } from '../../lib/recon/reports';
+import { PLAN_ISSUE_WINDOW_DAYS } from '../../lib/recon/plan-issue-recon';
 
 type Metric = {
   key: string;
@@ -112,7 +113,16 @@ async function tenantMetrics(db: Db, tenantId: string): Promise<{ tenantId: stri
   metrics.push(metric('pblMutatingNew', 'PBL baru yang memutasi stok', pblMutatingNew, 0,
     pblRefStart ? `sejak PBL acuan pertama ${pblRefStart.toISOString()}` : 'belum ada PBL mode acuan'));
   const rlUnlinked = await db.collection(INVENTORY_RELEASES_COLLECTION).countDocuments({ tenantId, ...unlinkedReleaseFilter() });
-  metrics.push(metric('rlUnlinked', 'RL produksi tanpa tautan rencana', rlUnlinked, 0));
+  const windowFrom = new Date(Date.now() - PLAN_ISSUE_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const rlUnlinkedWindow = await db.collection(INVENTORY_RELEASES_COLLECTION)
+    .countDocuments({ tenantId, ...unlinkedReleaseFilter({ tanggal: { $gte: windowFrom } }) });
+  metrics.push(metric(
+    'rlUnlinked',
+    'RL produksi tanpa tautan rencana',
+    rlUnlinked,
+    0,
+    `seluruh riwayat; ${rlUnlinkedWindow} dalam ${PLAN_ISSUE_WINDOW_DAYS} hari terakhir seperti panel recon — tautkan atau tandai bukan produksi`,
+  ));
 
   // 7. Penyesuaian POSTED tanpa penyetuju independen (sejak alur persetujuan dipakai).
   const approvalStart = await firstCreatedAt(db, 'penyesuaian_stok', { tenantId, 'approvedBy.userId': { $exists: true } });
