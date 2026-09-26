@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
 import { postStockMovements } from '@/lib/stock-ledger';
 import { handleProducts } from '@/lib/api/handlers/products';
+import { handlePages } from '@/lib/api/handlers/pages';
 import { handleTransfer } from '@/lib/api/handlers/inventory-transfer';
 import { assertPeriodNotLocked } from '@/lib/api/period-lock';
 import { softDeleteProducts } from '@/lib/api/product-delete';
@@ -94,6 +95,12 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5a kontrol master & posting', { timeo
     const list = await products('GET', ['products'], undefined);
     const rows = (Array.isArray(list.data) ? list.data : (list.data.data || list.data.items || [])) as Array<Record<string, unknown>>;
     expect(rows.some((r) => r.id === 'p-kosong')).toBe(false);
+
+    const pageUrl = new URL(`http://x/api/pages/produk?tenantId=${TID}`);
+    const pageRes = await handlePages({ db, route: '/pages/produk', method: 'GET', path: ['pages', 'produk'], body: undefined, url: pageUrl, auth: ADMIN, request: request(pageUrl) });
+    const pageItems = ((await pageRes!.json()) as { items: Array<Record<string, unknown>> }).items;
+    expect(pageItems.some((r) => r.id === 'p-baru')).toBe(true);
+    expect(pageItems.some((r) => r.id === 'p-kosong')).toBe(false);
 
     const audit = await db.collection('audit_log').findOne({ tenantId: TID, action: 'PRODUCT_DELETE' });
     expect(audit).toBeTruthy();

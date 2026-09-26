@@ -165,6 +165,8 @@ export async function postAdjustmentLines(
     const hargaBeli = parseInt(String(prod.hargaBeli || 0), 10) || 0;
 
     if (selisih !== 0) {
+      // qtyEntered baris = hasil hitung fisik; kartu butuh qty mutasi dalam satuan input.
+      const enteredPerBase = line.qtyEntered != null && line.qtyAktual > 0 ? line.qtyEntered / line.qtyAktual : null;
       const posted = await postStockMutation(txDb, {
         tenantId,
         productId: prod.id,
@@ -174,9 +176,9 @@ export async function postAdjustmentLines(
         noTransaksi: noPS,
         keterangan: `Penyesuaian Stok ${selisih >= 0 ? '(+)' : '(-)'} ${noPS}`,
         hargaSatuan: hargaBeli,
-        qtyEntered: line.qtyEntered ?? undefined,
-        uomId: line.uomId,
-        satuan: line.satuan || prod.satuan,
+        qtyEntered: enteredPerBase != null ? roundStockQty(Math.abs(selisih) * enteredPerBase) : undefined,
+        uomId: enteredPerBase != null ? line.uomId : undefined,
+        satuan: enteredPerBase != null ? line.satuan || prod.satuan : prod.satuan,
         session,
         sourceId: docId,
         lineRef: `${idx + 1}:${prod.id}`,

@@ -210,4 +210,32 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5 penyesuaian maker-checker', { timeo
     expect(invalidDate.status).toBe(400);
     await db.collection('tenant_settings').updateOne({ tenantId: TID }, { $unset: { periodLockedUntil: '' } });
   });
+
+  it('kartu mencatat qty mutasi dalam satuan input, bukan qty hitung fisik', async () => {
+    await setFlag(false);
+    await db.collection('products').insertOne({
+      id: 'tepung', tenantId: TID, kode: 'TEPUNG', nama: 'tepung', satuan: 'KG', itemRole: 'INGREDIENT',
+      aktif: true, syncSource: 'local', gudangKode: 'GKERING', hargaBeli: 1000, stok: 0,
+    });
+    await db.collection('product_uom').insertMany([
+      { id: 'u-tepung', tenantId: TID, productId: 'tepung', satuan: 'KG', isBase: true, factorToBase: 1, aktif: true, sortOrder: 0 },
+      { id: 'u-tepung-sak', tenantId: TID, productId: 'tepung', satuan: 'SAK', isBase: false, factorToBase: 25, aktif: true, sortOrder: 1 },
+    ]);
+    await move('tepung', 100);
+
+    const res = await call('POST', ['stok', 'penyesuaian'], { reasonCode: 'OPNAME', items: [{ stokId: 'tepung', qtyAktual: 3, uomId: 'u-tepung-sak' }] }, SPV);
+    expect(res.status).toBe(200);
+    expect(await lokasiQty('tepung')).toBe(75);
+    const kartu = await db.collection('stok_kartu').findOne({ tenantId: TID, sourceType: 'PENYESUAIAN', sourceId: String(res.data.id) });
+    expect(kartu?.keluar).toBe(25);
+    expect(kartu?.qtyEntered).toBe(1);
+    expect(kartu?.satuan).toBe('SAK');
+
+    const toZero = await call('POST', ['stok', 'penyesuaian'], { reasonCode: 'OPNAME', items: [{ stokId: 'tepung', qtyAktual: 0, uomId: 'u-tepung-sak' }] }, SPV);
+    expect(toZero.status).toBe(200);
+    const kartuZero = await db.collection('stok_kartu').findOne({ tenantId: TID, sourceType: 'PENYESUAIAN', sourceId: String(toZero.data.id) });
+    expect(kartuZero?.keluar).toBe(75);
+    expect(kartuZero?.qtyEntered ?? null).toBeNull();
+    expect(kartuZero?.satuan).toBe('KG');
+  });
 });

@@ -20,6 +20,7 @@ import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { applyLedgerCapToWarehouseMap, ledgerSaldoForProducts } from '@/lib/api/stock-ledger';
 import { WAREHOUSE_CODES } from '@/lib/api/warehouses';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
+import { NOT_DELETED_PRODUCT_FILTER } from '@/lib/api/product-delete';
 import type { HandlerContext } from '@/types/api/handler';
 
 function mapHutangRow(
@@ -141,7 +142,7 @@ export async function handlePages({
       itemRole: url.searchParams.get('itemRole'),
     });
     if (catalog.error) return err(catalog.error, 400);
-    filter = { ...(catalog.filter as Record<string, unknown>), mergedInto: null };
+    filter = { ...(catalog.filter as Record<string, unknown>), mergedInto: null, ...NOT_DELETED_PRODUCT_FILTER };
     filter = withTenantFilter(scopeAuth, filter);
     filter = await mergeProductSearchWithVendorName(db, tenantId, q, filter);
     const { limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 500 });

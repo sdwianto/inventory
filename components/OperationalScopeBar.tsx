@@ -26,7 +26,7 @@ export default function OperationalScopeBar({ className = '' }: OperationalScope
         return;
       }
       const settings = await fetchTenantSettings(scopeId, { bustCache: false }).catch(() => null);
-      setTenantLabel(settings?.companyName || settings?.tenantName || u.tenantName || scopeId);
+      setTenantLabel(settings?.companyName || settings?.tenantName || (isMaster ? scopeId : u.tenantName || scopeId));
     };
     refresh();
     window.addEventListener('erp-scope-change', refresh);
