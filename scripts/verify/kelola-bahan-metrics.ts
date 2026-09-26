@@ -9,7 +9,7 @@
  */
 import { MongoClient, type Db } from 'mongodb';
 import { buildRecipeConversionReview } from '../../lib/api/recipe-conversion-review';
-import { isTenantFeatureEnabled } from '../../lib/api/feature-flags';
+import { isTenantFeatureEnabled, OPT_IN_FEATURE_FLAGS } from '../../lib/api/feature-flags';
 import { PRODUCT_KODE_UNIQUE_FILTER } from '../../lib/api/product-merge';
 import { MATERIAL_ISSUES_COLLECTION } from '../../lib/food-production/material-issue';
 import { unlinkedReleaseFilter } from '../../lib/food-production/rl-unlinked';
@@ -44,10 +44,8 @@ async function firstCreatedAt(db: Db, coll: string, filter: Record<string, unkno
 }
 
 async function tenantMetrics(db: Db, tenantId: string): Promise<{ tenantId: string; flags: Record<string, boolean>; metrics: Metric[] }> {
-  const flagNames = ['pblReferenceMode', 'rlFromPoReference', 'strictRecipeConversion', 'lotQcRequired',
-    'planStockReservation', 'costingV2', 'adjustmentApproval'] as const;
   const flags: Record<string, boolean> = {};
-  for (const f of flagNames) flags[f] = await isTenantFeatureEnabled(db, tenantId, f);
+  for (const f of OPT_IN_FEATURE_FLAGS) flags[f] = await isTenantFeatureEnabled(db, tenantId, f);
   const now = new Date();
   const metrics: Metric[] = [];
 
