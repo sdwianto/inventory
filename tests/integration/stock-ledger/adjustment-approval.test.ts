@@ -169,6 +169,22 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5 penyesuaian maker-checker', { timeo
     expect(audit).toBeTruthy();
   });
 
+  it('pengubah draft ikut dihitung pembuat: tidak boleh menyetujui', async () => {
+    await setFlag(true);
+    const draft = await call('POST', ['stok', 'penyesuaian'], { items: [{ stokId: 'garam' }] }, GUDANG);
+    const id = String(draft.data.id);
+    const edit = await call('PUT', ['stok', 'penyesuaian', id], { reasonCode: 'OPNAME', items: [{ stokId: 'garam', qtyAktual: 4 }] }, SPV);
+    expect(edit.status).toBe(200);
+    expect(edit.data.editorIds).toEqual(['u-spv']);
+    expect((await call('POST', ['stok', 'penyesuaian', id, 'submit'], {}, GUDANG)).status).toBe(200);
+
+    const byEditor = await call('POST', ['stok', 'penyesuaian', id, 'approve'], {}, SPV);
+    expect(byEditor.status).toBe(403);
+    const byOther = await call('POST', ['stok', 'penyesuaian', id, 'approve'], {}, SPV2);
+    expect(byOther.status).toBe(200);
+    expect(byOther.data.status).toBe('POSTED');
+  });
+
   it('pembatalan draft dan penolakan produk ganda', async () => {
     await setFlag(true);
     const dup = await call('POST', ['stok', 'penyesuaian'], { items: [{ stokId: 'gula' }, { stokId: 'gula' }] }, GUDANG);

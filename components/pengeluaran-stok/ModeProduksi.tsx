@@ -19,7 +19,7 @@ import { actingKitchenHeaders } from '@/lib/acting-kitchen-client';
 import { getUser } from '@/lib/auth-client';
 import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import { useConfirm } from '@/components/ConfirmProvider';
-import { StockReversalSection } from '@/components/stok/StockReversal';
+import { StockReversalSection, PendingStockReversals } from '@/components/stok/StockReversal';
 import type { JsonObject } from '@/types/json';
 import { ArrowUpFromLine, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
@@ -662,6 +662,7 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
     <div className="space-y-4">
       <OperationalScopeBar />
       <KitchenScopeBar />
+      <PendingStockReversals sourceType="FP_ISSUE" refreshKey={rows.length} onChanged={() => { void load(); }} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2">

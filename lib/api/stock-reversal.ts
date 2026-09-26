@@ -21,6 +21,7 @@ import {
 } from '@/lib/api/stock-cost-journal';
 import { MAINTENANCE_REQUESTS_COLLECTION } from '@/lib/maintenance/constants';
 import { parseLokasiKode } from '@/lib/api/stok-lokasi';
+import { assertProductWarehouse } from '@/lib/api/product-warehouse';
 import { postStockMovements, type PostedStockLine, type StockMovementLine } from '@/lib/stock-ledger/post-stock-movements';
 import { roundStockQty } from '@/lib/stock-ledger/precision';
 import { restoreBatchesFromAllocations } from '@/lib/food-production/fefo-consume';
@@ -220,7 +221,7 @@ export async function checkStockReversible(
   }
 
   const rows = await db.collection('stok_kartu')
-    .find({ tenantId, sourceType, sourceId }, txOpts(session))
+    .find({ ...tenantIdMatchFilter(tenantId), sourceType, sourceId }, txOpts(session))
     .project<KartuRow>({
       id: 1, stokId: 1, lokasiKode: 1, lineRef: 1, masuk: 1, keluar: 1, hargaSatuan: 1, satuan: 1,
       ingredientLotAllocations: 1, fefoAllocations: 1,
@@ -233,8 +234,8 @@ export async function checkStockReversible(
   const ids = [...new Set(moved.map((r) => String(r.stokId)))];
   const products = await db.collection('products')
     .find({ ...tenantIdMatchFilter(tenantId), id: { $in: ids } }, txOpts(session))
-    .project<{ id: string; kode?: string; nama?: string; satuan?: string; mergedInto?: string | null; deletedAt?: Date | null }>({
-      id: 1, kode: 1, nama: 1, satuan: 1, mergedInto: 1, deletedAt: 1,
+    .project<{ id: string; kode?: string; nama?: string; satuan?: string; gudangKode?: string | null; mergedInto?: string | null; deletedAt?: Date | null }>({
+      id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, mergedInto: 1, deletedAt: 1,
     })
     .toArray();
   const byId = new Map(products.map((p) => [String(p.id), p]));
@@ -245,6 +246,8 @@ export async function checkStockReversible(
     if (!p) return { ok: false, error: `Produk ${label} tidak ditemukan`, status: 400 };
     if (p.deletedAt) return { ok: false, error: `Produk ${label} sudah dihapus — pembalik ditolak`, status: 400 };
     if (p.mergedInto) return { ok: false, error: `Produk ${label} sudah digabung ke item lain — pembalik ditolak`, status: 400 };
+    const whErr = assertProductWarehouse(p, parseLokasiKode(String(r.lokasiKode || '')));
+    if (whErr) return { ok: false, error: `${whErr.error} — gudang produk sudah berubah sejak dokumen asli, pembalik ditolak`, status: 400 };
     lines.push({
       // Kartu lama tanpa lineRef: urutan baris tetap unik di dalam satu pembalik.
       lineRef: r.lineRef ? String(r.lineRef) : `legacy:${idx + 1}`,

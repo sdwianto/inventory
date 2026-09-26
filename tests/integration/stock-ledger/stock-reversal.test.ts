@@ -263,6 +263,55 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5c pembalik stok (RVS)', { timeout: 1
     expect(new Map(debit(j))).toEqual(new Map(credit(orig)));
   });
 
+  it('transfer historis: dibalik dengan kartu lawan; baris di luar gudang produk ditolak saat pengajuan', async () => {
+    await db.collection('products').insertOne({
+      id: 'gula', tenantId: TID, kode: 'GULA', nama: 'gula', satuan: 'KG', itemRole: 'INGREDIENT',
+      aktif: true, syncSource: 'local', gudangKode: 'GKERING', hargaBeli: 1000, stok: 0,
+    });
+    await grn('gula', 5, 1200);
+    const qtyAt = async (lokasiKode: string) => Number((await db.collection('stok_lokasi').findOne({ tenantId: TID, stokId: 'gula', lokasiKode }))?.qty || 0);
+
+    // Transfer lama antar-lokasi dalam Gudang Kering (label lokasi lama L001 = GKERING).
+    await db.collection('transfer_stok').insertOne({
+      id: 'tr-1', tenantId: TID, noTransfer: 'TR-1', tanggal: new Date(), lokasiAsal: 'GKERING', lokasiTujuan: 'L001 Rak Dapur',
+      items: [{ stokId: 'gula', qty: 3, qtyBase: 3 }], userId: GUDANG.userId, fefoRelocate: [],
+    });
+    const posted = await postStockMovements(db, undefined, {
+      tenantId: TID, sourceType: 'TRANSFER', sourceId: 'tr-1', noTransaksi: 'TR-1', keterangan: 'Transfer TR-1', postingDate: new Date(),
+      lines: [
+        { lineRef: '1:OUT', productId: 'gula', warehouseKode: 'GKERING', deltaQtyBase: -3, unitCost: 1000 },
+        { lineRef: '1:IN', productId: 'gula', warehouseKode: 'L001 Rak Dapur', deltaQtyBase: 3, unitCost: 1000 },
+      ],
+    });
+    if (!posted.ok) throw new Error(posted.error);
+    expect(await qtyAt('GKERING')).toBe(5);
+
+    const req = await rvs('POST', ['stock-reversals'], { sourceType: 'TRANSFER', sourceId: 'tr-1', reason: 'salah catat' }, GUDANG);
+    expect(req.status).toBe(201);
+    expect((req.data.lines as unknown[]).length).toBe(2);
+    const ok = await rvs('POST', ['stock-reversals', String(req.data.id), 'approve'], {}, SPV);
+    expect(ok.status).toBe(200);
+    expect(await qtyAt('GKERING')).toBe(5);
+    expect(await lotRemaining('gula')).toBe(5);
+    expect(await avgCost('gula')).toBe(1200);
+    const counter = await db.collection('stok_kartu').find({ tenantId: TID, sourceType: 'STOCK_REVERSAL', sourceId: String(req.data.id) }).toArray();
+    expect(counter.map((k) => [k.lineRef, k.masuk, k.keluar]).sort()).toEqual([['1:IN', 0, 3], ['1:OUT', 3, 0]]);
+    const tr = await db.collection('transfer_stok').findOne({ tenantId: TID, id: 'tr-1' });
+    expect(tr).toMatchObject({ status: 'REVERSED', reversedBy: { reversalId: String(req.data.id) } });
+
+    // Transfer lama ke Gudang Basah padahal produk sekarang milik Gudang Kering: ditolak sejak pengajuan.
+    await db.collection('transfer_stok').insertOne({
+      id: 'tr-2', tenantId: TID, noTransfer: 'TR-2', tanggal: new Date(), lokasiAsal: 'GKERING', lokasiTujuan: 'GBASAH',
+      items: [{ stokId: 'gula', qty: 1, qtyBase: 1 }], userId: GUDANG.userId,
+    });
+    await db.collection('stok_kartu').insertOne({
+      id: 'k-tr-2', tenantId: TID, stokId: 'gula', lokasiKode: 'GBASAH', sourceType: 'TRANSFER', sourceId: 'tr-2', lineRef: '1:IN', masuk: 1, keluar: 0, hargaSatuan: 1200,
+    });
+    const blocked = await rvs('POST', ['stock-reversals'], { sourceType: 'TRANSFER', sourceId: 'tr-2', reason: 'salah gudang' }, GUDANG);
+    expect(blocked.status).toBe(400);
+    expect(String(blocked.data.error)).toMatch(/gudang produk sudah berubah/);
+  });
+
   it('kunci periode dengan tanggal server menolak persetujuan', async () => {
     await postedRelease('rl-3', 'telur', 1);
     const req = await rvs('POST', ['stock-reversals'], { sourceType: 'RELEASE', sourceId: 'rl-3', reason: 'uji kunci' }, GUDANG);

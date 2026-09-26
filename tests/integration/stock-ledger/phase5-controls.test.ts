@@ -9,6 +9,7 @@ import { postStockMovements } from '@/lib/stock-ledger';
 import { handleProducts } from '@/lib/api/handlers/products';
 import { handleTransfer } from '@/lib/api/handlers/inventory-transfer';
 import { assertPeriodNotLocked } from '@/lib/api/period-lock';
+import { softDeleteProducts } from '@/lib/api/product-delete';
 import type { AuthContext } from '@/types/auth';
 
 type ReplSet = { getUri(): string; stop(): Promise<boolean> };
@@ -105,6 +106,27 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 5a kontrol master & posting', { timeo
     });
     expect(grn.ok).toBe(false);
     if (!grn.ok) expect(grn.error).toMatch(/sudah dihapus/);
+  });
+
+  it('soft delete produk legacy tanpa tenantId (tenant default), UOM ikut terhapus, tenant lain tidak tersentuh', async () => {
+    await db.collection('products').insertOne({
+      id: 'p-legacy', kode: 'LGC', nama: 'legacy', satuan: 'KG', aktif: true, syncSource: 'local', stok: 0, mergedInto: null,
+    });
+    await db.collection('product_uom').insertOne({ id: 'u-legacy', productId: 'p-legacy', satuan: 'KG', isBase: true, factorToBase: 1 });
+    await insertProduct('p-lain', 'LAIN');
+
+    const other = await softDeleteProducts(db, 'tenant-lain', ['p-lain'], ADMIN);
+    expect(other).toMatchObject({ ok: false, status: 404 });
+    expect((await db.collection('products').findOne({ id: 'p-lain' }))?.deletedAt).toBeFalsy();
+
+    const res = await softDeleteProducts(db, 'default', ['p-legacy'], ADMIN);
+    expect(res).toMatchObject({ ok: true, deleted: 1, kodes: ['LGC'] });
+    const doc = await db.collection('products').findOne({ id: 'p-legacy' });
+    expect(doc?.deletedAt).toBeInstanceOf(Date);
+    expect(await db.collection('product_uom').countDocuments({ productId: 'p-legacy' })).toBe(0);
+
+    const again = await softDeleteProducts(db, 'default', ['p-legacy'], ADMIN);
+    expect(again).toMatchObject({ ok: false, status: 404 });
   });
 
   it('master produk tidak bisa mengubah stok; field milik server diabaikan', async () => {

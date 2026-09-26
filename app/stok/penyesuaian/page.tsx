@@ -244,7 +244,11 @@ export default function PenyesuaianPage() {
   }
 
   const detailStatus = docStatus(detail);
-  const makers = [asObject(detail?.createdBy), asObject(detail?.submittedBy)];
+  const makers = [
+    asObject(detail?.createdBy),
+    asObject(detail?.submittedBy),
+    ...asArray(detail?.editorIds).map((userId) => ({ userId })),
+  ];
   const isMaker = !!user?.id && makers.some((m) => str(m.userId) === user.id);
   const canApproveDetail = canApproveRole && (!isMaker || isMaster);
   const canCancelDetail = isMaker || canApproveRole;
@@ -469,7 +473,7 @@ export default function PenyesuaianPage() {
                 </div>
               )}
               {detailStatus === 'PENDING_APPROVAL' && isMaker && !isMaster && (
-                <p className="text-xs text-amber-700">Anda pembuat/pengaju dokumen ini — persetujuan harus oleh Supervisor/Admin lain.</p>
+                <p className="text-xs text-amber-700">Anda pembuat/pengubah/pengaju dokumen ini — persetujuan harus oleh Supervisor/Admin lain.</p>
               )}
             </div>
           )}

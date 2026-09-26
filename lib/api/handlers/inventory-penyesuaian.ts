@@ -51,11 +51,17 @@ type AdjustmentDoc = {
   items?: AdjustmentLine[];
   createdBy?: { userId?: string; userName?: string };
   submittedBy?: { userId?: string; userName?: string };
+  /** Semua pengguna yang pernah mengubah draft — ikut dihitung pembuat untuk maker-checker. */
+  editorIds?: string[];
   updatedAt?: Date | null;
   [key: string]: unknown;
 };
 
 type ParsedLine = AdjustmentLine;
+
+function adjustmentMakers(doc: AdjustmentDoc) {
+  return [doc.createdBy, doc.submittedBy, ...(doc.editorIds || []).map((userId) => ({ userId }))];
+}
 
 /** Susun baris dari body: produk, gudang home, konversi satuan ke base. qtyAktual boleh kosong untuk draft. */
 async function parseLines(
@@ -320,6 +326,7 @@ export async function handlePenyesuaian({
               updatedAt: now,
               updatedBy: actor,
             },
+            $addToSet: { editorIds: actor.userId },
           },
           txOpts(session),
         );
@@ -402,7 +409,7 @@ export async function handlePenyesuaian({
 
     if (action === 'cancel') {
       if (doc.status !== 'DRAFT' && doc.status !== 'PENDING_APPROVAL') return err('Hanya draft atau pengajuan yang bisa dibatalkan', 400);
-      const isMaker = [doc.createdBy, doc.submittedBy].some((m) => m && String(m.userId || '') === actor.userId);
+      const isMaker = adjustmentMakers(doc).some((m) => m && String(m.userId || '') === actor.userId);
       const canManage = requireRole(auth, STOCK_ADJUST_ROLES) === null;
       if (!isMaker && !canManage) return err('Hanya pembuat atau Supervisor/Admin yang bisa membatalkan', 403);
       try {
@@ -427,9 +434,9 @@ export async function handlePenyesuaian({
 
     if (action === 'approve') {
       if (doc.status !== 'PENDING_APPROVAL') return err('Hanya penyesuaian yang menunggu persetujuan yang bisa disetujui', 400);
-      const selfState = selfApprovalState(auth, [doc.createdBy, doc.submittedBy]);
+      const selfState = selfApprovalState(auth, adjustmentMakers(doc));
       if (selfState === 'blocked') {
-        return err('Pembuat/pengaju penyesuaian tidak boleh menyetujui sendiri — minta Supervisor/Admin lain', 403);
+        return err('Pembuat, pengubah, atau pengaju penyesuaian tidak boleh menyetujui sendiri — minta Supervisor/Admin lain', 403);
       }
       const locked = await guardPosting(db, scopeAuth, invBody, now);
       if (locked) return locked;
