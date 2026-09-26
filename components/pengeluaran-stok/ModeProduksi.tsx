@@ -20,6 +20,8 @@ import { getUser } from '@/lib/auth-client';
 import { mutationIdempotencyHeaders } from '@/lib/hooks/use-api-mutation';
 import { useConfirm } from '@/components/ConfirmProvider';
 import { StockReversalSection, PendingStockReversals } from '@/components/stok/StockReversal';
+import { getClientFeatureFlags } from '@/lib/feature-flags-client';
+import { isPblReferenceModeActive } from '@/lib/api/feature-flags';
 import type { JsonObject } from '@/types/json';
 import { ArrowUpFromLine, Plus, RefreshCw, Trash2, Eye, CheckCircle2, History } from 'lucide-react';
 import {
@@ -670,7 +672,9 @@ export function ModeProduksi({ initialPlanId }: { initialPlanId?: string }) {
             Mode Produksi — Pengambilan Bahan
           </h2>
           <p className="text-sm text-muted-foreground">
-            Ambil bahan dari gudang produk — Setujui membuka konfirmasi Keluarkan Stok
+            {isPblReferenceModeActive(getClientFeatureFlags())
+              ? 'PBL sebagai acuan dari PO rencana — stok keluar lewat Release (RL); Selesai mengonfirmasi pemakaian'
+              : 'Ambil bahan dari gudang produk — Setujui membuka konfirmasi Keluarkan Stok'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-end">

@@ -139,6 +139,28 @@ test.describe('Kelola bahan Fase 0–6 (tenant uji terisolasi)', () => {
     expect(((await json(latest)).reports as unknown[]).length).toBeGreaterThan(0);
   });
 
+  test('semua flag kelola bahan menyala: tersimpan, endpoint terkait merespons normal, rekonsiliasi bersih', async () => {
+    const features = {
+      pblReferenceMode: true, rlFromPoReference: true, strictRecipeConversion: true, lotExpiryRequired: true,
+      lotQcRequired: true, planStockReservation: true, costingV2: true, adjustmentApproval: true,
+    };
+    const put = await master.put('/api/tenant/settings', { data: { tenantId: T, features } });
+    expect(put.ok(), await put.text()).toBeTruthy();
+    const saved = await json(await master.get(`/api/tenant/settings?tenantId=${T}`));
+    expect(saved.features).toMatchObject(features);
+
+    for (const path of ['/lot-qc', '/lot-qc/inspections', '/recipe-conversion/review', '/inventory-releases', '/material-issues', '/production-plans']) {
+      const res = await master.get(q(path));
+      expect(res.status(), `${path}: ${await res.text()}`).toBe(200);
+    }
+    const recon = await master.post('/api/ops/recon/run', { data: { tenantId: T } });
+    expect(recon.status(), await recon.text()).toBe(200);
+    for (const r of (await json(recon)).results as Array<{ job: string; status: string; totalMismatch: number }>) {
+      expect(r.status, r.job).toBe('OK');
+      expect(r.totalMismatch, r.job).toBe(0);
+    }
+  });
+
   test('UI: halaman stok, produk, dan panel rekonsiliasi terbuka tanpa error', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('pageerror', (e) => consoleErrors.push(e.message));
@@ -153,6 +175,9 @@ test.describe('Kelola bahan Fase 0–6 (tenant uji terisolasi)', () => {
       ['/stok/kartu', /Kartu/i],
       ['/stok/saldo', /Saldo|Stok/i],
       ['/utiliti/ops', /Rekonsiliasi/i],
+      ['/penerimaan/qc', /QC/i],
+      ['/food-production/issue', /PBL|Pengambilan|Bahan/i],
+      ['/food-production/recipe/konversi', /Konversi/i],
     ];
     for (const [path, expected] of pages) {
       await page.goto(path);
