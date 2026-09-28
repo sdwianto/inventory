@@ -74,6 +74,8 @@ export interface ThreeWayMatchOptions {
   poSiblingInvoices?: { noInvoice?: string; items?: VendorInvoiceLine[] }[];
   /** Retur POSTED milik poSiblingInvoices — qty yang sudah dikreditkan kembali ke PO. */
   poSiblingReturns?: { items?: VendorInvoiceLine[] }[];
+  /** Hanya cek qty (GRN, retur, invoice lain, sisa qty PO); semua cek harga dilewati. */
+  qtyOnly?: boolean;
 }
 
 export interface ThreeWayMatchResult {

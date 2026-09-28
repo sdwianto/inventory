@@ -389,6 +389,7 @@ export function matchInvoiceLinesAgainstGrn(
 ): ThreeWayMatchResult {
   const qtyTol = Number(opts.qtyTolerancePct ?? DEFAULT_QTY_TOLERANCE_PCT);
   const priceTol = Number(opts.priceTolerancePct ?? DEFAULT_PRICE_TOLERANCE_PCT);
+  const checkPrice = opts.qtyOnly !== true;
 
   const index = buildGrnReceivedIndex(grns);
   applyPostedReturns(index, opts.postedReturns || []);
@@ -422,7 +423,7 @@ export function matchInvoiceLinesAgainstGrn(
     }
 
     const invPrice = parseInt(String(invLine.harga || 0), 10);
-    if (invPrice > 0) {
+    if (checkPrice && invPrice > 0) {
       const grnPrice = resolveUnitPrice(invLine, index);
       const maxPrice = grnPrice * (1 + priceTol / 100);
       if (grnPrice > 0 && invPrice > maxPrice + 1) {
@@ -457,7 +458,7 @@ export function matchInvoiceLinesAgainstGrn(
             code: 'QTY_MISMATCH',
           };
         }
-        if (invPrice > 0 && po.price > 0 && invPrice > po.price * (1 + priceTol / 100) + 1) {
+        if (checkPrice && invPrice > 0 && po.price > 0 && invPrice > po.price * (1 + priceTol / 100) + 1) {
           return {
             ok: false,
             error: `3-way match harga: ${kode} invoice Rp ${invPrice.toLocaleString('id-ID')} > harga PO/SO Rp ${po.price.toLocaleString('id-ID')} (+${priceTol}%)`,
@@ -470,7 +471,7 @@ export function matchInvoiceLinesAgainstGrn(
 
   const invSubTotal = invoiceComparableSubTotal(payload);
   const maxTotal = grnValue * (1 + priceTol / 100);
-  if (invSubTotal > maxTotal + 1 && grnValue > 0) {
+  if (checkPrice && invSubTotal > maxTotal + 1 && grnValue > 0) {
     return {
       ok: false,
       error: `3-way match harga: invoice Rp ${invSubTotal.toLocaleString('id-ID')} melebihi nilai GRN Rp ${grnValue.toLocaleString('id-ID')} (+${priceTol}% toleransi)`,

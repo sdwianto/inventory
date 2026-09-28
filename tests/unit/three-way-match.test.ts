@@ -330,4 +330,43 @@ describe('three-way-match', () => {
     });
     expect(ok.ok).toBe(true);
   });
+
+  describe('qtyOnly', () => {
+    const one = [{ items: [{ vendorKode: 'SKU1', satuan: 'PCS', qtyReceived: 1350, harga: 750 }] }];
+    const poLines = [{ kode: 'SKU1', satuan: 'PCS', qty: 1350, harga: 575 }];
+
+    it('mengabaikan selisih harga PO/SO, harga GRN, dan total', () => {
+      const payload: VendorInvoicePayload = {
+        noDO: 'DO-1',
+        subTotal: 5_000_000,
+        items: [{ kode: 'SKU1', satuan: 'PCS', qty: 1350, harga: 3000 }],
+      };
+      expect(matchInvoiceLinesAgainstGrn(one, payload, { poLines }).code).toBe('PRICE_MISMATCH');
+      expect(matchInvoiceLinesAgainstGrn(one, payload, { poLines, qtyOnly: true }).ok).toBe(true);
+    });
+
+    it('tetap menolak qty melebihi GRN, qty sudah ditagih, atau sisa qty PO', () => {
+      const over: VendorInvoicePayload = { noDO: 'DO-1', items: [{ kode: 'SKU1', satuan: 'PCS', qty: 1400, harga: 750 }] };
+      expect(matchInvoiceLinesAgainstGrn(one, over, { qtyOnly: true }).code).toBe('QTY_MISMATCH');
+
+      const full: VendorInvoicePayload = { noDO: 'DO-1', items: [{ kode: 'SKU1', satuan: 'PCS', qty: 1350, harga: 750 }] };
+      const dup = matchInvoiceLinesAgainstGrn(one, full, {
+        qtyOnly: true,
+        siblingInvoices: [{ noInvoice: 'INV-X', items: [{ kode: 'SKU1', satuan: 'PCS', qty: 1350 }] }],
+      });
+      expect(dup.code).toBe('GRN_ALREADY_INVOICED');
+
+      const poShort = matchInvoiceLinesAgainstGrn(one, full, {
+        qtyOnly: true,
+        poLines: [{ kode: 'SKU1', satuan: 'PCS', qty: 1000 }],
+      });
+      expect(poShort.code).toBe('QTY_MISMATCH');
+
+      const notOnPo = matchInvoiceLinesAgainstGrn(one, full, {
+        qtyOnly: true,
+        poLines: [{ kode: 'SKU9', satuan: 'PCS', qty: 5 }],
+      });
+      expect(notOnPo.ok).toBe(false);
+    });
+  });
 });

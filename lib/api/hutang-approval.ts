@@ -4,8 +4,74 @@ import type { Db } from 'mongodb';
 import type { HutangDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 import type { AuthContext } from '@/types/auth';
+import type { VendorInvoiceLine, VendorInvoicePayload } from '@/types/integration';
+import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
 
 const APPROVABLE_PO_STATUSES = new Set(['RECEIVED', 'INVOICED']);
+
+/** Payload 3-way match dari dokumen hutang tersimpan (untuk cek ulang saat review/approve). */
+export function invoicePayloadFromHutang(hutang: HutangDoc): VendorInvoicePayload {
+  const items = (Array.isArray(hutang.items) ? hutang.items : []) as VendorInvoiceLine[];
+  return {
+    invoiceId: hutang.vendorInvoiceId,
+    noInvoice: hutang.noInvoice,
+    noDO: hutang.noDO,
+    noSO: hutang.noSO ?? null,
+    noPO: hutang.noPO ?? null,
+    salesOrderId: hutang.salesOrderId,
+    vendorTenantId: hutang.vendorTenantId,
+    items: items.map((it) => ({
+      lineId: it.lineId,
+      stokId: it.stokId,
+      uomId: it.uomId,
+      satuan: it.satuan,
+      kode: it.kode,
+      qty: it.qty,
+      harga: it.harga,
+    })),
+  } as VendorInvoicePayload;
+}
+
+export type PoReceiptGate =
+  | { ok: true; via: 'NO_PO' | 'PO_RECEIVED' | 'MATCHED' | 'QTY_COVERED' }
+  | { ok: false; error: string; code: 'PO_NOT_RECEIVED' };
+
+/**
+ * Gerbang "barang sudah diterima" untuk approve tagihan ber-PO.
+ * po.status adalah rollup seluruh baris PO; pada PO multi-pengiriman yang sah sebagian baris
+ * bisa belum dikirim. Yang menentukan adalah baris yang DITAGIH invoice ini: bila qty tiap
+ * baris tertutup GRN POSTED (dikurangi retur & invoice lain) dan sisa qty PO, gerbang lolos —
+ * apa pun jenis selisih match-nya. Selisih harga/EXCEPTION tetap diputuskan lewat override.
+ */
+export async function resolvePoReceiptGate(
+  db: Db,
+  hutang: HutangDoc,
+  po: JsonObject | null,
+): Promise<PoReceiptGate> {
+  if (!hutang.noPO || !po) return { ok: true, via: 'NO_PO' };
+  if (APPROVABLE_PO_STATUSES.has(String(po.status || ''))) return { ok: true, via: 'PO_RECEIVED' };
+  if (hutang.matchStatus === 'MATCHED') return { ok: true, via: 'MATCHED' };
+
+  const items = Array.isArray(hutang.items) ? hutang.items : [];
+  if (hutang.noDO && items.length) {
+    const tid = hutang.tenantId || 'default';
+    const qty = await validateInvoiceAgainstGrn(db, tid, invoicePayloadFromHutang(hutang), {
+      excludeHutangId: hutang.id,
+      qtyOnly: true,
+    });
+    if (qty.ok) return { ok: true, via: 'QTY_COVERED' };
+    return {
+      ok: false,
+      error: `PO ${hutang.noPO} belum diterima lengkap untuk baris yang ditagih (status PO: ${po.status}) — ${qty.error}`,
+      code: 'PO_NOT_RECEIVED',
+    };
+  }
+  return {
+    ok: false,
+    error: `PO ${hutang.noPO} belum diterima lengkap (status: ${po.status})`,
+    code: 'PO_NOT_RECEIVED',
+  };
+}
 
 export async function actorSnapshot(db: Db, auth: AuthContext | null | undefined) {
   let userName = String(auth?.name || auth?.email || '').trim();
@@ -67,18 +133,8 @@ export async function assertCanApproveInvoice(
 
   if (hutang.noPO) {
     const po = await db.collection('customer_purchase_orders').findOne({ tenantId: tid, noPO: hutang.noPO });
-    // po.status adalah rollup kasar seluruh baris PO — pada PO multi-delivery
-    // yang sah, sebagian baris bisa masih SHIPPED walau baris yang ditagih di
-    // invoice ini sudah diverifikasi lengkap oleh 3-way match (matchStatus
-    // MATCHED = tiap baris invoice sudah dicek terhadap qty GRN POSTED).
-    // Jangan blok approval invoice ini hanya karena rollup PO belum lengkap.
-    if (po && !APPROVABLE_PO_STATUSES.has(po.status) && hutang.matchStatus !== 'MATCHED') {
-      return {
-        ok: false,
-        error: `PO ${hutang.noPO} belum diterima lengkap (status: ${po.status})`,
-        code: 'PO_NOT_RECEIVED',
-      };
-    }
+    const gate = await resolvePoReceiptGate(db, hutang, po as JsonObject | null);
+    if (!gate.ok) return gate;
   } else if (hutang.noDO) {
     const grn = await db.collection('goods_receipts').findOne({
       tenantId: tid,
@@ -131,9 +187,10 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
 
   const poReceived = po?.status === 'RECEIVED' || po?.status === 'INVOICED';
   const hasPostedGrn = grns.some((g) => g.status === 'POSTED');
-  // Sama seperti assertCanApproveInvoice: rollup po.status boleh dilewati
-  // kalau 3-way match per-baris invoice ini sudah MATCHED.
-  const poGate = poReceived || hutang.matchStatus === 'MATCHED';
+  const pendingReview = (hutang.approvalStatus || hutang.status) === 'PENDING_REVIEW';
+  const poGate = po && pendingReview
+    ? (await resolvePoReceiptGate(db, hutang, po)).ok
+    : poReceived || hutang.matchStatus === 'MATCHED';
 
   const tanggalPermintaanKirim = hutang.tanggalPermintaanKirim
     || po?.tanggalKedatangan
@@ -183,8 +240,7 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
     penerimaGudang,
     tanggalPermintaanKirim,
     tanggalAktualKirim,
-    canApprove: (hutang.approvalStatus || hutang.status) === 'PENDING_REVIEW'
-      && (poGate || (!po && hasPostedGrn)),
+    canApprove: pendingReview && (poGate || (!po && hasPostedGrn)),
   };
 }
 
