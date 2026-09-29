@@ -2,7 +2,7 @@ import type { ClientSession, Db } from 'mongodb';
 import { txOpts } from '@/lib/api/transaction';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
-import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems } from '@/lib/api/cpo-line-cancel-sync';
+import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems, isSupersededVendorSo } from '@/lib/api/cpo-line-cancel-sync';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import { logger } from '@/lib/api/logger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
@@ -333,6 +333,40 @@ export async function syncCpoFromVendorEvent(
 
   const now = new Date();
   const patch: Record<string, unknown> = { updatedAt: now, lastVendorEvent: event, lastVendorEventAt: now };
+
+  const isSoEvent = event === 'sales_order.confirmed'
+    || event === 'sales_order.updated'
+    || event === 'sales_order.cancelled';
+  if (isSoEvent) {
+    const soRef = {
+      salesOrderId: payload.salesOrderId ? String(payload.salesOrderId) : undefined,
+      noSO: payload.noSO ? String(payload.noSO) : undefined,
+      vendorTenantId: payload.vendorTenantId ? String(payload.vendorTenantId) : undefined,
+      reason: event === 'sales_order.cancelled'
+        ? String(payload.reason || payload.cancelReason || '')
+        : undefined,
+    };
+    if ((soRef.salesOrderId || soRef.noSO || soRef.reason) && isSupersededVendorSo(po, soRef)) {
+      logger.info('cpo_cancel_superseded_skipped', {
+        poId: po.id,
+        noPO: po.noPO,
+        event,
+        ...soRef,
+      });
+      await db.collection('customer_purchase_orders').updateOne(
+        { id: po.id },
+        { $set: { lastVendorEvent: event, lastVendorEventAt: now } },
+      );
+      return {
+        action: 'skipped',
+        reason: 'superseded_so',
+        salesOrderId: soRef.salesOrderId,
+        noSO: soRef.noSO,
+        vendorTenantId: soRef.vendorTenantId,
+        cancelReason: soRef.reason,
+      };
+    }
+  }
 
   if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
     const soSynced = syncCpoFromSoPayload(po, payload, now);

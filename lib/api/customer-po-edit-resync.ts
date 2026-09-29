@@ -7,6 +7,7 @@ import type { Db } from 'mongodb';
 import { notifySalesPoCancelled } from '@/lib/api/customer-po-cancel-sales';
 import { finalizePoSubmission, pushPoToVendor } from '@/lib/api/customer-po-push';
 import { poHasVendorSoNumbers } from '@/lib/api/customer-po-so-extract';
+import { collectCurrentVendorSos } from '@/lib/api/cpo-line-cancel-sync';
 import { reopenEnsureCreateSoOutboxForEdit } from '@/lib/api/integration-outbox';
 import { enqueueAndKickPoVendorSync } from '@/lib/api/po-vendor-sync-kick';
 import type { JsonObject } from '@/types/json';
@@ -41,6 +42,15 @@ export async function cancelVendorSoForPoEdit(
   const hadVendorSo = poHasVendorSoNumbers(po as JsonObject)
     || (Array.isArray(po.vendorSubmissions) && po.vendorSubmissions.length > 0);
   if (!hadVendorSo) return { ok: true, cancelled: [] };
+
+  // Wajib tersimpan sebelum cancel dikirim: webhook sales_order.cancelled bisa tiba kapan saja.
+  const superseded = collectCurrentVendorSos(po as JsonObject, editRevision);
+  if (superseded.length && po.id) {
+    await db.collection('customer_purchase_orders').updateOne(
+      { id: String(po.id) },
+      { $push: { supersededVendorSos: { $each: superseded } } } as never,
+    );
+  }
 
   const cancelled = await notifySalesPoCancelled(db, po, reason, { editRevision });
   const cancelErrors = cancelled.errors || [];

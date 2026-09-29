@@ -7,6 +7,7 @@ import {
   diffPoItemsAgainstActiveSo,
   applyCancelledLinesToPoItems,
   applySoCancelledWebhookToPoItems,
+  isSupersededVendorSo,
   type CpoLineCancelRecord,
 } from '@/lib/api/cpo-line-cancel-sync';
 import { fetchSoStatusForCustomerPo } from '@/lib/api/cpo-so-fetch';
@@ -214,6 +215,19 @@ export async function pullSoCancelStateForPo(
       ...(Array.isArray(payload.cancelledLines) ? payload.cancelledLines : []),
     ] as CpoLineCancelRecord[];
     const soStatus = String(payload.status || '').toUpperCase();
+
+    if (isSupersededVendorSo(po, {
+      ...meta,
+      reason: soStatus === 'CANCELLED' ? String(payload.cancelReason || payload.reason || '') : undefined,
+    })) {
+      logger.info('cpo_cancel_superseded_skipped', {
+        poId: po.id,
+        noPO: po.noPO,
+        source: 'so_pull',
+        ...meta,
+      });
+      continue;
+    }
 
     // SO penuh CANCELLED di sales — batalkan baris vendor (bukan hanya match lineId).
     if (soStatus === 'CANCELLED') {

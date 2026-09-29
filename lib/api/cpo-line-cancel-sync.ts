@@ -329,6 +329,87 @@ export function applySoCancelledWebhookToPoItems(
   };
 }
 
+/** SO vendor lama yang digantikan SO baru karena edit PO pasca-approve. */
+export type SupersededVendorSo = {
+  vendorTenantId?: string;
+  salesOrderId?: string;
+  noSO?: string;
+  editRevision?: number;
+  at?: Date;
+};
+
+const EDIT_PO_CANCEL_REASON = /^Edit PO \(rev \d+\)/;
+
+/** Daftar SO vendor yang sedang terikat ke PO — dicatat sebelum dibatalkan untuk edit. */
+export function collectCurrentVendorSos(
+  po: JsonObject,
+  editRevision: number,
+  now = new Date(),
+): SupersededVendorSo[] {
+  const out: SupersededVendorSo[] = [];
+  const seen = new Set<string>();
+  const push = (vendorTenantId: unknown, salesOrderId: unknown, noSO: unknown) => {
+    const soId = String(salesOrderId || '').trim();
+    const no = String(noSO || '').trim();
+    if (!soId && !no) return;
+    const vid = String(vendorTenantId || '').trim();
+    const key = `${vid}|${soId}|${no}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...(vid ? { vendorTenantId: vid } : {}),
+      ...(soId ? { salesOrderId: soId } : {}),
+      ...(no ? { noSO: no } : {}),
+      editRevision,
+      at: now,
+    });
+  };
+  const subs = Array.isArray(po.vendorSubmissions) ? po.vendorSubmissions as JsonObject[] : [];
+  for (const s of subs) push(s.vendorTenantId, s.vendorSoId, s.vendorNoSO);
+  const topVendor = String(po.vendorTenantId || '').trim();
+  if (topVendor !== 'multi') {
+    // vendorNoSO top-level PO multi-vendor berisi ringkasan, bukan nomor SO tunggal
+    push(topVendor, po.vendorSoId, po.vendorNoSO);
+  } else {
+    push('', po.vendorSoId, '');
+  }
+  return out;
+}
+
+/**
+ * Event SO untuk SO yang sudah digantikan edit PO — tidak boleh mengubah baris PO,
+ * karena baris vendor itu kini dilayani SO baru.
+ */
+export function isSupersededVendorSo(
+  po: JsonObject,
+  ref: { salesOrderId?: string; noSO?: string; vendorTenantId?: string; reason?: string },
+): boolean {
+  // Cancel yang dipicu edit PO selalu diikuti CreateSO ulang — bukan pembatalan baris,
+  // termasuk bila webhook tiba sebelum binding SO lama dibersihkan.
+  if (EDIT_PO_CANCEL_REASON.test(String(ref.reason || '').trim())) return true;
+
+  const soId = String(ref.salesOrderId || '').trim();
+  const noSO = String(ref.noSO || '').trim();
+  const vendor = String(ref.vendorTenantId || '').trim();
+
+  const subs = Array.isArray(po.vendorSubmissions) ? po.vendorSubmissions as JsonObject[] : [];
+  const isCurrent = subs.some((s) => {
+    if (soId && String(s.vendorSoId || '') === soId) return true;
+    if (!noSO || String(s.vendorNoSO || '') !== noSO) return false;
+    return !vendor || String(s.vendorTenantId || '') === vendor;
+  });
+  if (isCurrent) return false;
+
+  const superseded = Array.isArray(po.supersededVendorSos) ? po.supersededVendorSos as JsonObject[] : [];
+  return superseded.some((s) => {
+    if (soId && String(s.salesOrderId || '') === soId) return true;
+    if (!noSO || String(s.noSO || '') !== noSO) return false;
+    // noSO hanya unik per vendor (mis. SO2609000012 ada di dua vendor)
+    const sv = String(s.vendorTenantId || '');
+    return Boolean(vendor) && (!sv || sv === vendor);
+  });
+}
+
 /** @deprecated gunakan applySoCancelledWebhookToPoItems */
 export function applyFullSoCancelToPoItems(
   poItems: CpoLine[],

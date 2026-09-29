@@ -294,5 +294,5 @@ export async function processWebhookInboxEvent(
     return dn as Record<string, unknown>;
   }
 
-  return { message: `event ${event} ignored` };
+  return { ...result, message: result.cpoSync ? `event ${event} cpo_synced` : `event ${event} ignored` };
 }
