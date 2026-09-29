@@ -64,6 +64,7 @@ import {
 } from '@/lib/food-production/production-batch';
 import type { HandlerContext } from '@/types/api/handler';
 import { insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit } from '@/lib/api/cas';
+import { latestCompletedIssueForPlan } from '@/lib/api/result-issue-link';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -697,6 +698,12 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
             userName: actor.userName,
             note: String(resultBody.note || '').trim() || defaultNote,
           });
+          const linkedIssue = await latestCompletedIssueForPlan(
+            txDb,
+            withTenantFilter(scopeAuth, {}),
+            fresh.productionPlanId,
+            session,
+          );
           const completed = await txDb.collection(PRODUCTION_RESULTS_COLLECTION).updateOne(
             withTenantFilter(scopeAuth, { id, status: fresh.status, stockPostedAt: null }),
             {
@@ -704,6 +711,10 @@ export async function handleProductionResults(ctx: HandlerContext): Promise<Next
                 status: 'COMPLETED',
                 history,
                 stockPostedAt: now,
+                ...(linkedIssue ? {
+                  materialIssueId: linkedIssue.id,
+                  materialIssueNo: linkedIssue.noDokumen ?? null,
+                } : {}),
                 ...(wasteQty > 0 ? { wasteStockPostedAt: now } : {}),
                 batchNo,
                 expiryDate,

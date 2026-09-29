@@ -410,14 +410,10 @@ function FoodProductionResultPageContent() {
       title: 'Selesaikan hasil produksi?',
       description: completeTarget.materialIssueNo
         ? `${completeTarget.noDokumen} — catat selesai. Mode MBG: stok barang jadi tidak ditambah; lanjut distribusi dari porsi.`
-        : `${completeTarget.noDokumen} — belum ada PBL selesai. Selesaikan Pengeluaran Stok dulu.`,
+        : `${completeTarget.noDokumen} — PBL belum tertaut di dokumen ini. Sistem akan memeriksa PBL selesai pada rencananya.`,
       confirmText: 'Selesai',
     });
     if (!okConfirm) return;
-    if (!completeTarget.materialIssueNo) {
-      toast.error('Belum ada PBL selesai — selesaikan Pengeluaran Stok dulu');
-      return;
-    }
     await changeStatus(completeTarget, 'COMPLETED', {
       batchNo: completeBatchNo.trim() || undefined,
       expiryDate: completeExpiry.trim() || undefined,
@@ -721,7 +717,7 @@ function FoodProductionResultPageContent() {
               )}
               {!detail.materialIssueNo && detail.status !== 'COMPLETED' && detail.status !== 'CANCELLED' && (
                 <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2">
-                  Post stok FG membutuhkan PBL selesai.{' '}
+                  PBL belum tertaut di dokumen ini. Selesai butuh PBL selesai pada rencananya.{' '}
                   <Link
                     href={`/stok/pengeluaran?mode=produksi&productionPlanId=${detail.productionPlanId}`}
                     className="text-primary hover:underline"
@@ -806,8 +802,7 @@ function FoodProductionResultPageContent() {
                     type="button"
                     size="sm"
                     className="bg-green-600 hover:bg-green-700 text-white"
-                    disabled={!detail.materialIssueNo}
-                    title={!detail.materialIssueNo ? 'Butuh PBL selesai' : undefined}
+                    title={!detail.materialIssueNo ? 'PBL belum tertaut — sistem memeriksa PBL selesai pada rencana' : undefined}
                     onClick={() => void changeStatus(detail, 'COMPLETED')}
                   >
                     <CheckCircle2 className="h-4 w-4 mr-1" /> Selesai

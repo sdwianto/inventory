@@ -62,6 +62,7 @@ import {
 } from '@/lib/food-production/material-issue-reconcile';
 import type { HandlerContext } from '@/types/api/handler';
 import { insertWithAudit, casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit } from '@/lib/api/cas';
+import { linkOpenResultsToIssue } from '@/lib/api/result-issue-link';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 const KNOWN_STATUSES = new Set<string>(Object.keys(FP_DEFAULT_TRANSITIONS));
@@ -946,6 +947,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             txOpts(session),
           );
           if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+          await linkOpenResultsToIssue(txDb, withTenantFilter(scopeAuth, {}), fresh, now, session);
           await writeAuditLog(txDb, {
             tenantId: existing.tenantId,
             action: 'ISSUE_COMPLETE',
@@ -1085,6 +1087,7 @@ export async function handleMaterialIssues(ctx: HandlerContext): Promise<NextRes
             txOpts(session),
           );
           if (completed.matchedCount === 0) throw Object.assign(new Error('Dokumen berubah'), { httpStatus: 409 });
+          await linkOpenResultsToIssue(txDb, withTenantFilter(scopeAuth, {}), fresh, now, session);
           await writeAuditLog(txDb, {
             tenantId: existing.tenantId,
             action: 'ISSUE_COMPLETE',
