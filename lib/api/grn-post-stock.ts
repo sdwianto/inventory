@@ -258,7 +258,8 @@ export async function applyGrnStockPosting(
       ...(supplierLotNo ? { supplierLotNo } : {}),
       qty: qtyBase,
       qtyRemaining: qtyBase,
-      satuan: resolved.satuan,
+      // qty lot dalam satuan dasar — label ikut satuan dasar, bukan satuan terima (KG vs ONS)
+      satuan: String(prod.satuan || resolved.satuan || '').trim() || undefined,
       status: 'ACTIVE',
       ...(lotQcRequired ? { qcStatus: 'QUARANTINE' as const } : {}),
       ...(actor?.userId ? { receivedByUserId: String(actor.userId) } : {}),

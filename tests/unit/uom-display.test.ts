@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  baseQtyUnitView,
   formatKartuMutasiLabel,
   formatStockDualLabel,
   productStockLabel,
@@ -47,6 +48,26 @@ describe('productStockLabel', () => {
 
   it('falls back to raw stok + satuan', () => {
     expect(productStockLabel({ stok: 5, satuan: 'DUS' })).toBe('5 DUS');
+  });
+});
+
+describe('baseQtyUnitView', () => {
+  const tomat: ProductUom[] = [
+    { ...uoms[0], id: 'o', satuan: 'ONS' },
+    { ...uoms[1], id: 'k', satuan: 'KG', factorToBase: 10 },
+  ];
+
+  it('labels lot qty with base unit and larger-unit hint', () => {
+    expect(baseQtyUnitView(30, tomat, 'KG')).toEqual({
+      satuan: 'ONS',
+      qtyDisplay: '30 ONS (≈ 3 KG)',
+      altSatuan: 'KG',
+      altFactorToBase: 10,
+    });
+  });
+
+  it('falls back to stored satuan without UOM rows', () => {
+    expect(baseQtyUnitView(4, [], 'PCS')).toEqual({ satuan: 'PCS', qtyDisplay: '4 PCS' });
   });
 });
 

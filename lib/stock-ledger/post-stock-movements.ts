@@ -495,6 +495,7 @@ async function postInSession(
         delta: l.delta,
         policy: l.lotPolicy,
         satuan: l.satuan,
+        baseSatuan: l.product.satuan,
       });
       if ('error' in applied) return fail(applied.error, l.lineRef);
       lot = applied;

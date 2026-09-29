@@ -1,6 +1,10 @@
 /** Fase 3.2 — QC Penerimaan: antrean lot karantina/ditolak, inspeksi, pemusnahan. */
 
 import type { NextResponse } from 'next/server';
+import type { Db } from 'mongodb';
+import { listProductUomsByProductIds } from '@/lib/api/product-uom';
+import { baseQtyUnitView } from '@/lib/uom/display';
+import type { ProductUom } from '@/lib/uom/types';
 import { ok, err, clean } from '@/lib/api/db';
 import { requireRole, LOT_QC_INSPECT_ROLES, LOT_QC_VIEW_ROLES } from '@/lib/api/require-auth';
 import { resolveOperationalScope } from '@/lib/api/tenant-master';
@@ -25,8 +29,17 @@ import type { JsonObject } from '@/types/json';
 
 const LIST_LIMIT = 300;
 
-function lotRow(lot: IngredientLotDoc) {
+type LotUomMap = Map<string, ProductUom[]>;
+
+async function loadLotUoms(db: Db, tenantId: string, lots: IngredientLotDoc[]): Promise<LotUomMap> {
+  const ids = [...new Set(lots.map((l) => String(l.productId || '')).filter(Boolean))];
+  return listProductUomsByProductIds(db, tenantId, ids);
+}
+
+function lotRow(lot: IngredientLotDoc, uomsByProduct?: LotUomMap) {
   const qcStatus = effectiveLotQcStatus(lot);
+  const qtyRemaining = effectiveIngredientQtyRemaining(lot);
+  const unit = baseQtyUnitView(qtyRemaining, uomsByProduct?.get(String(lot.productId)) || [], lot.satuan);
   return {
     id: lot.id,
     lotNo: lot.lotNo,
@@ -36,9 +49,11 @@ function lotRow(lot: IngredientLotDoc) {
     productKode: lot.productKode,
     productNama: lot.productNama,
     warehouseKode: lot.warehouseKode,
-    satuan: lot.satuan,
+    satuan: unit.satuan || lot.satuan,
+    qtyDisplay: unit.qtyDisplay,
+    ...(unit.altSatuan ? { altSatuan: unit.altSatuan, altFactorToBase: unit.altFactorToBase } : {}),
     qty: lot.qty,
-    qtyRemaining: effectiveIngredientQtyRemaining(lot),
+    qtyRemaining,
     receivedAt: lot.receivedAt,
     expiryDate: lot.expiryDate,
     supplierLotNo: lot.supplierLotNo,
@@ -92,10 +107,12 @@ export async function handleLotQc({ db, route, method, path, body, url, auth, re
       summarizeLotQc(db, tenantId),
       isTenantFeatureEnabled(db, tenantId, 'lotQcRequired'),
     ]);
+    const lots = rows as unknown as IngredientLotDoc[];
+    const uoms = await loadLotUoms(db, tenantId, lots);
     return ok({
       enabled,
       summary,
-      lots: (rows as unknown as IngredientLotDoc[]).map(lotRow),
+      lots: lots.map((l) => lotRow(l, uoms)),
     });
   }
 
@@ -132,10 +149,11 @@ export async function handleLotQc({ db, route, method, path, body, url, auth, re
       actor: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role, isMaster: auth.isMaster },
     });
     if (!res.ok) return err(res.error, res.status);
+    const uoms = await loadLotUoms(db, scope.tenantId, [res.lot]);
     return ok({
       inspection: clean({ ...res.inspection } as unknown as JsonObject),
-      lot: lotRow(res.lot),
-      ...(res.rejectedLot ? { rejectedLot: lotRow(res.rejectedLot) } : {}),
+      lot: lotRow(res.lot, uoms),
+      ...(res.rejectedLot ? { rejectedLot: lotRow(res.rejectedLot, uoms) } : {}),
     });
   }
 

@@ -8,6 +8,7 @@ import { removeRecipeLinesMigration } from '@/lib/migrations/0006-remove-recipe-
 import { backfillStockCostMigration } from '@/lib/migrations/0007-backfill-stock-cost';
 import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
 import { normalizeStockDustMigration } from '@/lib/migrations/0009-normalize-stock-dust';
+import { normalizeLotSatuanMigration } from '@/lib/migrations/0010-normalize-lot-satuan';
 
 /** Penanda kerangka aktif. Tidak mengubah data bisnis. */
 export const frameworkNoopMigration: Migration = {
@@ -29,6 +30,7 @@ export const MIGRATIONS: readonly Migration[] = [
   backfillStockCostMigration,
   inventoryGlCutoverMigration,
   normalizeStockDustMigration,
+  normalizeLotSatuanMigration,
 ];
 
 export function findMigration(id: string): Migration | undefined {

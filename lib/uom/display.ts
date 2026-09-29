@@ -38,6 +38,36 @@ export function formatStockDualLabel(
   return `${formatQty(qty)} ${baseSatuan} (≈ ${formatQty(altQty)} ${alt.satuan})`;
 }
 
+export type BaseQtyUnitView = {
+  /** Satuan dasar — satuan qty yang disimpan (lot, saldo). */
+  satuan: string;
+  /** "30 ONS (≈ 3 KG)" */
+  qtyDisplay: string;
+  /** Satuan alternatif terbesar untuk petunjuk konversi. */
+  altSatuan?: string;
+  altFactorToBase?: number;
+};
+
+/** Satuan + label qty base (lot, antrean QC) dari daftar UOM produk. */
+export function baseQtyUnitView(
+  qtyBase: number,
+  uoms: ProductUom[],
+  fallbackSatuan?: string,
+): BaseQtyUnitView {
+  const qty = parseFloat(String(qtyBase)) || 0;
+  const base = pickBaseUom(uoms);
+  const satuan = String(base?.satuan || fallbackSatuan || '').trim();
+  if (!base) {
+    return { satuan, qtyDisplay: `${formatQty(qty)}${satuan ? ` ${satuan}` : ''}` };
+  }
+  const alt = pickDisplayAltUom(uoms);
+  return {
+    satuan,
+    qtyDisplay: formatStockDualLabel(qty, uoms),
+    ...(alt ? { altSatuan: alt.satuan, altFactorToBase: alt.factorToBase } : {}),
+  };
+}
+
 /** Label mutasi kartu stok: qty transaksi + qty base jika berbeda. */
 export function formatKartuMutasiLabel(row: {
   masuk?: number;

@@ -61,7 +61,15 @@ interface ApplyLotPolicyInput {
   lokasiKode: string;
   delta: number;
   policy: StockLotPolicy;
+  /** Satuan transaksi — fallback label bila satuan dasar produk tidak diketahui. */
   satuan?: string;
+  /** Satuan dasar produk: qty lot selalu dalam satuan ini. */
+  baseSatuan?: string;
+}
+
+function lotSatuanOf(input: Pick<ApplyLotPolicyInput, 'baseSatuan' | 'satuan'>, fallback?: string): string | undefined {
+  const s = String(input.baseSatuan || fallback || input.satuan || '').trim();
+  return s || undefined;
 }
 
 export async function applyLotPolicy(
@@ -154,6 +162,7 @@ export async function applyLotPolicy(
         warehouseKode: lokasiKode,
         qty,
         qtyRemaining: qty,
+        satuan: lotSatuanOf(input, policy.lot.satuan),
         status: policy.lot.status || 'ACTIVE',
         createdAt: policy.lot.createdAt || postingDate,
         updatedAt: postingDate,
@@ -190,7 +199,7 @@ export async function applyLotPolicy(
         productKode: input.product.kode,
         productNama: input.product.nama,
         shelfLifeDays: input.product.shelfLifeDays,
-        satuan: input.satuan,
+        satuan: lotSatuanOf(input),
       }, session);
       if ('error' in r) return { error: r.error };
       const moved = roundStockQty(r.consumed ?? r.increased ?? 0);

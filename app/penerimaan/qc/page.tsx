@@ -303,7 +303,7 @@ export default function QcPenerimaanPage() {
                     <td className="px-3 py-2 font-mono text-xs">{str(lot.noGRN) || '—'}</td>
                     <td className="px-3 py-2 text-xs">{warehouseName(str(lot.warehouseKode))}</td>
                     <td className="px-3 py-2 text-right text-xs whitespace-nowrap">
-                      {formatNumber(num(lot.qtyRemaining))} {str(lot.satuan)}
+                      {str(lot.qtyDisplay) || `${formatNumber(num(lot.qtyRemaining))} ${str(lot.satuan)}`}
                     </td>
                     <td className="px-3 py-2 text-xs">
                       {formatDateTime(str(lot.receivedAt) || undefined)}
@@ -415,6 +415,12 @@ function InspectDialog({ lot, scoped, tenantBody, sodBlocked, onClose, onDone }:
 }) {
   const remaining = num(lot.qtyRemaining);
   const satuan = str(lot.satuan);
+  const remainingLabel = str(lot.qtyDisplay) || `${formatNumber(remaining)} ${satuan}`;
+  const altSatuan = str(lot.altSatuan);
+  const altFactor = num(lot.altFactorToBase);
+  const altHint = (qtyBase: number) => (
+    altSatuan && altFactor > 1 && qtyBase > 0 ? `≈ ${formatNumber(roundQty(qtyBase / altFactor))} ${altSatuan}` : ''
+  );
   const [passed, setPassed] = useState(String(remaining));
   const [suhu, setSuhu] = useState('');
   const [kondisi, setKondisi] = useState('BAIK');
@@ -482,7 +488,7 @@ function InspectDialog({ lot, scoped, tenantBody, sodBlocked, onClose, onDone }:
         <div className="space-y-3 text-sm">
           <div className="rounded border bg-slate-50 px-3 py-2 text-xs text-slate-600 space-y-0.5">
             <div><span className="font-mono">{str(lot.productKode)}</span> — {str(lot.productNama)}</div>
-            <div>{str(lot.noGRN)} · {warehouseName(str(lot.warehouseKode))} · sisa {formatNumber(remaining)} {satuan}</div>
+            <div>{str(lot.noGRN)} · {warehouseName(str(lot.warehouseKode))} · sisa {remainingLabel}</div>
           </div>
           {sodBlocked && (
             <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -498,10 +504,12 @@ function InspectDialog({ lot, scoped, tenantBody, sodBlocked, onClose, onDone }:
               <Label>Qty lolos ({satuan})</Label>
               <Input type="number" min={0} max={remaining} step="any" value={passed} onChange={(e) => setPassed(e.target.value)} />
               {!passedValid && <p className="text-xs text-red-600 mt-1">Isi 0 – {formatNumber(remaining)}</p>}
+              {passedValid && altHint(passedNum) && <p className="text-xs text-slate-500 mt-1">{altHint(passedNum)}</p>}
             </div>
             <div>
               <Label>Qty gagal ({satuan})</Label>
               <Input value={formatNumber(failed)} disabled />
+              {altHint(failed) && <p className="text-xs text-slate-500 mt-1">{altHint(failed)}</p>}
               {failed > 0 && failed < remaining && (
                 <p className="text-xs text-slate-500 mt-1">Dipisah menjadi lot ditolak tersendiri.</p>
               )}
