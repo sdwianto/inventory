@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
-import { buildCursorListUrl } from '@/lib/cursor-prefetch-cache';
+import { buildCursorListUrl, toCursorPage } from '@/lib/cursor-prefetch-cache';
 import { queryKeys } from '@/lib/query-keys';
 import { buildProdukPageUrl, produkPageQueryKey } from '@/lib/produk-page-scope';
 
@@ -14,8 +14,9 @@ function prefetchCursorPage(
 ) {
   void queryClient.prefetchInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam }) =>
-      fetchJson(buildCursorListUrl(baseUrl, limit, (pageParam as string | null) ?? null)),
+    queryFn: async ({ pageParam }) => toCursorPage(
+      await fetchJson(buildCursorListUrl(baseUrl, limit, (pageParam as string | null) ?? null)),
+    ),
     initialPageParam: null as string | null,
     staleTime: 60_000,
   });

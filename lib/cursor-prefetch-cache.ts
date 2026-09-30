@@ -11,6 +11,17 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * Validasi satu halaman cursor sebelum masuk cache React Query.
+ * Array polos (endpoint lama tanpa pageMode) dibungkus jadi `{ items }`; selain objek → error,
+ * supaya halaman rusak tidak pernah tersimpan sebagai data sukses.
+ */
+export function toCursorPage<P extends { items?: unknown[] }>(data: unknown): P {
+  if (Array.isArray(data)) return { items: data, hasMore: false, nextCursor: null } as unknown as P;
+  if (data && typeof data === 'object') return data as P;
+  throw new Error('Data daftar tidak valid — coba muat ulang');
+}
+
 export function buildCursorListUrl(base: string, limit: number, cursor: string | null = null): string {
   const sep = base.includes('?') ? '&' : '?';
   let url = `${base}${sep}pageMode=cursor&limit=${limit}`;

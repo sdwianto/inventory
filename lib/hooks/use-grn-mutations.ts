@@ -16,9 +16,9 @@ function patchGrnInCache(
   if (!data) return data;
   return {
     ...data,
-    pages: data.pages.map((page) => ({
+    pages: (data.pages ?? []).map((page) => ({
       ...page,
-      items: (page.items || []).map((row) => (
+      items: (page?.items || []).map((row) => (
         String(row.id) === String(id) ? { ...row, ...patch } : row
       )),
     })),

@@ -23,11 +23,22 @@ export function createQueryPersister() {
   });
 }
 
+/** Naikkan saat bentuk cache berubah atau cache lama perlu dibuang di semua browser. */
+export const PERSIST_CACHE_VERSION = 'v2';
+
 export function persistBuster(): string {
   const user = getUser();
   const acting = getActingTenantId();
   const tid = user?.role === 'MASTER' ? (acting || 'master-none') : (user?.tenantId || 'anon');
-  return `${user?.id || 'anon'}:${tid}`;
+  return `${PERSIST_CACHE_VERSION}:${user?.id || 'anon'}:${tid}`;
+}
+
+/** Infinite query hanya dipersist bila semua halamannya objek (bukan null/terputus). */
+export function isPersistableData(data: unknown): boolean {
+  if (data === null || data === undefined) return false;
+  if (typeof data !== 'object' || !('pages' in (data as object))) return true;
+  const pages = (data as { pages?: unknown }).pages;
+  return Array.isArray(pages) && pages.every((p) => p !== null && typeof p === 'object');
 }
 
 const PERSISTED_PREFIXES = new Set([
@@ -59,7 +70,9 @@ export function PersistQueryProvider({ client, children }: PersistProviderProps)
         buster: persistBuster(),
         dehydrateOptions: {
           shouldDehydrateQuery: (query: Query) =>
-            query.state.status === 'success' && shouldPersistQuery(query.queryKey),
+            query.state.status === 'success'
+            && shouldPersistQuery(query.queryKey)
+            && isPersistableData(query.state.data),
         },
       }}
     >

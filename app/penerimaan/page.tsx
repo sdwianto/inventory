@@ -185,7 +185,7 @@ export default function PenerimaanPage() {
       staleTime: 15_000,
       refetchInterval: (query) => {
         const pages = query.state.data?.pages ?? [];
-        const flat = pages.flatMap((p) => (p.items ?? []) as JsonObject[]);
+        const flat = pages.flatMap((p) => (p?.items ?? []) as JsonObject[]);
         return needsGrnListPoll(flat) ? 5_000 : false;
       },
     },

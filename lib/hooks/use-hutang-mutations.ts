@@ -17,9 +17,9 @@ function removeHutangFromCache(
   if (!data) return data;
   return {
     ...data,
-    pages: data.pages.map((page) => ({
+    pages: (data.pages ?? []).map((page) => ({
       ...page,
-      items: (page.items || []).filter((row) => String(row.id) !== hutangId),
+      items: (page?.items || []).filter((row) => String(row.id) !== hutangId),
     })),
   };
 }
@@ -32,9 +32,9 @@ function patchHutangInCache(
   if (!data) return data;
   return {
     ...data,
-    pages: data.pages.map((page) => ({
+    pages: (data.pages ?? []).map((page) => ({
       ...page,
-      items: (page.items || []).map((row) => (
+      items: (page?.items || []).map((row) => (
         String(row.id) === hutangId ? { ...row, ...patch } : row
       )),
     })),

@@ -3,6 +3,7 @@
 import { useCallback } from 'react';
 import { useInfiniteQuery, type QueryKey } from '@tanstack/react-query';
 import { fetchJson } from '@/lib/fetch-json';
+import { toCursorPage } from '@/lib/cursor-prefetch-cache';
 
 export interface CursorPage<T> {
   items?: T[];
@@ -41,10 +42,9 @@ export function useCursorQuery<T>(
 ) {
   const query = useInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam }) =>
-      fetchJson<CursorPage<T>>(
-        buildUrl(baseUrl!, limit, (pageParam as string | null) ?? null),
-      ),
+    queryFn: async ({ pageParam }) => toCursorPage<CursorPage<T>>(
+      await fetchJson<unknown>(buildUrl(baseUrl!, limit, (pageParam as string | null) ?? null)),
+    ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) =>
       lastPage?.hasMore && lastPage?.nextCursor ? lastPage.nextCursor : undefined,
@@ -55,7 +55,7 @@ export function useCursorQuery<T>(
     refetchOnWindowFocus: true,
   });
 
-  const items = (query.data?.pages ?? []).flatMap((p) => p.items ?? []);
+  const items = (query.data?.pages ?? []).flatMap((p) => p?.items ?? []);
 
   const reload = useCallback(async (_opts?: { silent?: boolean }) => {
     await query.refetch();

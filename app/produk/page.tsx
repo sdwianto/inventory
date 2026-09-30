@@ -225,13 +225,13 @@ export default function ProdukPage() {
         const hargaBeli = num(detail.hargaBeli);
         queryClient.setQueriesData({ queryKey: ['pages', 'produk'] }, (old: unknown) => {
           if (!old || typeof old !== 'object') return old;
-          const data = old as { pages?: Array<{ items?: JsonObject[] }> };
+          const data = old as { pages?: Array<{ items?: JsonObject[] } | null> };
           if (!Array.isArray(data.pages)) return old;
           return {
             ...data,
             pages: data.pages.map((page) => ({
               ...page,
-              items: (page.items ?? []).map((item) => {
+              items: (page?.items ?? []).map((item) => {
                 if (str(item.id) !== productId) return item;
                 const prevWh = asObject(item.stokByWarehouse) as Record<string, number | string>;
                 return {
