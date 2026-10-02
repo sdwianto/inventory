@@ -42,6 +42,9 @@ export const JOB_TYPES = {
   SANDBOX_RESET: 'SANDBOX_RESET',
   AUDIT_LOG_PURGE: 'AUDIT_LOG_PURGE',
   PRODUCT_ENRICHMENT_SYNC: 'PRODUCT_ENRICHMENT_SYNC',
+  PO_VENDOR_AVAILABILITY_REFRESH: 'PO_VENDOR_AVAILABILITY_REFRESH',
+  PO_ARRIVAL_RISK_ALERT: 'PO_ARRIVAL_RISK_ALERT',
+  NOTIFICATION_OUTBOX_DRAIN: 'NOTIFICATION_OUTBOX_DRAIN',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -409,6 +412,21 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.PRODUCT_ENRICHMENT_SYNC) {
       const { runProductEnrichmentSyncJob } = await import('@/lib/api/product-enrichment-recover');
       outcome = await runProductEnrichmentSyncJob(db, job);
+    } else if (job.type === JOB_TYPES.PO_VENDOR_AVAILABILITY_REFRESH) {
+      const { runPoVendorAvailabilityRefresh } = await import('@/lib/api/cpo-vendor-availability');
+      outcome = await runPoVendorAvailabilityRefresh(db, {
+        ...((job.payload || {}) as Record<string, unknown>),
+        tenantId: job.tenantId,
+      });
+    } else if (job.type === JOB_TYPES.PO_ARRIVAL_RISK_ALERT) {
+      const { runPoArrivalRiskAlert } = await import('@/lib/api/po-arrival-risk');
+      outcome = await runPoArrivalRiskAlert(db, {
+        ...((job.payload || {}) as Record<string, unknown>),
+        tenantId: job.tenantId,
+      });
+    } else if (job.type === JOB_TYPES.NOTIFICATION_OUTBOX_DRAIN) {
+      const { drainNotificationOutbox } = await import('@/lib/notifications/telegram');
+      outcome = await drainNotificationOutbox(db, { limit: 100 });
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

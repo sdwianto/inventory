@@ -34,6 +34,7 @@ export default function TenantSetupPage() {
       offlineQueueEnabled: true,
       reportSnapshotsEnabled: true,
       foodSafetyHoldEnabled: true,
+      poArrivalRiskAlert: true,
       pblReferenceMode: false,
       rlFromPoReference: false,
       strictRecipeConversion: false,
@@ -66,6 +67,7 @@ export default function TenantSetupPage() {
           offlineQueueEnabled: true,
           reportSnapshotsEnabled: true,
           foodSafetyHoldEnabled: true,
+          poArrivalRiskAlert: true,
           pblReferenceMode: false,
           rlFromPoReference: false,
           strictRecipeConversion: false,
@@ -315,6 +317,17 @@ export default function TenantSetupPage() {
                 })}
               />
               Food safety HOLD (blokir keluar)
+            </label>
+            <label className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.features?.poArrivalRiskAlert !== false}
+                onChange={(e) => setForm({
+                  ...form,
+                  features: { ...form.features, poArrivalRiskAlert: e.target.checked },
+                })}
+              />
+              Peringatan H-1 PO belum diadakan
             </label>
             {([
               ['pblReferenceMode', 'PBL acuan (tanpa mutasi stok)'],

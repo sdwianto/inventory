@@ -52,4 +52,37 @@ export const DEFAULT_INVENTORY_SCHEDULED_TASKS: ScheduledTaskInput[] = [
     payload: { grnInvoiceSweepOnly: true, limit: 40 },
     dedupeKey: 'grn-invoice-sweep:2m',
   },
+  // Jaring pengaman: perubahan normal datang lewat push `sales_order.availability_changed` (~1 menit).
+  // Menit :30 agar tidak berebut klaim refresh dengan peringatan H-1 (menit :00).
+  {
+    id: 'po-vendor-availability:2h',
+    cronExpr: '30 */2 * * *',
+    jobType: JOB_TYPES.PO_VENDOR_AVAILABILITY_REFRESH,
+    domain: 'inventory',
+    tenantId: 'system',
+    payload: { allTenants: true, limit: 200, maxAgeMs: 110 * 60_000 },
+    dedupeKey: 'po-vendor-availability:2h',
+  },
+  // 00:00 & 08:00 UTC = 07:00 & 15:00 WIB.
+  ...([
+    ['po-arrival-risk:pagi', '0 0 * * *'],
+    ['po-arrival-risk:sore', '0 8 * * *'],
+  ] as const).map(([id, cronExpr]): ScheduledTaskInput => ({
+    id,
+    cronExpr,
+    jobType: JOB_TYPES.PO_ARRIVAL_RISK_ALERT,
+    domain: 'inventory',
+    tenantId: 'system',
+    payload: { allTenants: true },
+    dedupeKey: id,
+  })),
+  {
+    id: 'notification-outbox:2m',
+    cronExpr: '*/2 * * * *',
+    jobType: JOB_TYPES.NOTIFICATION_OUTBOX_DRAIN,
+    domain: 'inventory',
+    tenantId: 'system',
+    payload: {},
+    dedupeKey: 'notification-outbox:2m',
+  },
 ];

@@ -98,6 +98,11 @@ export async function processWebhookInboxEvent(
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> = {};
 
+  if (event === 'sales_order.availability_changed') {
+    const { applyVendorAvailabilityPush } = await import('@/lib/api/cpo-vendor-availability');
+    return applyVendorAvailabilityPush(db, customerTenantId, payload, vendorTenantId);
+  }
+
   if (CPO_EVENTS.has(event)) {
     const cpoSync = await syncCpoFromVendorEvent(db, customerTenantId, event, {
       ...payload,

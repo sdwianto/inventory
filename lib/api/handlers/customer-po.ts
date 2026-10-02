@@ -53,6 +53,8 @@ import { applyWrResolutionLink, assertWrResolvable, loadWrById } from '@/lib/api
 import { VENDOR_RETURNS_COLLECTION, type VendorReturnDoc } from '@/types/vendor-return';
 import { CasConflictError, casConflict, casStatusFilter, insertWithAudit, isCasConflict } from '@/lib/api/cas';
 import { txOpts } from '@/lib/api/transaction';
+import { refreshPoVendorAvailability } from '@/lib/api/cpo-vendor-availability';
+import { buildPoAvailabilityView } from '@/lib/pembelian-po/vendor-availability-view';
 
 interface CustomerPoBody extends Record<string, unknown> {
   items?: JsonObject[];
@@ -472,14 +474,22 @@ async function syncApprovedPoToVendor(db: Db, po: Record<string, unknown>) {
   };
 }
 
+/** Ganti cache mentah `vendorAvailability` dengan tampilan siap pakai UI. */
+function withVendorAvailabilityView<T extends Record<string, unknown>>(po: T, now = new Date()) {
+  const { vendorAvailability: _raw, ...rest } = po;
+  const view = buildPoAvailabilityView(po, now);
+  return { ...rest, vendorAvailabilityView: view.applicable ? view : null };
+}
+
 async function mapListForResponse(
   db: Db,
   list: Record<string, unknown>[],
   { enrichSo }: { enrichSo: boolean },
 ) {
   const withPeople = await enrichPoPeople(db, list);
-  if (!enrichSo) return withPeople;
-  return enrichPoListWithSoCancelState(db, withPeople);
+  const rows = enrichSo ? await enrichPoListWithSoCancelState(db, withPeople) : withPeople;
+  const now = new Date();
+  return (rows as Record<string, unknown>[]).map((row) => withVendorAvailabilityView(row, now));
 }
 
 export async function handleCustomerPo({
@@ -657,7 +667,34 @@ export async function handleCustomerPo({
       withTenantFilter(scopeAuth, { id: path[1] }),
     );
     if (!po) return err('PO tidak ditemukan', 404);
-    return ok(clean(await enrichOnePo(db, po as JsonObject)));
+    return ok(clean(withVendorAvailabilityView(await enrichOnePo(db, po as JsonObject) as JsonObject)));
+  }
+
+  // GET /customer-purchase-orders/:id/vendor-availability[?refresh=1] — status item di vendor
+  if (
+    path[0] === 'customer-purchase-orders'
+    && path.length === 3
+    && path[2] === 'vendor-availability'
+    && method === 'GET'
+  ) {
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    const po = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+    ) as JsonObject | null;
+    if (!po) return err('PO tidak ditemukan', 404);
+    const force = url.searchParams.get('refresh') === '1';
+    if (force) {
+      const deniedRole = requireRole(auth, PO_CREATE_ROLES);
+      if (deniedRole) return deniedRole;
+    }
+    const result = await refreshPoVendorAvailability(db, po, { force });
+    return ok({
+      poId: po.id,
+      refreshed: result.refreshed,
+      skipped: result.skipped ?? null,
+      view: buildPoAvailabilityView(result.po),
+    });
   }
 
   // PUT /customer-purchase-orders/:id — edit PO (draft/pending/rejected ATAU post-approve in-place)

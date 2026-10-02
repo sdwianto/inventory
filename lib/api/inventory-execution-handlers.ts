@@ -257,6 +257,31 @@ export async function executeInventoryReconJob(
   return runReconJobPayload(db, tenantId, payload);
 }
 
+export async function executePoVendorAvailabilityRefreshJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runPoVendorAvailabilityRefresh } = await import('@/lib/api/cpo-vendor-availability');
+  return runPoVendorAvailabilityRefresh(db, { ...payload, tenantId });
+}
+
+export async function executePoArrivalRiskAlertJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runPoArrivalRiskAlert } = await import('@/lib/api/po-arrival-risk');
+  return runPoArrivalRiskAlert(db, { ...payload, tenantId });
+}
+
+export async function executeNotificationOutboxDrainJob(
+  db: Db,
+): Promise<Record<string, unknown>> {
+  const { drainNotificationOutbox } = await import('@/lib/notifications/telegram');
+  return drainNotificationOutbox(db, { limit: 100 });
+}
+
 export async function executeAuditLogPurgeJob(
   db: Db,
 ): Promise<Record<string, unknown>> {

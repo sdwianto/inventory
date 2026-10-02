@@ -1155,6 +1155,38 @@ export class IntegrationClient {
     });
   }
 
+  /**
+   * Category B: status ketersediaan per baris SO untuk satu Customer PO.
+   * 404 `SO_NOT_FOUND` = SO belum ada; 404 lain = endpoint belum tersedia di sales.
+   */
+  async getCustomerPoAvailability(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    correlationId?: string;
+    customerTenantId: string;
+    customerPoId: string;
+    noPO?: string;
+    vendorTenantId?: string;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({
+      customerTenantId: input.customerTenantId,
+      customerPoId: input.customerPoId,
+      ...(input.noPO ? { noPO: input.noPO } : {}),
+      ...(input.vendorTenantId ? { vendorTenantId: input.vendorTenantId } : {}),
+    });
+    return this.categoryBGet({
+      salesAppUrl: input.salesAppUrl,
+      apiKey: input.apiKey,
+      pathAndQuery: `/api/v1/integrations/customer-po-availability?${qs}`,
+      commandType: 'GetCustomerPoAvailability',
+      pool: 'po',
+      correlationId: input.correlationId,
+      timeoutMs: input.timeoutMs ?? 12_000,
+      maxAttempts: 1,
+    });
+  }
+
   /** Category B: customer profile (vendor tiers). */
   async getCustomerProfile(input: {
     salesAppUrl: string;

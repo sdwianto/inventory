@@ -81,6 +81,8 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   'stok-bin': async () => (await import('@/lib/api/handlers/stok-bin')).handleStokBin,
   'putaway-moves': async () => (await import('@/lib/api/handlers/putaway-moves')).handlePutawayMoves,
   webhooks: async () => (await import('@/lib/api/handlers/webhooks')).handleWebhooks,
+  notifications: async () => (await import('@/lib/api/handlers/notifications')).handleNotifications,
+  telegram: async () => (await import('@/lib/api/handlers/notifications')).handleTelegramWebhook,
   'goods-receipts': async () => (await import('@/lib/api/handlers/goods-receipts')).handleGoodsReceipts,
   'grn-reversals': async () => (await import('@/lib/api/handlers/grn-reversals')).handleGrnReversals,
   'stock-reversals': async () => (await import('@/lib/api/handlers/stock-reversals')).handleStockReversals,

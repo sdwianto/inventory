@@ -2,7 +2,8 @@
 
 import type { JsonObject } from '@/types/json';
 import { str } from '@/types/json';
-import { Suspense } from 'react';
+import { Suspense, useMemo, useState } from 'react';
+import type { PoAvailabilityView } from '@/lib/pembelian-po/vendor-availability-view';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import PoCalendar from '@/components/PoCalendar';
 import PoFormDialog from '@/components/pembelian-po/PoFormDialog';
@@ -21,6 +22,11 @@ import {
 } from 'lucide-react';
 import { formatArrivalLabel, PO_STATUS_ORDER, PO_STATUS_STYLE, type PoArrivalFields } from '@/lib/po-calendar';
 import { useCustomerPoPage } from '@/lib/hooks/use-customer-po-page';
+
+function hasItemBelum(po: JsonObject): boolean {
+  const view = po.vendorAvailabilityView as PoAvailabilityView | null | undefined;
+  return view?.mode === 'REMOTE' && view.summary.belum > 0;
+}
 
 function CustomerPoPageContent() {
   const {
@@ -95,6 +101,15 @@ function CustomerPoPageContent() {
     reviseCancelledPo,
     canRevisePo,
   } = useCustomerPoPage();
+  const [onlyBelum, setOnlyBelum] = useState(false);
+  const belumCount = useMemo(
+    () => filteredList.filter((po: JsonObject) => hasItemBelum(po)).length,
+    [filteredList],
+  );
+  const visibleList = useMemo(
+    () => (onlyBelum ? filteredList.filter((po: JsonObject) => hasItemBelum(po)) : filteredList),
+    [filteredList, onlyBelum],
+  );
 
   return (
     <>
@@ -210,6 +225,18 @@ function CustomerPoPageContent() {
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                {(belumCount > 0 || onlyBelum) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`h-8 ${onlyBelum ? 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100' : ''}`}
+                    onClick={() => setOnlyBelum((v) => !v)}
+                    title="Tampilkan PO yang masih punya item belum diadakan vendor"
+                  >
+                    Belum diadakan
+                    <span className="ml-1 tabular-nums text-xs">({belumCount})</span>
+                  </Button>
+                )}
                 {selectedDate && (
                   <Button variant="outline" size="sm" onClick={() => setShowAll((v) => !v)}>
                     {showAll ? 'Filter tanggal' : 'Lihat semua'}
@@ -223,10 +250,12 @@ function CustomerPoPageContent() {
               </div>
             </div>
 
-            {!filteredList.length ? (
+            {!visibleList.length ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12 text-sm">
                 <CalendarDays className="w-10 h-10 mb-2 opacity-40" />
-                {!allStatusesSelected && Object.values(statusCounts).some((c) => c > 0)
+                {onlyBelum
+                  ? 'Tidak ada PO dengan item belum diadakan'
+                  : !allStatusesSelected && Object.values(statusCounts).some((c) => c > 0)
                   ? 'Tidak ada PO untuk status yang dipilih — klik Tampilkan semua'
                   : selectedDate && !showAll
                     ? 'Belum ada PO untuk tanggal ini — klik + di kalender untuk buat'
@@ -234,7 +263,7 @@ function CustomerPoPageContent() {
               </div>
             ) : (
               <div className="space-y-2 overflow-y-auto max-h-[520px] pr-1">
-                {filteredList.map((po: JsonObject) => {
+                {visibleList.map((po: JsonObject) => {
                   const poId = str(po.id);
                   return (
                     <PoListCard

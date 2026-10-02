@@ -21,6 +21,17 @@ import PrintPortal from '@/components/PrintPortal';
 import CustomerPoDocument from '@/components/CustomerPoDocument';
 import { printDocument } from '@/lib/doc-print';
 import { toast } from 'sonner';
+import {
+  LOCAL_AVAILABILITY_STATUSES,
+  REMOTE_AVAILABILITY_STATUSES,
+  type PoAvailabilityView,
+} from '@/lib/pembelian-po/vendor-availability-view';
+import {
+  AvailabilityCell,
+  AvailabilitySummaryBadge,
+  AvailabilityToolbar,
+  usePoVendorAvailability,
+} from '@/components/pembelian-po/PoVendorAvailability';
 
 const PO_PRINT_ID = 'customer-po-a4-print';
 
@@ -109,6 +120,16 @@ export default function PoListCard({
     && SHORT_CLOSABLE_PO_STATUSES.includes(poStatus)
     && poItems.some((it) => num(it.qtyReceived) > 0)
     && openRemainingLines.length > 0;
+  const availability = usePoVendorAvailability(
+    poId,
+    (po.vendorAvailabilityView as PoAvailabilityView | null | undefined) ?? null,
+    expanded && !isOptimistic,
+  );
+  const availabilityByLine = new Map(
+    (availability.view?.items || []).map((a) => [a.lineId, a]),
+  );
+  const showAvailability = Boolean(availability.view?.applicable) && !isOptimistic
+    && (REMOTE_AVAILABILITY_STATUSES.has(poStatus) || LOCAL_AVAILABILITY_STATUSES.has(poStatus));
 
   const handleReject = () => {
     onReject(rejectReason || 'Ditolak admin');
@@ -157,6 +178,7 @@ export default function PoListCard({
                   Termasuk item ditolak
                 </span>
               )}
+              {!isOptimistic && <AvailabilitySummaryBadge view={availability.view} />}
             </div>
             <div className="text-xs text-slate-500 mt-0.5">
               Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(str(po.tanggal))}
@@ -422,6 +444,14 @@ export default function PoListCard({
               <span className="font-medium">Alasan ditolak:</span> {str(po.rejectReason)}
             </p>
           )}
+          {showAvailability && (
+            <AvailabilityToolbar
+              view={availability.view}
+              loading={availability.loading}
+              onRefresh={availability.refresh}
+              canRefresh={canRequest}
+            />
+          )}
           <table className="w-full text-xs">
             <thead>
               <tr className="text-slate-500 border-b">
@@ -430,6 +460,7 @@ export default function PoListCard({
                 <th className="text-right py-1 pr-2">Estimasi</th>
                 <th className="text-right py-1 pr-2">Qty</th>
                 <th className="text-center py-1">Satuan</th>
+                {showAvailability && <th className="text-left py-1 pl-3">Status di vendor</th>}
               </tr>
             </thead>
             <tbody>
@@ -468,6 +499,11 @@ export default function PoListCard({
                     )}
                   </td>
                   <td className="py-1.5 text-center text-slate-600">{str(it.satuan) || '—'}</td>
+                  {showAvailability && (
+                    <td className="py-1.5 pl-3">
+                      <AvailabilityCell item={availabilityByLine.get(str(it.lineId))} />
+                    </td>
+                  )}
                 </tr>
                 );
               })}

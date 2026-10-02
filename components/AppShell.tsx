@@ -38,6 +38,7 @@ import { prefetchByRole } from '@/lib/prefetch-by-role';
 import { fetchTenantSettings } from '@/lib/tenant-client';
 import { useKeepWarm } from '@/lib/hooks/use-keep-warm';
 import WorkerHealthBanner from '@/components/WorkerHealthBanner';
+import NotificationBell from '@/components/NotificationBell';
 
 type NavBadgeKey = 'grnPending' | 'hutangReview' | 'wrPending' | 'pmOverdue' | 'rtvNeedsAttention' | 'lotQcPending';
 
@@ -694,6 +695,7 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <div className="hidden sm:block text-sm text-slate-600 font-mono">{now ? formatDateTime(now) : '—'}</div>
+            <NotificationBell />
             <Button
               variant="outline"
               size="sm"

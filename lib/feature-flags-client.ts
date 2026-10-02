@@ -21,6 +21,7 @@ export function setClientFeatureFlags(flags?: Partial<TenantFeatureFlags> | null
     offlineQueueEnabled: flags.offlineQueueEnabled !== false,
     reportSnapshotsEnabled: flags.reportSnapshotsEnabled !== false,
     foodSafetyHoldEnabled: flags.foodSafetyHoldEnabled !== false,
+    poArrivalRiskAlert: flags.poArrivalRiskAlert !== false,
     ...optIn,
   };
 }

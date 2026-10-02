@@ -18,6 +18,9 @@ import {
   executeInventoryReconJob,
   executeCancelSoPushRecoveryJob,
   executePoVendorSyncJob,
+  executePoVendorAvailabilityRefreshJob,
+  executePoArrivalRiskAlertJob,
+  executeNotificationOutboxDrainJob,
   executeSandboxResetJob,
   executeWebhookInboxJob,
   executeProductEnrichmentSyncJob,
@@ -211,6 +214,36 @@ export function registerInventoryHandlers(): void {
     requiredCapabilities: ['CPU_BATCH'],
     handler: async (ctx, payload) => assertExecutionHandlerSuccess(
       await executeInventoryReconJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'PO_VENDOR_AVAILABILITY_REFRESH',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['CPU_BATCH'],
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executePoVendorAvailabilityRefreshJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'PO_ARRIVAL_RISK_ALERT',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['CPU_BATCH'],
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executePoArrivalRiskAlertJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'NOTIFICATION_OUTBOX_DRAIN',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['CPU_BATCH'],
+    handler: async (ctx) => assertExecutionHandlerSuccess(
+      await executeNotificationOutboxDrainJob(ctx.db),
     ),
   });
 

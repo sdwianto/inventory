@@ -13,6 +13,8 @@ export interface TenantFeatureFlags {
    * bukan opt-in bertahap.
    */
   foodSafetyHoldEnabled: boolean;
+  /** Notifikasi H-1 bila PO besok masih punya item belum diadakan vendor. Default aktif. */
+  poArrivalRiskAlert: boolean;
   /** Fase 0.3 — opt-in per tenant, default mati sampai cutover. */
   pblReferenceMode: boolean;
   rlFromPoReference: boolean;
@@ -53,6 +55,7 @@ export const DEFAULT_FEATURE_FLAGS: TenantFeatureFlags = {
   offlineQueueEnabled: true,
   reportSnapshotsEnabled: true,
   foodSafetyHoldEnabled: true,
+  poArrivalRiskAlert: true,
   pblReferenceMode: false,
   rlFromPoReference: false,
   strictRecipeConversion: false,
@@ -75,6 +78,7 @@ export function mergeFeatureFlags(raw?: Record<string, unknown> | null): TenantF
     offlineQueueEnabled: src?.offlineQueueEnabled !== false,
     reportSnapshotsEnabled: src?.reportSnapshotsEnabled !== false,
     foodSafetyHoldEnabled: src?.foodSafetyHoldEnabled !== false,
+    poArrivalRiskAlert: src?.poArrivalRiskAlert !== false,
     ...optIn,
   };
 }

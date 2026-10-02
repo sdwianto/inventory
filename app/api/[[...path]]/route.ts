@@ -102,6 +102,11 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
     }
 
+    if (route === '/telegram/webhook' && method === 'POST') {
+      const rl = await checkRateLimit(`telegram:${clientIp(request)}`, webhookMax);
+      if (!rl.allowed) return rateLimitResponse(rl.retryAfterSec);
+    }
+
     if (route === '/integrations/pair' && method === 'POST') {
       const pairMax = parseInt(process.env.RATE_LIMIT_PAIR_MAX || '10', 10);
       const rl = await checkRateLimit(`pair:${clientIp(request)}`, pairMax);
