@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * Ganti secret webhook satu vendor sales → inventory (secret dipakai per vendor, untuk semua customer).
- * Sisi sales (webhook_subscriptions + integration_links vendor) dan sisi inventory (integration_links)
- * diperbarui dalam SATU transaksi lintas database — tidak ada jeda di mana webhook ditolak 401.
- * Secret baru tidak pernah dicetak.
+ * Ganti secret integrasi per pasangan vendor↔customer. Sales menandatangani semua panggilan ke
+ * inventory (webhook & Category A) dengan secret link pasangan itu, jadi tiap pasangan diberi secret
+ * unik sendiri. Link sisi sales dan sisi inventory diperbarui dalam SATU transaksi lintas database —
+ * tidak ada jeda di mana panggilan ditolak 401. Secret baru tidak pernah dicetak.
+ * Wajib: Sales sudah memakai secret link untuk webhook (resolveLinkedTargets) sebelum --apply.
  *
  * Usage:
- *   node scripts/rotate-vendor-webhook-secret.mjs --vendor=uddawam                 # dry-run
- *   node scripts/rotate-vendor-webhook-secret.mjs --vendor=uddawam --apply
- *   node scripts/rotate-vendor-webhook-secret.mjs --vendor=uddawam --url=https://inv.example.com/api/webhooks/sales --apply
+ *   node scripts/rotate-vendor-webhook-secret.mjs --vendor=uddawam                      # dry-run, semua customer
+ *   node scripts/rotate-vendor-webhook-secret.mjs --vendor=uddawam --customer=sppg --apply
+ *   node scripts/rotate-vendor-webhook-secret.mjs --all --apply                         # semua link ACTIVE
  *
  * Env: MONGO_URL, DB_NAME (inventory), SALES_DB_NAME (sales). Sales & inventory wajib di cluster Mongo yang sama.
  */
@@ -32,8 +33,9 @@ loadEnv();
 
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) || '';
 const APPLY = process.argv.includes('--apply');
+const ALL = process.argv.includes('--all');
 const vendor = arg('vendor').trim();
-const urlFilter = arg('url').trim();
+const customer = arg('customer').trim().toLowerCase();
 const uri = process.env.MONGO_URL || process.env.MONGODB_URI;
 const invDbName = process.env.INVENTORY_DB_NAME || process.env.DB_NAME || 'inventory_customer';
 const salesDbName = process.env.SALES_DB_NAME || 'kasir_db';
@@ -42,8 +44,8 @@ if (!uri) {
   console.error('MONGO_URL / MONGODB_URI tidak ada');
   process.exit(1);
 }
-if (!vendor) {
-  console.error('--vendor=<tenantId vendor> wajib');
+if (!vendor && !ALL) {
+  console.error('--vendor=<tenantId vendor> atau --all wajib');
   process.exit(1);
 }
 
@@ -53,70 +55,68 @@ const inv = client.db(invDbName);
 const sales = client.db(salesDbName);
 
 try {
-  const subs = await sales.collection('webhook_subscriptions')
-    .find({ tenantId: vendor, aktif: { $ne: false }, ...(urlFilter ? { url: urlFilter } : {}) })
-    .project({ id: 1, event: 1, url: 1, secret: 1 })
-    .toArray();
-  const urls = [...new Set(subs.map((s) => s.url))];
-  const secrets = [...new Set(subs.map((s) => s.secret).filter(Boolean))];
-  console.log(`DB sales=${salesDbName} inventory=${invDbName} vendor=${vendor}`);
-  console.log(`subscription aktif: ${subs.length}, url: ${JSON.stringify(urls)}, secret berbeda: ${secrets.length}`);
-
-  if (!subs.length) throw new Error('Tidak ada subscription aktif untuk vendor ini');
-  if (urls.length > 1) throw new Error('Subscription ke lebih dari satu URL — pilih satu dengan --url=');
-  if (secrets.length !== 1) throw new Error('Secret subscription tidak tunggal — rapikan manual dulu');
-  const oldSecret = secrets[0];
-
+  const filter = {
+    status: 'ACTIVE',
+    ...(vendor ? { vendorTenantId: vendor } : {}),
+    ...(customer ? { customerTenantId: customer } : {}),
+  };
   const invLinks = await inv.collection('integration_links')
-    .find({ vendorTenantId: vendor, webhookSecret: oldSecret })
-    .project({ customerTenantId: 1, status: 1 })
+    .find(filter)
+    .project({ customerTenantId: 1, vendorTenantId: 1, webhookSecret: 1 })
     .toArray();
-  const salesLinks = await sales.collection('integration_links')
-    .find({ vendorTenantId: vendor, webhookSecret: oldSecret })
-    .project({ customerTenantId: 1, status: 1 })
-    .toArray();
-  const sharedWith = await inv.collection('integration_links').distinct('vendorTenantId', {
-    webhookSecret: oldSecret, vendorTenantId: { $ne: vendor },
-  });
-  console.log(`link inventory: ${invLinks.map((l) => `${l.customerTenantId}/${l.status}`).join(', ') || '-'}`);
-  console.log(`link vendor di sales: ${salesLinks.map((l) => `${l.customerTenantId}/${l.status}`).join(', ') || '-'}`);
-  console.log(`vendor lain yang memakai secret sama: ${sharedWith.join(', ') || '-'} (tidak diubah)`);
-  if (!invLinks.length) {
-    throw new Error('Tidak ada link inventory dengan secret ini di DB inventory — URL subscription mungkin ke instance lain');
+  console.log(`DB sales=${salesDbName} inventory=${invDbName} pasangan: ${invLinks.length}`);
+  if (!invLinks.length) throw new Error('Tidak ada link ACTIVE yang cocok di DB inventory');
+
+  const plan = [];
+  for (const l of invLinks) {
+    const pair = `${l.vendorTenantId} -> ${l.customerTenantId}`;
+    const salesLink = await sales.collection('integration_links').findOne({
+      vendorTenantId: l.vendorTenantId, customerTenantId: l.customerTenantId, status: 'ACTIVE',
+    }, { projection: { webhookSecret: 1 } });
+    if (!salesLink) throw new Error(`${pair}: link sisi sales tidak ada — rapikan manual dulu`);
+    if (!l.webhookSecret || salesLink.webhookSecret !== l.webhookSecret) {
+      throw new Error(`${pair}: secret sales dan inventory tidak sama — rapikan manual dulu`);
+    }
+    const sharedWith = await inv.collection('integration_links').countDocuments({
+      webhookSecret: l.webhookSecret, _id: { $ne: l._id },
+    });
+    plan.push({ link: l, pair, sharedWith });
+    console.log(`  ${pair}: secret dipakai bersama ${sharedWith} link lain`);
   }
 
   if (!APPLY) {
     console.log('\nDry-run. Jalankan ulang dengan --apply untuk mengganti secret.');
   } else {
-    const newSecret = randomBytes(16).toString('hex');
-    const now = new Date();
-    const session = client.startSession();
-    let counts;
-    try {
-      await session.withTransaction(async () => {
-        const subIds = subs.map((s) => s.id);
-        const a = await sales.collection('webhook_subscriptions').updateMany(
-          { id: { $in: subIds }, secret: oldSecret },
-          { $set: { secret: newSecret, updatedAt: now } },
-          { session },
-        );
-        if (a.modifiedCount !== subIds.length) throw new Error('Subscription berubah saat rotasi — ulangi');
-        const b = await inv.collection('integration_links').updateMany(
-          { vendorTenantId: vendor, webhookSecret: oldSecret },
-          { $set: { webhookSecret: newSecret, updatedAt: now } },
-          { session },
-        );
-        const c = await sales.collection('integration_links').updateMany(
-          { vendorTenantId: vendor, webhookSecret: oldSecret },
-          { $set: { webhookSecret: newSecret, updatedAt: now } },
-          { session },
-        );
-        counts = { subscriptions: a.modifiedCount, inventoryLinks: b.modifiedCount, salesLinks: c.modifiedCount };
-      });
-    } finally {
-      await session.endSession();
+    let rotated = 0;
+    for (const { link, pair } of plan) {
+      const oldSecret = link.webhookSecret;
+      const newSecret = randomBytes(24).toString('hex');
+      const now = new Date();
+      const session = client.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const a = await inv.collection('integration_links').updateOne(
+            { _id: link._id, webhookSecret: oldSecret, status: 'ACTIVE' },
+            { $set: { webhookSecret: newSecret, updatedAt: now } },
+            { session },
+          );
+          const b = await sales.collection('integration_links').updateOne(
+            {
+              vendorTenantId: link.vendorTenantId, customerTenantId: link.customerTenantId,
+              webhookSecret: oldSecret, status: 'ACTIVE',
+            },
+            { $set: { webhookSecret: newSecret, updatedAt: now } },
+            { session },
+          );
+          if (a.modifiedCount !== 1 || b.modifiedCount !== 1) throw new Error(`${pair}: link berubah saat rotasi — ulangi`);
+        });
+        rotated += 1;
+        console.log(`  ${pair}: diganti (tidak dicetak)`);
+      } finally {
+        await session.endSession();
+      }
     }
-    console.log(`\nSecret diganti (tidak dicetak): ${JSON.stringify(counts)}`);
+    console.log(`\nSelesai: ${rotated}/${plan.length} pasangan.`);
   }
 } catch (e) {
   console.error(`GAGAL: ${e instanceof Error ? e.message : e}`);
