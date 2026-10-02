@@ -375,6 +375,52 @@ describe.skipIf(!MongoMemoryReplSet)('Monitor ketersediaan item PO (Mongo replic
     expect(JSON.stringify(await db.collection('audit_log').find({}).toArray())).not.toContain('test-token-123');
   });
 
+  it('Telegram: gagal simpan tautan → 500, token dikembalikan, kiriman ulang menautkan; poison update dilepas', async () => {
+    const link = await callNotif(user('u-gudang', 'GUDANG'), 'POST', ['notifications', 'telegram', 'link']);
+    const token = String(link.json.deepLink).split('start=')[1];
+    const hook = async (update: Record<string, unknown>) => {
+      const url = new URL('http://local/api/telegram/webhook');
+      const res = await handleTelegramWebhook({
+        db, route: '/telegram/webhook', method: 'POST', path: ['telegram', 'webhook'], body: update, url, auth: null,
+        request: new Request(url, { method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'secret_abcdefghijklmnop' } }),
+      } as unknown as HandlerContext);
+      return { status: res!.status, json: await res!.json() as Record<string, unknown> };
+    };
+    let failUserWrites = 1;
+    const realCollection = db.collection.bind(db);
+    const spy = vi.spyOn(db, 'collection').mockImplementation(((name: string) => {
+      const coll = realCollection(name);
+      if (name !== 'users') return coll;
+      return new Proxy(coll, {
+        get(target, prop, recv) {
+          if (prop === 'updateOne' && failUserWrites > 0) {
+            return async () => { failUserWrites -= 1; throw new Error('db down'); };
+          }
+          const v = Reflect.get(target, prop, recv);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+    }) as typeof db.collection);
+    try {
+      const update = { update_id: 50, message: { text: `/start ${token}`, chat: { id: 555, type: 'private' } } };
+      expect((await hook(update)).status).toBe(500);
+      expect((await db.collection('telegram_link_tokens').findOne({ userId: 'u-gudang' }))!.usedAt).toBeNull();
+      expect((await hook(update)).json.action).toBe('linked');
+      expect((await db.collection('users').findOne({ id: 'u-gudang' }))!.telegramChatId).toBe('555');
+
+      failUserWrites = 99;
+      const link2 = await callNotif(user('u-admin', 'ADMIN'), 'POST', ['notifications', 'telegram', 'link']);
+      const poison = { update_id: 51, message: { text: `/start ${String(link2.json.deepLink).split('start=')[1]}`, chat: { id: 556, type: 'private' } } };
+      expect((await hook(poison)).status).toBe(500);
+      expect((await hook(poison)).status).toBe(500);
+      expect((await hook(poison)).json.action).toBe('error_gave_up');
+      expect((await hook(poison)).json.action).toBe('duplicate');
+    } finally {
+      spy.mockRestore();
+      await db.collection('users').updateOne({ id: 'u-gudang' }, { $unset: { telegramChatId: '', telegramUsername: '', telegramLinkedAt: '' } });
+    }
+  });
+
   it('Telegram: 403 → outbox DEAD + tautan diputus otomatis', async () => {
     await db.collection('users').updateOne({ id: 'u-gudang2' }, { $set: { telegramChatId: '222' } });
     tgStatus = 403;

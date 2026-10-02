@@ -20,6 +20,9 @@ const MAX_SEND_ATTEMPTS = 6;
 const STALE_PROCESSING_MS = 2 * 60_000;
 const OUTBOX_RETENTION_MS = 30 * 86_400_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000];
+const MAX_UPDATE_FAILURES = 3;
+const UPDATE_STALE_MS = 60_000;
+const LINK_HINT = 'Inventory → ikon lonceng Notifikasi → "Tautkan"';
 
 export type TelegramConfig = {
   token: string;
@@ -101,9 +104,22 @@ function escapeHtml(s: string): string {
 
 const TELEGRAM_TEXT_MAX = 4000;
 
+/** Telegram menolak (400 → DEAD) tautan yang bukan URL publik, mis. http://localhost di dev. */
+function publicHttpsOrigin(): string {
+  const origin = getInventoryPublicOrigin();
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'https:') return '';
+    if (u.hostname === 'localhost' || /^[\d.]+$/.test(u.hostname) || u.hostname.includes(':')) return '';
+    return origin;
+  } catch {
+    return '';
+  }
+}
+
 /** Teks dipotong SEBELUM di-escape — memotong HTML jadi bisa merusak entitas/tag. */
 export function formatTelegramMessage(input: { title: string; body: string; link?: string | null }): string {
-  const origin = getInventoryPublicOrigin();
+  const origin = publicHttpsOrigin();
   const href = input.link && origin ? `${origin}${input.link.startsWith('/') ? '' : '/'}${input.link}` : '';
   const build = (title: string, body: string) => [
     `<b>${escapeHtml(title)}</b>`,
@@ -215,25 +231,64 @@ async function reply(chatId: string, text: string): Promise<void> {
   }
 }
 
-/** Proses satu update bot (idempoten per `update_id`). */
+/**
+ * Proses satu update bot (idempoten per `update_id`). Gagal → lempar (webhook non-2xx, Telegram
+ * mengulang) sampai MAX_UPDATE_FAILURES; setelah itu dilepas agar update lain tidak tertahan.
+ */
 export async function handleTelegramUpdate(
   db: Db,
   update: TelegramUpdate,
 ): Promise<{ action: string }> {
   const updateId = Number(update.update_id);
+  const coll = db.collection(TELEGRAM_UPDATES_COLLECTION);
   if (Number.isFinite(updateId)) {
     try {
-      await db.collection(TELEGRAM_UPDATES_COLLECTION).insertOne({
+      await coll.insertOne({
         updateId,
+        status: 'PROCESSING',
+        failures: 0,
+        claimedAt: new Date(),
         createdAt: new Date(),
         expireAt: new Date(Date.now() + 2 * 86_400_000),
       });
     } catch (e) {
-      if ((e as { code?: number }).code === 11000) return { action: 'duplicate' };
-      throw e;
+      if ((e as { code?: number }).code !== 11000) throw e;
+      const now = new Date();
+      const retry = await coll.findOneAndUpdate(
+        {
+          updateId,
+          failures: { $lt: MAX_UPDATE_FAILURES },
+          $or: [
+            { status: 'FAILED' },
+            // Proses mati di tengah jalan: Telegram tidak dapat balasan lalu mengirim ulang.
+            { status: 'PROCESSING', claimedAt: { $lt: new Date(now.getTime() - UPDATE_STALE_MS) } },
+          ],
+        },
+        { $set: { status: 'PROCESSING', claimedAt: now } },
+      );
+      if (!retry) return { action: 'duplicate' };
     }
   }
+  try {
+    const result = await processTelegramUpdate(db, update);
+    if (Number.isFinite(updateId)) await coll.updateOne({ updateId }, { $set: { status: 'DONE' } });
+    return result;
+  } catch (e) {
+    if (!Number.isFinite(updateId)) throw e;
+    const row = await coll.findOneAndUpdate(
+      { updateId },
+      { $set: { status: 'FAILED' }, $inc: { failures: 1 } },
+      { returnDocument: 'after' },
+    ).catch(() => null);
+    if (row && Number(row.failures) >= MAX_UPDATE_FAILURES) {
+      logger.warn('telegram_update_gave_up', { updateId, error: e instanceof Error ? e.message : String(e) });
+      return { action: 'error_gave_up' };
+    }
+    throw e;
+  }
+}
 
+async function processTelegramUpdate(db: Db, update: TelegramUpdate): Promise<{ action: string }> {
   const msg = update.message;
   const chatId = msg?.chat?.id != null ? String(msg.chat.id) : '';
   const text = String(msg?.text || '').trim();
@@ -247,7 +302,7 @@ export async function handleTelegramUpdate(
       reason: 'user_stop',
     });
     await reply(chatId, n
-      ? 'Notifikasi dihentikan. Tautkan lagi dari halaman Profil di Inventory bila perlu.'
+      ? `Notifikasi dihentikan. Tautkan lagi dari ${LINK_HINT} bila perlu.`
       : 'Chat ini tidak tertaut ke akun Inventory.');
     return { action: n ? 'unlinked' : 'not_linked' };
   }
@@ -259,7 +314,7 @@ export async function handleTelegramUpdate(
   }
   const token = m[1];
   if (!token) {
-    await reply(chatId, 'Buka Inventory → Profil → "Tautkan Telegram" untuk mendapatkan tautan.');
+    await reply(chatId, `Buka ${LINK_HINT} untuk mendapatkan tautan.`);
     return { action: 'start_without_token' };
   }
 
@@ -270,28 +325,39 @@ export async function handleTelegramUpdate(
     { returnDocument: 'after' },
   );
   if (!claimed) {
-    await reply(chatId, 'Tautan tidak berlaku atau sudah kedaluwarsa. Buat tautan baru dari halaman Profil.');
+    await reply(chatId, `Tautan tidak berlaku atau sudah kedaluwarsa. Buat tautan baru dari ${LINK_HINT}.`);
     return { action: 'invalid_token' };
   }
 
-  const user = await db.collection('users').findOne(
-    { id: claimed.userId, aktif: { $ne: false } },
-    { projection: { id: 1, name: 1, tenantId: 1 } },
-  );
+  let user;
+  try {
+    user = await db.collection('users').findOne(
+      { id: claimed.userId, aktif: { $ne: false } },
+      { projection: { id: 1, name: 1, tenantId: 1 } },
+    );
+    if (user) {
+      await db.collection('users').updateOne(
+        { id: user.id },
+        {
+          $set: {
+            telegramChatId: chatId,
+            telegramUsername: msg?.from?.username ? String(msg.from.username) : null,
+            telegramLinkedAt: now,
+          },
+        },
+      );
+    }
+  } catch (e) {
+    // Token dikembalikan agar pengulangan update oleh Telegram bisa menautkan.
+    await db.collection(TELEGRAM_LINK_TOKENS_COLLECTION)
+      .updateOne({ id: claimed.id, usedAt: now }, { $set: { usedAt: null } })
+      .catch(() => undefined);
+    throw e;
+  }
   if (!user) {
     await reply(chatId, 'Akun tidak ditemukan atau nonaktif.');
     return { action: 'user_missing' };
   }
-  await db.collection('users').updateOne(
-    { id: user.id },
-    {
-      $set: {
-        telegramChatId: chatId,
-        telegramUsername: msg?.from?.username ? String(msg.from.username) : null,
-        telegramLinkedAt: now,
-      },
-    },
-  );
   await writeAuditLog(db, {
     tenantId: String(user.tenantId || ''),
     action: 'TELEGRAM_LINK',

@@ -4,6 +4,7 @@ import type { NextResponse } from 'next/server';
 import { ok, err } from '@/lib/api/db';
 import type { HandlerContext } from '@/types/api/handler';
 import { NOTIFICATIONS_COLLECTION } from '@/lib/notifications/notify';
+import { logger } from '@/lib/api/logger';
 
 const MAX_LIST = 50;
 
@@ -111,8 +112,9 @@ export async function handleTelegramWebhook({
   try {
     const result = await handleTelegramUpdate(db, (body || {}) as Parameters<typeof handleTelegramUpdate>[1]);
     return ok(result);
-  } catch {
-    // Tetap 200 agar Telegram tidak mengulang update tanpa henti; update_id sudah tercatat.
-    return ok({ action: 'error' });
+  } catch (e) {
+    // Non-2xx → Telegram mengirim ulang update (penanda update_id sudah dilepas).
+    logger.warn('telegram_update_failed', { error: e instanceof Error ? e.message : String(e) });
+    return err('Gagal memproses update', 500);
   }
 }
