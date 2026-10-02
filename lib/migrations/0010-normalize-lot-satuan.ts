@@ -94,11 +94,27 @@ export const normalizeLotSatuanMigration: Migration = {
     const applied = await runInTransactionOnDb(db, async ({ db: txDb, session }) => {
       const fresh = await planLotSatuan(txDb, tenantId, session);
       let changed = 0;
+      const byCollection = new Map<string, Fix[]>();
       for (const f of fresh) {
-        const r = await txDb.collection(f.collection).updateOne(
-          { tenantId, id: f.id },
-          { $set: { satuan: f.to, satuanLegacy: f.from, updatedAt: ctx.now } },
-          txOpts(session),
+        const list = byCollection.get(f.collection) || [];
+        list.push(f);
+        byCollection.set(f.collection, list);
+      }
+      for (const [collection, list] of byCollection) {
+        const r = await txDb.collection(collection).bulkWrite(
+          list.map((f) => ({
+            updateOne: {
+              filter: { tenantId, id: f.id },
+              update: [{
+                $set: {
+                  satuan: f.to,
+                  satuanLegacy: { $ifNull: ['$satuanLegacy', f.from] },
+                  updatedAt: ctx.now,
+                },
+              }],
+            },
+          })),
+          { ordered: false, ...txOpts(session) },
         );
         changed += r.modifiedCount;
       }

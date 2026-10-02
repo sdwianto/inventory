@@ -76,4 +76,12 @@ describe.skipIf(!MongoMemoryReplSet)('0010 normalisasi satuan lot (Mongo replica
     const again = await run(false);
     expect(again.changed).toBe(0);
   });
+
+  it('run ulang setelah satuan dasar berubah tidak menimpa satuanLegacy asli', async () => {
+    await db.collection('products').updateOne({ tenantId: TID, id: 'tomat' }, { $set: { satuan: 'GRAM' } });
+    const r = await run(false);
+    expect(r.changed).toBe(2);
+    const tomat = await db.collection('ingredient_lots').findOne({ tenantId: TID, id: 'lot-tomat' });
+    expect(tomat).toMatchObject({ satuan: 'GRAM', satuanLegacy: 'KG' });
+  });
 });
