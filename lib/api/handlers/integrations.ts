@@ -146,9 +146,9 @@ async function enqueueCatalogSync(db: Db, tenantId: string) {
 }
 
 export async function handleIntegrations({
-  db, route, method, body, auth, url, request, path,
+  db, route, method, body, rawBody, auth, url, request, path,
 }: HandlerContext) {
-  const inbound = await handleIntegrationInbound({ db, route, method, body, auth, url, request, path });
+  const inbound = await handleIntegrationInbound({ db, route, method, body, rawBody, auth, url, request, path });
   if (inbound) return inbound;
 
   // W1-1: unauthenticated discovery for Sales IntegrationClient.getInventoryPublicInfo

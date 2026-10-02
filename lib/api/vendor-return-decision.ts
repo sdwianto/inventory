@@ -53,6 +53,8 @@ export type ApplyVendorReturnDecisionInput = {
   creditNoteId?: string | null;
   lineDecisions: VendorReturnLineDecisionInput[];
   decidedBy?: { userId?: string; userName?: string };
+  /** Vendor pengirim terverifikasi (webhook) — hanya boleh memutuskan retur miliknya. */
+  vendorTenantId?: string;
 };
 
 export type ApplyVendorReturnDecisionResult =
@@ -79,6 +81,10 @@ export async function applyVendorReturnDecision(
     id: returnId,
   }) as VendorReturnDoc | null;
   if (!doc) return { error: 'Retur vendor tidak ditemukan', status: 404, code: 'NOT_FOUND' };
+  const caller = String(payload.vendorTenantId || '').trim();
+  if (caller && String(doc.vendorTenantId || '').trim() !== caller) {
+    return { error: 'Retur ini bukan milik vendor pengirim', status: 403, code: 'FORBIDDEN' };
+  }
 
   const claimedCreditNoteId = String(payload.creditNoteId || '').trim();
   if (claimedCreditNoteId && String(doc.creditNoteId || '') !== claimedCreditNoteId) {

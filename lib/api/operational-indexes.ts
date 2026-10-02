@@ -598,6 +598,7 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'telegram_link_tokens', index: { expiresAt: 1 }, name: 'ttl_tg_link_token', expireAfterSeconds: 0 },
   { collection: 'telegram_updates', index: { updateId: 1 }, name: 'uniq_tg_update', unique: true },
   { collection: 'telegram_updates', index: { expireAt: 1 }, name: 'ttl_tg_update', expireAfterSeconds: 0 },
+  { collection: 'webhook_nonces', index: { expireAt: 1 }, name: 'ttl_webhook_nonce', expireAfterSeconds: 0 },
   {
     collection: 'migration_runs',
     index: { migrationId: 1, tenantId: 1 },

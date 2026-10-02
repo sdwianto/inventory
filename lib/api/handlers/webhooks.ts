@@ -4,7 +4,6 @@ import type { HandlerContext } from '@/types/api/handler';
 import { ok, err } from '@/lib/api/db';
 import { verifyWebhookSecret } from '@/lib/api/webhook-verify';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
-import { logger } from '@/lib/api/logger';
 import { enqueueJob, scheduleJobProcessing, JOB_TYPES } from '@/lib/api/bg-jobs';
 import { shouldProcessWebhookInline, runWebhookInboxInline } from '@/lib/api/webhook-inbox-process';
 
@@ -63,6 +62,7 @@ export async function handleWebhooks({
   method,
   request,
   body,
+  rawBody,
 }: HandlerContext) {
   const webhookBody = (body || {}) as WebhookBody;
 
@@ -75,8 +75,8 @@ export async function handleWebhooks({
   const v = await verifyWebhookSecret(request, db, {
     customerTenantId: String(payload.customerTenantId || ''),
     vendorTenantId: vendorTenantIdFromEnvelope || String(payload.vendorTenantId || ''),
-  });
-  if (!v.ok) return err(v.error, 401);
+  }, { rawBody });
+  if (!v.ok) return err(v.error, v.status);
 
   if (!event) return err('event wajib', 400);
 
@@ -85,17 +85,11 @@ export async function handleWebhooks({
 
   const customerTenantId = String(tenantId).trim().toLowerCase();
   const verifiedVendor = v.vendorTenantId ? String(v.vendorTenantId) : undefined;
-  const vendorMismatch = !!(verifiedVendor && vendorTenantIdFromEnvelope
-    && normalizeTenantId(verifiedVendor) !== normalizeTenantId(vendorTenantIdFromEnvelope));
-  if (vendorMismatch && event === 'sales_order.availability_changed') {
+  if (verifiedVendor && vendorTenantIdFromEnvelope
+    && normalizeTenantId(verifiedVendor) !== normalizeTenantId(vendorTenantIdFromEnvelope)) {
     return err('tenantId vendor tidak cocok dengan webhook secret', 403);
   }
-  if (vendorMismatch) {
-    logger.warn('webhook_vendor_mismatch', { event, verifiedVendor, envelopeVendor: vendorTenantIdFromEnvelope });
-  }
-  const vendorTenantId = event === 'sales_order.availability_changed'
-    ? (verifiedVendor || vendorTenantIdFromEnvelope)
-    : (vendorTenantIdFromEnvelope || verifiedVendor);
+  const vendorTenantId = verifiedVendor || vendorTenantIdFromEnvelope;
 
   if (v.tenantId && normalizeTenantId(v.tenantId) !== customerTenantId) {
     return err('customerTenantId tidak cocok dengan webhook secret tenant', 403);

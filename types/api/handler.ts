@@ -10,6 +10,8 @@ export interface HandlerContext {
   url: URL;
   path: string[];
   body: unknown;
+  /** Teks body persis seperti diterima — untuk verifikasi tanda tangan HMAC webhook. */
+  rawBody?: string;
   auth: AuthContext | null;
 }
 

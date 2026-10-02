@@ -168,27 +168,6 @@ export async function findLinksByWebhookSecret(
     .toArray();
 }
 
-export async function resolveWebhookLink(
-  db: Db,
-  secret: string,
-  customerTenantId: string,
-  vendorTenantId?: string,
-): Promise<IntegrationLinkDoc | null> {
-  const ctid = normalizeTenantId(customerTenantId);
-  const links = await findLinksByWebhookSecret(db, secret);
-  if (!links.length) return null;
-
-  const vid = String(vendorTenantId || '').trim();
-  if (vid) {
-    const exact = links.find((l) => l.customerTenantId === ctid && l.vendorTenantId === vid);
-    if (exact) return exact;
-  }
-  const forCustomer = links.filter((l) => l.customerTenantId === ctid);
-  if (forCustomer.length === 1) return forCustomer[0];
-  if (vid) return forCustomer.find((l) => l.vendorTenantId === vid) || null;
-  return forCustomer[0] || null;
-}
-
 export function resolvePlatformSalesApiKey(): string {
   return String(process.env.SALES_PLATFORM_API_KEY || '').trim();
 }

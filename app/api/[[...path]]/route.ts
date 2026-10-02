@@ -132,8 +132,14 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
     }
 
     let body: unknown = null;
+    let rawBody: string | undefined;
     if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-      body = await request.json().catch(() => ({}));
+      rawBody = await request.text().catch(() => '');
+      try {
+        body = rawBody ? JSON.parse(rawBody) : {};
+      } catch {
+        body = {};
+      }
     }
 
     const auth = await resolveRequestContext(request, db);
@@ -144,7 +150,7 @@ async function handleRoute(request: NextRequest, context: RouteContext) {
       if (dangerousDenied) return dangerousDenied;
     }
 
-    const ctx = { request, db, route, method, url, path, body, auth };
+    const ctx = { request, db, route, method, url, path, body, rawBody, auth };
 
     const idemKey = readIdempotencyKey(request);
     const tenantId = auth?.tenantId || 'default';

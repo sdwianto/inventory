@@ -29,6 +29,11 @@ describe('webhook availability_changed: vendor dari secret terverifikasi', () =>
     expect(res!.status).toBe(403);
   });
 
+  it('event lain dengan vendor envelope beda juga ditolak 403 (bukan sekadar warning)', async () => {
+    const res = await call('sales_order.confirmed', 'v-palsu');
+    expect(res!.status).toBe(403);
+  });
+
   it('tanpa envelope → vendor dari secret dipakai', async () => {
     const res = await call('sales_order.availability_changed', undefined);
     const json = await res!.json() as Record<string, unknown>;

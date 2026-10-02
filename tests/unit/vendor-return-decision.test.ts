@@ -102,6 +102,16 @@ describe('applyVendorReturnDecision (ADR-006)', () => {
     expect('error' in r && r.status).toBe(404);
   });
 
+  it('403 kalau vendor pengirim bukan pemilik retur', async () => {
+    const db = makeDb({ ...baseDoc, vendorTenantId: 'vendor-a' });
+    const r = await applyVendorReturnDecision(db, 'sppg', {
+      returnId: 'rtv-1',
+      vendorTenantId: 'vendor-b',
+      lineDecisions: [{ lineId: 'l1', decision: 'ACCEPTED' }],
+    });
+    expect('error' in r && r.status).toBe(403);
+  });
+
   it('409 kalau creditNoteId tidak cocok', async () => {
     const db = makeDb(baseDoc);
     const r = await applyVendorReturnDecision(db, 'sppg', {

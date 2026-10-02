@@ -20,6 +20,7 @@ export async function handleIntegrationInbound({
   route,
   method,
   body,
+  rawBody,
   request,
 }: HandlerContext) {
   if (method !== 'POST') return null;
@@ -43,13 +44,13 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     if (!payload.deliveryId) return err('deliveryId wajib', 400);
 
-    const vid = vendorTenantId || v.vendorTenantId || '';
+    const vid = v.vendorTenantId || vendorTenantId || '';
 
     const existingBefore = payload.deliveryId
       ? await db.collection('goods_receipts').findOne({
@@ -114,13 +115,13 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     if (!payload.invoiceId) return err('invoiceId wajib', 400);
 
-    const vid = vendorTenantId || v.vendorTenantId || '';
+    const vid = v.vendorTenantId || vendorTenantId || '';
     const { startIntegrationCommand, finishIntegrationCommand } = await import(
       '@/lib/integration/command-log'
     );
@@ -202,13 +203,13 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     if (!payload.invoiceId) return err('invoiceId wajib', 400);
 
-    const vid = vendorTenantId || v.vendorTenantId || '';
+    const vid = v.vendorTenantId || vendorTenantId || '';
     const creditNoteId = String(payload.creditNoteId || '').trim();
     const { startIntegrationCommand, finishIntegrationCommand } = await import(
       '@/lib/integration/command-log'
@@ -318,13 +319,13 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     if (!payload.invoiceId) return err('invoiceId wajib', 400);
 
-    const vid = vendorTenantId || v.vendorTenantId || '';
+    const vid = v.vendorTenantId || vendorTenantId || '';
     const debitNoteId = String(payload.debitNoteId || '').trim();
     const { startIntegrationCommand, finishIntegrationCommand } = await import(
       '@/lib/integration/command-log'
@@ -409,8 +410,8 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     const returnId = String(payload.returnId || '').trim();
@@ -451,6 +452,7 @@ export async function handleIntegrationInbound({
         creditNoteId: creditNoteId || undefined,
         lineDecisions,
         decidedBy: (payload.decidedBy as { userId?: string; userName?: string } | undefined) || undefined,
+        vendorTenantId: v.vendorTenantId || vendorTenantId || undefined,
       });
       if ('error' in result) {
         await finishIntegrationCommand(db, commandId, {
@@ -506,8 +508,8 @@ export async function handleIntegrationInbound({
     const v = await verifyWebhookSecret(request, db, {
       customerTenantId,
       vendorTenantId: vendorTenantId || undefined,
-    });
-    if (!v.ok) return err(v.error, 401);
+    }, { rawBody });
+    if (!v.ok) return err(v.error, v.status);
 
     if (!customerTenantId) return err('customerTenantId wajib', 400);
     const product = payload.product;
@@ -528,7 +530,7 @@ export async function handleIntegrationInbound({
     );
     if (claim.kind === 'replay') return claim.response;
 
-    const vid = vendorTenantId || v.vendorTenantId || '';
+    const vid = v.vendorTenantId || vendorTenantId || '';
     const { startIntegrationCommand, finishIntegrationCommand } = await import(
       '@/lib/integration/command-log'
     );
