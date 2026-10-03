@@ -13,6 +13,24 @@ import { hutangMatchesGrnVendor, vendorScopedKey } from '@/lib/api/hutang-vendor
 import { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
 import type { GrnDoc, HutangDoc, ReconcileOptions, SalesErrorRow, SalesReplayOptions } from '@/types/documents';
 import type { VendorInvoicePayload } from '@/types/integration';
+import {
+  computeHutangFromInvoice,
+  hutangLineSubTotal,
+  hutangTaxFields,
+  type HutangTaxPayload,
+  type HutangTaxResult,
+} from '@/lib/api/hutang-tax';
+import {
+  findActiveVendorHutangJournal,
+  hutangPpnDikreditkan,
+  journalMatchesBase,
+  postVendorHutangJournal,
+  vendorHutangPostingBase,
+  voidVendorHutangJournal,
+} from '@/lib/api/hutang-vendor-journal';
+import { runInTransactionOnDb, txOpts } from '@/lib/api/transaction';
+import { writeAuditLog } from '@/lib/api/audit-log';
+import { logger } from '@/lib/api/logger';
 
 export { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
 
@@ -128,47 +146,180 @@ async function normalizeVendorHutangDoc(
 }
 
 
-async function resetVendorHutangToPendingReview(
-  db: Db,
-  hutang: HutangDoc,
-  { total = null, items = null }: { total?: number | null; items?: HutangItemLike[] | null } = {},
-): Promise<boolean> {
-  const nextTotal = total != null ? total : Number(hutang.total || 0);
-  // Jangan reset tagihan yang statusnya/pembayarannya berubah sejak dibaca (mis. pembayaran bersamaan).
+const PENDING_REVIEW_UNSET = {
+  paidExternalAt: '',
+  paidExternalBy: '',
+  paidExternalNote: '',
+  approvedAt: '',
+  approvedBy: '',
+  rejectedAt: '',
+  rejectedBy: '',
+  rejectReason: '',
+  matchOverride: '',
+  matchOverrideNote: '',
+  matchOverrideBy: '',
+};
+
+function pendingReviewSet(total: number) {
+  return {
+    referenceType: 'VENDOR_INVOICE',
+    approvalStatus: 'PENDING_REVIEW',
+    status: 'PENDING_REVIEW',
+    terbayar: 0,
+    sisa: total,
+  };
+}
+
+/** Jangan ubah tagihan yang status/pembayarannya berubah sejak dibaca (mis. pembayaran bersamaan). */
+function unchangedSinceRead(hutang: HutangDoc) {
+  return {
+    status: hutang.status ?? null,
+    approvalStatus: hutang.approvalStatus ?? null,
+    terbayar: hutang.terbayar ?? null,
+    total: hutang.total ?? null,
+  };
+}
+
+/** Pelunasan yang benar-benar tercatat (pembayaran + pengurangan credit note) — bukan `terbayar` hasil status palsu. */
+async function recordedSettlement(db: Db, hutang: HutangDoc): Promise<number> {
+  const [row] = await db.collection('hutang_pembayaran').aggregate<{ sum: number }>([
+    { $match: { hutangId: hutang.id } },
+    { $group: { _id: null, sum: { $sum: { $ifNull: ['$amount', 0] } } } },
+  ]).toArray();
+  const cn = (Array.isArray(hutang.creditNotes) ? hutang.creditNotes : []) as Array<{ amount?: unknown }>;
+  return Math.max(0, Math.round(Number(row?.sum) || 0)) + cn.reduce((s, n) => s + Math.max(0, toInt(n.amount)), 0);
+}
+
+async function resetVendorHutangToPendingReview(db: Db, hutang: HutangDoc): Promise<boolean> {
+  const total = Number(hutang.total || 0);
+  const settled = Math.min(total, await recordedSettlement(db, hutang));
   const res = await db.collection('hutang').updateOne(
+    docIdFilter(hutang, unchangedSinceRead(hutang)),
     {
-      ...docIdFilter(hutang),
-      status: hutang.status ?? null,
-      approvalStatus: hutang.approvalStatus ?? null,
-      terbayar: hutang.terbayar ?? null,
-    },
-    {
-      $set: {
-        referenceType: 'VENDOR_INVOICE',
-        approvalStatus: 'PENDING_REVIEW',
-        status: 'PENDING_REVIEW',
-        terbayar: 0,
-        sisa: nextTotal,
-        ...(total != null ? { total: nextTotal } : {}),
-        ...(items ? { items } : {}),
-        updatedAt: new Date(),
-      },
-      $unset: {
-        paidExternalAt: '',
-        paidExternalBy: '',
-        paidExternalNote: '',
-        approvedAt: '',
-        approvedBy: '',
-        rejectedAt: '',
-        rejectedBy: '',
-        rejectReason: '',
-        matchOverride: '',
-        matchOverrideNote: '',
-        matchOverrideBy: '',
-      },
+      $set: { ...pendingReviewSet(total), terbayar: settled, sisa: Math.max(0, total - settled), updatedAt: new Date() },
+      $unset: PENDING_REVIEW_UNSET,
     },
   );
   return res.matchedCount > 0;
+}
+
+function toInt(v: unknown): number {
+  return parseInt(String(v ?? 0), 10) || 0;
+}
+
+/**
+ * Header invoice tersimpan di hutang (tanpa debit note) sebagai payload hitung ulang.
+ * Hutang lama tanpa `diskonNota`: diskon disimpulkan dari subTotal + PPN − total.
+ */
+export function hutangInvoicePayload(hutang: HutangDoc): HutangTaxPayload & { subTotal: number } {
+  const base = vendorHutangPostingBase(hutang);
+  const items = (Array.isArray(hutang.items) ? hutang.items : []) as HutangItemLike[];
+  const subTotal = hutangLineSubTotal(hutang);
+  const inclusive = hutang.hargaTermasukPajak === true;
+  const diskonNota = hutang.diskonNota != null
+    ? toInt(hutang.diskonNota)
+    : Math.max(0, inclusive ? subTotal - base.total : subTotal + base.ppn - base.total);
+  return {
+    subTotal,
+    diskonNota,
+    ppn: base.ppn,
+    total: base.total,
+    ppnRate: typeof hutang.ppnRate === 'number' ? hutang.ppnRate : undefined,
+    hargaTermasukPajak: inclusive,
+    items,
+  };
+}
+
+type HutangGrnRepair = { items: HutangItemLike[] | null; tax: HutangTaxResult<HutangItemLike> };
+
+/**
+ * Koreksi nilai tagihan dari qty terima GRN. Nilai dibandingkan pada basis yang sama (baris sebelum
+ * diskon/PPN), lalu diskon & PPN dihitung ulang — jangan pernah menimpa total ber-PPN dengan jumlah baris.
+ */
+export function planHutangGrnRepair(hutang: HutangDoc, grn: GrnDoc): HutangGrnRepair | null {
+  const payload = hutangInvoicePayload(hutang);
+  const reconciled = reconcileHutangItemsFromGrn((payload.items || []) as HutangItemLike[], grn.items);
+  if (reconciled.matchedCount > 0) {
+    if (!reconciled.changed) return null;
+    const tax = computeHutangFromInvoice(payload, reconciled.items, true);
+    return { items: tax.items, tax };
+  }
+  // Tidak ada baris yang bisa dicocokkan (lineId hilang): satu-satunya acuan adalah nilai terima GRN.
+  const recv = calcGrnReceivedTotal(grn);
+  if (recv <= 0 || Math.abs(payload.subTotal - recv) <= 1) return null;
+  const tax = computeHutangFromInvoice({ ...payload, ppnRate: undefined }, [{ jumlah: recv }], true);
+  return { items: null, tax: { ...tax, items: [] } };
+}
+
+async function hutangSettlementReason(db: Db, hutang: HutangDoc): Promise<string | null> {
+  const paymentCount = await db.collection('hutang_pembayaran').countDocuments({ hutangId: hutang.id }, { limit: 1 });
+  if (paymentCount > 0) return 'HAS_PAYMENT';
+  const notes = (list: unknown) => (Array.isArray(list) ? list : []) as Array<{ amount?: unknown; vendorCredit?: unknown }>;
+  if (notes(hutang.creditNotes).some((n) => toInt(n.amount) > 0 || toInt(n.vendorCredit) > 0)) return 'HAS_CREDIT_NOTE';
+  if (notes(hutang.debitNotes).some((n) => toInt(n.amount) > 0)) return 'HAS_DEBIT_NOTE';
+  return null;
+}
+
+async function applyHutangGrnRepair(
+  db: Db,
+  hutang: HutangDoc,
+  repair: HutangGrnRepair,
+  { resetToPending }: { resetToPending: boolean },
+): Promise<boolean> {
+  const tid = normalizeTenantId(String(hutang.tenantId || 'default'));
+  const { tax } = repair;
+  const settlement = await hutangSettlementReason(db, hutang);
+  if (settlement || (!resetToPending && toInt(hutang.terbayar) > 0)) {
+    const now = new Date();
+    const pending = { total: tax.total, noInvoice: hutang.noInvoice || null, reason: settlement || 'HAS_PAYMENT', source: 'grn-repair', at: now };
+    await db.collection('hutang').updateOne(docIdFilter(hutang), { $set: { vendorResyncPending: pending, updatedAt: now } });
+    logger.warn('hutang_grn_repair_blocked', { tenantId: tid, hutangId: hutang.id, ...pending });
+    return false;
+  }
+
+  let applied = false;
+  await runInTransactionOnDb(db, async ({ db: txDb, session }) => {
+    const now = new Date();
+    const set: Record<string, unknown> = {
+      ...hutangTaxFields(tax),
+      ...(repair.items ? { items: repair.items } : {}),
+      ...(resetToPending ? pendingReviewSet(tax.total) : { sisa: tax.total }),
+      updatedAt: now,
+    };
+    const res = await txDb.collection('hutang').updateOne(
+      docIdFilter(hutang, unchangedSinceRead(hutang)),
+      { $set: set, ...(resetToPending ? { $unset: PENDING_REVIEW_UNSET } : {}) },
+      txOpts(session),
+    );
+    if (res.matchedCount === 0) return;
+    applied = true;
+
+    const refreshed = { ...hutang, ...set };
+    const active = await findActiveVendorHutangJournal(txDb, tid, String(hutang.id), session);
+    if (active && !journalMatchesBase(active, tax.glPostingBase, hutangPpnDikreditkan(hutang))) {
+      await voidVendorHutangJournal(txDb, refreshed, {
+        userName: 'System',
+        keterangan: `Nilai tagihan vendor ${hutang.noInvoice || hutang.noHutang} dikoreksi dari qty GRN`,
+      }, session);
+      await postVendorHutangJournal(txDb, refreshed, { userName: 'System' }, session);
+    }
+    await writeAuditLog(txDb, {
+      tenantId: tid,
+      action: 'HUTANG_UPDATED',
+      entityType: 'hutang',
+      entityId: String(hutang.id),
+      summary: `Hutang ${hutang.noHutang} dikoreksi dari qty terima GRN`,
+      metadata: {
+        previousTotal: hutang.total ?? null,
+        previousPpn: hutang.ppn ?? null,
+        total: tax.total,
+        ppn: tax.ppn,
+        diskonNota: tax.diskonNota,
+        resetToPending,
+      },
+    }, session);
+  });
+  return applied;
 }
 
 export async function fixHutangApprovalIfNeeded(
@@ -178,46 +329,11 @@ export async function fixHutangApprovalIfNeeded(
 ): Promise<boolean> {
   const normalized = await normalizeVendorHutangDoc(db, String(grn?.tenantId || hutang.tenantId || ''), hutang, grn);
   const fromPostedGrn = !!grn;
-
-  // Utamakan koreksi per-baris (paling presisi, dan tidak bergantung pada grn.receivedTotal
-  // yang bisa basi/cache). Fallback ke grn.receivedTotal HANYA kalau tidak ada satu pun baris
-  // hutang yang bisa dicocokkan ke baris GRN (lineId hilang/beda) — baru di situ kita tidak
-  // punya ground truth per-baris sama sekali.
-  let correctedItems: HutangItemLike[] | null = null;
-  let correctedTotal: number | null = null;
-  if (grn) {
-    const reconciled = reconcileHutangItemsFromGrn((normalized.items || []) as HutangItemLike[], grn.items);
-    if (reconciled.matchedCount > 0) {
-      const totalMismatch = Math.abs(Number(normalized.total || 0) - reconciled.total) > 1;
-      if (reconciled.changed || totalMismatch) {
-        correctedItems = reconciled.changed ? reconciled.items : null;
-        correctedTotal = reconciled.total;
-      }
-    } else {
-      const recv = calcGrnReceivedTotal(grn);
-      if (Math.abs(Number(normalized.total || 0) - recv) > 1) correctedTotal = recv;
-    }
-  }
-
-  if (!vendorInvoiceNeedsPendingReview(normalized, { fromPostedGrn })) {
-    if (correctedTotal != null) {
-      await db.collection('hutang').updateOne(
-        docIdFilter(normalized),
-        {
-          $set: {
-            ...(correctedItems ? { items: correctedItems } : {}),
-            total: correctedTotal,
-            sisa: Math.max(0, correctedTotal - Number(normalized.terbayar || 0)),
-            updatedAt: new Date(),
-          },
-        },
-      );
-      return true;
-    }
-    return false;
-  }
-
-  return resetVendorHutangToPendingReview(db, normalized, { total: correctedTotal, items: correctedItems });
+  const repair = grn ? planHutangGrnRepair(normalized, grn) : null;
+  const resetToPending = vendorInvoiceNeedsPendingReview(normalized, { fromPostedGrn });
+  if (repair && await applyHutangGrnRepair(db, normalized, repair, { resetToPending })) return true;
+  if (!resetToPending) return false;
+  return resetVendorHutangToPendingReview(db, normalized);
 }
 
 function calcGrnReceivedTotal(grn: GrnDoc): number {
@@ -343,8 +459,9 @@ function needsSalesReplay(
   if (!grn.noDO && !grn.vendorDeliveryId) return false;
   if (hutang) {
     if (vendorInvoiceNeedsPendingReview(hutang, { fromPostedGrn: true })) return true;
+    // receivedTotal = Σ baris sebelum diskon/PPN — bandingkan dengan subTotal, bukan total ber-PPN.
     const recv = parseInt(String(grn.receivedTotal || 0), 10);
-    if (recv > 0 && Math.abs(Number(hutang.total || 0) - recv) > 1) return true;
+    if (recv > 0 && Math.abs(hutangInvoicePayload(hutang).subTotal - recv) > 1) return true;
     return false;
   }
   if (!fullSync) return false;

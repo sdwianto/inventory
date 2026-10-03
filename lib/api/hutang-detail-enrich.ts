@@ -8,6 +8,7 @@ import { sanitizeStoreSettings } from '@/lib/receipt-doc';
 import { createIntegrationClient } from '@/lib/integration/client';
 import { asArray, str, num, type JsonObject } from '@/types/json';
 import type { HutangDoc } from '@/types/documents';
+import { hutangLineSubTotal } from '@/lib/api/hutang-tax';
 import { randomUUID } from 'node:crypto';
 
 export type VendorBillingSnapshot = {
@@ -324,6 +325,13 @@ export async function buildHutangDetailEnrichment(
   ]);
 
   const itemsSubTotal = itemsFull.reduce((s, it) => s + (it.jumlah || 0), 0);
+  const subTotal = hutangLineSubTotal(hutang as HutangDoc) || itemsSubTotal;
+  const diskonNota = Math.max(0, num(hutang.diskonNota));
+  const ppn = num(hutang.ppn) || 0;
+  const total = num(hutang.total) || 0;
+  const inclusive = hutang.hargaTermasukPajak === true;
+  const invoiceNet = inclusive ? subTotal - diskonNota : subTotal - diskonNota + ppn;
+  const faktur = (hutang.fakturPajak || null) as { nomorFaktur?: string | null; status?: string; aktif?: boolean } | null;
 
   return {
     vendorBilling,
@@ -331,10 +339,17 @@ export async function buildHutangDetailEnrichment(
     itemsFull,
     totals: {
       itemsSubTotal,
-      subTotal: num(hutang.subTotal) || itemsSubTotal,
-      ppn: num(hutang.ppn) || 0,
-      total: num(hutang.total) || 0,
-      penyesuaian: Math.max(0, num(hutang.total) - (num(hutang.subTotal) || itemsSubTotal) - num(hutang.ppn)),
+      subTotal,
+      diskonNota,
+      dpp: hutang.dpp != null ? num(hutang.dpp) : Math.max(0, subTotal - diskonNota - (inclusive ? ppn : 0)),
+      ppn,
+      ppnRate: typeof hutang.ppnRate === 'number' ? hutang.ppnRate : null,
+      hargaTermasukPajak: inclusive,
+      ppnDikreditkan: hutang.ppnDikreditkan !== false,
+      fakturPajak: faktur ? { nomorFaktur: faktur.nomorFaktur || null, status: faktur.status || null, aktif: faktur.aktif !== false } : null,
+      total,
+      penyesuaian: Math.max(0, total - invoiceNet),
+      kreditVendorKelebihan: Math.max(0, num(hutang.kreditVendorKelebihan)),
     },
   };
 }

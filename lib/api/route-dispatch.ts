@@ -91,6 +91,7 @@ const HANDLER_LOADERS: Record<string, () => Promise<ApiHandler>> = {
   hutang: async () => (await import('@/lib/api/handlers/vendor-hutang')).handleVendorHutang,
   'vendor-returns': async () => (await import('@/lib/api/handlers/vendor-returns')).handleVendorReturns,
   'procurement-expenses': async () => (await import('@/lib/api/handlers/procurement-expenses')).handleProcurementExpenses,
+  'ppn-masukan': async () => (await import('@/lib/api/handlers/ppn-masukan')).handlePpnMasukan,
   'customer-purchase-orders': async () => (await import('@/lib/api/handlers/customer-po')).handleCustomerPo,
   'inventory-releases': async () => (await import('@/lib/api/handlers/inventory-releases')).handleInventoryReleases,
   tenant: async () => (await import('@/lib/api/handlers/tenants')).handleTenants,

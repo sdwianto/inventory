@@ -18,9 +18,11 @@ import { buildCreditNoteHutangJournalLines, buildDebitNoteHutangJournalLines } f
 import {
   buildHutangPostingBase,
   findActiveVendorHutangJournal,
+  hutangPpnDikreditkan,
   journalMatchesBase,
   postOrDeferNoteJournal,
   postVendorHutangJournal,
+  vendorHutangPostingBase,
   voidVendorHutangJournal,
 } from '@/lib/api/hutang-vendor-journal';
 import { CasConflictError, isCasConflict } from '@/lib/api/cas';
@@ -32,6 +34,8 @@ import type { VendorInvoicePayload, VendorInvoiceLine } from '@/types/integratio
 import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
 import { ingestInvoiceFakturPajak } from '@/lib/api/vendor-faktur-pajak';
+import { computeHutangFromInvoice, hutangMatchVerdict, hutangTaxFields } from '@/lib/api/hutang-tax';
+import { isPpnDikreditkan, loadTenantTax } from '@/lib/api/tenant-tax';
 
 /**
  * Cari GRN POSTED terkait invoice (by noDO, sama seperti validateInvoiceAgainstGrn) dan
@@ -210,7 +214,7 @@ async function loadPoVarianceContext(
     poEstimasiTotal,
     soTotal,
     soSubTotal,
-    variancePoToSo: soTotal - poEstimasiTotal,
+    variancePoToSo: (soSubTotal || soTotal) - poEstimasiTotal,
     customerPoId: po.id,
     vendorSoSnapshot: snap || po.vendorSoSnapshot || null,
   };
@@ -348,21 +352,32 @@ async function syncExistingVendorHutangFromPayload(
   payload: VendorInvoicePayload,
   vendorTenantId: string | null | undefined,
 ) {
-  let total = parseInt(String(payload.total || 0), 10);
-  if (total <= 0) total = parseInt(String(payload.subTotal || 0), 10);
+  const payloadTotal = parseInt(String(payload.total || 0), 10) || parseInt(String(payload.subTotal || 0), 10);
+
+  // Nilai yang akan disimpan (qty dikoreksi ke GRN, PPN dihitung ulang) — dibandingkan dengan basis jurnal
+  // invoice yang tersimpan (tanpa DN), bukan total bruto payload, agar kiriman ulang tidak memicu resync palsu.
+  const invCorrection = await correctInvoiceItemsAgainstGrn(db, tid, payload);
+  const tax = computeHutangFromInvoice(payload, invCorrection.items, invCorrection.corrected);
+  const total = tax.total;
 
   let fromPostedGrn = false;
   if (payload.noDO) {
+    const grnVid = hutangVendorKey(vendorTenantId || (existing.vendorTenantId as string | undefined));
     const grn = await db.collection('goods_receipts').findOne({
       ...tenantIdMatchFilter(tid),
       noDO: payload.noDO,
       status: 'POSTED',
+      ...(grnVid ? { vendorTenantId: grnVid } : {}),
     });
     fromPostedGrn = !!grn;
   }
 
   const staleStatus = vendorInvoiceNeedsPendingReview(existing, { fromPostedGrn });
-  const totalMismatch = total > 0 && Math.abs((existing.total || 0) - total) > 1;
+  const storedBase = vendorHutangPostingBase(existing);
+  const totalMismatch = payloadTotal > 0 && (
+    Math.abs(storedBase.total - tax.glPostingBase.total) > 1
+    || Math.abs(storedBase.ppn - tax.glPostingBase.ppn) > 1
+  );
   const invoiceMismatch = payload.noInvoice && existing.noInvoice !== payload.noInvoice;
 
   const { billingSnap, displayName, vid } = await resolveVendorBillingForHutang(
@@ -411,7 +426,7 @@ async function syncExistingVendorHutangFromPayload(
     { limit: 1 },
   );
   const cnApplied = (Array.isArray(existing.creditNotes) ? existing.creditNotes : [])
-    .some((n: { amount?: unknown }) => (Number(n?.amount) || 0) > 0);
+    .some((n: { amount?: unknown; vendorCredit?: unknown }) => (Number(n?.amount) || 0) > 0 || (Number(n?.vendorCredit) || 0) > 0);
   const dnApplied = (Array.isArray(existing.debitNotes) ? existing.debitNotes : [])
     .some((n: { amount?: unknown }) => (Number(n?.amount) || 0) > 0);
   if (paymentCount > 0 || cnApplied || dnApplied) {
@@ -444,13 +459,12 @@ async function syncExistingVendorHutangFromPayload(
   }
 
   const match = await validateInvoiceAgainstGrn(db, tid, payload, { excludeHutangId: existing.id });
-  const matchOk = match.ok === true;
   // matchStatus tetap dihitung dari payload asli (histori apa yang ditagih vendor) —
   // tapi qty/total yang benar-benar TERSIMPAN dikoreksi ke qtyReceived GRN dulu, supaya
   // hutang tidak pernah menagih barang yang GRN-nya bilang ditolak/tidak diterima.
-  const invCorrection = await correctInvoiceItemsAgainstGrn(db, tid, payload);
-  const invoiceItems = invCorrection.items;
-  if (invCorrection.corrected) total = invCorrection.total;
+  const verdict = hutangMatchVerdict(match, tax);
+  const matchOk = verdict.ok;
+  const invoiceItems = tax.items as VendorInvoiceLine[];
   const varianceCtx = await loadPoVarianceContext(db, tid, payload, vendorTenantId);
   const varianceSoToInvoice = total - varianceCtx.soTotal;
   const now = new Date();
@@ -458,7 +472,11 @@ async function syncExistingVendorHutangFromPayload(
   const existingTanggal = existing.tanggal as string | Date | undefined;
   const txnDate = payload.postedAt ? new Date(payload.postedAt) : (existingTanggal ? new Date(existingTanggal) : now);
   const settlement = resolveHutangSettlement(total, payload.jatuhTempo, txnDate);
-  const postingBase = buildHutangPostingBase(total, parseInt(String(payload.ppn || 0), 10));
+  const postingBase = tax.glPostingBase;
+  // Snapshot status pajak tidak diubah; hutang lama tanpa snapshot diberi snapshot dari pengaturan sekarang.
+  const ppnDikreditkan = typeof existing.ppnDikreditkan === 'boolean'
+    ? existing.ppnDikreditkan
+    : isPpnDikreditkan(await loadTenantTax(db, tid), txnDate);
 
   try {
     await runInTransactionOrFallback(async ({ db: txDb, session }) => {
@@ -484,10 +502,8 @@ async function syncExistingVendorHutangFromPayload(
             salesOrderId: payload.salesOrderId || existing.salesOrderId || null,
             salesOrderTotal: parseInt(String(payload.salesOrderTotal || 0), 10) || existing.salesOrderTotal || null,
             salesOrderSubTotal: parseInt(String(payload.salesOrderSubTotal || 0), 10) || existing.salesOrderSubTotal || null,
-            subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
-            ppn: parseInt(String(payload.ppn || 0), 10),
-            total,
-            glPostingBase: postingBase,
+            ...hutangTaxFields(tax),
+            ppnDikreditkan,
             terbayar: settlement.terbayar,
             sisa: settlement.sisa,
             status: settlement.status,
@@ -495,8 +511,8 @@ async function syncExistingVendorHutangFromPayload(
             paymentTerms,
             items: invoiceItems.length ? invoiceItems : (existing.items || []),
             matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
-            matchError: matchOk ? null : (match.error || null),
-            matchCode: matchOk ? null : (match.code || null),
+            matchError: verdict.error,
+            matchCode: verdict.code,
             matchGrnCount: match.grnCount || 0,
             grnValue: match.grnValue || 0,
             poEstimasiTotal: varianceCtx.poEstimasiTotal,
@@ -523,9 +539,9 @@ async function syncExistingVendorHutangFromPayload(
         txOpts(session),
       );
       if (res.matchedCount === 0) throw new CasConflictError('Hutang berubah bersamaan (dibayar/di-review) — sinkron invoice diulang');
-      const refreshed = { ...existing, total, ppn: postingBase.ppn, glPostingBase: postingBase, noInvoice: payload.noInvoice || existing.noInvoice, noDO: payload.noDO || existing.noDO };
+      const refreshed = { ...existing, total, ppn: postingBase.ppn, glPostingBase: postingBase, ppnDikreditkan, noInvoice: payload.noInvoice || existing.noInvoice, noDO: payload.noDO || existing.noDO };
       const active = await findActiveVendorHutangJournal(txDb, tid, String(existing.id), session);
-      if (active && (!matchOk || !journalMatchesBase(active, postingBase))) {
+      if (active && (!matchOk || !journalMatchesBase(active, postingBase, ppnDikreditkan))) {
         await voidVendorHutangJournal(txDb, refreshed, {
           userName: payload.userName || 'System',
           keterangan: matchOk
@@ -644,14 +660,16 @@ export async function createHutangFromVendorInvoice(
   if (total <= 0) return { error: 'total invoice tidak valid' };
 
   const match = await validateInvoiceAgainstGrn(db, tid, payload);
-  const matchOk = match.ok === true;
 
   // matchStatus di atas tetap dari payload asli (histori apa yang ditagih vendor) — tapi
   // qty/total yang TERSIMPAN dikoreksi ke qtyReceived GRN dulu, supaya hutang tidak pernah
   // menagih barang yang GRN-nya bilang ditolak/tidak diterima (boleh turun sampai 0).
   const invCorrection = await correctInvoiceItemsAgainstGrn(db, tid, payload);
-  const invoiceItems = invCorrection.items;
-  if (invCorrection.corrected) total = invCorrection.total;
+  const tax = computeHutangFromInvoice(payload, invCorrection.items, invCorrection.corrected);
+  const invoiceItems = tax.items as VendorInvoiceLine[];
+  total = tax.total;
+  const verdict = hutangMatchVerdict(match, tax);
+  const matchOk = verdict.ok;
 
   const varianceCtx = await loadPoVarianceContext(db, tid, payload, vendorTenantId || null);
   const soTotal = varianceCtx.soTotal;
@@ -669,6 +687,7 @@ export async function createHutangFromVendorInvoice(
   const now = new Date();
   const tanggal = payload.postedAt ? new Date(payload.postedAt) : now;
   const settlement = resolveHutangSettlement(total, payload.jatuhTempo, tanggal);
+  const ppnDikreditkan = isPpnDikreditkan(await loadTenantTax(db, tid), tanggal);
 
   let noHutang = '';
 
@@ -693,10 +712,8 @@ export async function createHutangFromVendorInvoice(
     billToName: payload.pelangganName || payload.customerName || null,
     referenceType: 'VENDOR_INVOICE',
     referenceId: invoiceId,
-    subTotal: invCorrection.corrected ? total : parseInt(String(payload.subTotal || total), 10),
-    ppn: parseInt(String(payload.ppn || 0), 10),
-    total,
-    glPostingBase: buildHutangPostingBase(total, parseInt(String(payload.ppn || 0), 10)),
+    ...hutangTaxFields(tax),
+    ppnDikreditkan,
     terbayar: settlement.terbayar,
     sisa: settlement.sisa,
     jatuhTempo: settlement.jatuhTempo,
@@ -705,8 +722,8 @@ export async function createHutangFromVendorInvoice(
     paymentTerms,
     items: invoiceItems,
     matchStatus: matchOk ? 'MATCHED' : 'EXCEPTION',
-    matchError: matchOk ? null : (match.error || null),
-    matchCode: matchOk ? null : (match.code || null),
+    matchError: verdict.error,
+    matchCode: verdict.code,
     matchGrnCount: match.grnCount || 0,
     grnValue: match.grnValue || 0,
     poEstimasiTotal: varianceCtx.poEstimasiTotal,
@@ -805,6 +822,29 @@ function isDuplicateVendorInvoiceError(e: unknown): boolean {
   return /uniq_hutang_tenant_vendor_invoice/.test(String(err.message || ''));
 }
 
+/**
+ * Porsi PPN nota (CN/DN). Payload kontrak pajak (ber-ppnRate) membawa PPN nota eksplisit;
+ * payload lama tanpa ppnRate bisa ber-ppn 0 walau ada PPN → pakai rasio hutang.
+ * Akun tujuan (PPN Masukan vs biaya barang) ditentukan pemanggil dari `hutangPpnDikreditkan`.
+ */
+export function resolveNotePpnPart(
+  payload: { ppn?: unknown; ppnRate?: unknown },
+  gross: number,
+  hutang: { ppn?: unknown; total?: unknown },
+): number {
+  const g = Math.max(0, Math.round(Number(gross) || 0));
+  if (g <= 0) return 0;
+  const hasContract = payload.ppnRate != null && payload.ppnRate !== '' && Number.isFinite(Number(payload.ppnRate));
+  if (hasContract && payload.ppn != null && payload.ppn !== '') {
+    const n = Number(payload.ppn);
+    if (Number.isFinite(n)) return Math.min(g, Math.max(0, Math.round(n)));
+  }
+  const total = Number(hutang.total) || 0;
+  const ppn = Number(hutang.ppn) || 0;
+  if (total <= 0 || ppn <= 0) return 0;
+  return Math.min(g, Math.round((g * ppn) / total));
+}
+
 export type CreditNoteApplyOptions = {
   appliedVia?: 'credit-note-posted-push' | 'credit-note-posted-webhook' | 'check-decision-pull';
   correlationId?: string | null;
@@ -866,12 +906,16 @@ export async function applyCreditNoteFromVendor(
     }
   }
 
-  const reduce = Math.min(creditTotal, hutang.sisa || 0);
+  const reduce = Math.max(0, Math.min(creditTotal, Number(hutang.sisa) || 0));
+  // Invoice sudah lunas/terbayar sebagian besar: sisa CN jadi piutang ke vendor, bukan dibuang.
+  const vendorCredit = creditTotal - reduce;
   const now = new Date();
   const cnTrail = {
     creditNoteId: payload.creditNoteId,
     noCN: payload.noCN,
-    amount: Math.max(0, reduce),
+    amount: reduce,
+    ...(vendorCredit > 0 ? { vendorCredit } : {}),
+    total: creditTotal,
     postedAt: payload.postedAt || now,
     source: payload.source || null,
     noReturn: payload.noReturn || null,
@@ -891,18 +935,10 @@ export async function applyCreditNoteFromVendor(
       }))
       : undefined,
   };
-  if (reduce <= 0) {
-    if (creditNoteId) {
-      await db.collection('hutang').updateOne(
-        docIdFilter(hutang, { creditNotes: { $not: { $elemMatch: { creditNoteId } } } }),
-        { $push: { creditNotes: cnTrail }, $set: { updatedAt: now } } as never,
-      );
-    }
-    return { action: 'nothing_to_reduce' as const, hutangId: hutang.id };
-  }
-  const newTerbayar = (hutang.terbayar || 0) + reduce;
-  const newSisa = hutang.total - newTerbayar;
-  const fullyPaid = newSisa <= 0;
+  const newTerbayar = (Number(hutang.terbayar) || 0) + reduce;
+  const newSisa = reduce > 0 ? Math.max(0, (Number(hutang.total) || 0) - newTerbayar) : (Number(hutang.sisa) || 0);
+  // CN yang seluruhnya jadi kredit vendor tidak boleh mengubah status pembayaran (mis. PAID_EXTERNAL).
+  const fullyPaid = reduce > 0 && newSisa <= 0;
   const settledStatus = fullyPaid ? 'LUNAS' : hutang.status;
   const settledApproval = fullyPaid
     ? (hutang.approvalStatus === 'APPROVED' || hutang.approvalStatus === 'PARTIAL' ? 'LUNAS' : hutang.approvalStatus)
@@ -919,13 +955,16 @@ export async function applyCreditNoteFromVendor(
     const upd = await txDb.collection('hutang').updateOne(
       filter,
       {
-        $set: {
-          terbayar: newTerbayar,
-          sisa: newSisa,
-          status: fullyPaid ? settledStatus : hutang.status,
-          approvalStatus: fullyPaid ? settledApproval : hutang.approvalStatus,
-          updatedAt: now,
-        },
+        $set: reduce > 0
+          ? {
+            terbayar: newTerbayar,
+            sisa: newSisa,
+            status: fullyPaid ? settledStatus : hutang.status,
+            approvalStatus: fullyPaid ? settledApproval : hutang.approvalStatus,
+            updatedAt: now,
+          }
+          : { updatedAt: now },
+        ...(vendorCredit > 0 ? { $inc: { kreditVendorKelebihan: vendorCredit } } : {}),
         $push: {
           creditNotes: cnTrail,
         } as never,
@@ -961,13 +1000,17 @@ export async function applyCreditNoteFromVendor(
       }
     }
 
+    const costingV2 = await isTenantFeatureEnabled(txDb, tid, 'costingV2');
     const cnLines = buildCreditNoteHutangJournalLines({
       noDoc: payload.noCN || payload.creditNoteId || 'CN',
-      amount: reduce,
-      ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
-      invoiceTotal: parseInt(String(hutang.total || 0), 10) || 0,
+      amount: creditTotal,
+      ppn: resolveNotePpnPart(payload as { ppn?: unknown; ppnRate?: unknown }, creditTotal, hutang as HutangDoc),
+      invoiceTotal: creditTotal,
+      vendorCreditAmount: vendorCredit,
       clearTransit,
-      priceVariance: !clearTransit && !stockLeftWithoutTransit && await isTenantFeatureEnabled(txDb, tid, 'costingV2'),
+      priceVariance: !clearTransit && !stockLeftWithoutTransit && costingV2,
+      ppnDikreditkan: hutangPpnDikreditkan(hutang as HutangDoc),
+      costingV2,
     });
     if (cnLines.length) {
       await postOrDeferNoteJournal(txDb, session, {
@@ -1008,6 +1051,7 @@ export async function applyCreditNoteFromVendor(
     action: 'credit_applied',
     hutangId: hutang.id,
     reduced: reduce,
+    vendorCredit,
     sisa: newSisa,
     vendorTenantId,
   };
@@ -1130,8 +1174,11 @@ export async function applyDebitNoteFromVendor(
     const dnLines = buildDebitNoteHutangJournalLines({
       noDoc: String(payload.noDN || debitNoteId || 'DN'),
       amount: debitTotal,
-      ppn: parseInt(String(hutang.ppn || 0), 10) || 0,
-      invoiceTotal: oldTotal,
+      // Non-PKP: porsi PPN ikut akun biaya yang sama dengan neto (Persediaan / Selisih Harga Beli).
+      ppn: hutangPpnDikreditkan(hutang as HutangDoc)
+        ? resolveNotePpnPart(payload as { ppn?: unknown; ppnRate?: unknown }, debitTotal, { ppn: oldPpn, total: oldTotal })
+        : 0,
+      invoiceTotal: debitTotal,
       priceVariance: await isTenantFeatureEnabled(txDb, tid, 'costingV2'),
     });
     if (dnLines.length) {

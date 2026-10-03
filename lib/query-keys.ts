@@ -90,6 +90,10 @@ export const queryKeys = {
     detail: (id: string) => ['putaway-moves', 'detail', id] as const,
   },
 
+  ppnMasukan: {
+    all: ['ppn-masukan'] as const,
+    report: (masa: string) => ['ppn-masukan', 'report', masa] as const,
+  },
   procurementExpenses: {
     all: ['procurement-expenses'] as const,
     report: (params: { from: string; to: string }) =>

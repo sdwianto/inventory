@@ -77,6 +77,7 @@ const NAV: NavEntry[] = [
   { type: 'item', href: '/hutang', label: 'Tagihan Vendor', icon: Banknote, badgeKey: 'hutangReview' },
   { type: 'item', href: '/retur-vendor', label: 'Retur Vendor', icon: Undo2, badgeKey: 'rtvNeedsAttention' },
   { type: 'item', href: '/pengeluaran-pengadaan', label: 'Pengeluaran Pengadaan', icon: TrendingDown },
+  { type: 'item', href: '/ppn-masukan', label: 'PPN Masukan', icon: Receipt },
   {
     type: 'group', key: 'maintenance', label: 'Maintenance', icon: Wrench,
     items: [
@@ -247,7 +248,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
     ...PEOPLE_ROUTES,
     '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
     '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/bins', '/stok/putaway'],
-  ADMIN: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
+  ADMIN: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/ppn-masukan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,
@@ -255,7 +256,7 @@ const ROLE_PERMISSIONS: Record<string, string[] | '*'> = {
           '/maintenance/permintaan', '/maintenance/jadwal', '/maintenance/aset', '/maintenance/laporan',
           '/stok/saldo', '/stok/pengeluaran', '/stok/release', '/stok/kartu', '/stok/penyesuaian', '/stok/transfer', '/stok/lokasi', '/stok/bins', '/stok/putaway',
           '/integrasi', '/utiliti/tenant', '/utiliti/user', '/utiliti/api-keys'],
-  OWNER: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/produk',
+  OWNER: ['/dashboard', '/penerimaan', '/penerimaan/qc', '/pembelian-po', '/hutang', '/retur-vendor', '/pengeluaran-pengadaan', '/ppn-masukan', '/produk',
           ...FP_ROUTES,
           ...KA_OPS_ROUTES,
           ...LOGISTICS_ROUTES,

@@ -18,11 +18,13 @@ import { useApiQuery, useQueryClient } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { TENANT_PURGE_CONFIRM_PHRASE } from '@/lib/dangerous-confirm';
+import { EMPTY_TENANT_TAX_FORM, taxFormFromSettings, taxFormToBody } from '@/lib/tenant-tax-form';
+import { TenantTaxFields } from '@/components/TenantTaxFields';
 
 const emptyForm = {
   tenantId: '', companyName: '', companyAddress: '', companyPhone: '', companyNPWP: '',
   receiptFooterText: 'Terima Kasih', showLogoOnReceipt: true, showLogoOnInvoice: true,
-  logoBase64: '', logoUrl: '', ppnPercent: 11,
+  logoBase64: '', logoUrl: '', tax: EMPTY_TENANT_TAX_FORM,
 };
 
 export default function TenantsListPage() {
@@ -72,7 +74,8 @@ export default function TenantsListPage() {
         queryKey: queryKeys.tenantSettings.detail(str(t.tenantId)),
         queryFn: () => fetchJson<JsonObject>(`/api/tenant/settings?tenantId=${encodeURIComponent(str(t.tenantId))}`),
       });
-      setForm({ ...emptyForm, ...asObject(settings), tenantId: str(t.tenantId) });
+      const s = asObject(settings);
+      setForm({ ...emptyForm, ...s, tenantId: str(t.tenantId), tax: taxFormFromSettings(s.tax) });
       setEditTenant(t);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -184,7 +187,7 @@ export default function TenantsListPage() {
       await saveSettingsMutation.mutateAsync({
         url: '/api/tenant/settings',
         method: 'PUT',
-        body: form,
+        body: { ...form, tax: taxFormToBody(form.tax) },
       });
       toast.success(`Tenant ${form.companyName} dibuat`);
       setShowCreate(false);
@@ -201,7 +204,7 @@ export default function TenantsListPage() {
       await saveSettingsMutation.mutateAsync({
         url: '/api/tenant/settings',
         method: 'PUT',
-        body: form,
+        body: { ...form, tax: taxFormToBody(form.tax) },
       });
       toast.success('Tenant diperbarui');
       setEditTenant(null);
@@ -284,6 +287,7 @@ export default function TenantsListPage() {
           <div><Label>Telepon</Label><Input value={form.companyPhone} onChange={e => setForm({...form, companyPhone: e.target.value})} /></div>
           <div><Label>NPWP</Label><Input value={form.companyNPWP} onChange={e => setForm({...form, companyNPWP: e.target.value})} /></div>
         </div>
+        <TenantTaxFields value={form.tax} onChange={(tax) => setForm({ ...form, tax })} />
         {!editTenant && (
           <label className="flex items-center gap-2 text-sm bg-orange-50 border border-orange-100 rounded-lg px-3 py-2 cursor-pointer">
             <input
@@ -295,8 +299,7 @@ export default function TenantsListPage() {
           </label>
         )}
         <div><Label>Footer Struk</Label><Input value={form.receiptFooterText} onChange={e => setForm({...form, receiptFooterText: e.target.value})} placeholder="Terima Kasih" /></div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><Label>PPN (%)</Label><Input type="number" value={form.ppnPercent} onChange={e => setForm({...form, ppnPercent: parseInt(e.target.value || '0')})} /></div>
+        <div className="grid grid-cols-1 gap-2">
           <div className="flex items-end gap-2">
             <label className="flex items-center gap-1 text-xs bg-slate-50 px-2 py-2 rounded cursor-pointer flex-1"><input type="checkbox" checked={form.showLogoOnReceipt !== false} onChange={e => setForm({...form, showLogoOnReceipt: e.target.checked})} /> Logo di struk</label>
             <label className="flex items-center gap-1 text-xs bg-slate-50 px-2 py-2 rounded cursor-pointer flex-1"><input type="checkbox" checked={form.showLogoOnInvoice !== false} onChange={e => setForm({...form, showLogoOnInvoice: e.target.checked})} /> Logo di laporan</label>

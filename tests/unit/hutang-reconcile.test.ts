@@ -9,6 +9,10 @@ function mockDb(updates: Array<{ collection: string; filter: Record<string, unkn
         if (patch.$set) updates.push({ collection: name, filter, set: patch.$set });
         return { matchedCount: 1, modifiedCount: 1 };
       },
+      countDocuments: async () => 0,
+      aggregate: () => ({ toArray: async () => [] }),
+      find: () => ({ sort: () => ({ toArray: async () => [] }), toArray: async () => [] }),
+      insertOne: async () => ({ acknowledged: true }),
     }),
   } as unknown as import('mongodb').Db;
 }

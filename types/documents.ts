@@ -28,6 +28,18 @@ export type HutangDoc = JsonObject & {
   varianceSoToInvoice?: number;
   variancePoToSo?: number;
   grnReceivedTotal?: number;
+  subTotal?: number;
+  diskonNota?: number;
+  dpp?: number;
+  ppn?: number;
+  ppnRate?: number | null;
+  hargaTermasukPajak?: boolean;
+  /** Nilai invoice yang dijurnal AUTO_HUTANG_VENDOR (tanpa debit note). */
+  glPostingBase?: { subTotal: number; ppn: number; total: number };
+  /** Snapshot PKP pembeli saat tagihan diterima; tidak ada (hutang lama) = dikreditkan. */
+  ppnDikreditkan?: boolean;
+  /** Σ nota kredit di atas sisa hutang — tercatat di Piutang Vendor (10250). */
+  kreditVendorKelebihan?: number;
   matchStatus?: string;
   matchError?: string;
   paidExternalAt?: Date | string;

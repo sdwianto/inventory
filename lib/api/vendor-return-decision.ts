@@ -507,6 +507,7 @@ export async function checkVendorReturnDecisionStatus(
     const noInvoice = String(nested.noInvoice || doc.noInvoice || '').trim();
     if (invoiceId || noInvoice) {
       const { applyCreditNoteFromVendor } = await import('@/lib/api/hutang-from-vendor');
+      const { noteTaxPayloadFields } = await import('@/lib/api/hutang-tax');
       const acceptedItems = Array.isArray(nested.acceptedItems)
         ? nested.acceptedItems
         : Array.isArray(nested.items)
@@ -519,6 +520,7 @@ export async function checkVendorReturnDecisionStatus(
           invoiceId: invoiceId || undefined,
           noInvoice: noInvoice || undefined,
           total: cnTotal,
+          ...noteTaxPayloadFields(nested),
           creditNoteId: String(nested.creditNoteId || doc.creditNoteId || ''),
           noCN: String(nested.noCN || doc.noCN || '') || undefined,
           source: 'inventory_return',

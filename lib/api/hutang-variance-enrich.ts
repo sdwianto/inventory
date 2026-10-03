@@ -12,6 +12,7 @@ import {
   type VendorSoSnapshot,
 } from '@/lib/api/vendor-so-snapshot';
 
+import { hutangLineSubTotal, hutangNetBeforePpn } from '@/lib/api/hutang-tax';
 import type { HutangDoc } from '@/types/documents';
 import { asArray, asObject, type JsonObject } from '@/types/json';
 
@@ -223,26 +224,35 @@ export function readHutangVarianceFromDoc(hutang: HutangDoc) {
   const invoiceTotal = parseInt(String(hutang.total || 0), 10);
   const poEstimasiTotal = parseInt(String(hutang.poEstimasiTotal || 0), 10);
   const soTotal = parseInt(String(hutang.soTotal || 0), 10);
+  const soSubTotal = parseInt(String(hutang.soSubTotal || 0), 10) || soTotal;
   const grnReceivedTotal = parseInt(String(hutang.grnReceivedTotal || 0), 10);
-  const nums = buildVarianceNumbers({ poEstimasiTotal, soTotal, invoiceTotal });
+  const nums = buildVarianceNumbers({ poEstimasiTotal, soTotal, soSubTotal, invoiceTotal });
+  const invoiceSubTotal = hutangLineSubTotal(hutang);
   return {
     ...nums,
     grnReceivedTotal,
     customerPoId: hutang.customerPoId || null,
-    soSubTotal: parseInt(String(hutang.soSubTotal || 0), 10) || soTotal,
-    varianceGrnToInvoice: invoiceTotal - grnReceivedTotal,
+    soSubTotal,
+    invoiceNetTotal: hutangNetBeforePpn(hutang),
+    invoiceSubTotal,
+    varianceGrnToInvoice: invoiceSubTotal - grnReceivedTotal,
   };
 }
 
-export function buildVarianceNumbers({ poEstimasiTotal = 0, soTotal = 0, invoiceTotal = 0 }) {
+/**
+ * Estimasi PO dan nilai terima GRN = Σ qty × harga sebelum PPN; jangan dibandingkan dengan total ber-PPN.
+ * PO→SO memakai subtotal SO; SO→Invoice tetap total vs total (keduanya sudah termasuk PPN).
+ */
+export function buildVarianceNumbers({ poEstimasiTotal = 0, soTotal = 0, soSubTotal = 0, invoiceTotal = 0 }) {
   const po = parseInt(String(poEstimasiTotal || 0), 10);
   const so = parseInt(String(soTotal || 0), 10);
+  const soSub = parseInt(String(soSubTotal || 0), 10) || so;
   const inv = parseInt(String(invoiceTotal || 0), 10);
   return {
     poEstimasiTotal: po,
     soTotal: so,
     invoiceTotal: inv,
-    variancePoToSo: so - po,
+    variancePoToSo: soSub - po,
     varianceSoToInvoice: inv - so,
   };
 }
@@ -273,13 +283,16 @@ export async function resolveHutangVariance(
   }
 
   const grnReceivedTotal = await grnReceivedTotalForHutang(db, hutang);
+  const invoiceSubTotal = hutangLineSubTotal(hutang);
 
   return {
-    ...buildVarianceNumbers({ poEstimasiTotal, soTotal, invoiceTotal }),
+    ...buildVarianceNumbers({ poEstimasiTotal, soTotal, soSubTotal, invoiceTotal }),
     grnReceivedTotal,
     customerPoId: hutang.customerPoId || linkedPo?.id || null,
     soSubTotal,
-    varianceGrnToInvoice: invoiceTotal - grnReceivedTotal,
+    invoiceNetTotal: hutangNetBeforePpn(hutang),
+    invoiceSubTotal,
+    varianceGrnToInvoice: invoiceSubTotal - grnReceivedTotal,
   };
 }
 

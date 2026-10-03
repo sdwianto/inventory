@@ -29,7 +29,14 @@ type HutangLike = {
   ppn?: unknown;
   glPostingBase?: unknown;
   debitNotes?: unknown;
+  /** Snapshot status PKP pembeli saat tagihan diterima; tidak ada (hutang lama) = dikreditkan. */
+  ppnDikreditkan?: unknown;
 };
+
+/** PPN masukan tagihan ini dikreditkan (PKP); false = PPN jadi bagian nilai barang (non-PKP). */
+export function hutangPpnDikreditkan(hutang: { ppnDikreditkan?: unknown } | null | undefined): boolean {
+  return hutang?.ppnDikreditkan !== false;
+}
 
 type JournalRow = { id: string; details?: JournalDetail[]; totalDebet?: number; voidedAt?: unknown };
 
@@ -152,6 +159,8 @@ export async function postVendorHutangJournal(
   // costingV2: tagihan sebelum akrual mendebit GRNI (bukan Persediaan) agar akrual GRN berikutnya
   // tidak menggandakan Persediaan; selisih harga tertinggal di GRNI untuk rekonsiliasi.
   const costingV2 = await isTenantFeatureEnabled(db, tenantId, 'costingV2');
+  // Non-PKP: PPN tidak dikreditkan — ikut nilai barang (Persediaan, atau Selisih Harga Beli terhadap akrual GRN).
+  const credited = hutangPpnDikreditkan(hutang);
   await createJournal(db, {
     tanggal,
     keterangan: keterangan || `Tagihan vendor ${noDoc}`,
@@ -161,7 +170,8 @@ export async function postVendorHutangJournal(
     details: buildVendorHutangJournalLines({
       noDoc,
       subTotal: base.subTotal,
-      ppn: base.ppn,
+      ppn: credited ? base.ppn : 0,
+      ppnTidakDikreditkan: credited ? 0 : base.ppn,
       total: base.total,
       clearGrni: grniAmount != null || costingV2,
       ...(costingV2 && grniAmount != null ? { grniAmount } : {}),
@@ -362,9 +372,16 @@ export async function voidVendorNoteJournals(
   return redeferred.length;
 }
 
-/** Jurnal berlaku harus sama dengan nilai tagihan sekarang. */
-export function journalMatchesBase(journal: JournalRow, base: HutangPostingBase): boolean {
-  const hutangLines = (journal.details || []).filter((d) => d.rekeningKode === COA.HUTANG.kode);
-  if (!hutangLines.length) return toInt(journal.totalDebet) === base.total;
-  return hutangLines.reduce((s, d) => s + toInt(d.kredit) - toInt(d.debet), 0) === base.total;
+/** Jurnal berlaku harus sama dengan nilai tagihan sekarang (total hutang dan porsi PPN Masukan). */
+export function journalMatchesBase(journal: JournalRow, base: HutangPostingBase, ppnDikreditkan = true): boolean {
+  const details = journal.details || [];
+  const hutangLines = details.filter((d) => d.rekeningKode === COA.HUTANG.kode);
+  const totalOk = hutangLines.length
+    ? hutangLines.reduce((s, d) => s + toInt(d.kredit) - toInt(d.debet), 0) === base.total
+    : toInt(journal.totalDebet) === base.total;
+  if (!totalOk) return false;
+  const ppnPosted = details
+    .filter((d) => d.rekeningKode === COA.PPN_MASUKAN.kode)
+    .reduce((s, d) => s + toInt(d.debet) - toInt(d.kredit), 0);
+  return ppnPosted === (ppnDikreditkan ? base.ppn : 0);
 }

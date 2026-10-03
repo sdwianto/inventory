@@ -340,6 +340,19 @@ export default function VendorInvoiceDocument({
   const poEst = num(cmp.poEstimasiTotal ?? detail.poEstimasiTotal ?? po.estimasiTotal);
   const soT = num(cmp.soTotal ?? detail.soTotal ?? asObject(po.vendorSoSnapshot).total);
   const invT = num(cmp.invoiceTotal ?? detail.total);
+  const diskonNota = num(totals.diskonNota ?? detail.diskonNota);
+  const dpp = num(totals.dpp ?? detail.dpp ?? (num(totals.subTotal ?? detail.subTotal) - diskonNota));
+  const ppnRate = totals.ppnRate ?? detail.ppnRate;
+  const ppnLabel = ppnRate != null && num(ppnRate) > 0
+    ? `PPN ${num(ppnRate)}%${totals.hargaTermasukPajak === true ? ' (termasuk)' : ''}`
+    : 'PPN';
+  const faktur = asObject(totals.fakturPajak ?? detail.fakturPajak);
+  const taxNote = [
+    str(faktur.nomorFaktur) ? `Faktur pajak ${str(faktur.nomorFaktur)}${str(faktur.status) ? ` (${str(faktur.status)})` : ''}` : '',
+    num(totals.ppn ?? detail.ppn) > 0 && totals.ppnDikreditkan === false ? 'PPN tidak dikreditkan (non-PKP) — masuk nilai barang' : '',
+  ].filter(Boolean).join(' · ');
+  const kreditKelebihan = num(totals.kreditVendorKelebihan ?? detail.kreditVendorKelebihan);
+  const soSub = num(cmp.soSubTotal ?? detail.soSubTotal ?? asObject(po.vendorSoSnapshot).subTotal) || soT;
   const showCustomerLogo = customer.showLogoOnInvoice !== false;
   const variant = resolveInvoiceVariantFromVendor(vendor);
   const tokens = variant.tokens;
@@ -790,8 +803,17 @@ export default function VendorInvoiceDocument({
         <div className="min-w-0 grid grid-cols-[auto_1fr] gap-x-2 gap-y-px">
           <span className="text-slate-500">Sub Total</span>
           <span className="text-right tabular-nums">{formatIDR(num(totals.subTotal ?? detail.subTotal))}</span>
-          <span className="text-slate-500">PPN</span>
+          {diskonNota > 0 && (
+            <>
+              <span className="text-slate-500">Diskon</span>
+              <span className="text-right tabular-nums">−{formatIDR(diskonNota)}</span>
+            </>
+          )}
+          <span className="text-slate-500">DPP</span>
+          <span className="text-right tabular-nums">{formatIDR(dpp)}</span>
+          <span className="text-slate-500">{ppnLabel}</span>
           <span className="text-right tabular-nums">{formatIDR(num(totals.ppn ?? detail.ppn))}</span>
+          {taxNote && <span className="col-span-2 text-[9px] text-slate-500 leading-snug">{taxNote}</span>}
           <span className="font-bold border-t pt-0.5 mt-0.5">{cnSummary.hasCredits ? 'Tagihan' : 'Total Akhir'}</span>
           <span className="font-bold text-right tabular-nums border-t pt-0.5 mt-0.5">{formatIDR(num(totals.total ?? detail.total))}</span>
           {cnSummary.hasCredits ? (
@@ -802,6 +824,12 @@ export default function VendorInvoiceDocument({
               <span className="font-bold text-right tabular-nums text-slate-900">{formatIDR(cnSummary.netTagihan)}</span>
             </>
           ) : null}
+          {kreditKelebihan > 0 && (
+            <>
+              <span className="text-emerald-700">Kelebihan nota kredit (piutang vendor)</span>
+              <span className="text-right tabular-nums text-emerald-700">{formatIDR(kreditKelebihan)}</span>
+            </>
+          )}
         </div>
       </section>
       <InternalSignatureSlots compact penerima={penerimaStamp} mengetahui={mengetahuiStamp} />
@@ -811,8 +839,9 @@ export default function VendorInvoiceDocument({
       <section className="vendor-invoice-footer-grid grid sm:grid-cols-2 gap-3">
         <div className="border rounded-lg p-3 bg-slate-50">
           <p className="font-medium text-sm mb-2">Perbandingan harga</p>
-          <VarianceRow label="Estimasi PO" value={poEst} showDelta={false} />
-          <VarianceRow label="Nilai SO (sales.app)" value={soT} delta={soT && poEst ? soT - poEst : null} showDelta={!!soT} />
+          <VarianceRow label="Estimasi PO (sebelum PPN)" value={poEst} showDelta={false} />
+          <VarianceRow label="Subtotal SO (sebelum PPN)" value={soSub} delta={soSub && poEst ? soSub - poEst : null} showDelta={!!soSub} />
+          <VarianceRow label="Total SO (sales.app)" value={soT} showDelta={false} />
           <VarianceRow label="Invoice (aktual)" value={invT} delta={soT ? invT - soT : null} showDelta={!!soT} />
           {lineVariance.length > 0 && (() => {
             const fmtDelta = (v: number | null) => {
@@ -904,14 +933,21 @@ export default function VendorInvoiceDocument({
             <span className="text-slate-500">Subtotal barang</span>
             <span className="tabular-nums">{formatIDR(num(totals.itemsSubTotal ?? detail.subTotal))}</span>
           </div>
+          {diskonNota > 0 && (
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-500">Diskon</span>
+              <span className="tabular-nums">−{formatIDR(diskonNota)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-xs">
-            <span className="text-slate-500">DPP / Subtotal</span>
-            <span className="tabular-nums">{formatIDR(num(totals.subTotal ?? detail.subTotal))}</span>
+            <span className="text-slate-500">DPP</span>
+            <span className="tabular-nums">{formatIDR(dpp)}</span>
           </div>
           <div className="flex justify-between text-xs">
-            <span className="text-slate-500">PPN</span>
+            <span className="text-slate-500">{ppnLabel}</span>
             <span className="tabular-nums">{formatIDR(num(totals.ppn ?? detail.ppn))}</span>
           </div>
+          {taxNote && <div className="text-[10px] text-slate-500 leading-snug">{taxNote}</div>}
           <div className={`flex justify-between font-bold pt-2 border-t mt-2 ${cnSummary.hasCredits ? 'text-sm' : 'text-base'}`}>
             <span>{cnSummary.hasCredits ? 'Tagihan' : 'Total Tagihan'}</span>
             <span className="tabular-nums" style={{ color: brandAccent }}>{formatIDR(num(totals.total ?? detail.total))}</span>
@@ -931,6 +967,12 @@ export default function VendorInvoiceDocument({
               </p>
             </div>
           ) : null}
+          {kreditKelebihan > 0 && (
+            <div className="flex justify-between text-xs text-emerald-700 pt-1">
+              <span>Kelebihan nota kredit (piutang vendor)</span>
+              <span className="tabular-nums">{formatIDR(kreditKelebihan)}</span>
+            </div>
+          )}
         </div>
       </section>
       <div className="mt-4">

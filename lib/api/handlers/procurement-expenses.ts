@@ -80,7 +80,10 @@ export async function handleProcurementExpenses({
   let approvedTotal = 0;
   let poEstimasiTotal = 0;
   let soTotal = 0;
+  let soSubTotal = 0;
   let invoiceTotal = 0;
+  let invoiceNetTotal = 0;
+  let invoiceSubTotal = 0;
   let grnReceivedTotal = 0;
 
   const byMonthMap = new Map();
@@ -95,7 +98,10 @@ export async function handleProcurementExpenses({
     approvedTotal += inv;
     poEstimasiTotal += poEst;
     soTotal += so;
+    soSubTotal += variance.soSubTotal;
     invoiceTotal += inv;
+    invoiceNetTotal += variance.invoiceNetTotal;
+    invoiceSubTotal += variance.invoiceSubTotal;
     grnReceivedTotal += grn;
 
     const mk = monthKey(h.approvedAt || h.tanggal || h.createdAt);
@@ -114,6 +120,7 @@ export async function handleProcurementExpenses({
       soTotal: so,
       grnReceivedTotal: grn,
       invoiceTotal: inv,
+      invoiceNetTotal: variance.invoiceNetTotal,
       variancePoToSo: variance.variancePoToSo,
       varianceSoToInvoice: variance.varianceSoToInvoice,
       varianceGrnToInvoice: variance.varianceGrnToInvoice,
@@ -137,9 +144,10 @@ export async function handleProcurementExpenses({
       soTotal,
       grnReceivedTotal,
       invoiceTotal,
-      variancePoToSo: soTotal - poEstimasiTotal,
+      invoiceNetTotal,
+      variancePoToSo: soSubTotal - poEstimasiTotal,
       varianceSoToInvoice: invoiceTotal - soTotal,
-      varianceGrnToInvoice: invoiceTotal - grnReceivedTotal,
+      varianceGrnToInvoice: invoiceSubTotal - grnReceivedTotal,
     },
     byMonth,
     rows,

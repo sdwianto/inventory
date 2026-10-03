@@ -17,6 +17,7 @@ export const REKENING_DEFAULTS = [
   { kode: '10130', nama: 'Bank BNI', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10210', nama: 'Piutang Dagang', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10230', nama: 'Piutang EDC', tipe: 'ASET', posisi: 'DEBET' },
+  { kode: '10250', nama: 'Piutang Vendor (Kelebihan Nota Kredit)', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10310', nama: 'Persediaan Barang Dagangan', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10315', nama: 'Barang dalam Retur', tipe: 'ASET', posisi: 'DEBET' },
   { kode: '10410', nama: 'PPN Masukan', tipe: 'ASET', posisi: 'DEBET' },

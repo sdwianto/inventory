@@ -252,6 +252,7 @@ export async function handleVendorHutang({
       (doc.poEstimasiTotal || 0) !== variance.poEstimasiTotal
       || (doc.soTotal || 0) !== variance.soTotal
       || (doc.grnReceivedTotal || 0) !== variance.grnReceivedTotal
+      || (doc.variancePoToSo ?? 0) !== variance.variancePoToSo
     ) {
       await db.collection('hutang').updateOne(
         docIdFilter(doc),
@@ -283,8 +284,11 @@ export async function handleVendorHutang({
       priceComparison: {
         poEstimasiTotal: variance.poEstimasiTotal,
         soTotal: variance.soTotal,
+        soSubTotal: variance.soSubTotal,
         grnReceivedTotal: variance.grnReceivedTotal,
         invoiceTotal: variance.invoiceTotal,
+        invoiceNetTotal: variance.invoiceNetTotal,
+        invoiceSubTotal: variance.invoiceSubTotal,
         variancePoToSo: variance.variancePoToSo,
         varianceSoToInvoice: variance.varianceSoToInvoice,
         varianceGrnToInvoice: variance.varianceGrnToInvoice,

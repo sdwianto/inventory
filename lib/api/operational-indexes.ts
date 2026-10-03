@@ -109,6 +109,13 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'hutang', index: { tenantId: 1, noPO: 1 }, name: 'idx_hutang_tenant_nopo' },
   { collection: 'hutang', index: { tenantId: 1, noDO: 1 }, name: 'idx_hutang_tenant_nodo' },
   { collection: 'hutang', index: { tenantId: 1, referenceType: 1, approvalStatus: 1 }, name: 'idx_hutang_tenant_ref_approval' },
+  { collection: 'hutang', index: { tenantId: 1, referenceType: 1, tanggal: 1 }, name: 'idx_hutang_tenant_ref_tanggal' },
+  {
+    collection: 'hutang',
+    index: { tenantId: 1, 'fakturPajak.masa': 1 },
+    name: 'idx_hutang_tenant_faktur_masa',
+    partialFilterExpression: { 'fakturPajak.masa': { $type: 'string' } },
+  },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, tanggal: -1 }, name: 'idx_cpo_tenant_tanggal' },
   { collection: 'customer_purchase_orders', index: { tenantId: 1, noPO: 1 }, name: 'idx_cpo_tenant_nopo' },
   {

@@ -15,6 +15,8 @@ import { useApiQuery } from '@/lib/hooks/useApiQuery';
 import { useApiMutation } from '@/lib/hooks/use-api-mutation';
 import { queryKeys } from '@/lib/query-keys';
 import { OfflineQueuedError } from '@/lib/offline-mutation-queue';
+import { EMPTY_TENANT_TAX_FORM, taxFormFromSettings, taxFormToBody } from '@/lib/tenant-tax-form';
+import { TenantTaxFields } from '@/components/TenantTaxFields';
 
 export default function TenantSetupPage() {
   const isMaster = getUser()?.role === 'MASTER';
@@ -24,6 +26,7 @@ export default function TenantSetupPage() {
     companyNPWP: '', receiptFooterText: 'Terima Kasih',
     showLogoOnReceipt: true, showLogoOnInvoice: true, logoBase64: '', logoUrl: '',
     ppnPercent: 11,
+    tax: EMPTY_TENANT_TAX_FORM,
     periodLockedUntil: '' as string,
     rlOverIssueTolerancePct: 0,
     poOverReceiveTolerancePct: 0,
@@ -81,6 +84,7 @@ export default function TenantSetupPage() {
         periodLockedUntil: settingsData.periodLockedUntil
           ? String(settingsData.periodLockedUntil).slice(0, 10)
           : '',
+        tax: taxFormFromSettings(settingsData.tax),
       }));
     });
   }, [settingsData, tenantId]);
@@ -140,6 +144,7 @@ export default function TenantSetupPage() {
           periodLockedUntil: form.periodLockedUntil
             ? new Date(`${form.periodLockedUntil}T23:59:59`).toISOString()
             : null,
+          tax: taxFormToBody(form.tax),
         },
       });
       invalidateTenantCache();
@@ -203,7 +208,9 @@ export default function TenantSetupPage() {
               </div>
               <div className="border-t pt-3 grid grid-cols-2 gap-3">
                 <div className="col-span-2"><Label>Footer Struk Kasir</Label><Input value={form.receiptFooterText} onChange={e => setForm({...form, receiptFooterText: e.target.value})} placeholder="Terima Kasih" /></div>
-                <div><Label>PPN (%)</Label><Input type="number" value={form.ppnPercent} onChange={e => setForm({...form, ppnPercent: parseInt(e.target.value || '0')})} /></div>
+                <div className="col-span-2">
+                  <TenantTaxFields value={form.tax} onChange={(tax) => setForm({ ...form, tax })} />
+                </div>
                 <div><Label>Tutup Buku Sampai</Label>
                   <div className="flex gap-2">
                     <Input type="date" value={form.periodLockedUntil || ''} onChange={e => setForm({...form, periodLockedUntil: e.target.value})} className="flex-1" />

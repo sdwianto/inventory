@@ -7,6 +7,7 @@ import { createIntegrationClient } from '@/lib/integration/client';
 import { IntegrationError } from '@/lib/integration/errors';
 import { integrationCorrelationId } from '@/lib/api/integration-common';
 import { applyCreditNoteFromVendor } from '@/lib/api/hutang-from-vendor';
+import { noteTaxPayloadFields } from '@/lib/api/hutang-tax';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import type { VendorReturnDoc } from '@/types/vendor-return';
 
@@ -138,6 +139,7 @@ export async function notifySalesGoodsReturnPosted(
         invoiceId: result.invoiceId || doc.vendorInvoiceId || '',
         noInvoice: result.noInvoice || doc.noInvoice,
         total: result.amount,
+        ...noteTaxPayloadFields(result.raw),
         creditNoteId: result.creditNoteId,
         noCN: result.noCN,
         postedAt: new Date(),

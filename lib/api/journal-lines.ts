@@ -10,6 +10,8 @@ export const COA = {
   KAS: { kode: '10010', nama: 'Kas' },
   BANK_MANDIRI: { kode: '10110', nama: 'Bank Mandiri' },
   BANK_BNI: { kode: '10130', nama: 'Bank BNI' },
+  /** Nota kredit vendor melebihi sisa hutang (invoice sudah lunas) — tagihkan/potong ke vendor. */
+  PIUTANG_VENDOR: { kode: '10250', nama: 'Piutang Vendor (Kelebihan Nota Kredit)' },
   PERSEDIAAN: { kode: '10310', nama: 'Persediaan Barang Dagangan' },
   /** ADR-005 — qty OUT di Post RTV, clear saat CN accept / vendor reject. */
   BARANG_DALAM_RETUR: { kode: '10315', nama: 'Barang dalam Retur' },
@@ -81,15 +83,19 @@ export function buildVendorHutangJournalLines({
   total,
   clearGrni = false,
   grniAmount,
+  ppnTidakDikreditkan = 0,
 }: VendorHutangJournalParams & {
   clearGrni?: boolean;
   /** Nilai akrual GRN yang dikliring; selisih terhadap subTotal masuk Selisih Harga Beli. */
   grniAmount?: number;
+  /** Pembeli non-PKP: PPN jadi bagian biaya barang (Persediaan / Selisih Harga Beli), bukan PPN Masukan. */
+  ppnTidakDikreditkan?: number;
 }): JournalDetail[] {
   const lines: JournalDetail[] = [];
+  const cost = subTotal + Math.max(0, Math.round(ppnTidakDikreditkan));
   if (clearGrni) {
     const grni = grniAmount != null && grniAmount > 0 ? Math.round(grniAmount) : subTotal;
-    const ppv = subTotal - grni;
+    const ppv = cost - grni;
     lines.push({
       rekeningKode: COA.GRNI.kode,
       rekeningNama: COA.GRNI.nama,
@@ -110,7 +116,7 @@ export function buildVendorHutangJournalLines({
     lines.push({
       rekeningKode: COA.PERSEDIAAN.kode,
       rekeningNama: COA.PERSEDIAAN.nama,
-      debet: subTotal,
+      debet: cost,
       kredit: 0,
       keterangan: `Tagihan vendor ${noDoc}`,
     });
@@ -212,6 +218,14 @@ export function buildCreditNoteHutangJournalLines({
   clearTransit = false,
   /** costingV2: CN harga (tanpa barang keluar) dikreditkan ke Selisih Harga Beli, nilai kartu tidak berubah. */
   priceVariance = false,
+  /** Porsi CN di atas sisa hutang — Dr Piutang Vendor, bukan Dr Hutang. */
+  vendorCreditAmount = 0,
+  /**
+   * Pembeli non-PKP: PPN dulu ikut biaya barang, jadi porsi PPN CN membalik ke akun biaya — bukan PPN Masukan.
+   * Transit retur hanya memuat nilai neto, jadi porsi PPN ke Selisih Harga Beli (costingV2) / Persediaan.
+   */
+  ppnDikreditkan = true,
+  costingV2 = false,
 }: {
   noDoc: string;
   amount: number;
@@ -219,9 +233,14 @@ export function buildCreditNoteHutangJournalLines({
   invoiceTotal?: number;
   clearTransit?: boolean;
   priceVariance?: boolean;
+  vendorCreditAmount?: number;
+  ppnDikreditkan?: boolean;
+  costingV2?: boolean;
 }): JournalDetail[] {
   const gross = Math.round(amount);
   if (gross <= 0) return [];
+  const vendorCredit = Math.min(gross, Math.max(0, Math.round(Number(vendorCreditAmount) || 0)));
+  const hutangPart = gross - vendorCredit;
 
   const invTotal = Math.round(Number(invoiceTotal) || 0);
   const invPpn = Math.max(0, Math.round(Number(ppn) || 0));
@@ -234,15 +253,25 @@ export function buildCreditNoteHutangJournalLines({
     ? COA.BARANG_DALAM_RETUR
     : priceVariance ? COA.SELISIH_HARGA_BELI : COA.PERSEDIAAN;
 
-  const lines: JournalDetail[] = [
-    {
+  const lines: JournalDetail[] = [];
+  if (hutangPart > 0) {
+    lines.push({
       rekeningKode: COA.HUTANG.kode,
       rekeningNama: COA.HUTANG.nama,
-      debet: gross,
+      debet: hutangPart,
       kredit: 0,
       keterangan: `CN ${noDoc}`,
-    },
-  ];
+    });
+  }
+  if (vendorCredit > 0) {
+    lines.push({
+      rekeningKode: COA.PIUTANG_VENDOR.kode,
+      rekeningNama: COA.PIUTANG_VENDOR.nama,
+      debet: vendorCredit,
+      kredit: 0,
+      keterangan: `CN kelebihan atas sisa hutang ${noDoc}`,
+    });
+  }
   if (netPart > 0) {
     lines.push({
       rekeningKode: inventoryCoa.kode,
@@ -253,12 +282,15 @@ export function buildCreditNoteHutangJournalLines({
     });
   }
   if (ppnPart > 0) {
+    const ppnCoa = ppnDikreditkan
+      ? COA.PPN_MASUKAN
+      : clearTransit ? (costingV2 ? COA.SELISIH_HARGA_BELI : COA.PERSEDIAAN) : inventoryCoa;
     lines.push({
-      rekeningKode: COA.PPN_MASUKAN.kode,
-      rekeningNama: COA.PPN_MASUKAN.nama,
+      rekeningKode: ppnCoa.kode,
+      rekeningNama: ppnCoa.nama,
       debet: 0,
       kredit: ppnPart,
-      keterangan: `CN PPN ${noDoc}`,
+      keterangan: ppnDikreditkan ? `CN PPN ${noDoc}` : `CN PPN tidak dikreditkan ${noDoc}`,
     });
   }
   return lines;

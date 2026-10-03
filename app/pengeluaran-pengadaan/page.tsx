@@ -80,10 +80,10 @@ export default function PengeluaranPengadaanPage() {
   const exportCsv = () => {
     const rows = asArray(data?.rows) as JsonObject[];
     if (!rows.length) { toast.error('Tidak ada data'); return; }
-    const header = ['No PO', 'No Invoice', 'Supplier', 'Estimasi PO', 'Tagihan', 'Selisih PO→Tagihan', 'Catatan selisih tahap', 'Disetujui'];
+    const header = ['No PO', 'No Invoice', 'Supplier', 'Estimasi PO', 'Tagihan', 'Tagihan sebelum PPN', 'Selisih PO→Tagihan (sebelum PPN)', 'Catatan selisih tahap', 'Disetujui'];
     const lines = rows.map((r) => [
       str(r.noPO), str(r.noInvoice), str(r.supplierName),
-      num(r.poEstimasiTotal), num(r.invoiceTotal), variancePoToInvoice(r),
+      num(r.poEstimasiTotal), num(r.invoiceTotal), invoiceNet(r), variancePoToInvoice(r),
       stageVarianceNote(r) || '',
       r.approvedAt ? formatDate(str(r.approvedAt)) : '',
     ].join(','));
@@ -96,7 +96,9 @@ export default function PengeluaranPengadaanPage() {
     URL.revokeObjectURL(url);
   };
 
-  const variancePoToInvoice = (r: JsonObject) => num(r.invoiceTotal) - num(r.poEstimasiTotal);
+  /** Estimasi PO tanpa PPN — banding dengan tagihan sebelum PPN; data lama tanpa invoiceNetTotal pakai total. */
+  const invoiceNet = (r: JsonObject) => (r.invoiceNetTotal == null ? num(r.invoiceTotal) : num(r.invoiceNetTotal));
+  const variancePoToInvoice = (r: JsonObject) => invoiceNet(r) - num(r.poEstimasiTotal);
 
   /** Hanya tampil jika SO/GRN berbeda dari tagihan — bukan redundan di baris normal. */
   const stageVarianceNote = (r: JsonObject) => {
@@ -115,7 +117,7 @@ export default function PengeluaranPengadaanPage() {
   const tableRows = asArray(data?.rows) as JsonObject[];
   const byMonth = asArray(data?.byMonth) as JsonObject[];
   const approvedTotal = num(s.approvedTotal, 1);
-  const summaryVariancePoToInv = num(s.invoiceTotal) - num(s.poEstimasiTotal);
+  const summaryVariancePoToInv = invoiceNet(s) - num(s.poEstimasiTotal);
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -168,7 +170,7 @@ export default function PengeluaranPengadaanPage() {
               <div className={`text-2xl font-bold ${varianceClass(summaryVariancePoToInv)}`}>
                 {formatIDR(summaryVariancePoToInv)}
               </div>
-              <div className="text-sm text-slate-500">Selisih estimasi vs tagihan</div>
+              <div className="text-sm text-slate-500">Selisih estimasi vs tagihan (sebelum PPN)</div>
             </div>
           </div>
         )}
@@ -202,7 +204,7 @@ export default function PengeluaranPengadaanPage() {
                 <th className="px-3 py-2 text-left">Supplier</th>
                 <th className="px-3 py-2 text-right">Estimasi PO</th>
                 <th className="px-3 py-2 text-right">Tagihan</th>
-                <th className="px-3 py-2 text-right">Selisih</th>
+                <th className="px-3 py-2 text-right" title="Tagihan sebelum PPN − estimasi PO">Selisih</th>
                 <th className="px-3 py-2 text-left">Disetujui</th>
               </tr>
             </thead>

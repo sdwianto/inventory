@@ -35,6 +35,7 @@ import {
   normalizeThreeWayTolerancePct,
 } from '@/lib/api/three-way-match';
 import type { HandlerContext } from '@/types/api/handler';
+import { normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
 
 const TOLERANCE_SETTINGS = [
   RL_OVER_TOLERANCE_SETTING,
@@ -70,6 +71,8 @@ interface TenantCreateBody {
 
 interface TenantSettingsBody extends Record<string, unknown> {
   tenantId?: string;
+  companyNPWP?: string;
+  tax?: unknown;
   logoBase64?: string;
   logoUrl?: string;
   logoMediaFile?: string;
@@ -146,7 +149,7 @@ export async function handleTenants({
       settings = newSettings;
     }
     const doc = clean(settings) as Record<string, unknown>;
-    return ok({ ...doc, ...sanitizeStoreSettings(doc) });
+    return ok({ ...doc, ...sanitizeStoreSettings(doc), tax: normalizeTenantTax(doc.tax) });
   }
 
   if (route === '/tenant/settings' && method === 'PUT') {
@@ -163,6 +166,21 @@ export async function handleTenants({
     const update: Record<string, unknown> = { ...settingsBody, tenantId, updatedAt: new Date() };
     delete update.id;
     delete update._id;
+    // Tarif PPN ditentukan vendor (ppnRate per invoice) — tidak diubah dari pengaturan tenant.
+    delete update.ppnPercent;
+    delete update.tax;
+    let taxChange: { from: TenantTaxSettings; to: TenantTaxSettings } | null = null;
+    if (settingsBody.tax !== undefined || (settingsBody.companyNPWP !== undefined)) {
+      const prev = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { tax: 1, companyNPWP: 1 } });
+      const from = normalizeTenantTax(prev?.tax);
+      const npwp = settingsBody.companyNPWP !== undefined ? settingsBody.companyNPWP : prev?.companyNPWP;
+      const v = validateTenantTaxInput(settingsBody.tax ?? {}, from, npwp);
+      if (!v.ok) return err(v.error, 400);
+      if (settingsBody.tax !== undefined) {
+        update.tax = v.tax;
+        if (JSON.stringify(from) !== JSON.stringify(v.tax)) taxChange = { from, to: v.tax };
+      }
+    }
     // Feature flag dan toleransi kontrol hanya diubah MASTER; ADMIN tenant tidak boleh melonggarkan kontrolnya sendiri.
     if (!userAuth.isMaster) {
       delete update.features;
@@ -243,6 +261,18 @@ export async function handleTenants({
           userId: userAuth.userId,
           userName: userAuth.name || userAuth.email || 'System',
           metadata: { changes },
+        }, session);
+      }
+      if (taxChange) {
+        await writeAuditLog(txDb, {
+          tenantId,
+          action: 'TENANT_TAX_SETTINGS_UPDATE',
+          entityType: 'tenant_settings',
+          entityId: tenantId,
+          summary: `Status pajak tenant: ${taxChange.to.pkp ? 'PKP' : 'non-PKP'} (berlaku untuk dokumen baru)`,
+          userId: userAuth.userId,
+          userName: userAuth.name || userAuth.email || 'System',
+          metadata: taxChange,
         }, session);
       }
       return after;
