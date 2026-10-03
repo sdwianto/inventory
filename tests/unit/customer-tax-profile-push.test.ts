@@ -14,23 +14,24 @@ vi.mock('@/lib/api/integration-links', () => ({
 vi.mock('@/lib/integration/client', () => ({
   createIntegrationClient: () => ({ pushCustomerTaxProfile }),
 }));
+const enqueueJob = vi.fn();
 vi.mock('@/lib/api/bg-jobs', () => ({
   JOB_TYPES: { CUSTOMER_TAX_PROFILE_PUSH: 'customer_tax_profile_push' },
-  enqueueJob: vi.fn(),
+  enqueueJob: (...a: unknown[]) => enqueueJob(...a),
   scheduleJobProcessing: vi.fn(),
 }));
 
-import { runCustomerTaxProfilePushJob } from '@/lib/api/customer-tax-profile-push';
+import { ensureCustomerTaxProfileSynced, runCustomerTaxProfilePushJob } from '@/lib/api/customer-tax-profile-push';
 
 const STAMP = new Date('2026-10-03T01:00:00.000Z');
 
-function mockDb() {
+function mockDb(link: Record<string, unknown> | null = null) {
   const linkUpdates: Array<{ filter: unknown; update: { $set: { taxProfileSync: Record<string, unknown> } } }> = [];
   const db = {
     collection: (name: string) => ({
       findOne: async () => (name === 'tenant_settings'
         ? { companyNPWP: '01.234.567.8-901.000', companyAddress: ' Jl. Pembeli 1 ', tax: { pkp: true }, taxProfileUpdatedAt: STAMP }
-        : null),
+        : name === 'integration_links' ? link : null),
       updateOne: async (filter: unknown, update: never) => { linkUpdates.push({ filter, update }); return { matchedCount: 1 }; },
     }),
   } as never;
@@ -54,6 +55,17 @@ describe('runCustomerTaxProfilePushJob', () => {
       body: { customerTenantId: 'buyer', vendorTenantId: 'vendor-a', npwp: '012345678901000', pkp: true, alamat: 'Jl. Pembeli 1', profileUpdatedAt: STAMP.toISOString() },
     });
     expect(linkUpdates.map((u) => u.update.$set.taxProfileSync.status)).toEqual(['OK', 'OK']);
+  });
+
+  it('simpan applied/reason dari Sales; 404 PELANGGAN_TIDAK_ADA dicatat FAILED tanpa retry', async () => {
+    pushCustomerTaxProfile
+      .mockResolvedValueOnce({ ok: true, applied: false, reason: 'STALE' })
+      .mockRejectedValueOnce(new IntegrationError('Pelanggan belum ada', { code: 'PELANGGAN_TIDAK_ADA', retryable: false, httpStatus: 404 }));
+    const { db, linkUpdates } = mockDb();
+    const r = await runCustomerTaxProfilePushJob(db, { tenantId: 'buyer', payload: {} });
+    expect(r).not.toHaveProperty('error');
+    expect(linkUpdates[0].update.$set.taxProfileSync).toMatchObject({ status: 'OK', applied: false, reason: 'STALE' });
+    expect(linkUpdates[1].update.$set.taxProfileSync).toMatchObject({ status: 'FAILED', code: 'PELANGGAN_TIDAK_ADA', retryable: false });
   });
 
   it('hanya vendor tertentu bila payload.vendorTenantId diisi', async () => {
@@ -81,5 +93,25 @@ describe('runCustomerTaxProfilePushJob', () => {
       .mockResolvedValueOnce({ ok: true });
     const r = await runCustomerTaxProfilePushJob(mockDb().db, { tenantId: 'buyer', payload: {} });
     expect(r).toMatchObject({ error: expect.stringContaining('vendor-a') });
+  });
+});
+
+describe('ensureCustomerTaxProfileSynced', () => {
+  beforeEach(() => enqueueJob.mockReset());
+  const sync = (x: Record<string, unknown>) => ({ taxProfileSync: { profileUpdatedAt: STAMP.toISOString(), ...x } });
+
+  it('antrekan bila belum pernah sinkron, versi lama, atau pelanggan belum ada', async () => {
+    for (const link of [{}, { taxProfileSync: { status: 'OK', profileUpdatedAt: '2020-01-01T00:00:00.000Z' } }, sync({ status: 'FAILED', code: 'PELANGGAN_TIDAK_ADA', retryable: false })]) {
+      expect(await ensureCustomerTaxProfileSynced(mockDb(link).db, 'buyer', 'vendor-a')).toBe(true);
+    }
+    expect(enqueueJob).toHaveBeenCalledTimes(3);
+    expect(enqueueJob.mock.calls[0][1]).toMatchObject({ payload: { vendorTenantId: 'vendor-a' } });
+  });
+
+  it('lewati bila versi terkini sudah OK, gagal bisnis permanen, atau link tidak ada', async () => {
+    expect(await ensureCustomerTaxProfileSynced(mockDb(sync({ status: 'OK' })).db, 'buyer', 'vendor-a')).toBe(false);
+    expect(await ensureCustomerTaxProfileSynced(mockDb(sync({ status: 'FAILED', code: 'NPWP_DUPLICATE', retryable: false })).db, 'buyer', 'vendor-a')).toBe(false);
+    expect(await ensureCustomerTaxProfileSynced(mockDb(null).db, 'buyer', 'vendor-a')).toBe(false);
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

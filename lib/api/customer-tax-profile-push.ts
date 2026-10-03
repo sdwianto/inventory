@@ -28,7 +28,7 @@ export async function loadCustomerTaxProfile(db: Db, tenantId: string): Promise<
   return {
     npwp: normalizeNpwpDigits(s?.companyNPWP),
     pkp: normalizeTenantTax(s?.tax).pkp,
-    alamat: String(s?.companyAddress || '').trim(),
+    alamat: String(s?.companyAddress || '').trim().slice(0, 1000),
     profileUpdatedAt: new Date(stamp as string | Date).toISOString(),
   };
 }
@@ -54,6 +54,28 @@ export async function enqueueCustomerTaxProfilePush(
   return enqueued;
 }
 
+/**
+ * Sales baru membuat pelanggan B2B saat customer PO pertama masuk — push saat link dibuat bisa 404.
+ * Dipanggil setelah PO tersinkron ke vendor: antrekan push bila versi profil terkini belum OK di vendor itu.
+ */
+export async function ensureCustomerTaxProfileSynced(db: Db, tenantId: string, vendorTenantId: string) {
+  const tid = normalizeTenantId(tenantId);
+  const link = await db.collection('integration_links').findOne(
+    { customerTenantId: tid, vendorTenantId },
+    { projection: { _id: 0, taxProfileSync: 1 } },
+  );
+  if (!link) return false;
+  const { profileUpdatedAt } = await loadCustomerTaxProfile(db, tid);
+  const sync = link.taxProfileSync as { status?: string; code?: string; retryable?: boolean; profileUpdatedAt?: string } | undefined;
+  if (sync?.profileUpdatedAt === profileUpdatedAt) {
+    if (sync.status === 'OK') return false;
+    // Gagal bisnis lain (mis. NPWP duplikat) tidak sembuh dengan push ulang per PO.
+    if (sync.code !== 'PELANGGAN_TIDAK_ADA' && sync.retryable === false) return false;
+  }
+  await enqueueCustomerTaxProfilePush(db, tid, vendorTenantId);
+  return true;
+}
+
 export async function runCustomerTaxProfilePushJob(db: Db, job: JsonObject & { tenantId?: string; payload?: JsonObject }) {
   const tid = normalizeTenantId(job.tenantId || 'default');
   const onlyVendor = String(job.payload?.vendorTenantId || '').trim();
@@ -66,22 +88,28 @@ export async function runCustomerTaxProfilePushJob(db: Db, job: JsonObject & { t
   for (const link of links) {
     const access = await resolveSalesApiAccess(db, tid, String(link.vendorTenantId || ''));
     if (!access) continue;
-    let status: { status: 'OK' | 'FAILED'; error?: string; code?: string };
+    let status: { status: 'OK' | 'FAILED'; error?: string; code?: string; retryable?: boolean; applied?: boolean; reason?: string };
     try {
-      await client.pushCustomerTaxProfile({
+      const res = await client.pushCustomerTaxProfile({
         salesAppUrl: access.salesAppUrl,
         apiKey: access.salesApiKey,
         idempotencyKey: `customer-tax-profile:${tid}:${link.vendorTenantId}:${profile.profileUpdatedAt}`,
         correlationId: randomUUID(),
         body: { customerTenantId: tid, vendorTenantId: link.vendorTenantId, ...profile },
       });
-      status = { status: 'OK' };
+      const data = (res || {}) as { applied?: unknown; reason?: unknown };
+      status = {
+        status: 'OK',
+        ...(typeof data.applied === 'boolean' ? { applied: data.applied } : {}),
+        ...(typeof data.reason === 'string' ? { reason: data.reason } : {}),
+      };
     } catch (e) {
       const err = e instanceof IntegrationError ? e : null;
       const message = e instanceof Error ? e.message : String(e);
       // 4xx bisnis (mis. NPWP sudah dipakai pelanggan lain) tidak akan sembuh dengan retry.
-      if (!err || err.retryable !== false) retryable = true;
-      status = { status: 'FAILED', error: message, ...(err?.code ? { code: err.code } : {}) };
+      const canRetry = !err || err.retryable !== false;
+      if (canRetry) retryable = true;
+      status = { status: 'FAILED', error: message, retryable: canRetry, ...(err?.code ? { code: err.code } : {}) };
     }
     await db.collection('integration_links').updateOne(
       { customerTenantId: tid, vendorTenantId: link.vendorTenantId },

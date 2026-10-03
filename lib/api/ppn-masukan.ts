@@ -2,7 +2,7 @@
 // Masa = masa faktur bila faktur sudah diterima; tanpa faktur memakai tanggal invoice (WIB).
 
 import type { Db } from 'mongodb';
-import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
+import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { vendorHutangPostingBase } from '@/lib/api/hutang-vendor-journal';
 import type { HutangDoc } from '@/types/documents';
 
@@ -178,7 +178,7 @@ export async function loadPpnMasukan(db: Db, tenantId: string, masa: string) {
     },
   }).sort({ tanggal: 1 }).limit(PPN_MASUKAN_LIMIT + 1).toArray();
   const truncated = docs.length > PPN_MASUKAN_LIMIT;
-  const settings = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { companyNPWP: 1 } });
+  const settings = await db.collection('tenant_settings').findOne({ tenantId: normalizeTenantId(tenantId) }, { projection: { companyNPWP: 1 } });
   const tenantNpwp = String(settings?.companyNPWP || '');
   const rows = (truncated ? docs.slice(0, PPN_MASUKAN_LIMIT) : docs)
     .map((d) => buildPpnMasukanRow(d as HutangDoc, tenantNpwp))

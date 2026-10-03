@@ -35,7 +35,7 @@ import {
   normalizeThreeWayTolerancePct,
 } from '@/lib/api/three-way-match';
 import type { HandlerContext } from '@/types/api/handler';
-import { normalizeNpwpDigits, normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
+import { isValidNpwp, normalizeNpwpDigits, normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
 import { enqueueCustomerTaxProfilePush } from '@/lib/api/customer-tax-profile-push';
 import { logger } from '@/lib/api/logger';
 
@@ -178,6 +178,11 @@ export async function handleTenants({
       const prev = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { tax: 1, companyNPWP: 1, companyAddress: 1 } });
       const from = normalizeTenantTax(prev?.tax);
       const npwp = settingsBody.companyNPWP !== undefined ? settingsBody.companyNPWP : prev?.companyNPWP;
+      // NPWP dikirim ke vendor sebagai identitas pembeli faktur; Sales menolak selain 15/16 digit.
+      if (settingsBody.companyNPWP !== undefined && normalizeNpwpDigits(npwp) !== normalizeNpwpDigits(prev?.companyNPWP)
+        && normalizeNpwpDigits(npwp) && !isValidNpwp(npwp)) {
+        return err('NPWP perusahaan harus 15/16 digit', 400);
+      }
       const v = validateTenantTaxInput(settingsBody.tax ?? {}, from, npwp);
       if (!v.ok) return err(v.error, 400);
       if (settingsBody.tax !== undefined) {

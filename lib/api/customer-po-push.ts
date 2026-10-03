@@ -13,6 +13,7 @@ import {
 } from '@/lib/api/customer-po-so-extract';
 import { integrationCorrelationId, salesFetchErrorMessage } from '@/lib/api/integration-common';
 import { recordIntegrationHold } from '@/lib/api/erp-hotpath-metrics';
+import { logger } from '@/lib/api/logger';
 import { createIntegrationClient } from '@/lib/integration/client';
 import { IntegrationError } from '@/lib/integration/errors';
 import type { JsonObject } from '@/types/json';
@@ -213,6 +214,12 @@ export async function pushPoToVendor(
           itemCount: items.length,
         });
         continue;
+      }
+      try {
+        const { ensureCustomerTaxProfileSynced } = await import('@/lib/api/customer-tax-profile-push');
+        await ensureCustomerTaxProfileSynced(db, tenantId, vendorTenantId);
+      } catch (e) {
+        logger.warn('customer_tax_profile_ensure_failed', { tenantId, vendorTenantId, error: e instanceof Error ? e.message : String(e) });
       }
       const soDoc = extractPushedVendorSo(pushed.vendorSo as JsonObject);
       submissions.push({
