@@ -31,6 +31,7 @@ export const SANDBOX_TRANSACTION_COLLECTIONS = [
   'hutang_pembayaran',
   'piutang_pembayaran',
   'hutang',
+  'vendor_faktur_pajak',
   'piutang',
   'credit_notes',
   'stok_kartu',

@@ -1207,6 +1207,64 @@ export class IntegrationClient {
     });
   }
 
+  /** Profil pajak pembeli (NPWP, PKP) ke pelanggan B2B vendor — identitas pembeli di faktur pajak. */
+  async pushCustomerTaxProfile(input: {
+    salesAppUrl: string;
+    apiKey: string;
+    idempotencyKey: string;
+    body: Record<string, unknown>;
+    correlationId?: string;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const base = normalizeBaseUrl(input.salesAppUrl);
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'PushCustomerTaxProfile',
+      grnId: null,
+    });
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url: `${base}/api/v1/integrations/customer-tax-profile`,
+        pool: 'notification',
+        timeoutMs: input.timeoutMs ?? 20_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify(input.body),
+      });
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+      throwIfHttpFailed(res, data, correlationId);
+      await finishIntegrationCommand(this.db, commandId, { status: 'SUCCEEDED' });
+      return data;
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), { correlationId, cause: e });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
+      });
+      throw err;
+    }
+  }
+
   /** Category B: vendor profile / store (hutang enrich). Tries profile then store. */
   async getVendorProfile(input: {
     salesAppUrl: string;

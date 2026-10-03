@@ -28,6 +28,8 @@ export type VendorFakturPajak = {
   dpp: number;
   dppLain: number;
   ppn: number;
+  /** NPWP pembeli di faktur (digit; '' = tanpa NPWP). Tidak ada = event versi lama (belum dikirim vendor). */
+  buyerNpwp?: string;
   updatedAt: Date;
 };
 
@@ -80,6 +82,7 @@ export function parseVendorFakturPajak(raw: unknown): VendorFakturPajak | null {
     dpp: num(r.dpp),
     dppLain: num(r.dppLain),
     ppn: num(r.ppn),
+    ...(typeof r.buyerNpwp === 'string' ? { buyerNpwp: r.buyerNpwp.replace(/\D/g, '') } : {}),
     updatedAt,
   };
 }

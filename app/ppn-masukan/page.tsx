@@ -19,6 +19,7 @@ import { fetchJson } from '@/lib/fetch-json';
 
 const STATUS_LABEL: Record<string, string> = {
   SIAP_DIKREDITKAN: 'Siap dikreditkan',
+  NPWP_TIDAK_SESUAI: 'NPWP pembeli tidak sesuai',
   MENUNGGU_FAKTUR: 'Menunggu faktur',
   FAKTUR_BATAL: 'Faktur batal/diganti',
   TIDAK_DIKREDITKAN: 'Tidak dikreditkan (non-PKP)',
@@ -26,6 +27,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 const STATUS_CLASS: Record<string, string> = {
   SIAP_DIKREDITKAN: 'bg-green-100 text-green-800',
+  NPWP_TIDAK_SESUAI: 'bg-red-100 text-red-700',
   MENUNGGU_FAKTUR: 'bg-amber-100 text-amber-800',
   FAKTUR_BATAL: 'bg-red-100 text-red-700',
   TIDAK_DIKREDITKAN: 'bg-slate-100 text-slate-600',
@@ -62,13 +64,13 @@ export default function PpnMasukanPage() {
     if (!rows.length) { toast.error('Tidak ada data'); return; }
     const header = [
       'Tanggal', 'No Invoice', 'No Hutang', 'Supplier', 'NPWP Vendor', 'DPP', 'PPN', 'Tarif',
-      'Nomor Faktur', 'Status Faktur', 'Masa Faktur', 'PPN Faktur', 'Selisih PPN', 'Status', 'Status Tagihan',
+      'Nomor Faktur', 'NPWP Pembeli di Faktur', 'Status Faktur', 'Masa Faktur', 'PPN Faktur', 'Selisih PPN', 'Status', 'Status Tagihan',
     ];
     const lines = rows.map((r) => [
       r.tanggal ? formatDate(str(r.tanggal)) : '',
       str(r.noInvoice), str(r.noHutang), str(r.supplierName), str(r.vendorNPWP),
       num(r.dpp), num(r.ppn), r.ppnRate == null ? '' : num(r.ppnRate),
-      str(r.nomorFaktur), str(r.fakturStatus), str(r.fakturMasa),
+      str(r.nomorFaktur), str(r.buyerNpwpFaktur), str(r.fakturStatus), str(r.fakturMasa),
       r.fakturPpn == null ? '' : num(r.fakturPpn), r.selisihPpn == null ? '' : num(r.selisihPpn),
       STATUS_LABEL[str(r.status)] || str(r.status), str(r.approvalStatus),
     ].map(csvCell).join(','));
@@ -98,6 +100,7 @@ export default function PpnMasukanPage() {
 
   const cards: Array<{ key: string; label: string; className: string }> = [
     { key: 'SIAP_DIKREDITKAN', label: 'Siap dikreditkan', className: 'text-green-700' },
+    { key: 'NPWP_TIDAK_SESUAI', label: 'NPWP pembeli tidak sesuai', className: 'text-red-600' },
     { key: 'MENUNGGU_FAKTUR', label: 'Menunggu faktur', className: 'text-amber-700' },
     { key: 'FAKTUR_BATAL', label: 'Faktur batal/diganti', className: 'text-red-600' },
     { key: 'TIDAK_DIKREDITKAN', label: 'Tidak dikreditkan', className: 'text-slate-600' },
@@ -135,7 +138,7 @@ export default function PpnMasukanPage() {
       </div>
 
       {data != null && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           {cards.map((c) => (
             <div key={c.key} className="bg-white border rounded-lg p-4">
               <div className={`text-2xl font-bold ${c.className}`}>{formatIDR(num(bucket(c.key).ppn))}</div>
@@ -145,6 +148,12 @@ export default function PpnMasukanPage() {
         </div>
       )}
 
+      {num(bucket('NPWP_TIDAK_SESUAI').count) > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {num(bucket('NPWP_TIDAK_SESUAI').count)} faktur vendor tidak mencantumkan NPWP perusahaan ini — PPN-nya tidak bisa dikreditkan.
+          Pastikan NPWP di Pengaturan Tenant benar, lalu minta vendor mengganti fakturnya.
+        </div>
+      )}
       {num(summary.selisihCount) > 0 && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {num(summary.selisihCount)} tagihan punya PPN faktur berbeda dari PPN tagihan — cek sebelum dikreditkan.
@@ -195,6 +204,9 @@ export default function PpnMasukanPage() {
                   <td className="px-3 py-2 text-xs">
                     {str(r.nomorFaktur) ? <div className="font-mono">{str(r.nomorFaktur)}</div> : <span className="text-slate-400">—</span>}
                     {str(r.fakturStatus) && <div className="text-[10px] text-slate-500">{str(r.fakturStatus)}{str(r.fakturMasa) ? ` · masa ${str(r.fakturMasa)}` : ''}</div>}
+                    {str(r.status) === 'NPWP_TIDAK_SESUAI' && (
+                      <div className="text-[10px] text-red-600 font-mono">NPWP pembeli: {str(r.buyerNpwpFaktur) || 'kosong'}</div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-xs">
                     <span className={`inline-block rounded px-2 py-0.5 ${STATUS_CLASS[str(r.status)] || ''}`}>

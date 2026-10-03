@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { normalizeTenantId } from '@/lib/api/tenant-scope';
 import { resolveEffectiveSalesAppUrl } from '@/lib/api/sales-app-url';
+import { logger } from '@/lib/api/logger';
 
 export interface IntegrationLinkDoc {
   id: string;
@@ -71,6 +72,14 @@ export async function upsertIntegrationLink(
   );
 
   await syncCustomerIntegrationSettings(db, keys.customerTenantId);
+  try {
+    const { enqueueCustomerTaxProfilePush } = await import('@/lib/api/customer-tax-profile-push');
+    await enqueueCustomerTaxProfilePush(db, keys.customerTenantId, keys.vendorTenantId);
+  } catch (e) {
+    logger.warn('customer_tax_profile_enqueue_failed', {
+      tenantId: keys.customerTenantId, vendorTenantId: keys.vendorTenantId, error: e instanceof Error ? e.message : String(e),
+    });
+  }
   return doc;
 }
 

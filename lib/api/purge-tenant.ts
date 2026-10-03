@@ -31,6 +31,7 @@ const EXTRA_COLLECTIONS = [
   'putaway_moves',
   'goods_receipts',
   'vendor_returns',
+  'vendor_faktur_pajak',
 
   'customer_purchase_orders',
   'local_purchase_orders',

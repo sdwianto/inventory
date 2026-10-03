@@ -41,6 +41,12 @@ describe('parseVendorFakturPajak', () => {
     expect(parseVendorFakturPajak({ ...base, status: 'DRAFT', nomorFaktur: null })?.nomorFaktur).toBeNull();
   });
 
+  it('NPWP pembeli: angka saja bila dikirim; vendor lama tanpa field → tidak ada', () => {
+    expect(parseVendorFakturPajak({ ...base, buyerNpwp: '00.123.456.7-890.1234' })?.buyerNpwp).toBe('0012345678901234');
+    expect(parseVendorFakturPajak({ ...base, buyerNpwp: '' })?.buyerNpwp).toBe('');
+    expect(parseVendorFakturPajak(base)).not.toHaveProperty('buyerNpwp');
+  });
+
   it('status BATAL/DIGANTI tidak pernah aktif walau payload bilang aktif', () => {
     expect(parseVendorFakturPajak({ ...base, status: 'BATAL', aktif: true })?.aktif).toBe(false);
     expect(parseVendorFakturPajak({ ...base, status: 'DIGANTI', aktif: true })?.aktif).toBe(false);

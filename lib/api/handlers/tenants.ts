@@ -35,7 +35,9 @@ import {
   normalizeThreeWayTolerancePct,
 } from '@/lib/api/three-way-match';
 import type { HandlerContext } from '@/types/api/handler';
-import { normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
+import { normalizeNpwpDigits, normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
+import { enqueueCustomerTaxProfilePush } from '@/lib/api/customer-tax-profile-push';
+import { logger } from '@/lib/api/logger';
 
 const TOLERANCE_SETTINGS = [
   RL_OVER_TOLERANCE_SETTING,
@@ -169,9 +171,11 @@ export async function handleTenants({
     // Tarif PPN ditentukan vendor (ppnRate per invoice) — tidak diubah dari pengaturan tenant.
     delete update.ppnPercent;
     delete update.tax;
+    delete update.taxProfileUpdatedAt;
     let taxChange: { from: TenantTaxSettings; to: TenantTaxSettings } | null = null;
-    if (settingsBody.tax !== undefined || (settingsBody.companyNPWP !== undefined)) {
-      const prev = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { tax: 1, companyNPWP: 1 } });
+    let taxProfileChanged = false;
+    if (settingsBody.tax !== undefined || settingsBody.companyNPWP !== undefined || settingsBody.companyAddress !== undefined) {
+      const prev = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { tax: 1, companyNPWP: 1, companyAddress: 1 } });
       const from = normalizeTenantTax(prev?.tax);
       const npwp = settingsBody.companyNPWP !== undefined ? settingsBody.companyNPWP : prev?.companyNPWP;
       const v = validateTenantTaxInput(settingsBody.tax ?? {}, from, npwp);
@@ -180,6 +184,11 @@ export async function handleTenants({
         update.tax = v.tax;
         if (JSON.stringify(from) !== JSON.stringify(v.tax)) taxChange = { from, to: v.tax };
       }
+      const address = settingsBody.companyAddress !== undefined ? settingsBody.companyAddress : prev?.companyAddress;
+      taxProfileChanged = normalizeNpwpDigits(npwp) !== normalizeNpwpDigits(prev?.companyNPWP)
+        || v.tax.pkp !== from.pkp
+        || String(address || '').trim() !== String(prev?.companyAddress || '').trim();
+      if (taxProfileChanged) update.taxProfileUpdatedAt = new Date();
     }
     // Feature flag dan toleransi kontrol hanya diubah MASTER; ADMIN tenant tidak boleh melonggarkan kontrolnya sendiri.
     if (!userAuth.isMaster) {
@@ -278,6 +287,13 @@ export async function handleTenants({
       return after;
     });
     await invalidateDashboardSnapshot(db, tenantId);
+    if (taxProfileChanged) {
+      try {
+        await enqueueCustomerTaxProfilePush(db, tenantId);
+      } catch (e) {
+        logger.warn('customer_tax_profile_enqueue_failed', { tenantId, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     return ok(clean(doc));
   }
 

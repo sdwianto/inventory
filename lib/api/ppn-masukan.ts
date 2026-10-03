@@ -6,14 +6,23 @@ import { tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { vendorHutangPostingBase } from '@/lib/api/hutang-vendor-journal';
 import type { HutangDoc } from '@/types/documents';
 
-export type PpnMasukanStatus = 'SIAP_DIKREDITKAN' | 'MENUNGGU_FAKTUR' | 'FAKTUR_BATAL' | 'TIDAK_DIKREDITKAN';
+export type PpnMasukanStatus = 'SIAP_DIKREDITKAN' | 'NPWP_TIDAK_SESUAI' | 'MENUNGGU_FAKTUR' | 'FAKTUR_BATAL' | 'TIDAK_DIKREDITKAN';
 
 export const PPN_MASUKAN_STATUS_LABEL: Record<PpnMasukanStatus, string> = {
   SIAP_DIKREDITKAN: 'Siap dikreditkan',
+  NPWP_TIDAK_SESUAI: 'NPWP pembeli di faktur tidak sesuai',
   MENUNGGU_FAKTUR: 'Menunggu faktur',
   FAKTUR_BATAL: 'Faktur batal/diganti',
   TIDAK_DIKREDITKAN: 'Tidak dikreditkan (non-PKP)',
 };
+
+/** NPWP 16 digit (NPWP lama 15 digit diawali 0); '' bila tidak valid. */
+export function npwp16(v: unknown): string {
+  const d = String(v ?? '').replace(/\D/g, '');
+  if (d.length === 16) return d;
+  if (d.length === 15) return `0${d}`;
+  return '';
+}
 
 export type PpnMasukanRow = {
   hutangId: string;
@@ -28,6 +37,8 @@ export type PpnMasukanRow = {
   ppnRate: number | null;
   status: PpnMasukanStatus;
   nomorFaktur: string | null;
+  /** NPWP pembeli tertera di faktur vendor; null = tidak dikirim vendor. */
+  buyerNpwpFaktur: string | null;
   fakturStatus: string | null;
   fakturMasa: string | null;
   fakturDpp: number | null;
@@ -68,19 +79,29 @@ type FakturSnap = {
   masa?: string | null;
   dpp?: number;
   ppn?: number;
+  buyerNpwp?: string;
 };
 
-export function classifyPpnMasukan(hutang: HutangDoc): PpnMasukanStatus {
+/**
+ * `tenantNpwp` = NPWP perusahaan pembeli. Faktur bernomor hanya bisa dikreditkan bila NPWP pembeli di faktur
+ * sama; faktur tanpa `buyerNpwp` (event vendor versi lama) tidak bisa dicek dan dianggap sesuai.
+ */
+export function classifyPpnMasukan(hutang: HutangDoc, tenantNpwp?: string): PpnMasukanStatus {
   if (hutang.ppnDikreditkan === false) return 'TIDAK_DIKREDITKAN';
   const f = (hutang.fakturPajak || null) as FakturSnap | null;
   if (!f) return 'MENUNGGU_FAKTUR';
   const status = String(f.status || '').toUpperCase();
   if (status === 'BATAL' || status === 'DIGANTI' || f.aktif === false) return 'FAKTUR_BATAL';
-  if (status === 'DISETUJUI' && f.nomorFaktur) return 'SIAP_DIKREDITKAN';
+  if (status === 'DISETUJUI' && f.nomorFaktur) {
+    if (typeof f.buyerNpwp === 'string' && (!npwp16(f.buyerNpwp) || npwp16(f.buyerNpwp) !== npwp16(tenantNpwp))) {
+      return 'NPWP_TIDAK_SESUAI';
+    }
+    return 'SIAP_DIKREDITKAN';
+  }
   return 'MENUNGGU_FAKTUR';
 }
 
-export function buildPpnMasukanRow(hutang: HutangDoc): PpnMasukanRow | null {
+export function buildPpnMasukanRow(hutang: HutangDoc, tenantNpwp?: string): PpnMasukanRow | null {
   const base = vendorHutangPostingBase(hutang);
   if (base.ppn <= 0) return null;
   const f = (hutang.fakturPajak || null) as FakturSnap | null;
@@ -98,8 +119,9 @@ export function buildPpnMasukanRow(hutang: HutangDoc): PpnMasukanRow | null {
     dpp: hutang.dpp != null ? int(hutang.dpp) : base.subTotal,
     ppn: base.ppn,
     ppnRate: typeof hutang.ppnRate === 'number' ? hutang.ppnRate : null,
-    status: classifyPpnMasukan(hutang),
+    status: classifyPpnMasukan(hutang, tenantNpwp),
     nomorFaktur: f?.nomorFaktur || null,
+    buyerNpwpFaktur: typeof f?.buyerNpwp === 'string' ? f.buyerNpwp : null,
     fakturStatus: f?.status || null,
     fakturMasa: f?.masa || null,
     fakturDpp: f && f.dpp != null ? int(f.dpp) : null,
@@ -112,6 +134,7 @@ export function summarizePpnMasukan(rows: PpnMasukanRow[]): PpnMasukanSummary {
   const empty = () => ({ count: 0, dpp: 0, ppn: 0 });
   const summary: PpnMasukanSummary = {
     SIAP_DIKREDITKAN: empty(),
+    NPWP_TIDAK_SESUAI: empty(),
     MENUNGGU_FAKTUR: empty(),
     FAKTUR_BATAL: empty(),
     TIDAK_DIKREDITKAN: empty(),
@@ -155,8 +178,10 @@ export async function loadPpnMasukan(db: Db, tenantId: string, masa: string) {
     },
   }).sort({ tanggal: 1 }).limit(PPN_MASUKAN_LIMIT + 1).toArray();
   const truncated = docs.length > PPN_MASUKAN_LIMIT;
+  const settings = await db.collection('tenant_settings').findOne({ tenantId }, { projection: { companyNPWP: 1 } });
+  const tenantNpwp = String(settings?.companyNPWP || '');
   const rows = (truncated ? docs.slice(0, PPN_MASUKAN_LIMIT) : docs)
-    .map((d) => buildPpnMasukanRow(d as HutangDoc))
+    .map((d) => buildPpnMasukanRow(d as HutangDoc, tenantNpwp))
     .filter((r): r is PpnMasukanRow => r != null);
   return { rows, summary: summarizePpnMasukan(rows), truncated };
 }

@@ -45,6 +45,7 @@ export const JOB_TYPES = {
   PO_VENDOR_AVAILABILITY_REFRESH: 'PO_VENDOR_AVAILABILITY_REFRESH',
   PO_ARRIVAL_RISK_ALERT: 'PO_ARRIVAL_RISK_ALERT',
   NOTIFICATION_OUTBOX_DRAIN: 'NOTIFICATION_OUTBOX_DRAIN',
+  CUSTOMER_TAX_PROFILE_PUSH: 'CUSTOMER_TAX_PROFILE_PUSH',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -427,6 +428,9 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.NOTIFICATION_OUTBOX_DRAIN) {
       const { drainNotificationOutbox } = await import('@/lib/notifications/telegram');
       outcome = await drainNotificationOutbox(db, { limit: 100 });
+    } else if (job.type === JOB_TYPES.CUSTOMER_TAX_PROFILE_PUSH) {
+      const { runCustomerTaxProfilePushJob } = await import('@/lib/api/customer-tax-profile-push');
+      outcome = await runCustomerTaxProfilePushJob(db, job);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }
