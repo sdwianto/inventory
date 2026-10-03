@@ -34,7 +34,12 @@ export async function loadCustomerTaxProfile(db: Db, tenantId: string): Promise<
 }
 
 /** Antrekan push profil ke semua vendor ter-link (atau satu vendor). Dedupe per versi profil. */
-export async function enqueueCustomerTaxProfilePush(db: Db, tenantId: string, vendorTenantId?: string) {
+export async function enqueueCustomerTaxProfilePush(
+  db: Db,
+  tenantId: string,
+  vendorTenantId?: string,
+  { schedule = true }: { schedule?: boolean } = {},
+) {
   const tid = normalizeTenantId(tenantId);
   const { profileUpdatedAt } = await loadCustomerTaxProfile(db, tid);
   const enqueued = await enqueueJob(db, {
@@ -45,7 +50,7 @@ export async function enqueueCustomerTaxProfilePush(db: Db, tenantId: string, ve
       dedupeKey: `customer-tax-profile:${tid}:${vendorTenantId || '*'}:${profileUpdatedAt}`,
     },
   });
-  scheduleJobProcessing(db, { limit: 1 });
+  if (schedule) scheduleJobProcessing(db, { limit: 1 });
   return enqueued;
 }
 
