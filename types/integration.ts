@@ -11,6 +11,10 @@ export interface VendorInvoiceLine {
   qtyBase?: number | string;
   harga?: number | string;
   nama?: string;
+  jumlah?: number | string;
+  /** Opsional dari Sales: DPP & PPN baris (baris bebas PPN: ppn 0). */
+  dpp?: number | string;
+  ppn?: number | string;
 }
 
 /** Invoice payload from sales.app `invoice.posted` webhook. */
@@ -27,6 +31,13 @@ export interface VendorInvoicePayload extends JsonObject {
   total?: number | string;
   subTotal?: number | string;
   ppn?: number | string;
+  /** Opsional dari Sales (invoice ber-basis pajak): diskon nota, tarif, mode harga, DPP dokumen. */
+  diskonNota?: number | string;
+  ppnRate?: number;
+  hargaTermasukPajak?: boolean;
+  dpp?: number | string;
+  /** Opsional: faktur pajak keluaran vendor saat payload dibuat (lihat `faktur_pajak.updated`). */
+  fakturPajak?: JsonObject;
   paymentTerms?: string;
   jatuhTempo?: string | Date;
   postedAt?: string | Date;

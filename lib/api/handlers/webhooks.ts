@@ -32,6 +32,12 @@ function dedupeSourceId(event: string, payload: JsonObject): string | null {
   if (event === 'debit_note.posted') {
     return String(payload.debitNoteId || payload.invoiceId || '') || null;
   }
+  if (event === 'faktur_pajak.updated') {
+    // Satu invoice punya banyak transisi faktur (nomor, ganti, batal) — jangan dedupe by invoiceId.
+    const fid = String(payload.fakturId || '');
+    const rev = String(payload.updatedAt || '');
+    return fid && rev ? `${fid}:${String(payload.status || '')}:${rev}` : null;
+  }
   if (event === 'credit_note.posted') {
     return String(payload.creditNoteId || payload.invoiceId || '') || null;
   }

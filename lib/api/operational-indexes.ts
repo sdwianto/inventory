@@ -600,6 +600,17 @@ const INDEX_SPECS: IndexSpec[] = [
   { collection: 'telegram_updates', index: { expireAt: 1 }, name: 'ttl_tg_update', expireAfterSeconds: 0 },
   { collection: 'webhook_nonces', index: { expireAt: 1 }, name: 'ttl_webhook_nonce', expireAfterSeconds: 0 },
   {
+    collection: 'vendor_faktur_pajak',
+    index: { tenantId: 1, vendorTenantId: 1, fakturId: 1 },
+    name: 'uniq_vendor_faktur_tenant_vendor_faktur',
+    unique: true,
+  },
+  {
+    collection: 'vendor_faktur_pajak',
+    index: { tenantId: 1, vendorTenantId: 1, invoiceId: 1 },
+    name: 'idx_vendor_faktur_tenant_vendor_invoice',
+  },
+  {
     collection: 'migration_runs',
     index: { migrationId: 1, tenantId: 1 },
     name: 'uniq_migration_apply_claim',

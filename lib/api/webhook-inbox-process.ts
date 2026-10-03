@@ -103,6 +103,11 @@ export async function processWebhookInboxEvent(
     return applyVendorAvailabilityPush(db, customerTenantId, payload, vendorTenantId);
   }
 
+  if (event === 'faktur_pajak.updated') {
+    const { applyVendorFakturPajakEvent } = await import('@/lib/api/vendor-faktur-pajak');
+    return applyVendorFakturPajakEvent(db, customerTenantId, payload, vendorTenantId);
+  }
+
   if (CPO_EVENTS.has(event)) {
     const cpoSync = await syncCpoFromVendorEvent(db, customerTenantId, event, {
       ...payload,

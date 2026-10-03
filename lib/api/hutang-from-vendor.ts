@@ -31,6 +31,7 @@ import type { GrnDoc, HutangDoc } from '@/types/documents';
 import type { VendorInvoicePayload, VendorInvoiceLine } from '@/types/integration';
 import { hutangMatchesGrnVendor, hutangVendorKey } from '@/lib/api/hutang-vendor-match';
 import { reconcileHutangItemsFromGrn, type HutangItemLike } from '@/lib/api/hutang-line-reconcile';
+import { ingestInvoiceFakturPajak } from '@/lib/api/vendor-faktur-pajak';
 
 /**
  * Cari GRN POSTED terkait invoice (by noDO, sama seperti validateInvoiceAgainstGrn) dan
@@ -632,6 +633,8 @@ export async function createHutangFromVendorInvoice(
         vendorTenantId,
       );
     }
+    // Faktur tidak bergantung pada nilai hutang — tetap disimpan walau resync konflik/diblokir.
+    await ingestInvoiceFakturPajak(db, tid, vendorTenantId, invoiceId, payload.fakturPajak);
     return result;
   }
 
@@ -724,6 +727,7 @@ export async function createHutangFromVendorInvoice(
       ?? await db.collection('hutang').findOne({ vendorInvoiceId: invoiceId, ...tenantIdMatchFilter(tid) });
     if (!winner) throw e;
     logger.warn('hutang_duplicate_invoice_race', { tenantId: tid, invoiceId, hutangId: winner.id });
+    await ingestInvoiceFakturPajak(db, tid, vendorTenantId, invoiceId, payload.fakturPajak);
     return {
       action: 'exists',
       hutangId: winner.id,
@@ -735,6 +739,7 @@ export async function createHutangFromVendorInvoice(
   logger.info('hutang_created', { tenantId: tid, hutangId: hutang.id, noHutang, invoiceId });
 
   await markGrnInvoiceSyncDone(db, tid, payload, hutang.id, invoiceId, vendorTenantId);
+  await ingestInvoiceFakturPajak(db, tid, vendorTenantId, invoiceId, payload.fakturPajak);
 
   return {
     action: 'created',
