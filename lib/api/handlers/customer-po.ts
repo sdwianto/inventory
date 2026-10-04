@@ -18,6 +18,7 @@ import {
 } from '@/lib/api/require-auth';
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
 import { applyCustomerPoSearch, parseCustomerPoSearch } from '@/lib/api/customer-po-search';
+import { notifyPoApprovalRequested, notifyPoApproved, notifyPoRejected } from '@/lib/api/customer-po-notify';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor, vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
@@ -908,11 +909,13 @@ export async function handleCustomerPo({
       });
     }
 
-    await db.collection('customer_purchase_orders').updateOne(
-      { id: po.id },
+    const casRes = await db.collection('customer_purchase_orders').updateOne(
+      casStatusFilter(po),
       { $set: approvalPatch },
     );
+    if (casRes.matchedCount === 0) return casConflict();
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    await notifyPoApprovalRequested(db, updated as JsonObject | null, submitter);
     return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
@@ -939,6 +942,13 @@ export async function handleCustomerPo({
       return err(result.error, result.status || 400);
     }
 
+    if (result.po && String((result.po as JsonObject).status || '') === 'APPROVED') {
+      await notifyPoApproved(db, result.po as JsonObject, approverSnap, {
+        vendorSynced: result.vendorSynced,
+        vendorSyncPending: result.vendorSyncPending,
+        vendorSyncError: 'vendorSyncError' in result ? result.vendorSyncError : null,
+      });
+    }
     const enriched = await enrichOnePo(db, result.po, { skipSalesBackfill: true });
     await invalidateDashboardSnapshot(db, String(po.tenantId || 'default'));
     // P1: sync CreateSO — 200 + SUCCESS|FAILED flags (bukan PENDING happy path).
@@ -1341,6 +1351,7 @@ export async function handleCustomerPo({
     );
     if (casRes.matchedCount === 0) return casConflict();
     const updated = await db.collection('customer_purchase_orders').findOne({ id: po.id });
+    await notifyPoRejected(db, updated as JsonObject | null, rejector, String(poBody.reason || 'Ditolak admin'));
     return ok(await enrichOnePo(db, updated, { skipSalesBackfill: true }));
   }
 
