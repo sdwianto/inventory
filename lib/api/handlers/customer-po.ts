@@ -17,6 +17,7 @@ import {
   PO_EDIT_ROLES,
 } from '@/lib/api/require-auth';
 import { tenantIdForWrite, withTenantFilter, resolveOperationalScope } from '@/lib/api/tenant-master';
+import { applyCustomerPoSearch, parseCustomerPoSearch } from '@/lib/api/customer-po-search';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { enrichPoItemsForVendor, vendorBaseUomIdIfCompatible } from '@/lib/api/customer-po-vendor';
 import { runPoVendorSyncPending } from '@/lib/api/po-vendor-sync-run';
@@ -505,6 +506,7 @@ export async function handleCustomerPo({
     const enrichSo = url.searchParams.get('enrichSo') === '1';
     let filter: Record<string, unknown> = status ? { status } : {};
     filter = withTenantFilter(scopeAuth, filter);
+    filter = await applyCustomerPoSearch(db, scopeAuth, filter, parseCustomerPoSearch(url));
     const { pageMode, limit, cursor } = parseCursorPageParams(url.searchParams, { defaultLimit: 100, maxLimit: 300 });
     if (pageMode) {
       const listFilter = applyDescDateIdCursor(filter, cursor, 'tanggal');

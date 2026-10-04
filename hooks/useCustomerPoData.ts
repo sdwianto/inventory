@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react';
 import type { JsonObject } from '@/types/json';
 import { str } from '@/types/json';
 import { useQueryClient } from '@/lib/hooks/useApiQuery';
@@ -24,8 +24,14 @@ function needsStatusPoll(items: JsonObject[]): boolean {
   });
 }
 
-export function useCustomerPoList() {
+export function useCustomerPoList(search = '') {
   const queryClient = useQueryClient();
+  const term = search.trim();
+  // Tanpa kata kunci key tetap `list` agar prefetch rute & cache lama tetap terpakai.
+  const listKey = useMemo(
+    () => (term ? [...queryKeys.customerPurchaseOrders.list, term] as const : queryKeys.customerPurchaseOrders.list),
+    [term],
+  );
   const {
     items,
     loading,
@@ -34,8 +40,8 @@ export function useCustomerPoList() {
     loadMore,
     reload: reloadCursor,
   } = useCursorQuery<JsonObject>(
-    queryKeys.customerPurchaseOrders.list,
-    '/api/customer-purchase-orders',
+    listKey,
+    term ? `/api/customer-purchase-orders?search=${encodeURIComponent(term)}` : '/api/customer-purchase-orders',
     {
       limit: 100,
       staleTime: 15_000,
@@ -50,7 +56,7 @@ export function useCustomerPoList() {
   // Update optimistis: terapkan updater pada gabungan seluruh halaman,
   // lalu simpan sebagai satu halaman dengan cursor terakhir agar loadMore tetap jalan.
   const setList = useCallback<Dispatch<SetStateAction<JsonObject[]>>>((updater) => {
-    queryClient.setQueryData<InfinitePoData>(queryKeys.customerPurchaseOrders.list, (prev) => {
+    queryClient.setQueryData<InfinitePoData>(listKey, (prev) => {
       if (!prev || !Array.isArray(prev.pages)) return prev;
       const flattened = prev.pages.flatMap((p) => p.items ?? []);
       const next = typeof updater === 'function'
@@ -66,7 +72,7 @@ export function useCustomerPoList() {
         }],
       };
     });
-  }, [queryClient]);
+  }, [queryClient, listKey]);
 
   const reload = useCallback(() => reloadCursor(), [reloadCursor]);
 

@@ -9,6 +9,7 @@ import PoCalendar from '@/components/PoCalendar';
 import PoFormDialog from '@/components/pembelian-po/PoFormDialog';
 import PoListCard from '@/components/pembelian-po/PoListCard';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -18,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  CalendarDays, ChevronDown, Plus, RefreshCw, ShoppingBag,
+  CalendarDays, ChevronDown, Plus, RefreshCw, Search, ShoppingBag, X,
 } from 'lucide-react';
 import { formatArrivalLabel, PO_STATUS_ORDER, PO_STATUS_STYLE, type PoArrivalFields } from '@/lib/po-calendar';
 import { useCustomerPoPage } from '@/lib/hooks/use-customer-po-page';
@@ -43,6 +44,10 @@ function CustomerPoPageContent() {
     setMonth,
     selectedDate,
     showAll,
+    searchInput,
+    docSearch,
+    onSearchInput,
+    listLoading,
     setShowAll,
     handleSelectDate,
     listTitle,
@@ -250,10 +255,38 @@ function CustomerPoPageContent() {
               </div>
             </div>
 
+            <div className="relative mb-3">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Input
+                value={searchInput}
+                onChange={(e) => onSearchInput(e.target.value)}
+                placeholder="Cari no PO, SO vendor, vendor, item, pembuat, atau catatan..."
+                className="pl-9 pr-9 h-9"
+                aria-label="Cari PO ke vendor"
+                maxLength={100}
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                  onClick={() => onSearchInput('')}
+                  aria-label="Hapus pencarian"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
             {!visibleList.length ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12 text-sm">
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12 text-sm text-center px-4">
                 <CalendarDays className="w-10 h-10 mb-2 opacity-40" />
-                {onlyBelum
+                {listLoading
+                  ? 'Memuat…'
+                  : docSearch && !list.length
+                  ? `Tidak ada PO yang cocok dengan “${docSearch}”`
+                  : docSearch && selectedDate && !showAll
+                  ? `Tidak ada PO “${docSearch}” untuk tanggal ini — klik Lihat semua`
+                  : onlyBelum
                   ? 'Tidak ada PO dengan item belum diadakan'
                   : !allStatusesSelected && Object.values(statusCounts).some((c) => c > 0)
                   ? 'Tidak ada PO untuk status yang dipilih — klik Tampilkan semua'

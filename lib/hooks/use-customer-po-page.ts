@@ -3,7 +3,7 @@
 import type { JsonObject } from '@/types/json';
 import { str, num, asObject, asArray } from '@/types/json';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { startOfMonth } from 'date-fns';
 import { toast } from 'sonner';
 import { fetchJson } from '@/lib/fetch-json';
@@ -45,10 +45,49 @@ import { PoMutationAmbiguousError } from '@/lib/pembelian-po/mutation-errors';
 
 export function useCustomerPoPage() {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const docSearch = searchParams.get('search')?.trim() || '';
+  const [searchInput, setSearchInput] = useState(docSearch);
+  const pendingSearch = useRef<string | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [user] = useState<JsonObject | null>(() => getUser() as JsonObject | null);
   const {
     list, reload: reloadList, setList, hasMore, loadMore, loadingMore, loading: listLoading,
-  } = useCustomerPoList();
+  } = useCustomerPoList(docSearch);
+
+  // URL berubah dari luar (back/forward, tautan) → input ikut; ketikan sendiri tidak ditimpa saat debounce.
+  useEffect(() => {
+    if (pendingSearch.current !== null) {
+      if (pendingSearch.current === docSearch) pendingSearch.current = null;
+      return;
+    }
+    setSearchInput(docSearch);
+  }, [docSearch]);
+
+  useEffect(() => () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+  }, []);
+
+  const onSearchInput = useCallback((value: string) => {
+    pendingSearch.current = value.trim();
+    setSearchInput(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const trimmed = value.trim();
+      if (trimmed) params.set('search', trimmed);
+      else params.delete('search');
+      const qs = params.toString();
+      const next = qs ? `${pathname}?${qs}` : pathname;
+      if (next === `${pathname}${window.location.search}`) {
+        pendingSearch.current = null;
+        return;
+      }
+      router.replace(next, { scroll: false });
+    }, 300);
+  }, [pathname, router]);
   const poMutations = usePoMutations(setList, async () => { await reloadList(); });
   const syncPendingMutation = useApiMutation([queryKeys.customerPurchaseOrders.all]);
   const [productCache, setProductCache] = useState<Record<string, JsonObject>>({});
@@ -72,7 +111,6 @@ export function useCustomerPoPage() {
   const [vendorTierMap, setVendorTierMap] = useState<JsonObject>({});
   const [vendorNameMap, setVendorNameMap] = useState<Record<string, string>>({});
   const [defaultTier, setDefaultTier] = useState('ECER');
-  const searchParams = useSearchParams();
   const [wrMeta, setWrMeta] = useState<JsonObject | null>(null);
   const wrPrefillDone = useRef(false);
   const [vrMeta, setVrMeta] = useState<JsonObject | null>(null);
@@ -1051,6 +1089,10 @@ export function useCustomerPoPage() {
     setMonth,
     selectedDate,
     showAll,
+    searchInput,
+    docSearch,
+    onSearchInput,
+    listLoading,
     setShowAll,
     handleSelectDate,
     listTitle,
