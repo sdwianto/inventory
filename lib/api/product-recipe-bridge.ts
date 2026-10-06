@@ -7,6 +7,7 @@
 import {
   normalizeRecipeSatuan,
   recipeCutAllowedForBase,
+  recipeCutFlag,
   validateIsiPerKemasan,
   validateProcurementPack,
 } from '@/lib/food-production/recipe-uom';
@@ -38,7 +39,8 @@ export type RecipeBridgeValues = {
   recipeBaseMl: number | null;
   isiPerKemasan: number | null;
   satuanIsi: string | null;
-  recipeCutEnabled: boolean;
+  /** null = belum diatur (ikut deteksi nama tahu/tempe). */
+  recipeCutEnabled: boolean | null;
   procurementPackMl: number | null;
   procurementPackLabel: string | null;
 };
@@ -57,7 +59,7 @@ function currentValues(existing?: Record<string, unknown> | null): RecipeBridgeV
     recipeBaseMl: num(existing?.recipeBaseMl),
     isiPerKemasan: num(existing?.isiPerKemasan),
     satuanIsi: normalizeRecipeSatuan(existing?.satuanIsi) || null,
-    recipeCutEnabled: existing?.recipeCutEnabled === true,
+    recipeCutEnabled: recipeCutFlag(existing?.recipeCutEnabled) ?? null,
     procurementPackMl: num(existing?.procurementPackMl),
     procurementPackLabel: normalizeRecipeSatuan(existing?.procurementPackLabel) || null,
   };
@@ -101,7 +103,7 @@ export function resolveRecipeBridgeInput(
     if (isiErr) return { error: isiErr };
     const packErr = validateProcurementPack(baseSatuan, next.procurementPackMl, next.procurementPackLabel);
     if (packErr) return { error: packErr };
-    if (next.recipeCutEnabled && !before.recipeCutEnabled && !recipeCutAllowedForBase(baseSatuan)) {
+    if (next.recipeCutEnabled === true && before.recipeCutEnabled !== true && !recipeCutAllowedForBase(baseSatuan)) {
       return { error: 'Satuan dapur POTONG hanya untuk produk bersatuan kemasan/hitung (ALIR, BAK, PCS, …)' };
     }
   }

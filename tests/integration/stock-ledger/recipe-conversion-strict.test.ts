@@ -306,6 +306,51 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 2.1 konversi resep ketat (Mongo repli
     expect('error' in fixed).toBe(false);
     expect(tiramLine(fixed)?.sources[0].qty).toBeCloseTo(200 / 500, 6);
   });
+
+  it('tempe tanpa centang: POTONG otomatis, review menandai baris lama, simpan jembatan tidak mematikan flag', async () => {
+    await setStrict(true);
+    await db.collection('products').insertOne(product('seno', 'SENO', 'Tempe Seno', 'ALIR'));
+    await db.collection('recipes').insertOne({
+      id: 'rcp-seno-lama', tenantId: TID, kode: 'RSP-SN0', nama: 'Tempe Kukus', aktif: true, yieldQty: 100, updatedAt: new Date(),
+      lines: [{
+        productId: 'seno', productKode: 'SENO', qty: 500, qtyBesar: 500, pctKecil: 100, qtyKecil: 500,
+        satuan: 'ALIR', qtyBaseBesar: 500, qtyBaseKecil: 500, factorToBase: 1, baseSatuan: 'ALIR', factorSource: 'IDENTITY',
+      }],
+    });
+
+    const review = await buildRecipeConversionReview(db, TID, {});
+    const seno = review.products.find((p) => p.productId === 'seno');
+    expect(seno).toMatchObject({ recipeCutEnabled: true, recipeCutFlag: null, cutPendingLines: 1 });
+    expect(seno?.lines[0].needsCut).toBe(true);
+    expect(review.summary.cutPendingLines).toBeGreaterThanOrEqual(1);
+
+    const saved = await postRecipe('Tempe Goreng Seno', [
+      { productId: 'seno', qtyBesar: 500, pctKecil: 100, satuan: 'POTONG', potongPerBase: 8 },
+    ]);
+    expect(saved.status).toBe(200);
+    const line = (saved.json.lines as Array<Record<string, unknown>>)[0];
+    expect(line).toMatchObject({ satuan: 'POTONG', potongPerBase: 8, baseSatuan: 'ALIR', factorSource: 'CUT', qtyBaseBesar: 62.5 });
+
+    const plan = {
+      id: 'plan-seno', tenantId: TID, noDokumen: 'RPN-SN', status: 'SUBMITTED', tanggal: TODAY, kitchenId: 'k1',
+      kitchenWarehouseKode: 'GKERING', lines: [{ recipeId: String(saved.json.id), targetPorsi: 128 }],
+    };
+    const mrp = await buildPlanMaterialExplosion(db, { ...ADMIN }, plan as never);
+    if ('error' in mrp) throw new Error(String(mrp.error));
+    const senoLine = (mrp as { lines: Array<{ productId: string; satuan: string; qtyNet: number }> }).lines
+      .find((l) => l.productId === 'seno');
+    // 128 porsi × 500/100 potong = 640 potong / 8 = 80 ALIR
+    expect(senoLine).toMatchObject({ satuan: 'ALIR', qtyNet: 80 });
+
+    const bridge = await call(handleRecipeConversion as Handler, 'POST', ['recipe-conversion', 'products', 'seno'], {
+      recipeBaseGrams: 250,
+    });
+    expect(bridge.status).toBe(200);
+    const after = await db.collection('products').findOne({ tenantId: TID, id: 'seno' });
+    expect(after?.recipeCutEnabled ?? null).toBeNull();
+    const reviewAfter = await buildRecipeConversionReview(db, TID, { includeOk: true });
+    expect(reviewAfter.products.find((p) => p.productId === 'seno')?.recipeCutEnabled).toBe(true);
+  });
 });
 
 function xlsxBase64(rows: unknown[][]): string {

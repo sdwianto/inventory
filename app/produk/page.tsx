@@ -26,7 +26,13 @@ import { withActingTenantQuery } from '@/lib/tenant-api';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/lib/vendor-price';
 import { productStockLabel, productStockTitle } from '@/lib/uom/display';
-import { recipeCutAllowedForBase, recipeUomFamily } from '@/lib/food-production/recipe-uom';
+import {
+  isCutProductName,
+  recipeCutAllowedForBase,
+  recipeCutEnabledOf,
+  recipeCutFlag,
+  recipeUomFamily,
+} from '@/lib/food-production/recipe-uom';
 import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib/produk/constants';
 import {
   ITEM_ROLE_LABELS,
@@ -385,7 +391,8 @@ export default function ProdukPage() {
         ? null
         : num(form.isiPerKemasan);
       payload.satuanIsi = str(form.satuanIsi).trim().toUpperCase() || null;
-      if (recipeCutAllowedForBase(str(form.satuan))) payload.recipeCutEnabled = form.recipeCutEnabled === true;
+      const cutFlag = recipeCutFlag(form.recipeCutEnabled);
+      if (recipeCutAllowedForBase(str(form.satuan)) && cutFlag !== undefined) payload.recipeCutEnabled = cutFlag;
       if (recipeUomFamily(str(form.satuan)) === 'VOLUME') {
         payload.procurementPackMl = form.procurementPackMl === '' || form.procurementPackMl == null
           ? null
@@ -1258,11 +1265,18 @@ export default function ProdukPage() {
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    checked={form.recipeCutEnabled === true}
+                    checked={recipeCutEnabledOf({
+                      recipeCutEnabled: recipeCutFlag(form.recipeCutEnabled),
+                      nama: str(form.nama),
+                      satuan: str(form.satuan),
+                    })}
                     onChange={(e) => setForm({ ...form, recipeCutEnabled: e.target.checked })}
                   />
                   Bisa dipotong di resep (satuan dapur POTONG)
                 </label>
+                {recipeCutFlag(form.recipeCutEnabled) === undefined && isCutProductName(str(form.nama)) && (
+                  <p className="text-[11px] text-slate-500 mt-1">Aktif otomatis karena produk tahu/tempe.</p>
+                )}
                 <p className="text-[11px] text-slate-400 mt-1">
                   Untuk tempe/tahu: jumlah potong per {str(form.satuan) || 'basis'} diisi di tiap resep (beda resep boleh beda ukuran).
                   Isi juga gram per satuan basis agar gizi per potong terhitung.

@@ -47,6 +47,7 @@ import { loadRecipePortionExceptionSet } from '@/lib/api/handlers/recipe-portion
 import { casConflict } from '@/lib/api/cas';
 import { insertRecipeWithRevision, updateRecipeWithRevision } from '@/lib/api/recipe-revisions';
 import { RECIPE_REVISIONS_COLLECTION } from '@/lib/food-production/recipe-revision';
+import { recipeCutFlag } from '@/lib/food-production/recipe-uom';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 
@@ -308,7 +309,7 @@ async function loadIngredientProducts(
       recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
       isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
       satuanIsi: p.satuanIsi != null ? String(p.satuanIsi) : undefined,
-      recipeCutEnabled: p.recipeCutEnabled === true,
+      recipeCutEnabled: recipeCutFlag(p.recipeCutEnabled),
     }));
 }
 

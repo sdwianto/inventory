@@ -264,6 +264,35 @@ export function recipeCutAllowedForBase(baseSatuan: string | null | undefined): 
   return fam === 'COUNT' || fam === 'UNKNOWN';
 }
 
+/** Nilai tersimpan `recipeCutEnabled`: true/false eksplisit, atau undefined (ikut deteksi nama). */
+export function recipeCutFlag(v: unknown): boolean | undefined {
+  if (v === true) return true;
+  if (v === false) return false;
+  return undefined;
+}
+
+/** Tahu/tempe dibeli per BAK/ALIR/PCS lalu dipotong di dapur; kembang tahu (lembaran) tidak. */
+export function isCutProductName(nama: string | null | undefined): boolean {
+  const n = String(nama || '');
+  if (!/\b(tahu|tempe)\b/i.test(n)) return false;
+  return !/\bkembang\s+tahu\b/i.test(n);
+}
+
+/**
+ * Opsi POTONG aktif bila dicentang, atau belum pernah diatur dan nama produk tahu/tempe.
+ * `false` eksplisit mematikan deteksi nama.
+ */
+export function recipeCutEnabledOf(product: {
+  recipeCutEnabled?: boolean | null;
+  nama?: string | null;
+  satuan?: string | null;
+}): boolean {
+  if (!recipeCutAllowedForBase(product.satuan)) return false;
+  const flag = recipeCutFlag(product.recipeCutEnabled);
+  if (flag !== undefined) return flag;
+  return isCutProductName(product.nama);
+}
+
 /**
  * Label satuan dapur untuk lembar kebutuhan. POTONG diberi ukuran (mis. "POTONG (20/ALIR)") supaya
  * potongan beda ukuran dari resep berbeda tidak dijumlahkan jadi satu baris.
@@ -496,7 +525,7 @@ export function kitchenSatuanOptionsForBase(
     }
     const isi = opts ? isiPerKemasanOf(opts) : null;
     if (isi) out.add(isi.satuanIsi);
-    if (opts?.recipeCutEnabled) out.add(RECIPE_CUT_SATUAN);
+    if (opts && recipeCutEnabledOf({ ...opts, satuan: base })) out.add(RECIPE_CUT_SATUAN);
   }
   return [...out];
 }
@@ -562,7 +591,7 @@ export function factorKitchenToBase(
   const kFam = recipeUomFamily(kitchen);
   const bFam = recipeUomFamily(base);
 
-  if (kitchen === RECIPE_CUT_SATUAN && product.recipeCutEnabled && recipeCutAllowedForBase(base)) {
+  if (kitchen === RECIPE_CUT_SATUAN && recipeCutEnabledOf({ ...product, satuan: base })) {
     const perBase = potongPerBaseOf(opts.potongPerBase);
     if (perBase == null) return { error: `Isi jumlah potong per ${base} untuk satuan ${RECIPE_CUT_SATUAN}` };
     return { factorToBase: 1 / perBase, baseSatuan: base, factorSource: 'CUT' };

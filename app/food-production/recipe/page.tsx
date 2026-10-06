@@ -43,6 +43,8 @@ import {
   kitchenSatuanOptionsForBase,
   normalizeRecipeSatuan,
   RECIPE_CUT_SATUAN,
+  recipeCutEnabledOf,
+  recipeCutFlag,
   toBaseRecipeQty,
   type RecipeConversionProduct,
 } from '@/lib/food-production/recipe-uom';
@@ -73,7 +75,7 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
     isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
     satuanIsi: p.satuanIsi ? String(p.satuanIsi) : undefined,
-    recipeCutEnabled: p.recipeCutEnabled === true,
+    recipeCutEnabled: recipeCutFlag(p.recipeCutEnabled),
     gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
     itemRole: p.itemRole ? String(p.itemRole) : undefined,
     aktif: p.aktif !== false,
@@ -232,10 +234,19 @@ function kitchenOptsForProduct(p: ProductOpt | undefined): string[] {
   return kitchenSatuanOptionsForBase(p.satuan, kitchenOptsOf(p));
 }
 
+function isCutProduct(p: ProductOpt | undefined): boolean {
+  return Boolean(p?.satuan) && recipeCutEnabledOf({ recipeCutEnabled: p?.recipeCutEnabled, nama: p?.nama, satuan: p?.satuan });
+}
+
+/** Tahu/tempe: baris baru langsung POTONG supaya ukuran potong per resep diisi. */
 function defaultSatuanForProduct(p: ProductOpt | undefined): string {
   if (!p?.satuan) return '';
+  if (isCutProduct(p)) return RECIPE_CUT_SATUAN;
   return defaultKitchenSatuan(p.satuan, kitchenOptsOf(p));
 }
+
+/** Ambang qty basis (BAK/ALIR) yang hampir pasti maksudnya jumlah potong, bukan kemasan beli. */
+const CUT_BASE_QTY_CONFIRM = 100;
 
 /** Live preview: kitchen qty → product base. */
 function basePreview(
@@ -847,6 +858,25 @@ export default function FoodProductionRecipePage() {
     void hydrateMissingProducts(collectRecipeProductIds(row.lines || [], [row]));
   }
 
+  // `?edit=<recipeId>` (tautan dari Review Konversi): buka dialog ubah sekali setelah daftar termuat.
+  const editParamHandledRef = useRef(false);
+  useEffect(() => {
+    if (editParamHandledRef.current || !rows.length) return;
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    editParamHandledRef.current = true;
+    if (!editId) return;
+    const row = rows.find((r) => r.id === editId);
+    params.delete('edit');
+    const qs = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    if (!row) {
+      toast.error('Resep dari tautan tidak ditemukan');
+      return;
+    }
+    window.setTimeout(() => openEdit(row), 0);
+  });
+
   function applyFromExisting(row: RecipeRow) {
     setForm((f) => ({
       ...f,
@@ -893,6 +923,22 @@ export default function FoodProductionRecipePage() {
         if (!l.satuan) {
           throw new Error(`Bahan "${product?.nama || l.productId}": satuan dapur wajib dipilih`);
         }
+      }
+      const suspicious = readyLines.flatMap((l) => {
+        const product = products.find((p) => p.id === l.productId);
+        if (!isCutProduct(product) || normalizeRecipeSatuan(l.satuan) === RECIPE_CUT_SATUAN) return [];
+        const r = toBaseRecipeQty(Number(l.qtyBesar) || 0, l.satuan, productConvFromOpt(product), {
+          strict: strictRecipeConversion(),
+        });
+        if ('error' in r || r.qtyBase < CUT_BASE_QTY_CONFIRM) return [];
+        return [`- ${product?.nama}: ${formatNumber(Number(l.qtyBesar) || 0)} ${l.satuan} = ${formatNumber(r.qtyBase)} ${r.baseSatuan}`];
+      });
+      if (suspicious.length && !window.confirm(
+        `Tahu/tempe ditulis dalam satuan beli, bukan POTONG:\n${suspicious.join('\n')}\n\n`
+        + 'Pengadaan akan memesan sebanyak itu. Bila maksudnya jumlah potong, pilih Batal lalu ganti satuan ke POTONG '
+        + 'dan isi ukuran potongnya. Tetap simpan?',
+      )) {
+        return;
       }
       const payload = {
         nama,
@@ -1625,6 +1671,11 @@ export default function FoodProductionRecipePage() {
                             potong / {product?.satuan || 'basis'}
                           </span>
                         </div>
+                      )}
+                      {!isCutLine && isCutProduct(product) && (
+                        <p className="mt-0.5 text-[10px] leading-tight text-amber-700">
+                          Tahu/tempe biasanya dipotong — pilih POTONG agar pengadaan sesuai.
+                        </p>
                       )}
                       {preview.text ? (
                         <p

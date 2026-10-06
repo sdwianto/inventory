@@ -20,7 +20,8 @@ export const EMPTY_PRODUCT: JsonObject = {
   /** 1 satuan basis = N satuanIsi (mis. 1 RTG = 10 SACHET). */
   isiPerKemasan: '',
   satuanIsi: '',
-  recipeCutEnabled: false,
+  /** null = ikut deteksi nama tahu/tempe; true/false = diatur manual. */
+  recipeCutEnabled: null,
   procurementPackMl: '',
   procurementPackLabel: '',
   /** Masa simpan (hari) — dasar kedaluwarsa lot bila GRN tidak mengisi tanggal. */

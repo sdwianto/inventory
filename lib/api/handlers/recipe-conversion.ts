@@ -5,7 +5,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import { auditActor } from '@/lib/api/audit-log';
 import { casUpdateWithAudit } from '@/lib/api/cas';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
-import { inferRecipeBridgeFromNama } from '@/lib/food-production/recipe-uom';
+import { inferRecipeBridgeFromNama, recipeCutFlag } from '@/lib/food-production/recipe-uom';
 import {
   RECIPE_BRIDGE_VALUE_FIELDS,
   manualRecipeBridgeSet,
@@ -130,7 +130,7 @@ export async function handleRecipeConversion(ctx: HandlerContext): Promise<NextR
             recipeBaseMl: existing.recipeBaseMl ?? null,
             isiPerKemasan: existing.isiPerKemasan ?? null,
             satuanIsi: existing.satuanIsi ?? null,
-            recipeCutEnabled: existing.recipeCutEnabled === true,
+            recipeCutEnabled: recipeCutFlag(existing.recipeCutEnabled) ?? null,
             procurementPackMl: existing.procurementPackMl ?? null,
             procurementPackLabel: existing.procurementPackLabel ?? null,
           },

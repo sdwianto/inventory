@@ -19,6 +19,9 @@ import {
   inferRecipeBridgeFromNama,
   isFallbackFactorSource,
   normalizeRecipeSatuan,
+  RECIPE_CUT_SATUAN,
+  recipeCutEnabledOf,
+  recipeCutFlag,
   recipeUomFamily,
 } from '@/lib/food-production/recipe-uom';
 import { loadLiveProductMap, type LiveCatalogProduct } from '@/lib/api/resolve-live-catalog-product';
@@ -49,6 +52,8 @@ export type RecipeLineConversionRow = {
   } | null;
   status: RecipeLineConversionStatus;
   cutover: boolean;
+  /** Produk tahu/tempe (POTONG aktif) tetapi baris belum memakai POTONG. */
+  needsCut?: boolean;
   error?: string;
   /** Baris hasil hitung ulang: STALE, atau OK yang hanya perlu isi factorSource. */
   nextLine?: RecipeLine;
@@ -63,7 +68,12 @@ export type ProductConversionReview = {
   recipeBaseMl: number | null;
   isiPerKemasan: number | null;
   satuanIsi: string | null;
+  /** Nilai efektif (centang manual atau deteksi nama tahu/tempe). */
   recipeCutEnabled: boolean;
+  /** Nilai tersimpan: null = belum diatur. */
+  recipeCutFlag: boolean | null;
+  /** Jumlah baris resep produk ini yang belum memakai POTONG (hanya bila POTONG aktif). */
+  cutPendingLines: number;
   procurementPackMl: number | null;
   procurementPackLabel: string | null;
   recipeBridgeSource: string | null;
@@ -88,6 +98,8 @@ export type RecipeConversionReview = {
     fallbackLines: number;
     productsInvalid: number;
     productsStale: number;
+    /** Baris tahu/tempe yang belum memakai POTONG. */
+    cutPendingLines: number;
   };
 };
 
@@ -249,6 +261,7 @@ export async function buildRecipeConversionReview(
     fallbackLines: 0,
     productsInvalid: 0,
     productsStale: 0,
+    cutPendingLines: 0,
   };
 
   for (const recipe of recipes) {
@@ -269,6 +282,8 @@ export async function buildRecipeConversionReview(
           isiPerKemasan: null,
           satuanIsi: null,
           recipeCutEnabled: false,
+          recipeCutFlag: null,
+          cutPendingLines: 0,
           procurementPackMl: null,
           procurementPackLabel: null,
           recipeBridgeSource: null,
@@ -323,7 +338,13 @@ export async function buildRecipeConversionReview(
           recipeBaseMl: numOrNull(p.recipeBaseMl),
           isiPerKemasan: numOrNull(p.isiPerKemasan),
           satuanIsi: p.satuanIsi ? normalizeRecipeSatuan(p.satuanIsi) : null,
-          recipeCutEnabled: p.recipeCutEnabled === true,
+          recipeCutEnabled: recipeCutEnabledOf({
+            recipeCutEnabled: recipeCutFlag(p.recipeCutEnabled),
+            nama: p.nama as string | undefined,
+            satuan: p.satuan as string | undefined,
+          }),
+          recipeCutFlag: recipeCutFlag(p.recipeCutEnabled) ?? null,
+          cutPendingLines: 0,
           procurementPackMl: numOrNull(p.procurementPackMl),
           procurementPackLabel: p.procurementPackLabel ? normalizeRecipeSatuan(p.procurementPackLabel) : null,
           recipeBridgeSource: p.recipeBridgeSource ? String(p.recipeBridgeSource) : null,
@@ -343,12 +364,17 @@ export async function buildRecipeConversionReview(
       }
       if (STATUS_RANK[row.status] > STATUS_RANK[entry.status]) entry.status = row.status;
       if (lineNeedsBridge(row.satuan, entry.satuan, entry.satuanIsi)) entry.needsBridge = true;
+      if (entry.recipeCutEnabled && row.satuan !== RECIPE_CUT_SATUAN) {
+        row.needsCut = true;
+        entry.cutPendingLines += 1;
+        summary.cutPendingLines += 1;
+      }
       entry.lines.push(row);
     });
   }
 
   const list = [...byProduct.values()]
-    .filter((p) => opts.includeOk || p.status !== 'OK' || p.needsBridge)
+    .filter((p) => opts.includeOk || p.status !== 'OK' || p.needsBridge || p.cutPendingLines > 0)
     .sort((a, b) => STATUS_RANK[b.status] - STATUS_RANK[a.status] || a.nama.localeCompare(b.nama));
   for (const p of byProduct.values()) {
     if (p.status === 'INVALID') summary.productsInvalid += 1;

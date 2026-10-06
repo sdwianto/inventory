@@ -14,6 +14,7 @@ import {
   factorKitchenToBase,
   kitchenSatuanOptionsForBase,
   normalizeRecipeSatuan,
+  recipeCutFlag,
   recipeUomFamily,
   type RecipeConversionProduct,
 } from '@/lib/food-production/recipe-uom';
@@ -49,7 +50,7 @@ export function recipeConversionProductOf(p: RecipeConversionSource): RecipeConv
     recipeBaseMl: numOrUndef(p.recipeBaseMl),
     isiPerKemasan: numOrUndef(p.isiPerKemasan),
     satuanIsi: p.satuanIsi != null && String(p.satuanIsi).trim() ? String(p.satuanIsi) : undefined,
-    recipeCutEnabled: p.recipeCutEnabled === true,
+    recipeCutEnabled: recipeCutFlag(p.recipeCutEnabled),
     nutrition,
   };
 }

@@ -72,6 +72,7 @@ import {
   resolveRecipeBridgeInput,
   stripRecipeBridgeMeta,
 } from '@/lib/api/product-recipe-bridge';
+import { recipeCutFlag } from '@/lib/food-production/recipe-uom';
 
 /** Field identitas vendor yang tidak boleh diubah dari Inventory (kecuali `nama` — boleh koreksi lokal). */
 const VENDOR_LOCKED_FIELDS = [
@@ -820,7 +821,7 @@ export async function handleProducts({
               recipeBaseMl: existing.recipeBaseMl ?? null,
               isiPerKemasan: existing.isiPerKemasan ?? null,
               satuanIsi: existing.satuanIsi ?? null,
-              recipeCutEnabled: existing.recipeCutEnabled === true,
+              recipeCutEnabled: recipeCutFlag(existing.recipeCutEnabled) ?? null,
               procurementPackMl: existing.procurementPackMl ?? null,
               procurementPackLabel: existing.procurementPackLabel ?? null,
             },

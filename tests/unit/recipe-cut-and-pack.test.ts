@@ -7,7 +7,9 @@ import {
   convertRecipeLineQtys,
   factorKitchenToBase,
   kitchenSatuanOptionsForBase,
+  isCutProductName,
   recipeCutAllowedForBase,
+  recipeCutEnabledOf,
   recipeKitchenSatuanLabel,
   validateProcurementPack,
   RECIPE_CUT_SATUAN,
@@ -270,5 +272,72 @@ describe('resolveRecipeBridgeInput: flag potong + kemasan beli', () => {
     if ('error' in ok) throw new Error(ok.error);
     expect(ok.values.recipeCutEnabled).toBe(true);
     expect('error' in resolveRecipeBridgeInput({ recipeCutEnabled: true }, 'KG', {})).toBe(true);
+  });
+});
+
+describe('POTONG otomatis untuk tahu/tempe', () => {
+  it('nama tahu/tempe dikenali, kembang tahu tidak', () => {
+    expect(isCutProductName('Tempe Seno')).toBe(true);
+    expect(isCutProductName('TAHU GEMBOS')).toBe(true);
+    expect(isCutProductName('Kembang Tahu Premiun 62cm')).toBe(false);
+    expect(isCutProductName('Tahunan Beras')).toBe(false);
+    expect(isCutProductName('Bakso Sapi')).toBe(false);
+  });
+
+  it('aktif tanpa centang untuk basis hitung; false eksplisit mematikan; basis massa ditolak', () => {
+    expect(recipeCutEnabledOf({ nama: 'Tempe Seno', satuan: 'ALIR' })).toBe(true);
+    expect(recipeCutEnabledOf({ nama: 'Tahu Gembos', satuan: 'PCS', recipeCutEnabled: null })).toBe(true);
+    expect(recipeCutEnabledOf({ nama: 'Tahu Putih', satuan: 'BAK', recipeCutEnabled: false })).toBe(false);
+    expect(recipeCutEnabledOf({ nama: 'Tahu Kering', satuan: 'KG' })).toBe(false);
+    expect(recipeCutEnabledOf({ nama: 'Kol', satuan: 'PCS', recipeCutEnabled: true })).toBe(true);
+    expect(recipeCutEnabledOf({ nama: 'Kol', satuan: 'PCS' })).toBe(false);
+  });
+
+  it('opsi dan faktor POTONG mengikuti deteksi nama', () => {
+    expect(kitchenSatuanOptionsForBase('ALIR', { nama: 'Tempe Seno' })).toContain(RECIPE_CUT_SATUAN);
+    expect(kitchenSatuanOptionsForBase('ALIR', { nama: 'Tempe Seno', recipeCutEnabled: false })).not.toContain(RECIPE_CUT_SATUAN);
+    const f = factorKitchenToBase('POTONG', { satuan: 'ALIR', nama: 'Tempe Seno' }, { potongPerBase: 8, strict: true });
+    if ('error' in f) throw new Error(f.error);
+    expect(f.factorToBase).toBeCloseTo(1 / 8, 9);
+    expect(f.factorSource).toBe('CUT');
+  });
+
+  it('simpan field jembatan lain tidak mengubah flag kosong jadi false', () => {
+    const untouched = resolveRecipeBridgeInput({ recipeBaseGrams: 250 }, 'ALIR', { nama: 'Tempe Seno' });
+    if ('error' in untouched) throw new Error(untouched.error);
+    expect(untouched.values.recipeCutEnabled).toBeNull();
+    const keptFalse = resolveRecipeBridgeInput({ recipeBaseGrams: 250 }, 'ALIR', { recipeCutEnabled: false });
+    if ('error' in keptFalse) throw new Error(keptFalse.error);
+    expect(keptFalse.values.recipeCutEnabled).toBe(false);
+    const off = resolveRecipeBridgeInput({ recipeCutEnabled: false }, 'ALIR', { nama: 'Tempe Seno' });
+    if ('error' in off) throw new Error(off.error);
+    expect(off.values.recipeCutEnabled).toBe(false);
+    expect(off.changed).toBe(true);
+  });
+
+  it('MRP: tempe tanpa centang, 500 potong (8/ALIR) untuk 640 porsi → 80 ALIR', () => {
+    const now = new Date();
+    const seno = { satuan: 'ALIR', nama: 'Tempe Seno' };
+    const r: RecipeDoc = {
+      id: 'seno', tenantId: 't1', kode: 'SENO', nama: 'Tempe Goreng', finishedGoodProductId: 'fg-seno',
+      version: 1, effectiveDate: '2026-10-01', yieldQty: 500, wastePct: 0,
+      lines: [cutLine('seno', seno, 500, 8)], aktif: true, createdAt: now, updatedAt: now,
+    };
+    const res = explodeMaterialRequirements({
+      plan: {
+        id: 'p2', noDokumen: 'RPN2', tanggal: '2026-10-07', kitchenId: 'k1', kitchenWarehouseKode: 'GKERING',
+        status: 'APPROVED', kategoriPorsiList: ['PORSI_BESAR'],
+        lines: [{ recipeId: 'seno', targetPorsi: 640, kategoriPorsiList: ['PORSI_BESAR'] }],
+      },
+      menusById: new Map<string, MenuDoc>(),
+      recipesById: new Map([[r.id, r]]),
+      onHandByProduct: new Map([['seno', 0]]),
+      warehouseKode: 'GKERING',
+    });
+    if (!res.ok) throw new Error('mrp gagal');
+    const t = res.lines.find((l) => l.productId === 'seno');
+    // 640 porsi × (500 potong / 500 porsi) = 640 potong / 8 = 80 ALIR
+    expect(t?.satuan).toBe('ALIR');
+    expect(t?.qtyNet).toBe(80);
   });
 });

@@ -21,7 +21,7 @@ type ReviewResponse = {
   products: ProductConversionReview[];
 };
 
-type Filter = 'PROBLEM' | 'INVALID' | 'STALE' | 'ALL';
+type Filter = 'PROBLEM' | 'INVALID' | 'STALE' | 'CUT' | 'ALL';
 
 type EditState = {
   recipeBaseGrams: string;
@@ -72,7 +72,7 @@ function editFrom(p: ProductConversionReview): EditState {
     recipeBaseMl: p.recipeBaseMl != null ? String(p.recipeBaseMl) : '',
     isiPerKemasan: p.isiPerKemasan != null ? String(p.isiPerKemasan) : '',
     satuanIsi: p.satuanIsi || '',
-    recipeCutEnabled: p.recipeCutEnabled === true,
+    recipeCutEnabled: p.recipeCutEnabled,
     procurementPackMl: p.procurementPackMl != null ? String(p.procurementPackMl) : '',
     procurementPackLabel: p.procurementPackLabel || '',
   };
@@ -112,6 +112,7 @@ export default function RecipeConversionReviewPage() {
       if (filter === 'PROBLEM' && p.status === 'OK') return false;
       if (filter === 'INVALID' && p.status !== 'INVALID') return false;
       if (filter === 'STALE' && p.status !== 'STALE') return false;
+      if (filter === 'CUT' && !(p.cutPendingLines > 0)) return false;
       if (!needle) return true;
       return p.nama.toLowerCase().includes(needle) || p.kode.toLowerCase().includes(needle);
     });
@@ -133,7 +134,9 @@ export default function RecipeConversionReviewPage() {
       recipeBaseMl: e.recipeBaseMl.trim() === '' ? null : Number(e.recipeBaseMl),
       isiPerKemasan: e.isiPerKemasan.trim() === '' ? null : Number(e.isiPerKemasan),
       satuanIsi: e.satuanIsi.trim() || null,
-      ...(recipeCutAllowedForBase(p.satuan) ? { recipeCutEnabled: e.recipeCutEnabled } : {}),
+      ...(recipeCutAllowedForBase(p.satuan) && e.recipeCutEnabled !== p.recipeCutEnabled
+        ? { recipeCutEnabled: e.recipeCutEnabled }
+        : {}),
       ...(recipeUomFamily(p.satuan) === 'VOLUME'
         ? {
           procurementPackMl: e.procurementPackMl.trim() === '' ? null : Number(e.procurementPackMl),
@@ -206,6 +209,11 @@ export default function RecipeConversionReviewPage() {
           <div className="text-amber-800">Perlu hitung ulang: <strong>{s.staleLines}</strong></div>
           <div className="text-red-700">Konversi belum ada: <strong>{s.invalidLines}</strong></div>
           <div className="text-muted-foreground">Snapshot faktor cadangan: <strong>{s.fallbackLines}</strong></div>
+          {s.cutPendingLines > 0 && (
+            <button type="button" className="text-amber-800 underline-offset-2 hover:underline" onClick={() => setFilter('CUT')}>
+              Tahu/tempe belum POTONG: <strong>{s.cutPendingLines}</strong>
+            </button>
+          )}
         </div>
       )}
 
@@ -218,6 +226,7 @@ export default function RecipeConversionReviewPage() {
           <option value="PROBLEM">Bermasalah</option>
           <option value="INVALID">Konversi belum ada</option>
           <option value="STALE">Perlu hitung ulang</option>
+          <option value="CUT">Tahu/tempe belum POTONG</option>
           <option value="ALL">Semua bahan kemasan</option>
         </select>
         <Input className="h-9 w-64" placeholder="Cari kode / nama" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -248,7 +257,8 @@ export default function RecipeConversionReviewPage() {
             )}
             {!loading && rows.map((p) => {
               const e = edits[p.productId] || editFrom(p);
-              const expanded = open.has(p.productId);
+              const expanded = open.has(p.productId) || filter === 'CUT';
+              const lines = filter === 'CUT' ? p.lines.filter((l) => l.needsCut) : p.lines;
               const inferredLabel = [
                 p.inferred.grams != null ? `${fmt(p.inferred.grams)} g` : '',
                 p.inferred.ml != null ? `${fmt(p.inferred.ml)} ml` : '',
@@ -266,6 +276,11 @@ export default function RecipeConversionReviewPage() {
                       <div className="text-[11px] font-mono text-muted-foreground">
                         {p.kode} · basis {p.satuan || '—'} · {p.lines.length} baris resep
                       </div>
+                      {p.cutPendingLines > 0 && (
+                        <div className="text-[11px] text-amber-800">
+                          {p.cutPendingLines} baris belum memakai POTONG
+                        </div>
+                      )}
                       {p.nutritionGramsPerUnit != null && (
                         <div className="text-[11px] text-muted-foreground">
                           Nutrisi: {fmt(p.nutritionGramsPerUnit)} g/unit (tidak dipakai mode ketat)
@@ -326,6 +341,9 @@ export default function RecipeConversionReviewPage() {
                           />
                           Bisa dipotong di resep
                         </label>
+                      )}
+                      {p.recipeCutFlag == null && p.recipeCutEnabled && (
+                        <div className="text-[11px] text-muted-foreground">Otomatis (tahu/tempe)</div>
                       )}
                       {recipeUomFamily(p.satuan) === 'VOLUME' && (
                         <div className="flex items-center gap-1" title="Pengadaan dibulatkan ke atas per kemasan beli">
@@ -390,12 +408,23 @@ export default function RecipeConversionReviewPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {p.lines.map((l) => (
+                            {lines.map((l) => (
                               <tr key={`${l.recipeId}-${l.lineIndex}`} className="border-t">
                                 <td className="p-1">
                                   {l.recipeKode} — {l.recipeNama}
                                   {!l.recipeAktif && <span className="text-muted-foreground"> (nonaktif)</span>}
                                   {l.cutover && <span className="text-amber-800"> · cutover</span>}
+                                  {l.needsCut && (
+                                    <div className="text-amber-800">
+                                      Belum POTONG ·{' '}
+                                      <Link
+                                        href={`/food-production/recipe?edit=${encodeURIComponent(l.recipeId)}`}
+                                        className="underline underline-offset-2"
+                                      >
+                                        Buka resep
+                                      </Link>
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="p-1">{l.satuan || '—'} → {l.baseSatuan || '—'}</td>
                                 <td className="p-1 text-right">
