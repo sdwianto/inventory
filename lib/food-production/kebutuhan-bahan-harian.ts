@@ -8,6 +8,7 @@ import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/pr
 import {
   convertQtySameFamily,
   foldSameFamilyQtyLines,
+  recipeKitchenSatuanLabel,
 } from '@/lib/food-production/recipe-uom';
 import {
   KATEGORI_MENU_OPTIONS,
@@ -389,7 +390,7 @@ export function buildAcuanResepCards(
       productId: String(line.productId || ''),
       productKode: line.productKode,
       productNama: line.productNama,
-      satuan: line.satuan || line.baseSatuan,
+      satuan: recipeKitchenSatuanLabel(line),
       qtyBesar: roundQty(recipeQtyForFamily(line, 'BESAR') * factor),
       qtyKecil: roundQty(recipeQtyForFamily(line, 'KECIL') * factor),
     })).filter((l) => l.qtyBesar > 0 || l.qtyKecil > 0);

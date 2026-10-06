@@ -26,6 +26,7 @@ import {
   buildPurchaseLinesFromMrp,
   summarizePurchaseLines,
   toDraftCpoItemPayloads,
+  procurementPackNotes,
   PR_ELIGIBLE_MRP_STATUSES,
   PR_ACTIVE_STATUSES,
   isPrEditable,
@@ -410,7 +411,7 @@ async function prepareDraftCpo(
     status: 'DRAFT',
     items: mapped.items,
     estimasiTotal: sumPoEstimasi(mapped.items),
-    catatan: `Dari Kebutuhan Beli ${opts.pr.noDokumen}`,
+    catatan: [`Dari Kebutuhan Beli ${opts.pr.noDokumen}`, ...procurementPackNotes(opts.pr.lines)].join(' · '),
     paymentTerms: 'KREDIT',
     ...vendorPoWriteFields({
       purchaseRequirementId: opts.pr.id,

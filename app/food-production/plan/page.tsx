@@ -244,6 +244,9 @@ interface MaterialReadiness {
     sourceOfTruth?: 'PO';
     poQtyOrdered?: number;
     poQtyReceived?: number;
+    packCount?: number;
+    procurementPackLabel?: string;
+    procurementPackMl?: number;
   }>;
   loading?: boolean;
   error?: string;
@@ -3832,6 +3835,11 @@ function FoodProductionPlanPageContent() {
                     <td className="p-2 text-right tabular-nums text-destructive font-medium">
                       {formatNumber(line.qtyNet ?? 0)}
                       {line.satuan ? ` ${line.satuan}` : ''}
+                      {line.packCount && line.procurementPackLabel ? (
+                        <div className="text-[11px] font-normal text-muted-foreground">
+                          {line.packCount} {line.procurementPackLabel} @{formatNumber(line.procurementPackMl ?? 0)} ml
+                        </div>
+                      ) : null}
                     </td>
                     <td className="p-2 text-right tabular-nums text-muted-foreground">
                       {formatNumber(line.qtyOnHand ?? 0)}

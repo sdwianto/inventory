@@ -1262,6 +1262,9 @@ export async function handleProductionPlans({
         sourceOfTruth: l.sourceOfTruth,
         poQtyOrdered: l.poQtyOrdered,
         poQtyReceived: l.poQtyReceived,
+        packCount: l.packCount,
+        procurementPackLabel: l.procurementPackLabel,
+        procurementPackMl: l.procurementPackMl,
       }));
 
     const consumptionSummary = await loadPlanConsumptionSummary(db, scopeAuth, id);

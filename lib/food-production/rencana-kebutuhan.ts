@@ -28,6 +28,7 @@ import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/pr
 import {
   convertQtySameFamily,
   foldSameFamilyQtyLines,
+  recipeKitchenSatuanLabel,
 } from '@/lib/food-production/recipe-uom';
 
 export type RencanaKebutuhanSource = {
@@ -274,7 +275,7 @@ export function recipeIngredientNeeds(input: {
   );
   return lines
     .map((rLine) => {
-      const kitchenSatuan = rLine.satuan || rLine.baseSatuan;
+      const kitchenSatuan = recipeKitchenSatuanLabel(rLine);
       const qtyResepBesar = recipeQtyForFamily(rLine, 'BESAR');
       const qtyResepKecil = recipeQtyForFamily(rLine, 'KECIL');
       const wastePct = recipeWastePctForLine(recipeWastePct, rLine, keys);

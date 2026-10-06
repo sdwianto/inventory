@@ -26,6 +26,7 @@ import { withActingTenantQuery } from '@/lib/tenant-api';
 import { WAREHOUSES, warehouseName } from '@/lib/warehouses-client';
 import { resolveVendorTier, vendorPriceFromProduct, vendorTierLabel } from '@/lib/vendor-price';
 import { productStockLabel, productStockTitle } from '@/lib/uom/display';
+import { recipeCutAllowedForBase, recipeUomFamily } from '@/lib/food-production/recipe-uom';
 import { EMPTY_PRODUCT, PRODUCT_MANAGE_ROLES, PRODUCT_SELECT_CLASS } from '@/lib/produk/constants';
 import {
   ITEM_ROLE_LABELS,
@@ -384,6 +385,13 @@ export default function ProdukPage() {
         ? null
         : num(form.isiPerKemasan);
       payload.satuanIsi = str(form.satuanIsi).trim().toUpperCase() || null;
+      if (recipeCutAllowedForBase(str(form.satuan))) payload.recipeCutEnabled = form.recipeCutEnabled === true;
+      if (recipeUomFamily(str(form.satuan)) === 'VOLUME') {
+        payload.procurementPackMl = form.procurementPackMl === '' || form.procurementPackMl == null
+          ? null
+          : num(form.procurementPackMl);
+        payload.procurementPackLabel = str(form.procurementPackLabel).trim().toUpperCase() || null;
+      }
       payload.shelfLifeDays = form.shelfLifeDays === '' || form.shelfLifeDays == null
         ? null
         : num(form.shelfLifeDays);
@@ -1245,6 +1253,51 @@ export default function ProdukPage() {
                 Isi berpasangan dengan jumlah isi. Resep boleh memakai satuan ini (mis. 2 SACHET).
               </p>
             </div>
+            {recipeCutAllowedForBase(str(form.satuan)) && (
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.recipeCutEnabled === true}
+                    onChange={(e) => setForm({ ...form, recipeCutEnabled: e.target.checked })}
+                  />
+                  Bisa dipotong di resep (satuan dapur POTONG)
+                </label>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Untuk tempe/tahu: jumlah potong per {str(form.satuan) || 'basis'} diisi di tiap resep (beda resep boleh beda ukuran).
+                  Isi juga gram per satuan basis agar gizi per potong terhitung.
+                </p>
+              </div>
+            )}
+            {recipeUomFamily(str(form.satuan)) === 'VOLUME' && (
+              <>
+                <div>
+                  <Label>Isi kemasan beli (ml)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={form.procurementPackMl === '' || form.procurementPackMl == null ? '' : num(form.procurementPackMl)}
+                    onChange={(e) => setForm({
+                      ...form,
+                      procurementPackMl: e.target.value === '' ? '' : parseFloat(e.target.value),
+                    })}
+                    placeholder="contoh: 700"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Kebutuhan pengadaan dibulatkan ke atas per kemasan (1.500 ml, kemasan 700 ml = 3 kemasan). Stok tetap {str(form.satuan)}.
+                  </p>
+                </div>
+                <div>
+                  <Label>Nama kemasan beli</Label>
+                  <Input
+                    value={str(form.procurementPackLabel)}
+                    onChange={(e) => setForm({ ...form, procurementPackLabel: e.target.value.toUpperCase() })}
+                    placeholder="contoh: SACHET"
+                  />
+                </div>
+              </>
+            )}
 
             <FormSectionTitle>Kedaluwarsa &amp; Lot</FormSectionTitle>
             <div>

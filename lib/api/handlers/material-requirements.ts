@@ -15,6 +15,8 @@ import {
   isMrpEditable,
   decideMrpRegenerateMode,
   MRP_ELIGIBLE_PLAN_STATUSES,
+  procurementPackOf,
+  type ProcurementPack,
   type MaterialRequirementDoc,
   type MaterialRequirementLine,
   type MaterialRequirementStatus,
@@ -291,9 +293,14 @@ async function buildExplosion(
   // Enrich names + resolve each SKU's warehouse (buah/basah → GBASAH, not kitchen GKERING)
   const products = await db.collection('products')
     .find({ ...tenantFilter, id: { $in: stockIds } })
-    .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, grup: 1 })
+    .project({ id: 1, kode: 1, nama: 1, satuan: 1, gudangKode: 1, grup: 1, procurementPackMl: 1, procurementPackLabel: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
+  const procurementPackByProduct = new Map<string, ProcurementPack>();
+  for (const p of products) {
+    const pack = procurementPackOf(p);
+    if (pack) procurementPackByProduct.set(String(p.id), pack);
+  }
   for (const recipe of recipes) {
     for (const line of recipe.lines || []) {
       const p = productById.get(line.productId);
@@ -355,6 +362,7 @@ async function buildExplosion(
     menusById,
     recipesById,
     onHandByProduct,
+    procurementPackByProduct,
     warehouseKode,
     acuanByKategori,
     fullPortionKeys: exceptionKeys,

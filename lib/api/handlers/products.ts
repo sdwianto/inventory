@@ -119,6 +119,11 @@ interface ProductBody extends Record<string, unknown> {
   /** 1 products.satuan = N satuanIsi (mis. 1 RTG = 10 SACHET). */
   isiPerKemasan?: number | string | null;
   satuanIsi?: string | null;
+  /** Boleh satuan dapur POTONG (jumlah potong per satuan basis diisi per baris resep). */
+  recipeCutEnabled?: boolean;
+  /** Satuan dasar volume: isi 1 kemasan beli (ml) + nama kemasan, untuk pembulatan pengadaan. */
+  procurementPackMl?: number | string | null;
+  procurementPackLabel?: string | null;
   /** Masa simpan (hari) — dasar kedaluwarsa lot bila GRN tidak mengisi tanggal. */
   shelfLifeDays?: number | string | null;
   /** No. lot pemasok wajib di GRN (flag lotExpiryRequired). */
@@ -815,6 +820,9 @@ export async function handleProducts({
               recipeBaseMl: existing.recipeBaseMl ?? null,
               isiPerKemasan: existing.isiPerKemasan ?? null,
               satuanIsi: existing.satuanIsi ?? null,
+              recipeCutEnabled: existing.recipeCutEnabled === true,
+              procurementPackMl: existing.procurementPackMl ?? null,
+              procurementPackLabel: existing.procurementPackLabel ?? null,
             },
             after: bridge.values,
           },

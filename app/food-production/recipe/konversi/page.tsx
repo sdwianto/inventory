@@ -13,6 +13,7 @@ import type {
   RecipeConversionReview,
   RecipeLineConversionStatus,
 } from '@/lib/api/recipe-conversion-review';
+import { recipeCutAllowedForBase, recipeUomFamily } from '@/lib/food-production/recipe-uom';
 
 type ReviewResponse = {
   strictRecipeConversion: boolean;
@@ -27,6 +28,9 @@ type EditState = {
   recipeBaseMl: string;
   isiPerKemasan: string;
   satuanIsi: string;
+  recipeCutEnabled: boolean;
+  procurementPackMl: string;
+  procurementPackLabel: string;
 };
 
 const STATUS_LABEL: Record<RecipeLineConversionStatus, string> = {
@@ -54,6 +58,7 @@ const FACTOR_SOURCE_LABEL: Record<string, string> = {
   INFERRED: 'tebakan nama',
   NUTRITION: 'nutrisi 100 g',
   SPPG_STANDARD: 'standar SPPG',
+  CUT: 'potong per resep',
 };
 
 function fmt(n: number | null | undefined, digits = 6): string {
@@ -67,6 +72,9 @@ function editFrom(p: ProductConversionReview): EditState {
     recipeBaseMl: p.recipeBaseMl != null ? String(p.recipeBaseMl) : '',
     isiPerKemasan: p.isiPerKemasan != null ? String(p.isiPerKemasan) : '',
     satuanIsi: p.satuanIsi || '',
+    recipeCutEnabled: p.recipeCutEnabled === true,
+    procurementPackMl: p.procurementPackMl != null ? String(p.procurementPackMl) : '',
+    procurementPackLabel: p.procurementPackLabel || '',
   };
 }
 
@@ -125,6 +133,13 @@ export default function RecipeConversionReviewPage() {
       recipeBaseMl: e.recipeBaseMl.trim() === '' ? null : Number(e.recipeBaseMl),
       isiPerKemasan: e.isiPerKemasan.trim() === '' ? null : Number(e.isiPerKemasan),
       satuanIsi: e.satuanIsi.trim() || null,
+      ...(recipeCutAllowedForBase(p.satuan) ? { recipeCutEnabled: e.recipeCutEnabled } : {}),
+      ...(recipeUomFamily(p.satuan) === 'VOLUME'
+        ? {
+          procurementPackMl: e.procurementPackMl.trim() === '' ? null : Number(e.procurementPackMl),
+          procurementPackLabel: e.procurementPackLabel.trim() || null,
+        }
+        : {}),
     };
     if (confirmInferred) body.confirmInferred = true;
     setSaving(p.productId);
@@ -219,16 +234,17 @@ export default function RecipeConversionReviewPage() {
               <th className="text-left p-2">Gram / basis</th>
               <th className="text-left p-2">Ml / basis</th>
               <th className="text-left p-2">Isi per kemasan</th>
+              <th className="text-left p-2">Potong / kemasan beli</th>
               <th className="text-left p-2">Sumber</th>
               <th className="text-right p-2">Aksi</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Memuat…</td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Tidak ada bahan pada filter ini</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Tidak ada bahan pada filter ini</td></tr>
             )}
             {!loading && rows.map((p) => {
               const e = edits[p.productId] || editFrom(p);
@@ -301,6 +317,41 @@ export default function RecipeConversionReviewPage() {
                       </div>
                     </td>
                     <td className="p-2 text-xs">
+                      {recipeCutAllowedForBase(p.satuan) && (
+                        <label className="flex items-center gap-1.5 whitespace-nowrap" title="Resep boleh memakai satuan POTONG; jumlah potong per satuan beli diisi di tiap resep">
+                          <input
+                            type="checkbox"
+                            checked={e.recipeCutEnabled}
+                            onChange={(ev) => setEdit(p, { recipeCutEnabled: ev.target.checked })}
+                          />
+                          Bisa dipotong di resep
+                        </label>
+                      )}
+                      {recipeUomFamily(p.satuan) === 'VOLUME' && (
+                        <div className="flex items-center gap-1" title="Pengadaan dibulatkan ke atas per kemasan beli">
+                          <Input
+                            className="h-8 w-20"
+                            type="number"
+                            min={0}
+                            step="any"
+                            placeholder="700"
+                            value={e.procurementPackMl}
+                            onChange={(ev) => setEdit(p, { procurementPackMl: ev.target.value })}
+                          />
+                          <span className="text-muted-foreground">ml /</span>
+                          <Input
+                            className="h-8 w-24"
+                            placeholder="SACHET"
+                            value={e.procurementPackLabel}
+                            onChange={(ev) => setEdit(p, { procurementPackLabel: ev.target.value.toUpperCase() })}
+                          />
+                        </div>
+                      )}
+                      {!recipeCutAllowedForBase(p.satuan) && recipeUomFamily(p.satuan) !== 'VOLUME' && (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="p-2 text-xs">
                       <div>{p.recipeBridgeSource ? SOURCE_LABEL[p.recipeBridgeSource] || p.recipeBridgeSource : 'Belum ditetapkan'}</div>
                       {inferredLabel && (
                         <div className="text-muted-foreground">Tebakan nama: {inferredLabel}</div>
@@ -326,7 +377,7 @@ export default function RecipeConversionReviewPage() {
                   {expanded && (
                     <tr className="bg-slate-50/60">
                       <td />
-                      <td colSpan={7} className="p-2">
+                      <td colSpan={8} className="p-2">
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="text-muted-foreground">

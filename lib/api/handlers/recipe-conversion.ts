@@ -7,6 +7,7 @@ import { casUpdateWithAudit } from '@/lib/api/cas';
 import { FP_MANAGE_ROLES } from '@/lib/food-production/roles';
 import { inferRecipeBridgeFromNama } from '@/lib/food-production/recipe-uom';
 import {
+  RECIPE_BRIDGE_VALUE_FIELDS,
   manualRecipeBridgeSet,
   resolveRecipeBridgeInput,
   type RecipeBridgeSource,
@@ -62,7 +63,7 @@ export async function handleRecipeConversion(ctx: HandlerContext): Promise<NextR
     const tenantId = String(existing.tenantId || tenantIdForWrite(scopeAuth, payload));
 
     const input: Record<string, unknown> = {};
-    for (const k of ['recipeBaseGrams', 'recipeBaseMl', 'isiPerKemasan', 'satuanIsi'] as const) {
+    for (const k of RECIPE_BRIDGE_VALUE_FIELDS) {
       if (payload[k] !== undefined) input[k] = payload[k];
     }
     const resolved = resolveRecipeBridgeInput(input, existing.satuan as string | undefined, existing);
@@ -129,6 +130,9 @@ export async function handleRecipeConversion(ctx: HandlerContext): Promise<NextR
             recipeBaseMl: existing.recipeBaseMl ?? null,
             isiPerKemasan: existing.isiPerKemasan ?? null,
             satuanIsi: existing.satuanIsi ?? null,
+            recipeCutEnabled: existing.recipeCutEnabled === true,
+            procurementPackMl: existing.procurementPackMl ?? null,
+            procurementPackLabel: existing.procurementPackLabel ?? null,
           },
           after: values,
         },

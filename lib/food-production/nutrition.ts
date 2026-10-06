@@ -12,7 +12,7 @@ import {
   type RecipeLine,
   type RecipePorsiFamily,
 } from '@/lib/food-production/recipe';
-import { recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
+import { RECIPE_CUT_SATUAN, recipeBaseQtyForFamily } from '@/lib/food-production/recipe-uom';
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
   expandLegacyKategoriPorsi,
@@ -592,7 +592,19 @@ export function analyzeRecipeNutrition(input: {
       satuan: baseSatuan,
     }, { productNama, productKode, satuan: baseSatuan });
     let contrib: NutritionTotals | null;
-    if (resolved.nutrition?.basis === 'PER_100G') {
+    const isCut = String(kitchenSatuan || '').trim().toUpperCase() === RECIPE_CUT_SATUAN && Number(line.potongPerBase) > 0;
+    if (resolved.nutrition?.basis === 'PER_100G' && isCut) {
+      // Ukuran potong beda per resep: gram = qty basis (potong / potong per basis) × berat per basis.
+      const gramsPerBase = Number(product?.recipeBaseGrams) > 0
+        ? Number(product?.recipeBaseGrams)
+        : Number(resolved.nutrition.gramsPerUnit) > 0 ? Number(resolved.nutrition.gramsPerUnit) : null;
+      if (gramsPerBase == null) {
+        contrib = null;
+        warnings.push(`${productNama || productKode || line.productId}: isi berat rata-rata per ${baseSatuan || 'satuan basis'} di master produk untuk hitung gizi satuan ${RECIPE_CUT_SATUAN}`);
+      } else {
+        contrib = contributionFromGrams(qtyBase * gramsPerBase, resolved.nutrition);
+      }
+    } else if (resolved.nutrition?.basis === 'PER_100G') {
       const gramsHint = Number(resolved.nutrition.gramsPerUnit) > 0
         ? Number(resolved.nutrition.gramsPerUnit)
         : (product?.recipeBaseGrams != null ? Number(product.recipeBaseGrams) : null);

@@ -291,7 +291,7 @@ async function loadIngredientProducts(
     })
     .project({
       id: 1, kode: 1, nama: 1, satuan: 1, itemRole: 1, aktif: 1,
-      recipeBaseGrams: 1, recipeBaseMl: 1, isiPerKemasan: 1, satuanIsi: 1,
+      recipeBaseGrams: 1, recipeBaseMl: 1, isiPerKemasan: 1, satuanIsi: 1, recipeCutEnabled: 1,
     })
     .limit(20000)
     .toArray();
@@ -308,6 +308,7 @@ async function loadIngredientProducts(
       recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
       isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
       satuanIsi: p.satuanIsi != null ? String(p.satuanIsi) : undefined,
+      recipeCutEnabled: p.recipeCutEnabled === true,
     }));
 }
 

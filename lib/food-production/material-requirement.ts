@@ -150,6 +150,20 @@ export interface MaterialRequirementLine {
   sourceOfTruth?: 'PO';
   poQtyOrdered?: number;
   poQtyReceived?: number;
+  /** Kemasan beli (satuan dasar volume): qtyNet dibulatkan ke kelipatan kemasan. */
+  procurementPackMl?: number;
+  procurementPackLabel?: string;
+  /** Jumlah kemasan untuk qtyNet. */
+  packCount?: number;
+}
+
+/** Hitung ulang qtyNet (+ jumlah kemasan) baris kebutuhan dari sisa kebutuhan setelah stok. */
+export function procurementNetFields(
+  netRaw: number,
+  line: Pick<MaterialRequirementLine, 'satuan' | 'procurementPackMl' | 'procurementPackLabel'>,
+): { qtyNet: number; packCount?: number } {
+  const r = ceilToProcurementPack(Math.max(0, netRaw), line.satuan, procurementPackOf(line));
+  return r.packCount != null && r.qty > 0 ? { qtyNet: r.qty, packCount: r.packCount } : { qtyNet: r.qty };
 }
 
 export interface MaterialRequirementDoc {
@@ -249,6 +263,51 @@ export function ceilProcurementQty(n: number, satuan?: string): number {
   return Math.ceil(q - 1e-9);
 }
 
+/** Kemasan beli produk bersatuan dasar volume (mis. 1 SACHET = 700 ml). */
+export type ProcurementPack = { packMl: number; label: string };
+
+export function procurementPackOf(p: {
+  procurementPackMl?: unknown;
+  procurementPackLabel?: unknown;
+} | null | undefined): ProcurementPack | null {
+  const packMl = Number(p?.procurementPackMl);
+  const label = normalizeRecipeSatuan(p?.procurementPackLabel);
+  if (!(Number.isFinite(packMl) && packMl > 0) || !label) return null;
+  return { packMl, label };
+}
+
+export type ProcurementPackQty = {
+  qty: number;
+  /** Ada hanya bila dibulatkan per kemasan. */
+  packCount?: number;
+  packLabel?: string;
+  packMl?: number;
+};
+
+/**
+ * Qty pengadaan: produk bersatuan dasar volume dengan kemasan beli dibulatkan ke atas ke kelipatan
+ * kemasan (1.500 ml, kemasan 700 ml → 3 kemasan = 2.100 ml). Selain itu sama dengan ceilProcurementQty.
+ */
+export function ceilToProcurementPack(
+  n: number,
+  satuan: string | undefined,
+  pack: ProcurementPack | null | undefined,
+): ProcurementPackQty {
+  const q = Number(n) || 0;
+  if (!pack || !(q > 0) || recipeUomFamily(satuan) !== 'VOLUME') {
+    return { qty: ceilProcurementQty(q, satuan) };
+  }
+  const packBase = convertQtySameFamily(pack.packMl, 'ML', satuan);
+  if (!(packBase != null && packBase > 0)) return { qty: ceilProcurementQty(q, satuan) };
+  const packCount = Math.ceil(q / packBase - 1e-9);
+  return {
+    qty: Math.round(packCount * packBase * 1e6) / 1e6,
+    packCount,
+    packLabel: pack.label,
+    packMl: pack.packMl,
+  };
+}
+
 export function procurementQtyStep(satuan?: string): number {
   const s = normalizeRecipeSatuan(satuan);
   const family = recipeUomFamily(s);
@@ -328,6 +387,8 @@ export type ExplodeMrpInput = {
   recipesById: Map<string, RecipeDoc>;
   /** productId → on-hand qty at kitchen warehouse */
   onHandByProduct: Map<string, number>;
+  /** productId → kemasan beli (produk bersatuan dasar volume). */
+  procurementPackByProduct?: Map<string, ProcurementPack>;
   warehouseKode: string;
   /** Optional acuan porsi per kategori (tanggal/dapur) untuk pecah besar vs kecil. */
   acuanByKategori?: Partial<Record<string, number>> | null;
@@ -340,7 +401,10 @@ export type ExplodeMrpResult =
 
 /** Pure explosion — unit-tested without Mongo. */
 export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpResult {
-  const { plan, menusById, recipesById, onHandByProduct, warehouseKode, acuanByKategori, fullPortionKeys } = input;
+  const {
+    plan, menusById, recipesById, onHandByProduct, warehouseKode, acuanByKategori, fullPortionKeys,
+    procurementPackByProduct,
+  } = input;
   if (!plan.lines?.length) return { ok: false, error: 'Rencana tidak punya baris resep' };
   if (!warehouseKode) return { ok: false, error: 'Gudang dapur wajib untuk MRP' };
 
@@ -485,9 +549,13 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
       const qtyOnHand = roundQty(
         [...new Set(row.productIds)].reduce((s, id) => s + Number(onHandByProduct.get(id) || 0), 0),
       );
-      const qtyNet = ceilProcurementQty(Math.max(0, qtyGross - qtyOnHand), row.satuan);
       const productId = row.productIds.find((id) => Number(onHandByProduct.get(id) || 0) > 0)
         || row.productId;
+      const pack = recipeUomFamily(row.satuan) === 'VOLUME'
+        ? row.productIds.map((id) => procurementPackByProduct?.get(id)).find(Boolean) ?? null
+        : null;
+      const packFields = pack ? { procurementPackMl: pack.packMl, procurementPackLabel: pack.label } : {};
+      const net = procurementNetFields(qtyGross - qtyOnHand, { satuan: row.satuan, ...packFields });
       return {
         productId,
         productKode: row.productKode,
@@ -495,9 +563,10 @@ export function explodeMaterialRequirements(input: ExplodeMrpInput): ExplodeMrpR
         satuan: row.satuan,
         qtyGross,
         qtyOnHand,
-        qtyNet,
-        shortage: qtyNet > 0,
+        ...net,
+        shortage: net.qtyNet > 0,
         sources: row.sources,
+        ...packFields,
       };
     })
     .sort((a, b) => String(a.productNama || a.productKode || a.productId)
@@ -536,8 +605,9 @@ export function applyLinkedPoTargets<T extends MaterialRequirementLine>(
     const po = poItemsByProductId.get(ident) || poItemsByProductId.get(line.productId);
     if (!po) return line;
     const poShortfall = roundQty(Math.max(0, po.qtyOrdered - po.qtyReceived));
+    const { packCount: _staleFromRecipe, ...rest } = line;
     return {
-      ...line,
+      ...(rest as T),
       qtyNet: poShortfall,
       shortage: poShortfall > 0,
       sourceOfTruth: 'PO' as const,

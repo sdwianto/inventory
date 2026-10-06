@@ -25,6 +25,9 @@ export type LiveCatalogProduct = {
   recipeBaseMl?: number;
   isiPerKemasan?: number;
   satuanIsi?: string;
+  recipeCutEnabled?: boolean;
+  procurementPackMl?: number;
+  procurementPackLabel?: string;
   recipeBridgeSource?: string;
   nutrition?: { gramsPerUnit?: number };
 };
@@ -151,6 +154,9 @@ const SKU_MATCH_PROJECTION = {
   recipeBaseMl: 1,
   isiPerKemasan: 1,
   satuanIsi: 1,
+  recipeCutEnabled: 1,
+  procurementPackMl: 1,
+  procurementPackLabel: 1,
   recipeBridgeSource: 1,
   nutrition: 1,
   vendorTenantId: 1,

@@ -18,6 +18,7 @@ import { RL_POSTED_STATUSES } from '@/lib/food-production/material-issue-reconci
 import {
   MATERIAL_REQUIREMENTS_COLLECTION,
   ceilProcurementQty,
+  procurementNetFields,
   type MaterialRequirementLine,
 } from '@/lib/food-production/material-requirement';
 import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
@@ -76,6 +77,9 @@ export interface PlanReferenceLine {
   qtyOnHand?: number;
   stockWarehouseKode?: string;
   warnings?: string[];
+  /** Kemasan beli dari MRP (satuan dasar volume) — kekurangan dibulatkan per kemasan. */
+  procurementPackMl?: number;
+  procurementPackLabel?: string;
 }
 
 export interface PlanReference {
@@ -137,6 +141,8 @@ type Acc = {
   rlPending: number;
   pblPosted: number;
   warnings: string[];
+  procurementPackMl?: number;
+  procurementPackLabel?: string;
 };
 
 export const RL_PENDING_STATUSES = ['DRAFT', 'PENDING_APPROVAL'] as const;
@@ -184,7 +190,7 @@ async function loadCanonicalStock(
 export type PlanReferenceMrpLine = Pick<
   MaterialRequirementLine,
   'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyGross'
->;
+> & Partial<Pick<MaterialRequirementLine, 'procurementPackMl' | 'procurementPackLabel'>>;
 type MrpLineInput = PlanReferenceMrpLine;
 type ReleaseItem = { stokId?: string; qtyBase?: number; qty?: number };
 
@@ -371,6 +377,10 @@ export async function loadPlanReference(
     if (!l.productId) continue;
     const { row, canonId } = touch(String(l.productId), { kode: l.productKode, nama: l.productNama });
     row.hasMrp = true;
+    if (l.procurementPackMl && l.procurementPackLabel && !row.procurementPackMl) {
+      row.procurementPackMl = l.procurementPackMl;
+      row.procurementPackLabel = l.procurementPackLabel;
+    }
     row.qtyMrp = roundQty(row.qtyMrp + toBase(row, canonId, { qty: Number(l.qtyGross) || 0, satuan: l.satuan }, 'MRP'));
     if (!row.productNama && l.productNama) row.productNama = l.productNama;
   }
@@ -447,6 +457,7 @@ export async function loadPlanReference(
         ...(stock ? { qtyOnHand: stock.qtyOnHand } : {}),
         ...(stock?.stockWarehouseKode ? { stockWarehouseKode: stock.stockWarehouseKode } : {}),
         ...(r.warnings.length ? { warnings: [...new Set(r.warnings)] } : {}),
+        ...(r.procurementPackMl ? { procurementPackMl: r.procurementPackMl, procurementPackLabel: r.procurementPackLabel } : {}),
       };
     })
     .sort((a, b) => String(a.productNama || a.productKode || a.productId)
@@ -488,10 +499,16 @@ export function planReferenceReadiness(
   const lines: PlanReadinessLine[] = reference.lines.map((l) => {
     const qtyOnHand = roundQty(l.qtyOnHand ?? 0);
     const consumed = roundQty(l.rlPosted + l.pblPosted);
-    const qtyNet = l.sumber === 'PO'
-      ? Math.max(0, roundQty(l.poQtyOrdered - l.poQtyReceived))
-      : ceilProcurementQty(Math.max(0, roundQty(l.qtyMrp - consumed - qtyOnHand)), l.satuan);
+    const packFields = l.procurementPackMl
+      ? { procurementPackMl: l.procurementPackMl, procurementPackLabel: l.procurementPackLabel }
+      : {};
+    const net = l.sumber === 'PO'
+      ? { qtyNet: Math.max(0, roundQty(l.poQtyOrdered - l.poQtyReceived)) }
+      : procurementNetFields(roundQty(l.qtyMrp - consumed - qtyOnHand), { satuan: l.satuan, ...packFields });
+    const { qtyNet } = net;
     return {
+      ...packFields,
+      ...(l.sumber === 'PO' ? {} : net),
       productId: l.productId,
       productIds: l.productIds,
       productKode: l.productKode,

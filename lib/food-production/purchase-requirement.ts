@@ -4,7 +4,11 @@
  */
 
 import type { DocHistoryEntry, FpDocStatus } from '@/lib/food-production/document';
-import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
+import {
+  ceilToProcurementPack,
+  procurementPackOf,
+  type MaterialRequirementLine,
+} from '@/lib/food-production/material-requirement';
 import { foldEmptySatuanMap, procurementLineKey } from '@/lib/food-production/procurement-line-key';
 import { convertQtySameFamily, foldSameFamilyQtyLines } from '@/lib/food-production/recipe-uom';
 
@@ -20,6 +24,10 @@ export interface PurchaseRequirementLine {
   qtyNet: number;
   qtyGross?: number;
   qtyOnHand?: number;
+  /** Kemasan beli (satuan dasar volume): qtyNet kelipatan kemasan. */
+  procurementPackMl?: number;
+  procurementPackLabel?: string;
+  packCount?: number;
 }
 
 export interface PurchaseRequirementDoc {
@@ -118,7 +126,23 @@ export function mergePurchaseLinesByKode(lines: PurchaseRequirementLine[]): Purc
     }),
     mergePurchaseLineQty,
   );
-  return sortPurchaseLines(folded);
+  return sortPurchaseLines(folded.map(withPackCount));
+}
+
+/** qtyNet hasil gabung dibulatkan lagi ke kelipatan kemasan + jumlah kemasannya. */
+function withPackCount(line: PurchaseRequirementLine): PurchaseRequirementLine {
+  const pack = procurementPackOf(line);
+  const { packCount: _prev, ...rest } = line;
+  if (!pack) return rest;
+  const r = ceilToProcurementPack(Number(line.qtyNet) || 0, line.satuan, pack);
+  return r.packCount != null ? { ...rest, qtyNet: r.qty, packCount: r.packCount } : rest;
+}
+
+/** "Kecap Asin: 3 SACHET @700 ml" untuk catatan Draft CPO. */
+export function procurementPackNotes(lines: PurchaseRequirementLine[]): string[] {
+  return lines
+    .filter((l) => l.packCount && l.procurementPackLabel && l.procurementPackMl)
+    .map((l) => `${l.productNama || l.productKode || l.productId}: ${l.packCount} ${l.procurementPackLabel} @${l.procurementPackMl} ml`);
 }
 
 function mergePurchaseLineQty(
@@ -141,7 +165,8 @@ function mergePurchaseLineQty(
 export function buildPurchaseLinesFromMrp(
   mrpLines: Pick<
     MaterialRequirementLine,
-    'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyNet' | 'qtyGross' | 'qtyOnHand' | 'shortage'
+    | 'productId' | 'productKode' | 'productNama' | 'satuan' | 'qtyNet' | 'qtyGross' | 'qtyOnHand' | 'shortage'
+    | 'procurementPackMl' | 'procurementPackLabel'
   >[],
 ): PurchaseRequirementLine[] {
   const lines = (mrpLines || [])
@@ -166,6 +191,9 @@ export function buildPurchaseLinesFromMrp(
       qtyOnHand: l.qtyOnHand != null && Number.isFinite(Number(l.qtyOnHand))
         ? Number(l.qtyOnHand)
         : undefined,
+      ...(l.procurementPackMl && l.procurementPackLabel
+        ? { procurementPackMl: l.procurementPackMl, procurementPackLabel: l.procurementPackLabel }
+        : {}),
     }));
   return mergePurchaseLinesByKode(lines);
 }

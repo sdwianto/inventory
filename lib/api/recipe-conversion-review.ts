@@ -63,6 +63,9 @@ export type ProductConversionReview = {
   recipeBaseMl: number | null;
   isiPerKemasan: number | null;
   satuanIsi: string | null;
+  recipeCutEnabled: boolean;
+  procurementPackMl: number | null;
+  procurementPackLabel: string | null;
   recipeBridgeSource: string | null;
   recipeBridgeConfirmedAt: Date | null;
   nutritionGramsPerUnit: number | null;
@@ -98,6 +101,9 @@ const PRODUCT_PROJECTION = {
   recipeBaseMl: 1,
   isiPerKemasan: 1,
   satuanIsi: 1,
+  recipeCutEnabled: 1,
+  procurementPackMl: 1,
+  procurementPackLabel: 1,
   recipeBridgeSource: 1,
   recipeBridgeConfirmedAt: 1,
   nutrition: 1,
@@ -262,6 +268,9 @@ export async function buildRecipeConversionReview(
           recipeBaseMl: null,
           isiPerKemasan: null,
           satuanIsi: null,
+          recipeCutEnabled: false,
+          procurementPackMl: null,
+          procurementPackLabel: null,
           recipeBridgeSource: null,
           recipeBridgeConfirmedAt: null,
           nutritionGramsPerUnit: null,
@@ -314,6 +323,9 @@ export async function buildRecipeConversionReview(
           recipeBaseMl: numOrNull(p.recipeBaseMl),
           isiPerKemasan: numOrNull(p.isiPerKemasan),
           satuanIsi: p.satuanIsi ? normalizeRecipeSatuan(p.satuanIsi) : null,
+          recipeCutEnabled: p.recipeCutEnabled === true,
+          procurementPackMl: numOrNull(p.procurementPackMl),
+          procurementPackLabel: p.procurementPackLabel ? normalizeRecipeSatuan(p.procurementPackLabel) : null,
           recipeBridgeSource: p.recipeBridgeSource ? String(p.recipeBridgeSource) : null,
           recipeBridgeConfirmedAt: (p.recipeBridgeConfirmedAt as Date | undefined) ?? null,
           nutritionGramsPerUnit: numOrNull(nutrition?.gramsPerUnit),

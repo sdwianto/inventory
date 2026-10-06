@@ -41,6 +41,8 @@ import {
 import {
   defaultKitchenSatuan,
   kitchenSatuanOptionsForBase,
+  normalizeRecipeSatuan,
+  RECIPE_CUT_SATUAN,
   toBaseRecipeQty,
   type RecipeConversionProduct,
 } from '@/lib/food-production/recipe-uom';
@@ -71,6 +73,7 @@ function toProductOpt(p: Record<string, unknown>): ProductOpt {
     recipeBaseMl: p.recipeBaseMl != null ? Number(p.recipeBaseMl) : undefined,
     isiPerKemasan: p.isiPerKemasan != null ? Number(p.isiPerKemasan) : undefined,
     satuanIsi: p.satuanIsi ? String(p.satuanIsi) : undefined,
+    recipeCutEnabled: p.recipeCutEnabled === true,
     gramsPerUnit: nutrition?.gramsPerUnit != null ? Number(nutrition.gramsPerUnit) : undefined,
     itemRole: p.itemRole ? String(p.itemRole) : undefined,
     aktif: p.aktif !== false,
@@ -119,6 +122,7 @@ interface ProductOpt {
   recipeBaseMl?: number;
   isiPerKemasan?: number;
   satuanIsi?: string;
+  recipeCutEnabled?: boolean;
   gramsPerUnit?: number;
   itemRole?: string;
   aktif?: boolean;
@@ -133,6 +137,8 @@ interface RecipeLineForm {
   qtyBesar: string;
   pctKecil: string;
   satuan: string;
+  /** Satuan POTONG: jumlah potong per satuan basis (per resep). */
+  potongPerBase: string;
   notes: string;
 }
 
@@ -154,6 +160,7 @@ interface RecipeRow {
     pctKecil?: number;
     qtyKecil?: number;
     satuan?: string;
+    potongPerBase?: number;
     qtyBaseBesar?: number;
     qtyBaseKecil?: number;
     factorToBase?: number;
@@ -197,6 +204,7 @@ function productConvFromOpt(p: ProductOpt | undefined): RecipeConversionProduct 
     recipeBaseMl: p.recipeBaseMl,
     isiPerKemasan: p.isiPerKemasan,
     satuanIsi: p.satuanIsi,
+    recipeCutEnabled: p.recipeCutEnabled,
     nutrition: p.gramsPerUnit != null ? { gramsPerUnit: p.gramsPerUnit } : undefined,
   };
 }
@@ -212,6 +220,7 @@ function kitchenOptsOf(p: ProductOpt) {
     gramsPerUnit: p.gramsPerUnit,
     isiPerKemasan: p.isiPerKemasan,
     satuanIsi: p.satuanIsi,
+    recipeCutEnabled: p.recipeCutEnabled,
     nama: p.nama,
     kode: p.kode,
     strict: strictRecipeConversion(),
@@ -233,16 +242,22 @@ function basePreview(
   qtyKitchen: number,
   kitchenSatuan: string,
   product: ProductOpt | undefined,
+  potongPerBase?: number,
 ): { text: string; ok: boolean } {
   if (!product?.satuan || !kitchenSatuan || !(qtyKitchen > 0)) {
     return { text: '', ok: true };
   }
   const r = toBaseRecipeQty(qtyKitchen, kitchenSatuan, productConvFromOpt(product), {
     strict: strictRecipeConversion(),
+    potongPerBase,
   });
   if ('error' in r) return { text: r.error, ok: false };
+  const isCut = normalizeRecipeSatuan(kitchenSatuan) === RECIPE_CUT_SATUAN && Number(potongPerBase) > 0;
+  const gramsPerPotong = isCut && Number(product.recipeBaseGrams) > 0
+    ? Number(product.recipeBaseGrams) / Number(potongPerBase)
+    : null;
   return {
-    text: `= ${formatNumber(r.qtyBase)} ${r.baseSatuan}`,
+    text: `= ${formatNumber(r.qtyBase)} ${r.baseSatuan}${gramsPerPotong != null ? ` · ±${formatNumber(Math.round(gramsPerPotong * 10) / 10)} g/potong` : ''}`,
     ok: true,
   };
 }
@@ -265,6 +280,7 @@ const emptyLine = (): RecipeLineForm => ({
   qtyBesar: '1',
   pctKecil: String(DEFAULT_PCT_KECIL),
   satuan: '',
+  potongPerBase: '',
   notes: '',
 });
 
@@ -284,6 +300,7 @@ function lineFromDoc(l: RecipeRow['lines'][number]): RecipeLineForm {
     qtyBesar: String(qtyBesar),
     pctKecil: String(pctKecil),
     satuan: l.satuan || '',
+    potongPerBase: l.potongPerBase != null ? String(l.potongPerBase) : '',
     notes: l.notes || '',
   };
 }
@@ -307,6 +324,7 @@ function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
     const q2 = Number(line.qtyBesar) || 0;
     existing.qtyBesar = String(q1 + q2);
     if (!existing.satuan && line.satuan) existing.satuan = line.satuan;
+    if (!existing.potongPerBase && line.potongPerBase) existing.potongPerBase = line.potongPerBase;
     if (line.notes?.trim()) {
       const a = existing.notes.trim();
       const b = line.notes.trim();
@@ -866,7 +884,7 @@ export default function FoodProductionRecipePage() {
       const readyLines = consolidateFormLines(lines).filter((l) => l.productId);
       for (const l of readyLines) {
         const product = products.find((p) => p.id === l.productId);
-        const preview = basePreview(Number(l.qtyBesar) || 0, l.satuan, product);
+        const preview = basePreview(Number(l.qtyBesar) || 0, l.satuan, product, Number(l.potongPerBase) || undefined);
         if (!preview.ok) {
           throw new Error(
             `Bahan "${product?.nama || l.productId}": ${preview.text || 'konversi satuan gagal'}`,
@@ -891,6 +909,7 @@ export default function FoodProductionRecipePage() {
           qty: Number(l.qtyBesar),
           pctKecil: portionPctForSave(l, products),
           satuan: l.satuan || undefined,
+          ...(normalizeRecipeSatuan(l.satuan) === RECIPE_CUT_SATUAN ? { potongPerBase: Number(l.potongPerBase) } : {}),
           notes: l.notes.trim() || undefined,
         })),
       };
@@ -1377,10 +1396,12 @@ export default function FoodProductionRecipePage() {
                       clampPctKecil(line.pctKecil),
                     );
                   const satuanOpts = kitchenOptsForProduct(product);
+                  const isCutLine = normalizeRecipeSatuan(line.satuan) === RECIPE_CUT_SATUAN;
                   const preview = basePreview(
                     Number(line.qtyBesar) || 0,
                     line.satuan,
                     product,
+                    isCutLine ? Number(line.potongPerBase) || undefined : undefined,
                   );
                   return (
                   <div
@@ -1585,6 +1606,26 @@ export default function FoodProductionRecipePage() {
                           <option value={line.satuan}>{line.satuan}</option>
                         )}
                       </select>
+                      {isCutLine && (
+                        <div className="mt-1 flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min={0}
+                            step="any"
+                            className="h-7 w-16 px-1.5 text-xs tabular-nums"
+                            value={line.potongPerBase}
+                            placeholder="20"
+                            aria-label={`Potong per ${product?.satuan || 'satuan basis'} baris ${idx + 1}`}
+                            title="Jumlah potong dari 1 satuan beli untuk resep ini (beda resep boleh beda ukuran)"
+                            onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                              i === idx ? { ...l, potongPerBase: e.target.value } : l
+                            )))}
+                          />
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                            potong / {product?.satuan || 'basis'}
+                          </span>
+                        </div>
+                      )}
                       {preview.text ? (
                         <p
                           className={`mt-0.5 text-[10px] tabular-nums leading-tight ${

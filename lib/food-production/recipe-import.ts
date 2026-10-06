@@ -30,6 +30,7 @@ export type RecipeImportProduct = {
   recipeBaseMl?: number;
   isiPerKemasan?: number;
   satuanIsi?: string;
+  recipeCutEnabled?: boolean;
 };
 
 export type RecipeImportLineDraft = {

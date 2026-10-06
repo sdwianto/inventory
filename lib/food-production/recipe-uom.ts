@@ -221,7 +221,12 @@ export type RecipeBridgeOptions = {
    * tebakan nama mentah dan tanpa nutrition.gramsPerUnit.
    */
   strict?: boolean;
+  /** Satuan dapur POTONG: jumlah potong per 1 satuan basis, diisi per baris resep. */
+  potongPerBase?: number | null;
 };
+
+/** Satuan dapur untuk produk yang dipotong dengan ukuran berbeda per resep (tempe, tahu). */
+export const RECIPE_CUT_SATUAN = 'POTONG';
 
 export type RecipeKitchenOpts = RecipeBridgeOptions & {
   recipeBaseGrams?: number | null;
@@ -231,6 +236,7 @@ export type RecipeKitchenOpts = RecipeBridgeOptions & {
   kode?: string | null;
   isiPerKemasan?: number | null;
   satuanIsi?: string | null;
+  recipeCutEnabled?: boolean | null;
 };
 
 export type RecipeConversionProduct = {
@@ -244,12 +250,61 @@ export type RecipeConversionProduct = {
   /** 1 base unit = N satuanIsi (mis. 1 RTG = 10 SACHET). */
   isiPerKemasan?: number | null;
   satuanIsi?: string | null;
+  /** Boleh memakai satuan dapur POTONG dengan jumlah potong per basis diisi di baris resep. */
+  recipeCutEnabled?: boolean | null;
   /** Fallback grams from nutrition master (non-strict saja). */
   nutrition?: { gramsPerUnit?: number | null } | null;
 };
 
 /** Asal faktor baris resep — disimpan di snapshot baris untuk audit/review. */
-export type RecipeFactorSource = 'IDENTITY' | 'SI' | 'ISI' | 'MASTER' | 'INFERRED' | 'NUTRITION';
+export type RecipeFactorSource = 'IDENTITY' | 'SI' | 'ISI' | 'MASTER' | 'INFERRED' | 'NUTRITION' | 'CUT';
+
+export function recipeCutAllowedForBase(baseSatuan: string | null | undefined): boolean {
+  const fam = recipeUomFamily(baseSatuan);
+  return fam === 'COUNT' || fam === 'UNKNOWN';
+}
+
+/**
+ * Label satuan dapur untuk lembar kebutuhan. POTONG diberi ukuran (mis. "POTONG (20/ALIR)") supaya
+ * potongan beda ukuran dari resep berbeda tidak dijumlahkan jadi satu baris.
+ */
+export function recipeKitchenSatuanLabel(line: {
+  satuan?: string | null;
+  baseSatuan?: string | null;
+  potongPerBase?: number | null;
+}): string | undefined {
+  const kitchen = line.satuan || line.baseSatuan || undefined;
+  const perBase = potongPerBaseOf(line.potongPerBase);
+  if (normalizeRecipeSatuan(kitchen) !== RECIPE_CUT_SATUAN || perBase == null) return kitchen;
+  const base = normalizeRecipeSatuan(line.baseSatuan);
+  return `${RECIPE_CUT_SATUAN} (${perBase}/${base || 'basis'})`;
+}
+
+/** Jumlah potong per basis yang valid (> 0), atau null. */
+export function potongPerBaseOf(v: unknown): number | null {
+  return positiveOrNull(v as number | null | undefined);
+}
+
+/** Satuan dasar volume: isi kemasan beli (ml) + label, berpasangan. `null` = valid. */
+export function validateProcurementPack(
+  baseSatuan: string | null | undefined,
+  packMl: unknown,
+  packLabel: unknown,
+): string | null {
+  const hasMl = packMl != null && packMl !== '';
+  const label = normalizeRecipeSatuan(packLabel);
+  if (!hasMl && !label) return null;
+  if (!hasMl || !label) return 'Isi kemasan beli (ml) dan nama kemasan wajib diisi berpasangan';
+  const n = Number(packMl);
+  if (!Number.isFinite(n) || n <= 0) return 'Isi kemasan beli harus angka > 0';
+  if (recipeUomFamily(baseSatuan) !== 'VOLUME') {
+    return 'Isi kemasan beli hanya untuk produk bersatuan dasar volume (LTR / ML)';
+  }
+  if (recipeUomFamily(label) === 'VOLUME' || recipeUomFamily(label) === 'MASS') {
+    return 'Nama kemasan harus satuan kemasan (SACHET, BTL, JRG, …), bukan satuan volume/berat';
+  }
+  return null;
+}
 
 export function isiPerKemasanOf(product: { isiPerKemasan?: number | null; satuanIsi?: string | null }): {
   isi: number;
@@ -441,6 +496,7 @@ export function kitchenSatuanOptionsForBase(
     }
     const isi = opts ? isiPerKemasanOf(opts) : null;
     if (isi) out.add(isi.satuanIsi);
+    if (opts?.recipeCutEnabled) out.add(RECIPE_CUT_SATUAN);
   }
   return [...out];
 }
@@ -505,6 +561,12 @@ export function factorKitchenToBase(
 
   const kFam = recipeUomFamily(kitchen);
   const bFam = recipeUomFamily(base);
+
+  if (kitchen === RECIPE_CUT_SATUAN && product.recipeCutEnabled && recipeCutAllowedForBase(base)) {
+    const perBase = potongPerBaseOf(opts.potongPerBase);
+    if (perBase == null) return { error: `Isi jumlah potong per ${base} untuk satuan ${RECIPE_CUT_SATUAN}` };
+    return { factorToBase: 1 / perBase, baseSatuan: base, factorSource: 'CUT' };
+  }
 
   if (kFam === 'MASS' && bFam === 'MASS') {
     const kg = MASS_TO_GRAM[kitchen];
@@ -600,6 +662,7 @@ export function convertRecipeLineQtys(input: {
   kitchenSatuan: string | null | undefined;
   product: RecipeConversionProduct;
   strict?: boolean;
+  potongPerBase?: number | null;
 }): {
   qtyBaseBesar: number;
   qtyBaseKecil: number;
@@ -608,7 +671,7 @@ export function convertRecipeLineQtys(input: {
   satuan: string;
   factorSource: RecipeFactorSource;
 } | RecipeConversionErr {
-  const opts = { strict: input.strict === true };
+  const opts = { strict: input.strict === true, potongPerBase: input.potongPerBase };
   const factor = factorKitchenToBase(input.kitchenSatuan, input.product, opts);
   if ('error' in factor) return factor;
   const besar = toBaseRecipeQty(input.qtyBesar, input.kitchenSatuan, input.product, opts);

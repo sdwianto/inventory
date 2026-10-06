@@ -4,7 +4,13 @@ import {
   KATEGORI_PORSI_LEGACY,
   type KategoriPorsi,
 } from '@/lib/food-production/production-plan';
-import { normalizeRecipeSatuan, recipeUomFamily, type RecipeFactorSource } from '@/lib/food-production/recipe-uom';
+import {
+  normalizeRecipeSatuan,
+  potongPerBaseOf,
+  RECIPE_CUT_SATUAN,
+  recipeUomFamily,
+  type RecipeFactorSource,
+} from '@/lib/food-production/recipe-uom';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -108,6 +114,8 @@ export interface RecipeLine {
   baseSatuan?: string;
   /** Snapshot asal faktor (INFERRED/NUTRITION = cadangan non-strict). */
   factorSource?: RecipeFactorSource | 'SPPG_STANDARD';
+  /** Satuan dapur POTONG: jumlah potong per 1 satuan basis (beda per resep, mis. 20 atau 30 per ALIR). */
+  potongPerBase?: number;
   notes?: string;
 }
 
@@ -715,14 +723,21 @@ export function normalizeRecipeLines(
       return { error: `Baris ${i + 1}: barang jadi tidak boleh jadi bahan di resep yang sama` };
     }
     const satuan = row.satuan != null ? String(row.satuan).trim().toUpperCase() : '';
+    let potongPerBase: number | undefined;
+    if (satuan === RECIPE_CUT_SATUAN) {
+      const n = potongPerBaseOf(row.potongPerBase);
+      if (n == null) return { error: `Baris ${i + 1}: isi jumlah potong per satuan basis (> 0) untuk satuan ${RECIPE_CUT_SATUAN}` };
+      potongPerBase = Math.round(n * 1e6) / 1e6;
+    }
     if (satuan) {
+      const key = potongPerBase != null ? `${satuan} ${potongPerBase}/basis` : satuan;
       const prev = satuanByProduct.get(productId);
-      if (prev && prev !== satuan) {
+      if (prev && prev !== key) {
         return {
-          error: `Baris ${i + 1}: produk yang sama tidak boleh memakai satuan dapur berbeda (${prev} vs ${satuan})`,
+          error: `Baris ${i + 1}: produk yang sama tidak boleh memakai satuan dapur berbeda (${prev} vs ${key})`,
         };
       }
-      satuanByProduct.set(productId, satuan);
+      satuanByProduct.set(productId, key);
     }
     lines.push({
       productId,
@@ -734,6 +749,7 @@ export function normalizeRecipeLines(
       qtyKecil: qtys.qtyKecil,
       satuan: row.satuan != null ? String(row.satuan) : undefined,
       uomId: row.uomId != null ? String(row.uomId) : undefined,
+      ...(potongPerBase != null ? { potongPerBase } : {}),
       notes: row.notes != null ? String(row.notes).trim() || undefined : undefined,
     });
   }

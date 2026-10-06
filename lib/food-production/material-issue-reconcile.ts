@@ -5,7 +5,7 @@
 
 import type { Db } from 'mongodb';
 import type { MaterialRequirementLine } from '@/lib/food-production/material-requirement';
-import { roundQty, ceilProcurementQty } from '@/lib/food-production/material-requirement';
+import { roundQty, procurementNetFields } from '@/lib/food-production/material-requirement';
 import {
   MATERIAL_ISSUES_COLLECTION,
   STOCK_ISSUE_FILTER,
@@ -759,13 +759,14 @@ export function applyConsumptionToRequirementLines<T extends MaterialRequirement
     const qtyGross = roundQty(Number(line.qtyGross) || 0);
     const qtyOnHand = roundQty(Number(line.qtyOnHand) || 0);
     const needRemaining = Math.max(0, roundQty(qtyGross - already));
-    const qtyNet = ceilProcurementQty(Math.max(0, needRemaining - qtyOnHand), line.satuan);
+    const { packCount: _prev, ...rest } = line;
+    const net = procurementNetFields(needRemaining - qtyOnHand, line);
     return {
-      ...line,
+      ...(rest as T),
       qtyGross,
       qtyOnHand,
-      qtyNet,
-      shortage: qtyNet > 0,
+      ...net,
+      shortage: net.qtyNet > 0,
     };
   });
   return {

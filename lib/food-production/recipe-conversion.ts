@@ -27,6 +27,7 @@ export type RecipeConversionSource = {
   recipeBaseMl?: unknown;
   isiPerKemasan?: unknown;
   satuanIsi?: unknown;
+  recipeCutEnabled?: unknown;
   nutrition?: unknown;
 };
 
@@ -48,6 +49,7 @@ export function recipeConversionProductOf(p: RecipeConversionSource): RecipeConv
     recipeBaseMl: numOrUndef(p.recipeBaseMl),
     isiPerKemasan: numOrUndef(p.isiPerKemasan),
     satuanIsi: p.satuanIsi != null && String(p.satuanIsi).trim() ? String(p.satuanIsi) : undefined,
+    recipeCutEnabled: p.recipeCutEnabled === true,
     nutrition,
   };
 }
@@ -112,6 +114,7 @@ export function convertRecipeLineForProduct(
     kode: productConv.kode,
     isiPerKemasan: productConv.isiPerKemasan,
     satuanIsi: productConv.satuanIsi,
+    recipeCutEnabled: productConv.recipeCutEnabled,
     strict: opts.strict,
   };
   const allowed = kitchenSatuanOptionsForBase(baseSatuan, kitchenOpts);
@@ -149,15 +152,17 @@ export function convertRecipeLineForProduct(
     kitchenSatuan: kitchen,
     product: productConv,
     strict: opts.strict,
+    potongPerBase: line.potongPerBase,
   });
   if ('error' in converted) {
     return { ok: false, code: 'NO_BRIDGE', error: converted.error };
   }
 
+  const { potongPerBase: _drop, ...rest } = line;
   return {
     ok: true,
     line: {
-      ...line,
+      ...(converted.factorSource === 'CUT' ? line : rest),
       ...identity,
       qtyBesar,
       qtyKecil,
