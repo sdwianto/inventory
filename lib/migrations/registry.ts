@@ -9,6 +9,7 @@ import { backfillStockCostMigration } from '@/lib/migrations/0007-backfill-stock
 import { inventoryGlCutoverMigration } from '@/lib/migrations/0008-inventory-gl-cutover';
 import { normalizeStockDustMigration } from '@/lib/migrations/0009-normalize-stock-dust';
 import { normalizeLotSatuanMigration } from '@/lib/migrations/0010-normalize-lot-satuan';
+import { rebaseProductUomMigration } from '@/lib/migrations/0011-rebase-product-uom';
 
 /** Penanda kerangka aktif. Tidak mengubah data bisnis. */
 export const frameworkNoopMigration: Migration = {
@@ -31,6 +32,7 @@ export const MIGRATIONS: readonly Migration[] = [
   inventoryGlCutoverMigration,
   normalizeStockDustMigration,
   normalizeLotSatuanMigration,
+  rebaseProductUomMigration,
 ];
 
 export function findMigration(id: string): Migration | undefined {

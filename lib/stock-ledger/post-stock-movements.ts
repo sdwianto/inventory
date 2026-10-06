@@ -35,6 +35,7 @@ import {
 import { buildKartuDoc, type StockActor, type StockCostSource } from '@/lib/stock-ledger/kartu';
 import { applyLineCost, legacyLineCost, type AvgCostState } from '@/lib/stock-ledger/cost';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
+import { uomRebasePendingError } from '@/lib/api/uom-rebase-guard';
 
 export type StockSourceType =
   | 'RELEASE'
@@ -129,6 +130,7 @@ type ProductRow = {
   deletedAt?: Date | null;
   shelfLifeDays?: number | null;
   satuan?: string;
+  uomRebasePending?: unknown;
 };
 
 type PreparedLine = StockMovementLine & {
@@ -332,7 +334,7 @@ async function postInSession(
   const ids = [...productIds];
   const products = await db.collection<ProductRow>('products')
     .find(productsFilter(tid, ids), txOpts(session))
-    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, mergedInto: 1, deletedAt: 1, shelfLifeDays: 1, satuan: 1 })
+    .project<ProductRow>({ id: 1, kode: 1, nama: 1, gudangKode: 1, hargaBeli: 1, avgCost: 1, itemRole: 1, mergedInto: 1, deletedAt: 1, shelfLifeDays: 1, satuan: 1, uomRebasePending: 1 })
     .toArray();
   const productById = new Map(products.map((p) => [String(p.id), p]));
 
@@ -349,6 +351,8 @@ async function postInSession(
     if (product.deletedAt) {
       return fail(`Produk ${product.kode || line.productId} sudah dihapus — mutasi stok ditolak`, line.lineRef);
     }
+    const rebaseErr = uomRebasePendingError(product);
+    if (rebaseErr) return fail(rebaseErr, line.lineRef);
     const lokasiKode = parseLokasiKode(line.warehouseKode);
     const whErr = assertProductWarehouse(product, lokasiKode);
     if (whErr) return fail(whErr.error, line.lineRef);

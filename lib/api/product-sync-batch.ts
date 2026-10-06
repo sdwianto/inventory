@@ -21,6 +21,7 @@ import {
   relinkMergedCopyForKode,
 } from '@/lib/api/product-merge';
 import { logger } from '@/lib/api/logger';
+import { uomRebasePendingPatch } from '@/lib/api/uom-rebase-guard';
 import type { JsonObject } from '@/types/json';
 
 /**
@@ -330,10 +331,11 @@ export async function bulkUpsertProductsFromVendor(
       if (existing) {
         const classPatch = await applyInferredClassification(db, tid, existing, snap);
         const relink = await relinkMergedCopyForKode(db, tid, existing, String(snap.kode), now);
+        const rebasePatch = await uomRebasePendingPatch(db, tid, existing, snap.satuan, now);
         bulkOps.push({
           updateOne: {
             filter: { id: existing.id },
-            update: { $set: { ...syncSet, ...classPatch, ...relink?.patch } },
+            update: { $set: { ...syncSet, ...classPatch, ...relink?.patch, ...rebasePatch } },
           },
         });
         bulkMeta.push({ kode: String(snap.kode), vendorTenantId: vTenant, row: existing, relinkIds: relink?.canonicalIds || [] });

@@ -13,6 +13,7 @@ import {
   bulkReplaceProductUoms,
 } from '@/lib/api/product-uom';
 import { materializeInboundProductFotos } from '@/lib/api/product-media';
+import { uomRebasePendingPatch } from '@/lib/api/uom-rebase-guard';
 import { rematchOpenDocsAfterProductUomSync, rematchOpenDocsAfterBulkProductUomSync } from '@/lib/api/rematch-open-po-uoms';
 import {
   preserveManualLocalNama,
@@ -252,8 +253,9 @@ export async function upsertProductFromVendor(
   if (existing) {
     const classPatch = await applyInferredClassification(db, tid, existing, snap);
     const relink = await relinkMergedCopyForKode(db, tid, existing, snap.kode, now);
+    const rebasePatch = await uomRebasePendingPatch(db, tid, existing, snap.satuan, now);
     try {
-      await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch, ...relink?.patch } });
+      await db.collection('products').updateOne({ id: existing.id }, { $set: { ...syncSet, ...classPatch, ...relink?.patch, ...rebasePatch } });
     } catch (e) {
       if (isDuplicateKodeError(e)) throw new Error(kodeConflictMessage(snap.kode, vTenant));
       throw e;
