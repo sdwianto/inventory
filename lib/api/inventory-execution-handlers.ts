@@ -282,6 +282,15 @@ export async function executeNotificationOutboxDrainJob(
   return drainNotificationOutbox(db, { limit: 100 });
 }
 
+export async function executeCustomerTaxProfilePushJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runCustomerTaxProfilePushJob } = await import('@/lib/api/customer-tax-profile-push');
+  return runCustomerTaxProfilePushJob(db, { tenantId, payload: payload as JsonObject });
+}
+
 export async function executeAuditLogPurgeJob(
   db: Db,
 ): Promise<Record<string, unknown>> {

@@ -20,6 +20,7 @@ export const EXECUTION_WAVE_1_TYPES = new Set([
   'CATALOG_SYNC',
   'PO_VENDOR_SYNC',
   'HUTANG_SYNC',
+  'CUSTOMER_TAX_PROFILE_PUSH',
 ]);
 
 export const EXECUTION_WAVE_2_TYPES = new Set([

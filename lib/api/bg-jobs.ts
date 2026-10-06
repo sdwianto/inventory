@@ -130,6 +130,9 @@ export async function enqueueJob(
       tenantId: tid,
       payload: mergedPayload,
     });
+    // DB Inventory hanya dilayani inventory-worker (WORKER_DOMAIN=inventory); default kontrak untuk tipe
+    // yang tidak dikenal adalah 'sales' → job tidak pernah di-claim.
+    input.domain = 'inventory';
     const dedupeKey = payload.dedupeKey != null ? String(payload.dedupeKey) : undefined;
     if (dedupeKey) input.dedupeKey = dedupeKey;
     return executionEnqueue(db, input);
@@ -175,6 +178,8 @@ export async function enqueueJob(
   const job = {
     id: uuidv4(),
     type,
+    // Dibaca normalizeLegacyJobs saat melengkapi doc lama; tanpa ini tipe di luar kontrak jatuh ke 'sales'.
+    domain: 'inventory',
     tenantId: tid,
     grnId: grnId || null,
     payload,

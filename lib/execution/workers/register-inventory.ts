@@ -21,6 +21,7 @@ import {
   executePoVendorAvailabilityRefreshJob,
   executePoArrivalRiskAlertJob,
   executeNotificationOutboxDrainJob,
+  executeCustomerTaxProfilePushJob,
   executeSandboxResetJob,
   executeWebhookInboxJob,
   executeProductEnrichmentSyncJob,
@@ -244,6 +245,19 @@ export function registerInventoryHandlers(): void {
     requiredCapabilities: ['CPU_BATCH'],
     handler: async (ctx) => assertExecutionHandlerSuccess(
       await executeNotificationOutboxDrainJob(ctx.db),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'CUSTOMER_TAX_PROFILE_PUSH',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['SYNC'],
+    requiresLock: true,
+    lockTtlTier: 'SHORT',
+    lockKeyFromPayload: (_payload, job) => `customer-tax-profile:${job.tenantId}`,
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeCustomerTaxProfilePushJob(ctx.db, ctx.tenantId, payload),
     ),
   });
 
