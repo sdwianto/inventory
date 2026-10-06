@@ -266,6 +266,51 @@ describe.skipIf(!MongoMemoryReplSet)('0011 rebase satuan dasar tempe/tahu (Mongo
     expect((await db.collection('stok_kartu').findOne({ id: 'k5' }))?.masuk).toBe(1);
   });
 
+  it('dokumen yang memuat tahu dan tempe sekaligus mendapat kedua konversi', async () => {
+    const T6 = 'it-rebase-both';
+    await db.collection('products').insertMany([
+      { id: 'tahu-6', tenantId: T6, kode: 'B509689', satuan: 'PTG', stok: 0, hargaBeli: 0 },
+      { id: 'tempe-6', tenantId: T6, kode: 'B824159', satuan: 'PTG', stok: 0, hargaBeli: 0 },
+    ]);
+    await db.collection('product_uom').insertMany([
+      { id: 'u6-tahu-ptg', tenantId: T6, productId: 'tahu-6', satuan: 'PTG', isBase: true, factorToBase: 1, aktif: true },
+      { id: 'u6-tahu-bak', tenantId: T6, productId: 'tahu-6', satuan: 'BAK', isBase: false, factorToBase: 32, aktif: true },
+      { id: 'u6-tempe-ptg', tenantId: T6, productId: 'tempe-6', satuan: 'PTG', isBase: true, factorToBase: 1, aktif: true },
+      { id: 'u6-tempe-alir', tenantId: T6, productId: 'tempe-6', satuan: 'ALIR', isBase: false, factorToBase: 20, aktif: true },
+    ]);
+    const lines: RecipeLine[] = [
+      { ...recipeLine(), productId: 'tahu-6' },
+      { ...recipeLine(), productId: 'tempe-6', productKode: 'B824159', qty: 40, qtyBesar: 40, qtyKecil: 28, qtyBaseBesar: 40, qtyBaseKecil: 28 },
+    ];
+    const revContent = recipeRevisionContent({ kode: 'RSP-6', nama: 'Bacem', yieldQty: 500, lines });
+    await db.collection('recipe_revisions').insertOne({ ...revContent, id: 'rev-6', tenantId: T6, recipeId: 'r-6', revision: 1, contentHash: recipeContentHash(revContent) });
+    await db.collection('recipes').insertOne({
+      id: 'r-6', tenantId: T6, kode: 'RSP-6', nama: 'Bacem', yieldQty: 500, lines, currentRevisionId: 'rev-6', revision: 1, revisionHash: recipeContentHash(revContent),
+    });
+    await db.collection('material_requirements').insertOne({
+      id: 'mrp-6', tenantId: T6, noDokumen: 'KBH6', status: 'APPROVED',
+      lines: [
+        { productId: 'tahu-6', satuan: 'PTG', qtyGross: 640, qtyOnHand: 0, qtyNet: 640, sources: [] },
+        { productId: 'tempe-6', satuan: 'PTG', qtyGross: 60, qtyOnHand: 0, qtyNet: 60, sources: [] },
+      ],
+      summary: { qtyGrossTotal: 700, qtyNetTotal: 700 },
+    });
+
+    const r = await rebaseProductUomMigration.run({ db, tenantId: T6, now, dryRun: false, actor: 'it' });
+    expect(r.changed).toBeGreaterThan(0);
+    const recipe = await db.collection('recipes').findOne({ id: 'r-6' });
+    expect(recipe?.lines[0]).toMatchObject({ satuan: 'POTONG', potongPerBase: 32, baseSatuan: 'BAK', qtyBaseBesar: 15.625 });
+    expect(recipe?.lines[1]).toMatchObject({ satuan: 'POTONG', potongPerBase: 20, baseSatuan: 'ALIR', qtyBaseBesar: 2 });
+    const rev = await db.collection('recipe_revisions').findOne({ id: 'rev-6' });
+    expect(rev?.lines.map((l: RecipeLine) => l.baseSatuan)).toEqual(['BAK', 'ALIR']);
+    expect(rev?.contentHash).toBe(recipeContentHash(recipeRevisionContent(rev as never)));
+    expect(recipe?.revisionHash).toBe(rev?.contentHash);
+    const mrp = await db.collection('material_requirements').findOne({ id: 'mrp-6' });
+    expect(mrp?.lines[0]).toMatchObject({ satuan: 'BAK', qtyGross: 20, qtyNet: 20 });
+    expect(mrp?.lines[1]).toMatchObject({ satuan: 'ALIR', qtyGross: 3, qtyNet: 3 });
+    expect(mrp?.summary).toMatchObject({ qtyGrossTotal: 23, qtyNetTotal: 23 });
+  });
+
   it('stok yang tidak habis dibagi faktor diblokir', async () => {
     const T4 = 'it-rebase-dust';
     await db.collection('products').insertOne({ id: 'tahu-4', tenantId: T4, kode: 'B509689', satuan: 'PTG', stok: 5 });

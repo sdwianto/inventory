@@ -190,6 +190,22 @@ type Plan = {
   blockers: string[];
 };
 
+/** Salinan dokumen setelah `$set` (mendukung kunci bertitik seperti `summary.x`). */
+function applySet(doc: Record<string, unknown>, set: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...doc };
+  for (const [k, v] of Object.entries(set)) {
+    const parts = k.split('.');
+    let o = out;
+    for (const p of parts.slice(0, -1)) {
+      const next = o[p] && typeof o[p] === 'object' ? { ...(o[p] as Record<string, unknown>) } : {};
+      o[p] = next;
+      o = next;
+    }
+    o[parts[parts.length - 1]] = v;
+  }
+  return out;
+}
+
 function getPath(doc: Record<string, unknown>, path: string): unknown {
   return path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), doc);
 }
@@ -389,6 +405,25 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
   const writes: Write[] = [];
   const counts: Record<string, number> = {};
   const bump = (k: string) => { counts[k] = (counts[k] || 0) + 1; };
+  // Satu dokumen bisa memuat beberapa produk yang di-rebase (resep tahu+tempe, MRP, GRN):
+  // produk berikutnya harus membaca hasil produk sebelumnya, dan semuanya jadi satu $set.
+  const overlay = new Map<string, { doc: Record<string, unknown>; write: Write }>();
+  const docKey = (coll: string, d: Record<string, unknown>) => `${coll}|${String(d._id)}`;
+  const current = (coll: string, d: Record<string, unknown>) => overlay.get(docKey(coll, d))?.doc ?? d;
+  const pushDocWrite = (coll: string, d: Record<string, unknown>, set: Record<string, unknown>) => {
+    const key = docKey(coll, d);
+    const hit = overlay.get(key);
+    const doc = applySet(hit?.doc ?? d, set);
+    if (hit) {
+      Object.assign(hit.write.set, set);
+      hit.doc = doc;
+      return;
+    }
+    const write: Write = { coll, filter: { tenantId, _id: d._id }, set: { ...set } };
+    writes.push(write);
+    overlay.set(key, { doc, write });
+    bump(coll);
+  };
 
   for (const pp of products.filter((x) => x.state === 'TODO')) {
     const { spec, product } = pp;
@@ -442,7 +477,8 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
     // dokumen satu-produk
     for (const ref of DOC_REFS) {
       const docs = await db.collection(ref.coll).find({ tenantId, [ref.key]: product.id }, txOpts(session)).toArray();
-      for (const d of docs as Array<Record<string, unknown>>) {
+      for (const raw of docs as Array<Record<string, unknown>>) {
+        const d = current(ref.coll, raw);
         const where = `${ref.coll}:${d.id || d._id}`;
         if (ref.era === 'KARTU') {
           const qty = num(d.masuk) || num(d.keluar);
@@ -463,10 +499,7 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
         if (ref.coll === 'ingredient_lots' && norm(d.satuan) !== spec.to && d.satuan != null && d.satuanLegacy == null) {
           docSet.satuanLegacy = d.satuan;
         }
-        if (Object.keys(docSet).length) {
-          writes.push({ coll: ref.coll, filter: { tenantId, _id: d._id }, set: docSet });
-          bump(ref.coll);
-        }
+        if (Object.keys(docSet).length) pushDocWrite(ref.coll, d, docSet);
       }
     }
 
@@ -474,7 +507,8 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
     for (const ref of ARRAY_REFS) {
       const filter = { tenantId, $or: ref.keys.map((k) => ({ [`${ref.path}.${k}`]: product.id })) };
       const docs = await db.collection(ref.coll).find(filter, txOpts(session)).toArray();
-      for (const d of docs as Array<Record<string, unknown>>) {
+      for (const raw of docs as Array<Record<string, unknown>>) {
+        const d = current(ref.coll, raw);
         const arr = getPath(d, ref.path);
         if (!Array.isArray(arr)) continue;
         const where = `${ref.coll}:${d.noDokumen || d.noPO || d.noGRN || d.noRelease || d.id}`;
@@ -522,15 +556,15 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
             if (has(summary[sf]) && deltas.has(lf)) set[`summary.${sf}`] = round(num(summary[sf]) + (deltas.get(lf) || 0), QTY_DP);
           }
         }
-        writes.push({ coll: ref.coll, filter: { tenantId, _id: d._id }, set });
-        bump(ref.coll);
+        pushDocWrite(ref.coll, d, set);
       }
     }
 
     // resep + revisi
     for (const coll of ['recipes', 'recipe_revisions']) {
       const docs = await db.collection(coll).find({ tenantId, 'lines.productId': product.id }, txOpts(session)).toArray();
-      for (const d of docs as Array<Record<string, unknown>>) {
+      for (const raw of docs as Array<Record<string, unknown>>) {
+        const d = current(coll, raw);
         let touched = false;
         const lines = (d.lines as RecipeLine[]).map((l) => {
           if (l.productId !== product.id) return l;
@@ -542,8 +576,7 @@ async function buildPlan(db: Db, tenantId: string, specs: RebaseSpec[], now: Dat
         if (!touched) continue;
         const set: Record<string, unknown> = { lines };
         if (coll === 'recipe_revisions') set.contentHash = recipeContentHash(recipeRevisionContent({ ...d, lines } as never));
-        writes.push({ coll, filter: { tenantId, _id: d._id }, set });
-        bump(coll);
+        pushDocWrite(coll, d, set);
       }
     }
 
