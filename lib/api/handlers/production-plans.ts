@@ -8,6 +8,12 @@ import {
 } from '@/lib/api/tenant-master';
 import { RELEASE_CREATE_ROLES, requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import {
+  loadPlanPenerima,
+  loadPortionTargetsForPlans,
+  penerimaFromMap,
+  type PlanPenerima,
+} from '@/lib/api/plan-penerima-porsi';
 import { releasePlanReservations } from '@/lib/stock-ledger/plan-reservation';
 import {
   PRODUCTION_PLANS_COLLECTION,
@@ -19,6 +25,7 @@ import {
   isIsoDate,
   normalizeKategoriPorsiList,
   totalTargetPorsi,
+  planRecipientPorsi,
   RECIPE_NEED_BUFFER_PCT,
   assertConsolidatePlans,
   mergeProductionPlanLines,
@@ -215,14 +222,31 @@ function actorFields(auth: HandlerContext['auth']): { userId?: string; userName?
   return auditActor(auth);
 }
 
-function projectPlan(doc: Record<string, unknown> | null) {
+function projectPlan(doc: Record<string, unknown> | null, penerima?: PlanPenerima) {
   if (!doc) return null;
   const presented = presentProductionPlanKategori(doc);
   const lines = (presented.lines || []) as ProductionPlanLine[];
   return clean({
     ...presented,
     totalTargetPorsi: totalTargetPorsi(lines),
+    penerimaPorsi: penerima?.penerimaPorsi
+      ?? planRecipientPorsi(lines, presented.kategoriPorsiList as string[] | undefined),
+    ...(penerima?.penerimaByKategori ? { penerimaByKategori: penerima.penerimaByKategori } : {}),
   });
+}
+
+async function projectPlanWithPenerima(
+  db: HandlerContext['db'],
+  scopeAuth: Parameters<typeof loadPlanPenerima>[1],
+  doc: Record<string, unknown> | null,
+) {
+  if (!doc) return null;
+  try {
+    return projectPlan(doc, await loadPlanPenerima(db, scopeAuth, doc as unknown as ProductionPlanDoc));
+  } catch {
+    // Mutasi sudah tersimpan — gagal baca panel porsi tidak boleh membuat respons gagal.
+    return projectPlan(doc);
+  }
 }
 
 type LinkedProcureLite = {
@@ -329,7 +353,11 @@ export async function handleProductionPlans({
       .limit(200)
       .toArray();
 
-    return ok(list.map((doc) => projectPlan(doc as Record<string, unknown>)));
+    const targetsByKey = await loadPortionTargetsForPlans(db, scopeAuth, list as unknown as ProductionPlanDoc[]);
+    return ok(list.map((doc) => projectPlan(
+      doc as Record<string, unknown>,
+      penerimaFromMap(doc as unknown as ProductionPlanDoc, targetsByKey),
+    )));
   }
 
   if (route === '/production-plans' && method === 'POST') {
@@ -417,7 +445,7 @@ export async function handleProductionPlans({
         ...auditActor(auth),
       }),
     });
-    return ok(projectPlan(doc as unknown as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, doc as unknown as Record<string, unknown>));
   }
 
   // POST /production-plans/consolidate — gabung RPN dapur+tanggal yang sama
@@ -655,7 +683,7 @@ export async function handleProductionPlans({
       return err(msg, 500);
     }
 
-    return ok(projectPlan(created as unknown as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, created as unknown as Record<string, unknown>));
   }
 
   // GET /production-plans/:id
@@ -668,7 +696,7 @@ export async function handleProductionPlans({
       withTenantFilter(scopeAuth, { id }),
     );
     if (!existing) return err('Rencana tidak ditemukan', 404);
-    return ok(projectPlan(existing as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, existing as Record<string, unknown>));
   }
 
   // PUT /production-plans/:id — edit header/lines (DRAFT/SUBMITTED only)
@@ -754,7 +782,7 @@ export async function handleProductionPlans({
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(projectPlan(saved as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, saved as Record<string, unknown>));
   }
 
   // POST /production-plans/:id/material-override — upsert/hapus 1 qty kebutuhan
@@ -827,7 +855,7 @@ export async function handleProductionPlans({
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(projectPlan(saved as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, saved as Record<string, unknown>));
   }
 
   // POST /production-plans/:id/recipe-buffer — { recipeId, enabled?: boolean, bufferPct?: number }
@@ -901,7 +929,7 @@ export async function handleProductionPlans({
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(projectPlan(saved as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, saved as Record<string, unknown>));
   }
 
   // GET /production-plans/:id/revise-menu — dampak MRP/PR/PO (tanpa mengubah dokumen)
@@ -1003,7 +1031,7 @@ export async function handleProductionPlans({
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(projectPlan(saved as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, saved as Record<string, unknown>));
   }
 
   // POST /production-plans/:id/status — { status, note? }
@@ -1140,7 +1168,7 @@ export async function handleProductionPlans({
     const saved = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
       withTenantFilter(scopeAuth, { id }),
     );
-    return ok(projectPlan(saved as Record<string, unknown>));
+    return ok(await projectPlanWithPenerima(db, scopeAuth, saved as Record<string, unknown>));
   }
 
   // GET /production-plans/:id/release-prefill?lokasiKode=&excludeReleaseId= — baris RL dari acuan PO/MRP

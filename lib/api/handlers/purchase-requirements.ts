@@ -11,6 +11,7 @@ import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
 import { nextDocNumber } from '@/lib/api/document-sequence';
 import { guardPosting } from '@/lib/api/period-lock';
+import { planCostEstimateForCpo } from '@/lib/api/plan-cost-estimate';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { vendorPoWriteFields } from '@/lib/api/po-channel';
 import { resolveTanggalKedatanganForWrite } from '@/lib/api/po-arrival-date';
@@ -400,6 +401,7 @@ async function prepareDraftCpo(
   if ('error' in mapped) return { error: mapped.error };
   if (!mapped.items.length) return { error: 'Gagal memetakan item Draft CPO' };
 
+  const estimasiBiayaPorsi = await planCostEstimateForCpo(db, opts.scopeAuth, opts.pr.productionPlanId);
   const now = new Date();
   const actor = actorFields(opts.auth);
   const insertDoc = {
@@ -411,6 +413,7 @@ async function prepareDraftCpo(
     status: 'DRAFT',
     items: mapped.items,
     estimasiTotal: sumPoEstimasi(mapped.items),
+    ...(estimasiBiayaPorsi ? { estimasiBiayaPorsi } : {}),
     catatan: [`Dari Kebutuhan Beli ${opts.pr.noDokumen}`, ...procurementPackNotes(opts.pr.lines)].join(' · '),
     paymentTerms: 'KREDIT',
     ...vendorPoWriteFields({

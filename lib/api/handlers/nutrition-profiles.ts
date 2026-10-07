@@ -7,6 +7,8 @@ import {
 } from '@/lib/api/tenant-master';
 import { requireRole } from '@/lib/api/require-auth';
 import { writeAuditLog, auditActor } from '@/lib/api/audit-log';
+import { loadPlanPenerimaPorsi } from '@/lib/api/plan-penerima-porsi';
+import { resolvePlanPenerimaPorsi } from '@/lib/food-production/portion-target';
 import {
   normalizeNutritionFacts,
   analyzeRecipeNutrition,
@@ -27,6 +29,7 @@ import {
   PRODUCTION_PLANS_COLLECTION,
   collectPlanLineRefs,
   expandLegacyKategoriPorsi,
+  resultRecipientPorsi,
   type ProductionPlanDoc,
   type ProductionPlanLine,
   type KategoriPorsi,
@@ -207,6 +210,12 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       const productIds = [...new Set(recipes.flatMap((r) => (r.lines || []).map((l) => l.productId)))];
       const productsById = await loadProductsByIds(db, tenantFilter, productIds);
       const recipesById = new Map(recipes.map((r) => [r.id, r]));
+      const resultPlan = result.productionPlanId
+        ? await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+          { ...tenantFilter, id: result.productionPlanId },
+          { projection: { lines: 1, kategoriPorsiList: 1 } },
+        ) as Pick<ProductionPlanDoc, 'lines' | 'kategoriPorsiList'> | null
+        : null;
       const analysis = analyzeResultNutrition({
         resultId: result.id,
         resultNo: result.noDokumen,
@@ -214,6 +223,9 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         recipesById,
         productsById,
         akgProfile,
+        ...(resultPlan
+          ? { penerimaPorsi: resultRecipientPorsi(result.lines, resultPlan.lines, resultPlan.kategoriPorsiList) }
+          : {}),
       });
       if ('error' in analysis) return err(analysis.error, 400);
       const lineEstimates = (result.lines || []).map((l, idx) => {
@@ -267,6 +279,8 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       recipesById,
       productsById,
       akgProfile,
+      planKategoriPorsiList: plan.kategoriPorsiList,
+      penerimaPorsi: await loadPlanPenerimaPorsi(db, scopeAuth, plan),
     });
     if ('error' in analysis) return err(analysis.error, 400);
     const lineEstimates = (plan.lines || []).map((l, idx) => {
@@ -362,6 +376,13 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
       productsById,
       akgProfile,
       acuanByKategori,
+      penerimaPorsi: resolvePlanPenerimaPorsi(
+        {
+          lines: lines as ProductionPlanLine[],
+          kategoriPorsiList: [...new Set(lines.flatMap((l) => l.kategoriPorsiList))],
+        },
+        acuanByKategori,
+      ),
     });
     if ('error' in analysis) return err(analysis.error, 400);
     const lineEstimates = lines.map((l, idx) => {

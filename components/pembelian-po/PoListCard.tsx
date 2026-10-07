@@ -111,6 +111,9 @@ export default function PoListCard({
   const cancelledSoLines = asArray(po.cancelledSoLines) as JsonObject[];
   const productionPlanId = str(po.productionPlanId);
   const fromProductionPlan = Boolean(productionPlanId) && poStatus === 'DRAFT';
+  const biayaPorsi = asObject(po.estimasiBiayaPorsi);
+  const hasBiayaPorsi = num(biayaPorsi.penerimaPorsi) > 0;
+  const biayaPorsiLocked = !['DRAFT', 'REJECTED'].includes(poStatus);
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
   const hasRejectedQty = Boolean(po.hasRejectedQty) && ['RECEIVED', 'INVOICED'].includes(poStatus);
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
@@ -183,6 +186,9 @@ export default function PoListCard({
             <div className="text-xs text-slate-500 mt-0.5">
               Kedatangan: {formatDate(arrival)} · Dibuat: {formatDateTime(str(po.tanggal))}
               {poCreatorLabel(po) !== 'Tidak tercatat' && ` · oleh ${poCreatorLabel(po)}`}
+              {num(biayaPorsi.perPorsi) > 0 && (
+                <span className="text-emerald-800"> · Biaya bahan/porsi {formatIDR(num(biayaPorsi.perPorsi))}</span>
+              )}
               {!!vendorSoSegments.length && (
                 <span className="block sm:inline sm:before:content-['·_'] sm:before:mx-1 mt-0.5 sm:mt-0">
                   SO vendor:{' '}
@@ -420,6 +426,24 @@ export default function PoListCard({
               <span className="font-medium text-slate-700">Dari Kebutuhan Beli (Rencana Produksi):</span>{' '}
               <span className="font-mono">{str(po.purchaseRequirementNo)}</span>
             </p>
+          )}
+          {hasBiayaPorsi && (
+            <div className="text-xs text-slate-700 mb-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+              <span className="font-medium">Estimasi biaya bahan / porsi</span>
+              {!!biayaPorsi.planNo && <span className="font-mono"> ({str(biayaPorsi.planNo)})</span>}:{' '}
+              <span className="font-semibold tabular-nums">{formatIDR(num(biayaPorsi.perPorsi))}</span>
+              <span className="text-slate-500 tabular-nums">
+                {' '}— total bahan {formatIDR(num(biayaPorsi.totalCost))} ÷ {formatNumber(num(biayaPorsi.penerimaPorsi))} penerima
+              </span>
+              <span className="block text-[10px] text-slate-500 mt-0.5">
+                Semua bahan resep RPN (termasuk yang sudah ada di stok) × harga beli master.{' '}
+                {biayaPorsiLocked
+                  ? `Dikunci ${formatDateTime(str(biayaPorsi.computedAt))}.`
+                  : `Dihitung ${formatDateTime(str(biayaPorsi.computedAt))} — dikunci saat PO diajukan/dikirim.`}
+                {num(biayaPorsi.missingPriceCount) > 0
+                  && ` ${num(biayaPorsi.missingPriceCount)} bahan belum punya harga beli.`}
+              </span>
+            </div>
           )}
           {!!po.revisedFromNoPO && (
             <p className="text-xs text-slate-600 mb-2 rounded border border-slate-200 bg-white px-2 py-1.5">

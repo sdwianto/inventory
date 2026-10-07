@@ -1,7 +1,7 @@
 'use client';
 
 import type { JsonObject } from '@/types/json';
-import { str, num, asArray } from '@/types/json';
+import { str, num, asArray, asObject } from '@/types/json';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
 
@@ -24,6 +24,7 @@ export default function CustomerPoDocument({
   if (!po) return null;
   const poItems = asArray(po.items) as JsonObject[];
   const vendorSubs = asArray(po.vendorSubmissions) as JsonObject[];
+  const biayaPorsi = asObject(po.estimasiBiayaPorsi);
   const arrival = getPoArrivalDate(po);
   const status = str(po.status);
   const statusClass = PO_STATUS_STYLE[status as keyof typeof PO_STATUS_STYLE] || 'bg-slate-100 text-slate-700';
@@ -57,6 +58,16 @@ export default function CustomerPoDocument({
         {!!po.catatan && (
           <div className="col-span-2 text-xs bg-slate-50 rounded px-2 py-1">
             <span className="text-slate-500">Catatan:</span> {str(po.catatan)}
+          </div>
+        )}
+        {num(biayaPorsi.perPorsi) > 0 && (
+          <div className="col-span-2 text-xs bg-emerald-50 rounded px-2 py-1">
+            <span className="text-slate-500">Estimasi biaya bahan / porsi</span>
+            {!!biayaPorsi.planNo && <span className="font-mono"> ({str(biayaPorsi.planNo)})</span>}:{' '}
+            <span className="font-semibold">{formatIDR(num(biayaPorsi.perPorsi))}</span>
+            <span className="text-slate-500">
+              {' '}— total {formatIDR(num(biayaPorsi.totalCost))} ÷ {formatNumber(num(biayaPorsi.penerimaPorsi))} penerima
+            </span>
           </div>
         )}
       </section>

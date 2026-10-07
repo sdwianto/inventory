@@ -171,8 +171,12 @@ export default function FoodCostPage() {
               </div>
             )}
             <div className="border rounded p-3">
-              <div className="text-[11px] text-muted-foreground">Porsi</div>
-              <div className="font-medium">{analysis.actual?.yieldPorsi ?? analysis.standard.yieldPorsi}</div>
+              <div className="text-[11px] text-muted-foreground">Penerima (pembagi / porsi)</div>
+              <div className="font-medium">
+                {analysis.actual
+                  ? `${analysis.standard.yieldPorsi} rencana · ${analysis.actual.yieldPorsi} aktual`
+                  : analysis.standard.yieldPorsi}
+              </div>
               <div className="text-[11px]">missing harga: {analysis.standard.missingPriceCount}</div>
             </div>
           </div>

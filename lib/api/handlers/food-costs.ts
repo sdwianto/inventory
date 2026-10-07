@@ -3,11 +3,8 @@ import { ok, err } from '@/lib/api/db';
 import { withTenantFilter, resolveOperationalScope, tenantIdForWrite } from '@/lib/api/tenant-master';
 import { requireRole } from '@/lib/api/require-auth';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
-import { planFallbackMrpLines } from '@/lib/api/handlers/material-requirements';
-import {
-  MATERIAL_REQUIREMENTS_COLLECTION,
-  type MaterialRequirementLine,
-} from '@/lib/food-production/material-requirement';
+import { computePlanCostEstimate, loadPlanMrpLines } from '@/lib/api/plan-cost-estimate';
+import { loadPlanPenerimaPorsi } from '@/lib/api/plan-penerima-porsi';
 import {
   analyzeRecipeStandardCost,
   analyzeMenuStandardCost,
@@ -22,6 +19,7 @@ import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import {
   PRODUCTION_PLANS_COLLECTION,
   collectPlanLineRefs,
+  resultRecipientPorsi,
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { loadPlanActualCostInput } from '@/lib/food-production/actual-consumption';
@@ -76,22 +74,6 @@ async function loadProducts(
     const priced = target ? { ...p, hargaBeli: target.hargaBeli, avgCost: target.avgCost } : p;
     return [String(p.id), asCostRef(priced as Record<string, unknown>, useAvgCost)];
   }));
-}
-
-/** Baris kebutuhan rencana persis seperti MRP: dokumen MRP aktif, atau eksplosi live bila belum ada. */
-async function loadPlanMrpLines(
-  db: HandlerContext['db'],
-  scopeAuth: Parameters<typeof withTenantFilter>[0],
-  plan: ProductionPlanDoc,
-): Promise<{ source: 'MRP' | 'MRP_LIVE'; lines: MaterialRequirementLine[] } | null> {
-  const mrp = await db.collection(MATERIAL_REQUIREMENTS_COLLECTION).findOne(
-    withTenantFilter(scopeAuth, { productionPlanId: plan.id, status: { $nin: ['CANCELLED'] } }),
-    { sort: { createdAt: -1 }, projection: { lines: 1 } },
-  ) as { lines?: MaterialRequirementLine[] } | null;
-  if (mrp?.lines?.length) return { source: 'MRP', lines: mrp.lines };
-  if (mrp) return null;
-  const live = await planFallbackMrpLines(db, scopeAuth, plan);
-  return live.length ? { source: 'MRP_LIVE', lines: live } : null;
 }
 
 export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse | null> {
@@ -173,11 +155,12 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         ...(mrp?.lines || []).map((l) => l.productId),
       ])];
       const standardProducts = await loadProducts(db, scopeAuth, productIds);
+      const penerimaPorsi = await loadPlanPenerimaPorsi(db, scopeAuth, plan);
       const standard = mrp
         ? analyzeMrpStandardCost({
           planId: plan.id,
           planNo: plan.noDokumen,
-          totalPorsi: (plan.lines || []).reduce((s, l) => s + (Number(l.targetPorsi) || 0), 0),
+          totalPorsi: penerimaPorsi,
           mrpLines: mrp.lines,
           productsById: standardProducts,
         })
@@ -188,6 +171,7 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
           menusById: new Map(menus.map((m) => [m.id, m])),
           recipesById: new Map(recipes.map((r) => [r.id, r])),
           productsById: standardProducts,
+          penerimaPorsi,
         });
       if ('error' in standard) return err(standard.error, 400);
       const meta = { ...recipeRevision, standardSource: mrp?.source ?? 'RECIPE' };
@@ -209,11 +193,30 @@ export async function handleFoodCosts(ctx: HandlerContext): Promise<NextResponse
         productsById,
         standard: standard.standard,
         ...(actualInput.kartuCostByProduct ? { kartuCostByProduct: actualInput.kartuCostByProduct } : {}),
+        penerimaPorsi: resultRecipientPorsi(result?.lines, plan.lines, plan.kategoriPorsiList),
       });
       return ok({ ...actual, ...meta });
     }
 
     return err('scope wajib recipe | menu | plan | actual', 400);
+  }
+
+  // GET /food-costs/plan-estimate?id= — estimasi biaya bahan per penerima (kartu RPN)
+  if (path[0] === 'food-costs' && path[1] === 'plan-estimate' && method === 'GET') {
+    const deniedRole = requireRole(auth, [...FP_MGMT_READ_ROLES]);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, { url, request });
+    if (denied) return denied;
+    if (!scopeAuth) return err('Scope tidak valid', 400);
+    const id = String(url.searchParams.get('id') || '').trim();
+    if (!id) return err('id wajib');
+    const plan = await db.collection(PRODUCTION_PLANS_COLLECTION).findOne(
+      withTenantFilter(scopeAuth, { id }),
+    ) as ProductionPlanDoc | null;
+    if (!plan) return err('Rencana tidak ditemukan', 404);
+    const est = await computePlanCostEstimate(db, scopeAuth, plan);
+    if ('error' in est) return err(est.error, 400);
+    return ok(est);
   }
 
   if ((route === '/food-costs' || path[0] === 'food-costs') && !path[1] && method === 'GET') {

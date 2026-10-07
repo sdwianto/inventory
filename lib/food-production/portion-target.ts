@@ -9,7 +9,10 @@
 import {
   KATEGORI_PORSI_LEGACY,
   KATEGORI_PORSI_OPTIONS,
+  expandLegacyKategoriPorsi,
+  planRecipientPorsi,
   type KategoriPorsiCurrent,
+  type ProductionPlanLine,
 } from '@/lib/food-production/production-plan';
 
 export const PORTION_TARGETS_COLLECTION = 'portion_targets';
@@ -112,4 +115,65 @@ export function normalizePortionTargets(raw: unknown): PortionTargetMap | { erro
     }
   }
   return out;
+}
+
+export function portionTargetKey(tanggal: string, kitchenId: string): string {
+  return `${String(tanggal || '').trim()}::${String(kitchenId || '').trim()}`;
+}
+
+/** Penerima per kategori dari panel, dibatasi kategori rencana; null bila panel kosong/tidak valid. */
+export function resolvePlanPenerimaByKategori(
+  plan: { kategoriPorsiList?: readonly string[] | null },
+  targets?: Partial<Record<string, number>> | null,
+): Record<string, number> | null {
+  if (!targets) return null;
+  const norm = normalizePortionTargets(targets);
+  if ('error' in norm) return null;
+  const kp = expandLegacyKategoriPorsi(plan.kategoriPorsiList);
+  const keys = kp.length ? kp : (Object.keys(norm) as string[]);
+  const out: Record<string, number> = {};
+  for (const k of keys) {
+    const n = Number((norm as Record<string, number>)[k]) || 0;
+    if (n > 0) out[k] = n;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export interface PlanPenerima {
+  penerimaPorsi: number;
+  /** Hanya bila dari panel Kategori Porsi — dipakai menggabung total harian tanpa hitung dobel. */
+  penerimaByKategori?: Record<string, number>;
+}
+
+/**
+ * Jumlah penerima makan RPN = total panel Kategori Porsi (tanggal + dapur), dibatasi kategori RPN.
+ * Tidak melebihi porsi yang dimasak RPN (mis. RPN ad-hoc untuk sebagian penerima): bila porsi baris
+ * lebih kecil, itu yang dipakai dan rincian per kategori diskalakan.
+ * Cadangan bila acuan belum diisi: dari baris resep (porsi terbesar per kelompok kategori).
+ */
+export function resolvePlanPenerima(
+  plan: { lines?: ProductionPlanLine[]; kategoriPorsiList?: readonly string[] | null },
+  targets?: Partial<Record<string, number>> | null,
+): PlanPenerima {
+  const fromLines = planRecipientPorsi(plan.lines, plan.kategoriPorsiList);
+  const panel = resolvePlanPenerimaByKategori(plan, targets);
+  if (!panel) return { penerimaPorsi: fromLines };
+  const panelTotal = Object.values(panel).reduce((s, n) => s + n, 0);
+  if (fromLines > 0 && fromLines < panelTotal) {
+    const f = fromLines / panelTotal;
+    return {
+      penerimaPorsi: fromLines,
+      penerimaByKategori: Object.fromEntries(
+        Object.entries(panel).map(([k, n]) => [k, Math.round(n * f * 100) / 100]),
+      ),
+    };
+  }
+  return { penerimaPorsi: panelTotal, penerimaByKategori: panel };
+}
+
+export function resolvePlanPenerimaPorsi(
+  plan: { lines?: ProductionPlanLine[]; kategoriPorsiList?: readonly string[] | null },
+  targets?: Partial<Record<string, number>> | null,
+): number {
+  return resolvePlanPenerima(plan, targets).penerimaPorsi;
 }

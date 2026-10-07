@@ -42,6 +42,7 @@ import {
 } from '@/lib/api/cursor-page';
 import { invalidateDashboardSnapshot } from '@/lib/api/dashboard-snapshot';
 import { guardPosting } from '@/lib/api/period-lock';
+import { planCostEstimateForCpo } from '@/lib/api/plan-cost-estimate';
 import { computeLineEstimasi, sumPoEstimasi, mergePoItemsByStokId } from '@/lib/api/po-estimasi';
 import { findProductUomsByIds } from '@/lib/api/product-uom';
 import { resolveStockProducts } from '@/lib/api/product-merge';
@@ -897,6 +898,8 @@ export async function handleCustomerPo({
       rejectedBy: null,
       rejectedAt: null,
     };
+    const estimasiBiayaPorsi = await planCostEstimateForCpo(db, scopeAuth, po.productionPlanId);
+    if (estimasiBiayaPorsi) approvalPatch.estimasiBiayaPorsi = estimasiBiayaPorsi;
     if (!po.createdBy?.userId) {
       approvalPatch.createdBy = submitter;
     } else if (!po.createdBy?.userName) {
@@ -1380,6 +1383,15 @@ export async function handleCustomerPo({
 
     const locked = await guardPosting(db, scopeAuth, poBody, po.tanggal || po.tanggalKedatangan);
     if (locked) return locked;
+
+    const estimasiBiayaPorsi = await planCostEstimateForCpo(db, scopeAuth, po.productionPlanId);
+    if (estimasiBiayaPorsi) {
+      await db.collection('customer_purchase_orders').updateOne(
+        { id: po.id, tenantId: po.tenantId, status: 'DRAFT' },
+        { $set: { estimasiBiayaPorsi } },
+      );
+      po.estimasiBiayaPorsi = estimasiBiayaPorsi;
+    }
 
     const result = await approvePoAndSyncVendor(
       db,

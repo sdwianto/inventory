@@ -11,6 +11,7 @@ import {
   groupPlansByDate,
   PLAN_STATUS_DOT,
   statusesOnDay,
+  dayPenerimaPorsi,
   type PlanDateFields,
 } from '@/lib/food-production/plan-calendar';
 import { PLAN_STATUS_LABELS, type ProductionPlanStatus } from '@/lib/food-production/production-plan';
@@ -31,10 +32,6 @@ function toDate(value: Date | string | null | undefined): Date {
   if (value instanceof Date) return startOfDay(value);
   const key = value ? dateKey(value) : dateKey(new Date());
   return startOfDay(new Date(`${key || dateKey(new Date())}T12:00:00`));
-}
-
-function dayPorsi(dayPlans: PlanDateFields[]): number {
-  return dayPlans.reduce((sum, p) => sum + (Number(p.totalTargetPorsi) || 0), 0);
 }
 
 function PlanStatusDot({ status }: { status: ProductionPlanStatus }) {
@@ -138,7 +135,7 @@ export default function PlanDateStrip({
             const key = dateKey(d);
             const dayPlans = planByDate[key] || [];
             const count = dayPlans.length;
-            const porsi = dayPorsi(dayPlans);
+            const porsi = dayPenerimaPorsi(dayPlans);
             const flags = statusesOnDay(dayPlans);
             const selectedDay = key === selectedKey;
             const isToday = key === dateKey(new Date());

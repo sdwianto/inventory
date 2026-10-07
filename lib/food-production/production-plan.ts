@@ -685,6 +685,84 @@ export function totalTargetPorsi(lines: ProductionPlanLine[] | undefined): numbe
   return (lines || []).reduce((s, l) => s + (Number(l.targetPorsi) || 0), 0);
 }
 
+/**
+ * Jumlah penerima makan pada rencana (bukan jumlah porsi semua resep).
+ * Baris yang kategorinya beririsan melayani penerima yang sama → ambil porsi terbesar;
+ * kelompok kategori yang terpisah (mis. RPN gabungan) dijumlahkan.
+ * Baris tanpa kategori memakai kategori rencana; bila tetap kosong dianggap beririsan dengan semua.
+ */
+export function planRecipientPorsi(
+  lines: Array<Pick<ProductionPlanLine, 'targetPorsi' | 'kategoriPorsiList'> & { kategoriPorsi?: string }> | undefined,
+  planKategoriPorsiList?: readonly string[] | null,
+): number {
+  const planKp = expandLegacyKategoriPorsi(planKategoriPorsiList);
+  const items = (lines || [])
+    .map((l) => {
+      const own = expandLegacyKategoriPorsi(
+        l.kategoriPorsiList?.length ? l.kategoriPorsiList : (l.kategoriPorsi ? [l.kategoriPorsi] : []),
+      );
+      return { target: Number(l.targetPorsi) || 0, kp: own.length ? own : planKp };
+    })
+    .filter((i) => i.target > 0);
+  if (!items.length) return 0;
+
+  const parent = items.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const owner = new Map<string, number>();
+  for (let i = 0; i < items.length; i++) {
+    const kp = items[i].kp;
+    if (!kp.length) {
+      for (let j = 0; j < items.length; j++) parent[find(j)] = find(i);
+      continue;
+    }
+    for (const k of kp) {
+      const prev = owner.get(k);
+      if (prev == null) owner.set(k, i);
+      else parent[find(i)] = find(prev);
+    }
+  }
+  const maxByGroup = new Map<number, number>();
+  for (let i = 0; i < items.length; i++) {
+    const g = find(i);
+    maxByGroup.set(g, Math.max(maxByGroup.get(g) || 0, items[i].target));
+  }
+  return [...maxByGroup.values()].reduce((s, n) => s + n, 0);
+}
+
+/**
+ * Penerima aktual dari baris Hasil Produksi: kategori diambil dari baris rencana dengan resep/menu
+ * yang sama, lalu dikelompokkan seperti {@link planRecipientPorsi} (porsi aktual sebagai target).
+ */
+export function resultRecipientPorsi(
+  resultLines: Array<{ recipeId?: string; menuId?: string; actualPorsi?: number }> | undefined,
+  planLines: ProductionPlanLine[] | undefined,
+  planKategoriPorsiList?: readonly string[] | null,
+): number {
+  const byRef = new Map<string, ProductionPlanLine>();
+  for (const pl of planLines || []) {
+    const ref = String(pl.recipeId || pl.menuId || '').trim();
+    if (ref && !byRef.has(ref)) byRef.set(ref, pl);
+  }
+  return planRecipientPorsi(
+    (resultLines || []).map((rl) => {
+      const pl = byRef.get(String(rl.menuId || '').trim()) || byRef.get(String(rl.recipeId || '').trim());
+      const legacyKp = (pl as { kategoriPorsi?: string } | undefined)?.kategoriPorsi;
+      return {
+        targetPorsi: Number(rl.actualPorsi) || 0,
+        kategoriPorsiList: pl?.kategoriPorsiList,
+        ...(legacyKp ? { kategoriPorsi: legacyKp } : {}),
+      };
+    }),
+    planKategoriPorsiList,
+  );
+}
+
 /** Collect menu/recipe ids referenced by plan lines (dual-mode). */
 export function collectPlanLineRefs(lines: ProductionPlanLine[] | undefined): {
   menuIds: string[];

@@ -92,6 +92,9 @@ import {
   formatPlanDateLabel,
   monthRangeIso,
   PLAN_STATUS_BADGE,
+  dayPenerimaPorsi,
+  overlappingPlans,
+  planPorsiLabel,
 } from '@/lib/food-production/plan-calendar';
 import {
   buildRencanaKebutuhanLines,
@@ -121,7 +124,7 @@ import {
   type KebutuhanRecipeRef,
 } from '@/lib/food-production/kebutuhan-bahan-harian';
 import { fetchPortionExceptionMatchSet } from '@/lib/food-production/recipe-portion-exception';
-import { formatNumber } from '@/lib/format';
+import { formatIDR, formatNumber } from '@/lib/format';
 import {
   parseQtyInput,
   shouldSnapSpinnerStep,
@@ -199,6 +202,9 @@ interface PlanRow {
   kategoriPorsiList?: KategoriPorsi[];
   status: ProductionPlanStatus;
   totalTargetPorsi?: number;
+  penerimaPorsi?: number;
+  penerimaByKategori?: Record<string, number>;
+  updatedAt?: string;
   catatan?: string;
   weeklyMenuPlanId?: string | null;
   history?: PlanHistoryEntry[];
@@ -440,7 +446,14 @@ function FoodProductionPlanPageContent() {
       perPorsi?: AkgPerPorsi | null;
       perPorsiAkgPct?: { energiKcal?: number; proteinG?: number } | null;
     }>;
+    yieldPorsi?: number;
   }>>({});
+  const [planCostById, setPlanCostById] = useState<Record<string, {
+    perPorsi: number;
+    totalCost: number;
+    penerimaPorsi: number;
+    missingPriceCount: number;
+  } | { error: string }>>({});
 
   const scopeKitchenId = useMemo(
     () => getActingKitchenId() || kitchens[0]?.id || '',
@@ -1094,6 +1107,11 @@ function FoodProductionPlanPageContent() {
           delete next[editing.id];
           return next;
         });
+        setPlanCostById((prev) => {
+          const next = { ...prev };
+          delete next[editing.id];
+          return next;
+        });
       }
       setOpen(false);
       if (payload.tanggal) {
@@ -1191,6 +1209,7 @@ function FoodProductionPlanPageContent() {
           },
           warnings: Array.isArray(data.warnings) ? data.warnings : [],
           lineEstimates: Array.isArray(data.lineEstimates) ? data.lineEstimates : [],
+          yieldPorsi: Number(data.yieldPorsi) || 0,
         },
       }));
     } catch {
@@ -1198,12 +1217,48 @@ function FoodProductionPlanPageContent() {
     }
   }
 
+  async function fetchPlanCostEstimate(row: PlanRow) {
+    try {
+      const res = await fetch(
+        `/api/food-costs/plan-estimate?id=${encodeURIComponent(row.id)}`,
+        { headers: { ...actingTenantHeaders() } },
+      );
+      const data = await res.json();
+      setPlanCostById((prev) => ({
+        ...prev,
+        [row.id]: res.ok
+          ? {
+            perPorsi: Number(data.perPorsi) || 0,
+            totalCost: Number(data.totalCost) || 0,
+            penerimaPorsi: Number(data.penerimaPorsi) || 0,
+            missingPriceCount: Number(data.missingPriceCount) || 0,
+          }
+          : { error: String(data?.error || 'Gagal hitung estimasi biaya') },
+      }));
+    } catch {
+      setPlanCostById((prev) => ({ ...prev, [row.id]: { error: 'Gagal hitung estimasi biaya' } }));
+    }
+  }
+
+  const estimateFetchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!expandedId) {
+      estimateFetchedFor.current = null;
+      return;
+    }
+    const row = rows.find((r) => r.id === expandedId);
+    if (!row) return;
+    const key = `${row.id}|${row.updatedAt || ''}|${row.penerimaPorsi || 0}|${row.totalTargetPorsi || 0}`;
+    if (estimateFetchedFor.current === key && planCostById[expandedId]) return;
+    estimateFetchedFor.current = key;
+    void fetchPlanAkgEstimate(row);
+    void fetchPlanCostEstimate(row);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch on expand (incl. deep link), plan change, or cache reset
+  }, [expandedId, rows, planCostById]);
+
   async function toggleExpand(row: PlanRow) {
     const next = expandedId === row.id ? null : row.id;
     setExpandedId(next);
-    if (next) {
-      void fetchPlanAkgEstimate(row);
-    }
     if (
       next
       && ISSUE_ELIGIBLE_PLAN_STATUSES.has(row.status)
@@ -2043,6 +2098,11 @@ function FoodProductionPlanPageContent() {
         message?: string;
       };
       if (!res.ok) throw new Error(data?.error || 'Gagal perbarui draft belanja');
+      setPlanCostById((prev) => {
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
 
       if (data.materialsReady) {
         toast.success(data.message || 'Bahan lengkap — siap Ambil Bahan');
@@ -2071,7 +2131,7 @@ function FoodProductionPlanPageContent() {
     && form.kitchenId
     && lines.some((l) => l.recipeId && l.kategoriPorsiList.length > 0),
   );
-  const dayPorsi = filteredList.reduce((s, r) => s + (Number(r.totalTargetPorsi) || 0), 0);
+  const dayPorsi = dayPenerimaPorsi(filteredList);
   const dayPlansForConsolidate = !showAll && selectedDate ? filteredList : [];
   const consolidateEligible = dayPlansForConsolidate.filter(
     (r) => CONSOLIDATE_ELIGIBLE_STATUSES.has(r.status),
@@ -2444,7 +2504,7 @@ function FoodProductionPlanPageContent() {
                       </span>
                     )}
                     <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
-                      {row.totalTargetPorsi ?? 0} porsi · {(row.lines || []).length} resep
+                      {planPorsiLabel(row)} porsi · {(row.lines || []).length} resep
                     </span>
                   </button>
 
@@ -2466,6 +2526,18 @@ function FoodProductionPlanPageContent() {
                         {row.catatan && <span>Catatan: {row.catatan}</span>}
                       </div>
 
+                      {(() => {
+                        if (row.status === 'CANCELLED') return null;
+                        const overlap = overlappingPlans(row, rows);
+                        if (!overlap.length) return null;
+                        return (
+                          <p className="text-[11px] text-amber-800 bg-amber-50/80 border border-amber-200/80 rounded px-2 py-1">
+                            {overlap.map((o) => o.noDokumen).join(', ')}{' '}
+                            juga mencakup kategori yang sama di dapur &amp; tanggal ini. Penerima di total harian dihitung sekali; biaya / porsi RPN ini = biaya tambahan per penerima.
+                          </p>
+                        );
+                      })()}
+
                       {canEditMaterialsForRow(row) && row.status === 'APPROVED' && (
                         <p className="text-[11px] text-amber-800 bg-amber-50/80 border border-amber-200/80 rounded px-2 py-1">
                           Qty bahan bisa diubah sampai PO dikirim ke vendor. Setelah ubah, gunakan Perbarui Draft PO.
@@ -2482,11 +2554,44 @@ function FoodProductionPlanPageContent() {
                             {' · '}
                             {planAkgById[row.id].perPorsiAkgPct.energiKcal ?? 0}% energi AKG
                           </span>
+                          {!!planAkgById[row.id].yieldPorsi && (
+                            <span className="ml-1 text-slate-500 tabular-nums">
+                              (total semua resep ÷ {formatNumber(planAkgById[row.id].yieldPorsi || 0)} penerima)
+                            </span>
+                          )}
                           {!!planAkgById[row.id].warnings.length && (
                             <span className="ml-2 text-amber-800">
                               ({planAkgById[row.id].warnings.join(' · ')})
                             </span>
                           )}
+                        </div>
+                      )}
+
+                      {planCostById[row.id] && (
+                        <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-slate-800">
+                          {'error' in planCostById[row.id] ? (
+                            <span className="text-slate-600">
+                              Est. biaya bahan / porsi: — ({(planCostById[row.id] as { error: string }).error})
+                            </span>
+                          ) : (() => {
+                            const c = planCostById[row.id] as {
+                              perPorsi: number; totalCost: number; penerimaPorsi: number; missingPriceCount: number;
+                            };
+                            return (
+                              <>
+                                <span className="font-medium">Est. biaya bahan / porsi: </span>
+                                <span className="tabular-nums font-semibold">{formatIDR(c.perPorsi)}</span>
+                                <span className="ml-1 text-slate-500 tabular-nums">
+                                  (total {formatIDR(c.totalCost)} ÷ {formatNumber(c.penerimaPorsi)} penerima · harga beli master)
+                                </span>
+                                {c.missingPriceCount > 0 && (
+                                  <span className="ml-2 text-amber-800">
+                                    {c.missingPriceCount} bahan belum punya harga beli — estimasi lebih rendah dari seharusnya
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
 
@@ -3423,7 +3528,7 @@ function FoodProductionPlanPageContent() {
                       </span>
                     </span>
                     <span className="mt-0.5 block text-[11px] text-slate-600">
-                      {summarizePlanLines(row.lines)} · {row.totalTargetPorsi ?? 0} porsi
+                      {summarizePlanLines(row.lines)} · {planPorsiLabel(row)} porsi
                     </span>
                     {blocked && (
                       <span className="mt-0.5 block text-[10px] text-amber-800">{blocked}</span>
@@ -3615,6 +3720,11 @@ function FoodProductionPlanPageContent() {
                     {draftAkg.perPorsiAkgPct.energiKcal ?? 0}% energi
                     {' · '}
                     {draftAkg.perPorsiAkgPct.proteinG ?? 0}% protein
+                    {draftAkg.yieldPorsi > 0 && (
+                      <span className="ml-1 text-xs text-slate-500">
+                        (total semua resep ÷ {formatNumber(draftAkg.yieldPorsi)} penerima)
+                      </span>
+                    )}
                   </span>
                 )}
                 {!draftAkgLoading && !draftAkg && (

@@ -34,6 +34,55 @@ export interface PlanDateFields {
   status?: string;
   /** Optional — shown on date strip (total porsi target that day). */
   totalTargetPorsi?: number;
+  /** Jumlah penerima makan (panel Kategori Porsi) — dipakai bila ada. */
+  penerimaPorsi?: number;
+  /** Penerima per kategori dari panel — rencana lain di dapur+tanggal yang sama berbagi angka ini. */
+  penerimaByKategori?: Record<string, number>;
+  kitchenId?: string;
+}
+
+export function planPorsiLabel(p: Pick<PlanDateFields, 'penerimaPorsi' | 'totalTargetPorsi'>): number {
+  const n = Number(p.penerimaPorsi);
+  return n > 0 ? n : (Number(p.totalTargetPorsi) || 0);
+}
+
+/**
+ * Total penerima satu hari: rencana dari panel Kategori Porsi digabung per dapur (kategori yang
+ * sama dihitung sekali), rencana tanpa panel dijumlah apa adanya. Rencana batal tidak dihitung.
+ */
+export function dayPenerimaPorsi(
+  plans: Array<Pick<PlanDateFields, 'status' | 'penerimaPorsi' | 'totalTargetPorsi' | 'penerimaByKategori' | 'kitchenId'>>,
+): number {
+  const byKitchen = new Map<string, Map<string, number>>();
+  let loose = 0;
+  for (const p of plans) {
+    if (p.status === 'CANCELLED') continue;
+    const kp = p.penerimaByKategori;
+    if (!kp || !Object.keys(kp).length) {
+      loose += planPorsiLabel(p);
+      continue;
+    }
+    const kitchen = String(p.kitchenId || '');
+    const merged = byKitchen.get(kitchen) ?? new Map<string, number>();
+    for (const [k, n] of Object.entries(kp)) merged.set(k, Math.max(merged.get(k) || 0, Number(n) || 0));
+    byKitchen.set(kitchen, merged);
+  }
+  let total = loose;
+  for (const merged of byKitchen.values()) for (const n of merged.values()) total += n;
+  return Math.round(total);
+}
+
+/** Rencana aktif lain di dapur+tanggal yang sama dengan kategori yang beririsan. */
+export function overlappingPlans<
+  T extends { id?: string; status?: string; kitchenId?: string; tanggal?: string | Date | null; kategoriPorsiList?: string[] },
+>(plan: T, others: T[]): T[] {
+  const kp = new Set(plan.kategoriPorsiList || []);
+  const day = dateKey(plan.tanggal);
+  return others.filter((o) => o.id !== plan.id
+    && o.status !== 'CANCELLED'
+    && String(o.kitchenId || '') === String(plan.kitchenId || '')
+    && dateKey(o.tanggal) === day
+    && (!kp.size || !(o.kategoriPorsiList || []).length || (o.kategoriPorsiList || []).some((k) => kp.has(k))));
 }
 
 type DateInput = string | Date | null | undefined;

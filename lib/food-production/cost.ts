@@ -211,6 +211,8 @@ export function analyzePlanStandardCost(input: {
   menusById: Map<string, MenuDoc>;
   recipesById: Map<string, RecipeDoc>;
   productsById: Map<string, ProductCostRef>;
+  /** Jumlah penerima makan; tanpa ini per porsi dibagi jumlah target porsi semua baris. */
+  penerimaPorsi?: number;
 }): CostAnalysis | { error: string } {
   let total = 0;
   let missing = 0;
@@ -261,6 +263,7 @@ export function analyzePlanStandardCost(input: {
     }
   }
 
+  if (Number(input.penerimaPorsi) > 0) totalPorsi = Number(input.penerimaPorsi);
   if (!totalPorsi) totalPorsi = 1;
   total = money(total);
   return {
@@ -334,6 +337,8 @@ export function analyzeActualCost(input: {
   standard?: CostTotals;
   /** Bila diisi: qty yang tercatat di kartu dinilai dengan harga kartu; sisanya harga master. */
   kartuCostByProduct?: Map<string, ActualKartuCost>;
+  /** Jumlah penerima aktual; tanpa ini per porsi dibagi jumlah porsi aktual semua baris hasil. */
+  penerimaPorsi?: number;
 }): CostAnalysis {
   const actualLines: CostLineBreakdown[] = [];
   let total = 0;
@@ -402,9 +407,9 @@ export function analyzeActualCost(input: {
     if (input.kartuCostByProduct) masterFallbackCount += 1;
   }
 
-  const actualPorsi = roundQty(
-    (input.resultLines || []).reduce((s, l) => s + (Number(l.actualPorsi) || 0), 0),
-  );
+  const actualPorsi = Number(input.penerimaPorsi) > 0
+    ? roundQty(Number(input.penerimaPorsi))
+    : roundQty((input.resultLines || []).reduce((s, l) => s + (Number(l.actualPorsi) || 0), 0));
   const yieldPorsi = actualPorsi > 0 ? actualPorsi : 1;
   total = money(total);
   const actual: CostTotals = {

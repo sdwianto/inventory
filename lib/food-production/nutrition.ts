@@ -16,6 +16,7 @@ import { RECIPE_CUT_SATUAN, recipeBaseQtyForFamily } from '@/lib/food-production
 import type { MenuDoc } from '@/lib/food-production/menu';
 import {
   expandLegacyKategoriPorsi,
+  planRecipientPorsi,
   type ProductionPlanLine,
 } from '@/lib/food-production/production-plan';
 import type { ProductionResultLine } from '@/lib/food-production/production-result';
@@ -809,6 +810,10 @@ export function analyzePlanNutrition(input: {
   akgProfile?: string;
   /** Acuan qty per kategori (dari dialog target porsi). */
   acuanByKategori?: Partial<Record<string, number>> | null;
+  /** Kategori header rencana — cadangan untuk baris tanpa kategori saat menghitung penerima. */
+  planKategoriPorsiList?: readonly string[] | null;
+  /** Jumlah penerima dari panel Kategori Porsi; kosong = dihitung dari baris resep. */
+  penerimaPorsi?: number;
 }): NutritionAnalysis | { error: string } {
   const { planLines, menusById, recipesById, productsById } = input;
   if (!planLines?.length) return { error: 'Rencana tidak punya baris resep' };
@@ -817,13 +822,11 @@ export function analyzePlanNutrition(input: {
   const lines: NutritionLineBreakdown[] = [];
   const missingProductIds: string[] = [];
   const warnings: string[] = [];
-  let totalPorsi = 0;
   let sumBesar = 0;
   let sumKecil = 0;
 
   for (const pl of planLines) {
     const target = Number(pl.targetPorsi) || 0;
-    totalPorsi = roundQty(totalPorsi + target);
     const split = splitPlanLinePorsiFamilies(pl, input.acuanByKategori);
     sumBesar += split.porsiBesar;
     sumKecil += split.porsiKecil;
@@ -871,7 +874,10 @@ export function analyzePlanNutrition(input: {
     }
   }
 
-  if (!totalPorsi) totalPorsi = 1;
+  // Per porsi = satu penerima makan (semua resep yang ia terima), bukan rata-rata per resep.
+  const totalPorsi = (Number(input.penerimaPorsi) > 0 ? Number(input.penerimaPorsi) : 0)
+    || planRecipientPorsi(planLines, input.planKategoriPorsiList)
+    || 1;
   const perPorsi = scaleNutrition(batch, 1 / totalPorsi);
   // Campuran: % vs profil user; murni satu family: pakai target family itu.
   const akgKey = resolveAkgKeyForPlanLine({
@@ -916,6 +922,8 @@ export function analyzePlanDraftNutrition(input: {
   productsById: Map<string, ProductNutritionRef>;
   akgProfile?: string;
   acuanByKategori?: Partial<Record<string, number>> | null;
+  /** Jumlah penerima dari panel Kategori Porsi; kosong = dihitung dari baris resep. */
+  penerimaPorsi?: number;
 }): NutritionAnalysis | { error: string } {
   return analyzePlanNutrition({
     planId: 'draft',
@@ -926,6 +934,7 @@ export function analyzePlanDraftNutrition(input: {
     productsById: input.productsById,
     akgProfile: input.akgProfile,
     acuanByKategori: input.acuanByKategori,
+    penerimaPorsi: input.penerimaPorsi,
   });
 }
 
@@ -937,6 +946,8 @@ export function analyzeResultNutrition(input: {
   recipesById: Map<string, RecipeDoc>;
   productsById: Map<string, ProductNutritionRef>;
   akgProfile?: string;
+  /** Jumlah penerima aktual; tanpa ini per porsi dibagi jumlah porsi aktual semua baris. */
+  penerimaPorsi?: number;
 }): NutritionAnalysis | { error: string } {
   const { resultLines, recipesById, productsById } = input;
   if (!resultLines?.length) return { error: 'Hasil tidak punya baris' };
@@ -966,6 +977,7 @@ export function analyzeResultNutrition(input: {
     }
   }
 
+  if (Number(input.penerimaPorsi) > 0) totalPorsi = Number(input.penerimaPorsi);
   if (!totalPorsi) totalPorsi = 1;
   const perPorsi = scaleNutrition(batch, 1 / totalPorsi);
   const akgKey = resolveAkgKey(input.akgProfile);
