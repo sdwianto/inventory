@@ -61,6 +61,7 @@ interface Analysis {
   warnings: string[];
   perPorsiAkgPct: Record<string, number>;
   akgProfile: string;
+  oilAbsorption?: { serapPct: number; absorbedGramsPerPorsi: number; basis: string };
 }
 
 export default function NutritionPage() {
@@ -372,6 +373,12 @@ export default function NutritionPage() {
             <div className="text-muted-foreground">
               {analysis.refLabel} · yield {analysis.yieldPorsi} porsi · AKG {analysis.akgProfile}
             </div>
+            {analysis.oilAbsorption && (
+              <div className="text-xs text-muted-foreground">
+                Minyak goreng terserap ~{analysis.oilAbsorption.absorbedGramsPerPorsi} g/porsi
+                ({analysis.oilAbsorption.serapPct}%, {analysis.oilAbsorption.basis})
+              </div>
+            )}
             {!!analysis.warnings.length && (
               <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
                 {analysis.warnings.join(' · ')}

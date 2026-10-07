@@ -48,6 +48,7 @@ import { casConflict } from '@/lib/api/cas';
 import { insertRecipeWithRevision, updateRecipeWithRevision } from '@/lib/api/recipe-revisions';
 import { RECIPE_REVISIONS_COLLECTION } from '@/lib/food-production/recipe-revision';
 import { recipeCutFlag } from '@/lib/food-production/recipe-uom';
+import { parseMetodeMasak } from '@/lib/food-production/oil-absorption';
 
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 
@@ -60,6 +61,7 @@ interface RecipeBody extends Record<string, unknown> {
   yieldQty?: number;
   kategoriMenu?: string | null;
   wastePct?: number | null;
+  metodeMasak?: string | null;
   lines?: unknown;
   catatan?: string;
   /** data-URL baru, URL media yang sudah ada, atau null/'' untuk hapus. */
@@ -645,6 +647,9 @@ export async function handleRecipes({
       wastePct = w;
     }
 
+    const metodeMasak = parseMetodeMasak(recipeBody.metodeMasak);
+    if (recipeBody.metodeMasak && !metodeMasak) return err('Cara masak tidak valid', 400);
+
     const image = await resolveRecipeImage(tenantId, recipeBody.gambarBase64);
     if ('error' in image) return err(image.error, 400);
 
@@ -672,6 +677,7 @@ export async function handleRecipes({
       yieldQty,
       kategoriMenu,
       wastePct,
+      ...(metodeMasak && metodeMasak !== 'OTOMATIS' ? { metodeMasak } : {}),
       lines,
       catatan: String(recipeBody.catatan || '').trim() || undefined,
       gambarUrl: image.gambarUrl || undefined,
@@ -809,6 +815,11 @@ export async function handleRecipes({
         if (!Number.isFinite(w) || w < 0 || w > 100) return err('Waste % harus 0–100', 400);
         update.wastePct = w;
       }
+    }
+    if (recipeBody.metodeMasak !== undefined) {
+      const m = parseMetodeMasak(recipeBody.metodeMasak);
+      if (recipeBody.metodeMasak && !m) return err('Cara masak tidak valid', 400);
+      update.metodeMasak = m && m !== 'OTOMATIS' ? m : null;
     }
     if (recipeBody.lines !== undefined) {
       const fgForLines = String(

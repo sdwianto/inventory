@@ -141,6 +141,8 @@ interface RecipeLineForm {
   satuan: string;
   /** Satuan POTONG: jumlah potong per satuan basis (per resep). */
   potongPerBase: string;
+  /** Minyak goreng: % terserap manual; kosong = otomatis (DPM). */
+  serapPct: string;
   notes: string;
 }
 
@@ -153,6 +155,7 @@ interface RecipeRow {
   yieldQty: number;
   kategoriMenu?: KategoriMenu | string;
   wastePct?: number;
+  metodeMasak?: string;
   catatan?: string;
   gambarUrl?: string;
   lines: Array<{
@@ -163,6 +166,7 @@ interface RecipeRow {
     qtyKecil?: number;
     satuan?: string;
     potongPerBase?: number;
+    serapPct?: number;
     qtyBaseBesar?: number;
     qtyBaseKecil?: number;
     factorToBase?: number;
@@ -292,8 +296,14 @@ const emptyLine = (): RecipeLineForm => ({
   pctKecil: String(DEFAULT_PCT_KECIL),
   satuan: '',
   potongPerBase: '',
+  serapPct: '',
   notes: '',
 });
+
+function isFryingOilName(nama?: string): boolean {
+  const n = String(nama || '');
+  return /\bminyak\b|\boil\b/i.test(n) && !/wijen|sesame|zaitun|olive/i.test(n);
+}
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -312,6 +322,7 @@ function lineFromDoc(l: RecipeRow['lines'][number]): RecipeLineForm {
     pctKecil: String(pctKecil),
     satuan: l.satuan || '',
     potongPerBase: l.potongPerBase != null ? String(l.potongPerBase) : '',
+    serapPct: l.serapPct != null ? String(l.serapPct) : '',
     notes: l.notes || '',
   };
 }
@@ -336,6 +347,7 @@ function consolidateFormLines(rows: RecipeLineForm[]): RecipeLineForm[] {
     existing.qtyBesar = String(q1 + q2);
     if (!existing.satuan && line.satuan) existing.satuan = line.satuan;
     if (!existing.potongPerBase && line.potongPerBase) existing.potongPerBase = line.potongPerBase;
+    if (!existing.serapPct && line.serapPct) existing.serapPct = line.serapPct;
     if (line.notes?.trim()) {
       const a = existing.notes.trim();
       const b = line.notes.trim();
@@ -368,6 +380,7 @@ export default function FoodProductionRecipePage() {
     effectiveDate: today(),
     yieldQty: '500',
     wastePct: '',
+    metodeMasak: 'OTOMATIS',
     catatan: '',
     aktif: true,
   });
@@ -801,6 +814,7 @@ export default function FoodProductionRecipePage() {
       effectiveDate: today(),
       yieldQty: '500',
       wastePct: '',
+      metodeMasak: 'OTOMATIS',
       catatan: '',
       aktif: true,
     });
@@ -845,6 +859,7 @@ export default function FoodProductionRecipePage() {
       effectiveDate: row.effectiveDate || today(),
       yieldQty: String(row.yieldQty || 1),
       wastePct: row.wastePct != null ? String(row.wastePct) : '',
+      metodeMasak: row.metodeMasak || 'OTOMATIS',
       catatan: row.catatan || '',
       aktif: row.aktif !== false,
     });
@@ -885,6 +900,7 @@ export default function FoodProductionRecipePage() {
       effectiveDate: row.effectiveDate || today(),
       yieldQty: String(row.yieldQty || 1),
       wastePct: row.wastePct != null ? String(row.wastePct) : '',
+      metodeMasak: row.metodeMasak || 'OTOMATIS',
       catatan: row.catatan || '',
       aktif: true,
     }));
@@ -946,6 +962,7 @@ export default function FoodProductionRecipePage() {
         effectiveDate: form.effectiveDate,
         yieldQty: Number(form.yieldQty),
         wastePct: form.wastePct === '' ? null : Number(form.wastePct),
+        metodeMasak: form.metodeMasak,
         catatan: form.catatan.trim() || undefined,
         aktif: form.aktif,
         gambarBase64: gambarPhotos[0] || null,
@@ -956,6 +973,7 @@ export default function FoodProductionRecipePage() {
           pctKecil: portionPctForSave(l, products),
           satuan: l.satuan || undefined,
           ...(normalizeRecipeSatuan(l.satuan) === RECIPE_CUT_SATUAN ? { potongPerBase: Number(l.potongPerBase) } : {}),
+          ...(l.serapPct.trim() !== '' ? { serapPct: Number(l.serapPct) } : {}),
           notes: l.notes.trim() || undefined,
         })),
       };
@@ -1355,6 +1373,20 @@ export default function FoodProductionRecipePage() {
               </div>
             </div>
             <div className="space-y-1">
+              <Label>Cara masak (serapan minyak gizi)</Label>
+              <select
+                className="w-full border rounded-md px-2 py-1.5 text-sm bg-white h-9"
+                value={form.metodeMasak}
+                onChange={(e) => setForm((f) => ({ ...f, metodeMasak: e.target.value }))}
+                title="Otomatis = dideteksi dari nama resep (goreng/krispy → goreng; tumis/oseng → tumis). Dipakai menghitung minyak yang termakan (DPM Kemenkes)."
+              >
+                <option value="OTOMATIS">Otomatis (dari nama resep)</option>
+                <option value="GORENG">Goreng</option>
+                <option value="TUMIS">Tumis</option>
+                <option value="TANPA_MINYAK">Minyak tidak termakan</option>
+              </select>
+            </div>
+            <div className="space-y-1">
               <Label>Waste % (opsional)</Label>
               <Input
                 type="number"
@@ -1670,6 +1702,25 @@ export default function FoodProductionRecipePage() {
                           <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                             potong / {product?.satuan || 'basis'}
                           </span>
+                        </div>
+                      )}
+                      {isFryingOilName(product?.nama) && (
+                        <div className="mt-1 flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="any"
+                            className="h-7 w-20 px-1.5 text-xs tabular-nums"
+                            value={line.serapPct}
+                            placeholder="otomatis"
+                            aria-label={`Serap minyak % baris ${idx + 1}`}
+                            title="Persen minyak yang ikut termakan (hanya untuk hitung gizi). Kosong = otomatis dari tabel DPM Kemenkes: % kelompok bahan × berat bahan yang digoreng/ditumis."
+                            onChange={(e) => setLines((prev) => prev.map((l, i) => (
+                              i === idx ? { ...l, serapPct: e.target.value } : l
+                            )))}
+                          />
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">% terserap (gizi)</span>
                         </div>
                       )}
                       {!isCutLine && isCutProduct(product) && (

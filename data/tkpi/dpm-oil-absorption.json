@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "source": "Daftar Konversi Penyerapan Minyak (DPM) — lampiran pedoman TKPI; Ernawati F. dkk. 2020, Buku Pedoman Perkiraan Jumlah Garam dan Penyerapan Minyak Goreng, Studi Status Gizi Indonesia 2020, Badan Litbangkes Kemenkes. Metode sama: Bognár 2002 (FAO/INFOODS).",
+  "formula": "minyak terserap (g) = % MT x berat mentah bersih bahan yang digoreng/ditumis",
+  "note": "Nilai per kelompok = nilai tipikal DPM untuk kelompok itu; kata kunci nama bahan memakai nilai spesifik DPM.",
+  "fallbackPct": 12,
+  "groups": {
+    "GORENG": {
+      "G": { "pct": 20, "label": "ikan goreng", "ref": "ikan gurame goreng 20,0; ikan tongkol goreng 23,0" },
+      "F": { "pct": 16, "label": "daging/ayam goreng", "ref": "ayam dada goreng 16,0" },
+      "C": { "pct": 15, "label": "kacang/olahan goreng", "ref": "tempe murni goreng 24,0; tahu cetak goreng kering 11,1" },
+      "B": { "pct": 15, "label": "umbi goreng", "ref": "kentang goreng langsung 19,9; kentang rebus-goreng 12,1" },
+      "H": { "pct": 10, "label": "telur goreng", "ref": "telur ayam ceplok 10,0" },
+      "A": { "pct": 12, "label": "serealia/mi goreng", "ref": "mie basah goreng 12,6; bihun seduh goreng 14,8" },
+      "D": { "pct": 13, "label": "sayur goreng", "ref": "wortel 13,0; bayam 13,3" }
+    },
+    "TUMIS": {
+      "D": { "pct": 15, "label": "sayur tumis", "ref": "kangkung 21,3; kacang panjang 19,3; buncis 19,3; bayam 13,3; wortel 13,0; tomat 7,3" },
+      "C": { "pct": 15, "label": "kacang/olahan tumis", "ref": "tempe murni tumis 22,6; tahu cetak tumis 11,5" },
+      "F": { "pct": 10, "label": "daging/ayam tumis", "ref": "cadangan" },
+      "G": { "pct": 10, "label": "ikan tumis", "ref": "cadangan" },
+      "H": { "pct": 10, "label": "telur orak-arik", "ref": "cadangan" },
+      "A": { "pct": 12, "label": "serealia/mi tumis", "ref": "cadangan" },
+      "B": { "pct": 12, "label": "umbi tumis", "ref": "cadangan" }
+    }
+  },
+  "keywords": {
+    "GORENG": [
+      { "match": "tempe", "group": "C", "pct": 24, "label": "tempe goreng" },
+      { "match": "tahu", "group": "C", "pct": 11.1, "label": "tahu goreng" },
+      { "match": "udang", "group": "G", "pct": 8, "label": "udang goreng" },
+      { "match": "tongkol", "group": "G", "pct": 23, "label": "ikan tongkol goreng" },
+      { "match": "kentang", "group": "B", "pct": 19.9, "label": "kentang goreng" },
+      { "match": "hati", "group": "F", "pct": 26, "label": "hati ayam goreng" },
+      { "match": "pisang", "group": "E", "pct": 12, "label": "pisang goreng (cadangan)" }
+    ],
+    "TUMIS": [
+      { "match": "tempe", "group": "C", "pct": 22.6, "label": "tempe tumis" },
+      { "match": "tahu", "group": "C", "pct": 11.5, "label": "tahu tumis" },
+      { "match": "kangkung", "group": "D", "pct": 21.3, "label": "kangkung tumis" },
+      { "match": "buncis", "group": "D", "pct": 19.3, "label": "buncis tumis" },
+      { "match": "kacang panjang", "group": "D", "pct": 19.3, "label": "kacang panjang tumis" },
+      { "match": "bayam", "group": "D", "pct": 13.3, "label": "bayam tumis" },
+      { "match": "wortel", "group": "D", "pct": 13, "label": "wortel tumis" },
+      { "match": "tomat", "group": "D", "pct": 7.3, "label": "tomat tumis" }
+    ]
+  },
+  "nameGroups": [
+    { "match": "lele|nila|tongkol|gurame|gurami|bandeng|patin|dori|tuna|kakap|tenggiri|bawal|kembung|salmon|ikan|udang|cumi", "group": "G" },
+    { "match": "ayam|sapi|daging|bakso|sosis|nugget|kambing|bebek|hati|ampela|rempela|kornet", "group": "F" },
+    { "match": "tempe|tahu|oncom|kacang", "group": "C" },
+    { "match": "telur", "group": "H" },
+    { "match": "kentang|singkong|ubi|talas", "group": "B" }
+  ]
+}

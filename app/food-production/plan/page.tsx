@@ -5,6 +5,7 @@ import Link from 'next/link';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
 import PlanDateStrip from '@/components/food-production/PlanDateStrip';
+import { NutritionPlates, dataGiziWarnings, parsePlates, type PlateView } from '@/components/food-production/NutritionPlates';
 import RencanaKebutuhanDocument, {
   RENCANA_KEBUTUHAN_PRINT_ID,
 } from '@/components/food-production/RencanaKebutuhanDocument';
@@ -181,6 +182,7 @@ interface PlanLineForm {
   recipeId: string;
   kategoriPorsiList: KategoriPorsi[];
   targetPorsi: string;
+  notes?: string;
 }
 
 interface PlanHistoryEntry {
@@ -427,6 +429,7 @@ function FoodProductionPlanPageContent() {
     perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
     yieldPorsi: number;
     warnings: string[];
+    plates: PlateView[];
     lineEstimates: Array<{
       index: number;
       recipeId?: string | null;
@@ -441,6 +444,7 @@ function FoodProductionPlanPageContent() {
     perPorsi: AkgPerPorsi;
     perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
     warnings: string[];
+    plates: PlateView[];
     lineEstimates: Array<{
       recipeId?: string | null;
       perPorsi?: AkgPerPorsi | null;
@@ -493,6 +497,7 @@ function FoodProductionPlanPageContent() {
         recipeId: l.recipeId,
         targetPorsi: Number(l.targetPorsi) || 0,
         kategoriPorsiList: l.kategoriPorsiList,
+        ...(l.notes ? { notes: l.notes } : {}),
       }));
     if (!payload.length) {
       setDraftAkg(null);
@@ -528,6 +533,7 @@ function FoodProductionPlanPageContent() {
             },
             yieldPorsi: Number(data.yieldPorsi) || 0,
             warnings: Array.isArray(data.warnings) ? data.warnings : [],
+            plates: parsePlates(data.plates),
             lineEstimates: Array.isArray(data.lineEstimates) ? data.lineEstimates : [],
           });
         } catch {
@@ -1035,6 +1041,7 @@ function FoodProductionPlanPageContent() {
           recipeId: l.recipeId,
           kategoriPorsiList: lineKp,
           targetPorsi: String(l.targetPorsi),
+          ...(l.notes ? { notes: l.notes } : {}),
         });
         continue;
       }
@@ -1089,6 +1096,7 @@ function FoodProductionPlanPageContent() {
           recipeId: l.recipeId,
           kategoriPorsiList: l.kategoriPorsiList,
           targetPorsi: Number(l.targetPorsi) || 0,
+          ...(l.notes ? { notes: l.notes } : {}),
         })),
       };
       const url = editing ? `/api/production-plans/${editing.id}` : '/api/production-plans';
@@ -1208,6 +1216,7 @@ function FoodProductionPlanPageContent() {
             proteinG: Number(data.perPorsiAkgPct?.proteinG) || 0,
           },
           warnings: Array.isArray(data.warnings) ? data.warnings : [],
+          plates: parsePlates(data.plates),
           lineEstimates: Array.isArray(data.lineEstimates) ? data.lineEstimates : [],
           yieldPorsi: Number(data.yieldPorsi) || 0,
         },
@@ -2545,24 +2554,21 @@ function FoodProductionPlanPageContent() {
                       )}
 
                       {planAkgById[row.id] && (
-                        <div className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-slate-800">
-                          <span className="font-medium">Est. AKG / porsi: </span>
-                          <span className="tabular-nums">
-                            ~{formatEstKcal(planAkgById[row.id].perPorsi.energiKcal)} kkal
-                            {' · '}
-                            {planAkgById[row.id].perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
-                            {' · '}
-                            {planAkgById[row.id].perPorsiAkgPct.energiKcal ?? 0}% energi AKG
-                          </span>
-                          {!!planAkgById[row.id].yieldPorsi && (
-                            <span className="ml-1 text-slate-500 tabular-nums">
-                              (total semua resep ÷ {formatNumber(planAkgById[row.id].yieldPorsi || 0)} penerima)
+                        <div className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-slate-800 space-y-1">
+                          <div className="font-medium">Est. AKG per piring (vs target MBG keluarga porsi):</div>
+                          {planAkgById[row.id].plates.length ? (
+                            <NutritionPlates plates={planAkgById[row.id].plates} />
+                          ) : (
+                            <span className="tabular-nums">
+                              ~{formatEstKcal(planAkgById[row.id].perPorsi.energiKcal)} kkal
+                              {' · '}
+                              {planAkgById[row.id].perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
                             </span>
                           )}
-                          {!!planAkgById[row.id].warnings.length && (
-                            <span className="ml-2 text-amber-800">
-                              ({planAkgById[row.id].warnings.join(' · ')})
-                            </span>
+                          {!!dataGiziWarnings(planAkgById[row.id].warnings).length && (
+                            <div className="text-amber-800">
+                              {dataGiziWarnings(planAkgById[row.id].warnings).join(' · ')}
+                            </div>
                           )}
                         </div>
                       )}
@@ -3708,34 +3714,29 @@ function FoodProductionPlanPageContent() {
                   <option value="PORSI_BESAR">Target Porsi Besar Sekolah (762 kkal)</option>
                 </select>
               </div>
-              <p className="text-sm text-slate-900">
-                <span className="font-medium">Est. isi porsi (TKPI) vs target MBG: </span>
+              <div className="text-sm text-slate-900">
+                <span className="font-medium">Est. isi piring (TKPI) vs target MBG: </span>
                 {draftAkgLoading && <span className="text-muted-foreground text-xs">menghitung…</span>}
                 {!draftAkgLoading && draftAkg && (
-                  <span className="tabular-nums">
-                    ~{formatEstKcal(draftAkg.perPorsi.energiKcal)} kkal
-                    {' · '}
-                    {draftAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
-                    {' · '}
-                    {draftAkg.perPorsiAkgPct.energiKcal ?? 0}% energi
-                    {' · '}
-                    {draftAkg.perPorsiAkgPct.proteinG ?? 0}% protein
-                    {draftAkg.yieldPorsi > 0 && (
-                      <span className="ml-1 text-xs text-slate-500">
-                        (total semua resep ÷ {formatNumber(draftAkg.yieldPorsi)} penerima)
-                      </span>
-                    )}
-                  </span>
+                  draftAkg.plates.length ? (
+                    <div className="text-xs mt-0.5"><NutritionPlates plates={draftAkg.plates} /></div>
+                  ) : (
+                    <span className="tabular-nums">
+                      ~{formatEstKcal(draftAkg.perPorsi.energiKcal)} kkal
+                      {' · '}
+                      {draftAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
+                    </span>
+                  )
                 )}
                 {!draftAkgLoading && !draftAkg && (
                   <span className="text-muted-foreground text-xs">isi resep + porsi untuk estimasi</span>
                 )}
-              </p>
+              </div>
               <p className="text-[10px] text-slate-600">
                 Qty bahan: porsi besar (sekolah, bumil, busui, organoleptik) = 100%; kecil sekolah &amp; balita = % dari qty besar (resep). Target 90–120% energi &amp; protein MBG.
               </p>
-              {!!draftAkg?.warnings?.length && (
-                <p className="text-[11px] text-amber-800">{draftAkg.warnings.join(' · ')}</p>
+              {!!dataGiziWarnings(draftAkg?.warnings).length && (
+                <p className="text-[11px] text-amber-800">{dataGiziWarnings(draftAkg?.warnings).join(' · ')}</p>
               )}
             </div>
 

@@ -17,6 +17,7 @@ export type RecipeRevisionContent = Pick<
 > & {
   kategoriMenu: RecipeDoc['kategoriMenu'] | null;
   wastePct: number | null;
+  metodeMasak?: RecipeDoc['metodeMasak'] | null;
   finishedGoodProductId: string | null;
   finishedGoodKode: string | null;
   finishedGoodNama: string | null;
@@ -70,6 +71,7 @@ export function recipeRevisionContent(recipe: Partial<RecipeDoc>): RecipeRevisio
     yieldQty: Number(recipe.yieldQty) || 0,
     kategoriMenu: recipe.kategoriMenu ?? null,
     wastePct: numOrNull(recipe.wastePct),
+    metodeMasak: recipe.metodeMasak ?? null,
     finishedGoodProductId: strOrNull(recipe.finishedGoodProductId),
     finishedGoodKode: strOrNull(recipe.finishedGoodKode),
     finishedGoodNama: strOrNull(recipe.finishedGoodNama),
@@ -104,6 +106,7 @@ export function recipeFromRevision(rev: RecipeRevisionDoc, live?: Partial<Recipe
     yieldQty: rev.yieldQty,
     kategoriMenu: rev.kategoriMenu ?? undefined,
     wastePct: rev.wastePct ?? undefined,
+    metodeMasak: rev.metodeMasak ?? undefined,
     finishedGoodProductId: rev.finishedGoodProductId ?? undefined,
     finishedGoodKode: rev.finishedGoodKode ?? undefined,
     finishedGoodNama: rev.finishedGoodNama ?? undefined,

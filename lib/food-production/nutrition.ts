@@ -6,6 +6,8 @@
 
 import { roundQty } from '@/lib/food-production/material-requirement';
 import {
+  KATEGORI_PORSI_BESAR_FAMILY,
+  KATEGORI_PORSI_KECIL_FAMILY,
   recipeQtyForFamily,
   splitPorsiByKategoriFamily,
   type RecipeDoc,
@@ -31,6 +33,7 @@ import {
   resolveUsdaCodeByProductName,
 } from '@/lib/food-production/usda-catalog';
 import akgProfilesJson from '@/data/tkpi/akg-profiles.json';
+import { estimateOilAbsorption, type OilItem } from '@/lib/food-production/oil-absorption';
 
 /** Toleransi pemenuhan target MBG (% dari target). */
 export const AKG_COMPLIANCE_MIN_PCT = 90;
@@ -103,6 +106,34 @@ export interface NutritionLineBreakdown {
   source?: NutritionSource;
   tkpiCode?: string;
   usdaCode?: string;
+  /** Minyak goreng: % yang dihitung termakan (DPM). */
+  serapPct?: number;
+}
+
+export interface OilAbsorptionSummary {
+  serapPct: number;
+  absorbedGramsPerPorsi: number;
+  basis: string;
+  method?: 'GORENG' | 'TUMIS' | 'TANPA_MINYAK';
+  manual: boolean;
+}
+
+export type PlateFamily = 'KECIL' | 'BESAR';
+
+/** Isi satu piring penerima per keluarga porsi, dibanding target MBG keluarga itu. */
+export interface NutritionPlate {
+  family: PlateFamily;
+  akgProfile: string;
+  akgDaily: NutritionTotals;
+  perPorsi: NutritionTotals;
+  perPorsiAkgPct: Partial<Record<keyof NutritionTotals, number>>;
+  warnings: string[];
+  recipes: Array<{
+    recipeId: string;
+    kode?: string;
+    energiKcal: number;
+    oil?: OilAbsorptionSummary;
+  }>;
 }
 
 export interface NutritionAnalysis {
@@ -119,6 +150,9 @@ export interface NutritionAnalysis {
   akgDaily: NutritionTotals;
   /** % of daily AKG for one portion (meal). */
   perPorsiAkgPct: Partial<Record<keyof NutritionTotals, number>>;
+  oilAbsorption?: OilAbsorptionSummary;
+  /** Rencana/hasil: piring per keluarga porsi (acuan kepatuhan target MBG). */
+  plates?: NutritionPlate[];
 }
 
 type AkgJsonProfile = {
@@ -524,7 +558,7 @@ export function akgComplianceWarnings(
   return out;
 }
 
-function planLineKategoriList(pl: Pick<ProductionPlanLine, 'kategoriPorsiList'> & { kategoriPorsi?: string }): string[] {
+function planLineKategoriList(pl: { kategoriPorsiList?: readonly string[] | null; kategoriPorsi?: string }): string[] {
   if (pl.kategoriPorsiList?.length) return expandLegacyKategoriPorsi(pl.kategoriPorsiList);
   if (pl.kategoriPorsi) return expandLegacyKategoriPorsi([pl.kategoriPorsi]);
   return [];
@@ -561,7 +595,7 @@ export function resolveAkgKeyForPlanLine(input: {
 }
 
 export function analyzeRecipeNutrition(input: {
-  recipe: Pick<RecipeDoc, 'id' | 'kode' | 'nama' | 'yieldQty' | 'lines'>;
+  recipe: Pick<RecipeDoc, 'id' | 'kode' | 'nama' | 'yieldQty' | 'lines' | 'metodeMasak'>;
   productsById: Map<string, ProductNutritionRef>;
   akgProfile?: string;
   /** Keluarga qty bahan: BESAR (qtyBesar) atau KECIL (qtyKecil). Default BESAR. */
@@ -576,6 +610,8 @@ export function analyzeRecipeNutrition(input: {
   const missingProductIds: string[] = [];
   const warnings: string[] = [];
   let batch = { ...EMPTY_NUTRITION };
+  const pending: Array<{ line: NutritionLineBreakdown; contrib: NutritionTotals }> = [];
+  const oilItems: OilItem[] = [];
 
   for (const line of recipe.lines || []) {
     const product = productsById.get(line.productId);
@@ -593,6 +629,7 @@ export function analyzeRecipeNutrition(input: {
       satuan: baseSatuan,
     }, { productNama, productKode, satuan: baseSatuan });
     let contrib: NutritionTotals | null;
+    let grams = 0;
     const isCut = String(kitchenSatuan || '').trim().toUpperCase() === RECIPE_CUT_SATUAN && Number(line.potongPerBase) > 0;
     if (resolved.nutrition?.basis === 'PER_100G' && isCut) {
       // Ukuran potong beda per resep: gram = qty basis (potong / potong per basis) × berat per basis.
@@ -603,16 +640,18 @@ export function analyzeRecipeNutrition(input: {
         contrib = null;
         warnings.push(`${productNama || productKode || line.productId}: isi berat rata-rata per ${baseSatuan || 'satuan basis'} di master produk untuk hitung gizi satuan ${RECIPE_CUT_SATUAN}`);
       } else {
-        contrib = contributionFromGrams(qtyBase * gramsPerBase, resolved.nutrition);
+        grams = qtyBase * gramsPerBase;
+        contrib = contributionFromGrams(grams, resolved.nutrition);
       }
     } else if (resolved.nutrition?.basis === 'PER_100G') {
       const gramsHint = Number(resolved.nutrition.gramsPerUnit) > 0
         ? Number(resolved.nutrition.gramsPerUnit)
         : (product?.recipeBaseGrams != null ? Number(product.recipeBaseGrams) : null);
-      const grams = kitchenQtyToGrams(qtyKitchen, kitchenSatuan, gramsHint);
+      grams = kitchenQtyToGrams(qtyKitchen, kitchenSatuan, gramsHint);
       contrib = contributionFromGrams(grams, resolved.nutrition);
     } else {
       contrib = contributionFromProduct(qtyBase, resolved.nutrition);
+      if (Number(product?.recipeBaseGrams) > 0) grams = qtyBase * Number(product?.recipeBaseGrams);
     }
     if (resolved.warning) warnings.push(`${productNama || productKode || line.productId}: ${resolved.warning}`);
     if (!contrib) {
@@ -628,8 +667,7 @@ export function analyzeRecipeNutrition(input: {
       });
       continue;
     }
-    batch = addNutrition(batch, contrib);
-    lines.push({
+    const breakdown: NutritionLineBreakdown = {
       productId: line.productId,
       productKode,
       productNama,
@@ -639,7 +677,32 @@ export function analyzeRecipeNutrition(input: {
       source: resolved.source,
       tkpiCode: resolved.tkpiCode,
       usdaCode: resolved.usdaCode,
+    };
+    lines.push(breakdown);
+    oilItems.push({
+      key: pending.length,
+      productNama,
+      tkpiCode: resolved.tkpiCode || resolved.nutrition?.tkpiCode,
+      tkpiNama: resolved.nutrition?.tkpiNama,
+      lemakPer100: resolved.nutrition?.basis === 'PER_100G' ? resolved.nutrition.lemakG : undefined,
+      grams,
+      satuan: kitchenSatuan,
+      bddPct: resolved.nutrition?.bddPct,
+      serapPct: line.serapPct,
     });
+    pending.push({ line: breakdown, contrib });
+  }
+
+  const oil = estimateOilAbsorption({ recipeNama: recipe.nama, metodeMasak: recipe.metodeMasak, items: oilItems });
+  for (let i = 0; i < pending.length; i++) {
+    const factor = oil.factorByKey.get(i);
+    const p = pending[i];
+    if (factor != null) {
+      p.contrib = scaleNutrition(p.contrib, factor);
+      p.line.contribution = p.contrib;
+      p.line.serapPct = oil.serapPctByKey.get(i);
+    }
+    batch = addNutrition(batch, p.contrib);
   }
 
   if (missingProductIds.length) {
@@ -669,6 +732,15 @@ export function analyzeRecipeNutrition(input: {
     akgProfile: akgKey,
     akgDaily,
     perPorsiAkgPct: pct,
+    ...(oil.fryingOilGrams > 0 ? {
+      oilAbsorption: {
+        serapPct: oil.serapPct ?? 0,
+        absorbedGramsPerPorsi: roundNut(oil.absorbedGrams / yieldPorsi, 1),
+        basis: oil.basis || '',
+        method: oil.method,
+        manual: oil.manual,
+      },
+    } : {}),
   };
 }
 
@@ -797,6 +869,100 @@ export function analyzeMenuNutrition(input: {
   };
 }
 
+const PLATE_FAMILY_KATEGORI: Record<PlateFamily, ReadonlySet<string>> = {
+  KECIL: KATEGORI_PORSI_KECIL_FAMILY,
+  BESAR: new Set([...KATEGORI_PORSI_BESAR_FAMILY].filter((k) => k !== 'ORGANOLEPTIK')),
+};
+
+type PlateItem = {
+  recipeId?: string | null;
+  menuId?: string | null;
+  kategoriPorsiList?: string[] | null;
+  kategoriPorsi?: string;
+  notes?: string | null;
+};
+
+const ALERGI_NOTES_RE = /^alergi\b/i;
+
+/**
+ * Piring per keluarga: jumlah gizi satu porsi tiap resep yang disajikan ke kategori keluarga itu
+ * (qty Kecil/Besar). Tidak bergantung jumlah porsi/penerima; baris khusus ORGANOLEPTIK dan
+ * pengganti alergi (notes "ALERGI…", bukan tambahan ke piring reguler) tidak ikut.
+ */
+export function analyzePlatesByFamily(input: {
+  items: PlateItem[];
+  recipesById: Map<string, RecipeDoc>;
+  menusById?: Map<string, MenuDoc>;
+  productsById: Map<string, ProductNutritionRef>;
+  fallbackKategori?: readonly string[] | null;
+}): NutritionPlate[] {
+  const fallback = input.fallbackKategori?.length ? expandLegacyKategoriPorsi([...input.fallbackKategori]) : [];
+  const cache = new Map<string, NutritionAnalysis>();
+  const analyze = (recipe: RecipeDoc, family: PlateFamily) => {
+    const key = `${recipe.id}|${family}`;
+    let a = cache.get(key);
+    if (!a) {
+      a = analyzeRecipeNutrition({ recipe, productsById: input.productsById, porsiFamily: family });
+      cache.set(key, a);
+    }
+    return a;
+  };
+
+  const plates: NutritionPlate[] = [];
+  for (const family of ['KECIL', 'BESAR'] as const) {
+    const cats = PLATE_FAMILY_KATEGORI[family];
+    const recipeFactors = new Map<string, number>();
+    for (const item of input.items) {
+      if (ALERGI_NOTES_RE.test(String(item.notes || '').trim())) continue;
+      const own = planLineKategoriList(item);
+      const kats = own.length ? own : fallback;
+      const served = kats.length ? kats.some((k) => cats.has(k)) : family === 'BESAR';
+      if (!served) continue;
+      if (item.recipeId) {
+        recipeFactors.set(item.recipeId, 1);
+        continue;
+      }
+      const menu = item.menuId ? input.menusById?.get(String(item.menuId)) : undefined;
+      for (const mi of menu?.items || []) {
+        recipeFactors.set(mi.recipeId, Number(mi.porsi) > 0 ? Number(mi.porsi) : 1);
+      }
+    }
+    if (!recipeFactors.size) continue;
+
+    let perPorsi = { ...EMPTY_NUTRITION };
+    const recipes: NutritionPlate['recipes'] = [];
+    const missing = new Set<string>();
+    for (const [recipeId, factor] of recipeFactors) {
+      const recipe = input.recipesById.get(recipeId);
+      if (!recipe) continue;
+      const a = analyze(recipe, family);
+      const part = scaleNutrition(a.perPorsi, factor);
+      perPorsi = addNutrition(perPorsi, part);
+      for (const id of a.missingProductIds) missing.add(id);
+      recipes.push({
+        recipeId,
+        kode: recipe.kode,
+        energiKcal: roundNut(part.energiKcal, 1),
+        ...(a.oilAbsorption ? { oil: a.oilAbsorption } : {}),
+      });
+    }
+    const akgProfile = akgProfileForPorsiFamily(family);
+    const akgDaily = AKG_PROFILES[akgProfile] || EMPTY_NUTRITION;
+    const warnings = akgComplianceWarnings(perPorsi, akgDaily);
+    if (missing.size) warnings.push(`${missing.size} bahan belum punya data gizi`);
+    plates.push({
+      family,
+      akgProfile,
+      akgDaily,
+      perPorsi,
+      perPorsiAkgPct: akgPct(perPorsi, akgDaily),
+      warnings,
+      recipes,
+    });
+  }
+  return plates;
+}
+
 export function analyzePlanNutrition(input: {
   planId: string;
   planNo?: string;
@@ -904,6 +1070,13 @@ export function analyzePlanNutrition(input: {
     akgProfile: akgKey,
     akgDaily,
     perPorsiAkgPct: akgPct(perPorsi, akgDaily),
+    plates: analyzePlatesByFamily({
+      items: planLines,
+      recipesById,
+      menusById,
+      productsById,
+      fallbackKategori: input.planKategoriPorsiList,
+    }),
   };
 }
 
@@ -948,6 +1121,9 @@ export function analyzeResultNutrition(input: {
   akgProfile?: string;
   /** Jumlah penerima aktual; tanpa ini per porsi dibagi jumlah porsi aktual semua baris. */
   penerimaPorsi?: number;
+  /** Baris rencana (kategori porsi per resep) untuk piring per keluarga. */
+  planLines?: PlateItem[] | null;
+  planKategoriPorsiList?: readonly string[] | null;
 }): NutritionAnalysis | { error: string } {
   const { resultLines, recipesById, productsById } = input;
   if (!resultLines?.length) return { error: 'Hasil tidak punya baris' };
@@ -997,6 +1173,22 @@ export function analyzeResultNutrition(input: {
     akgProfile: akgKey,
     akgDaily,
     perPorsiAkgPct: akgPct(perPorsi, akgDaily),
+    plates: analyzePlatesByFamily({
+      items: resultLines
+        .filter((rl) => Number(rl.actualPorsi) > 0)
+        .map((rl) => {
+          const pl = input.planLines?.find((p) => p.recipeId === rl.recipeId);
+          return {
+            recipeId: rl.recipeId,
+            kategoriPorsiList: pl?.kategoriPorsiList,
+            kategoriPorsi: pl?.kategoriPorsi,
+            notes: pl?.notes,
+          };
+        }),
+      recipesById,
+      productsById,
+      fallbackKategori: input.planKategoriPorsiList,
+    }),
   };
 }
 

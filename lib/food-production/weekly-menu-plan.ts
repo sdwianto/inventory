@@ -816,11 +816,11 @@ export function akgKeyForDay(map: PortionTargetMap): 'PORSI_KECIL' | 'PORSI_BESA
 
 export function draftNutritionLinesFromDay(
   day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi'>,
-): Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[] }> {
+): Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[]; notes?: string }> {
   const total = sumAllPorsi(day.porsiByKategori);
   const kp = porsiKategoriWithQty(day.porsiByKategori);
   const kategoriPorsiList = kp.length ? kp : ['PORSI_BESAR'];
-  const out: Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[] }> = [];
+  const out: Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[]; notes?: string }> = [];
   if (total > 0) {
     for (const recipeId of slotRecipeIds(day.slots)) {
       out.push({ recipeId, targetPorsi: total, kategoriPorsiList });
@@ -834,6 +834,7 @@ export function draftNutritionLinesFromDay(
       recipeId: row.recipeId,
       targetPorsi: porsi,
       kategoriPorsiList: alergiKp,
+      notes: 'ALERGI',
     });
   }
   return out;

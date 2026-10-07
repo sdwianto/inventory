@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
+import { NutritionPlates, dataGiziWarnings, parsePlates, type PlateView } from '@/components/food-production/NutritionPlates';
 import RecipeSearchSelect, { type RecipeSearchOption } from '@/components/RecipeSearchSelect';
 import PrintPortal from '@/components/PrintPortal';
 import FpFlowHint from '@/components/food-production/FpFlowHint';
@@ -162,6 +163,7 @@ type DayGizi = {
   proteinPct: number;
   akg: string;
   warnings: string[];
+  plates: PlateView[];
 };
 
 function formatEstKcal(n: number | undefined): string {
@@ -566,7 +568,8 @@ export default function MenuPlanPage() {
               energiPct: Number(data.perPorsiAkgPct?.energiKcal) || 0,
               proteinPct: Number(data.perPorsiAkgPct?.proteinG) || 0,
               akg: String(data.akgProfile || akgKeyForDay(day.porsiByKategori)),
-              warnings: Array.isArray(data.warnings) ? data.warnings.map(String) : [],
+              warnings: Array.isArray(data.warnings) ? dataGiziWarnings(data.warnings.map(String)) : [],
+              plates: parsePlates(data.plates),
             };
           } catch (e) {
             if (e instanceof DOMException && e.name === 'AbortError') return;
@@ -1973,6 +1976,25 @@ function DayGiziChip({
       <div className={cn('text-[10px] text-slate-500', compact ? 'mt-0.5' : 'rounded border bg-slate-50 px-2 py-1.5')}>
         Tanpa data TKPI
         {!compact && gizi.warnings[0] ? <span className="block text-amber-800">{gizi.warnings[0]}</span> : null}
+      </div>
+    );
+  }
+  if (gizi.plates.length) {
+    if (compact) {
+      return (
+        <div className="mt-0.5 text-[10px] tabular-nums">
+          {gizi.plates.map((p) => (
+            <span key={p.family} className={cn('block font-medium', giziTone(p.perPorsiAkgPct.energiKcal ?? 0))}>
+              {p.family === 'KECIL' ? 'K' : 'B'} ~{formatEstKcal(p.perPorsi.energiKcal)} kkal · {Math.round(p.perPorsiAkgPct.energiKcal ?? 0)}%
+            </span>
+          ))}
+        </div>
+      );
+    }
+    return (
+      <div className="rounded border bg-slate-50 px-2 py-1.5 space-y-0.5 text-[10px]">
+        <NutritionPlates plates={gizi.plates} />
+        {gizi.warnings[0] ? <span className="block text-amber-800">{gizi.warnings[0]}</span> : null}
       </div>
     );
   }

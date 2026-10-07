@@ -11,6 +11,7 @@ import {
   recipeUomFamily,
   type RecipeFactorSource,
 } from '@/lib/food-production/recipe-uom';
+import { parseSerapPct, type MetodeMasak } from '@/lib/food-production/oil-absorption';
 
 export const RECIPES_COLLECTION = 'recipes';
 
@@ -116,6 +117,8 @@ export interface RecipeLine {
   factorSource?: RecipeFactorSource | 'SPPG_STANDARD';
   /** Satuan dapur POTONG: jumlah potong per 1 satuan basis (beda per resep, mis. 20 atau 30 per ALIR). */
   potongPerBase?: number;
+  /** Minyak goreng: % terserap manual (0–100); kosong = otomatis DPM. Hanya untuk gizi. */
+  serapPct?: number;
   notes?: string;
 }
 
@@ -144,6 +147,8 @@ export interface RecipeDoc {
   kategoriMenu?: KategoriMenu;
   /** Optional waste % standard (0–100). */
   wastePct?: number;
+  /** Cara masak untuk serapan minyak (gizi); kosong/OTOMATIS = deteksi dari nama resep. */
+  metodeMasak?: MetodeMasak;
   lines: RecipeLine[];
   catatan?: string;
   /** Optional recipe photo (stored via media API). */
@@ -673,6 +678,13 @@ export function consolidateRecipeLines(lines: RecipeLine[]): RecipeLine[] {
       continue;
     }
     const sumBesar = (Number(existing.qtyBesar) || 0) + (Number(normalized.qtyBesar) || 0);
+    if (existing.serapPct != null || normalized.serapPct != null) {
+      const a = Number(existing.qtyBesar) || 0;
+      const b = Number(normalized.qtyBesar) || 0;
+      const sa = existing.serapPct ?? 100;
+      const sb = normalized.serapPct ?? 100;
+      existing.serapPct = a + b > 0 ? Math.round(((sa * a + sb * b) / (a + b)) * 100) / 100 : sa;
+    }
     // Weighted average pct by qtyBesar contribution
     const w1 = Number(existing.qtyBesar) || 0;
     const w2 = Number(normalized.qtyBesar) || 0;
@@ -729,6 +741,8 @@ export function normalizeRecipeLines(
       if (n == null) return { error: `Baris ${i + 1}: isi jumlah potong per satuan basis (> 0) untuk satuan ${RECIPE_CUT_SATUAN}` };
       potongPerBase = Math.round(n * 1e6) / 1e6;
     }
+    const serapPct = parseSerapPct(row.serapPct);
+    if (serapPct != null && typeof serapPct === 'object') return { error: `Baris ${i + 1}: ${serapPct.error}` };
     if (satuan) {
       const key = potongPerBase != null ? `${satuan} ${potongPerBase}/basis` : satuan;
       const prev = satuanByProduct.get(productId);
@@ -750,6 +764,7 @@ export function normalizeRecipeLines(
       satuan: row.satuan != null ? String(row.satuan) : undefined,
       uomId: row.uomId != null ? String(row.uomId) : undefined,
       ...(potongPerBase != null ? { potongPerBase } : {}),
+      ...(serapPct != null ? { serapPct } : {}),
       notes: row.notes != null ? String(row.notes).trim() || undefined : undefined,
     });
   }

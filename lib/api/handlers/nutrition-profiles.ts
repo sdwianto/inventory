@@ -224,7 +224,11 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         productsById,
         akgProfile,
         ...(resultPlan
-          ? { penerimaPorsi: resultRecipientPorsi(result.lines, resultPlan.lines, resultPlan.kategoriPorsiList) }
+          ? {
+            penerimaPorsi: resultRecipientPorsi(result.lines, resultPlan.lines, resultPlan.kategoriPorsiList),
+            planLines: resultPlan.lines,
+            planKategoriPorsiList: resultPlan.kategoriPorsiList,
+          }
           : {}),
       });
       if ('error' in analysis) return err(analysis.error, 400);
@@ -344,6 +348,7 @@ export async function handleNutritionProfiles(ctx: HandlerContext): Promise<Next
         menuId: r.menuId ? String(r.menuId) : undefined,
         targetPorsi: Number(r.targetPorsi) || 0,
         kategoriPorsiList: kpList,
+        notes: r.notes != null ? String(r.notes).slice(0, 200) : undefined,
       } satisfies Partial<ProductionPlanLine> & { targetPorsi: number };
     }).filter((l) => (l.recipeId || l.menuId) && (Number(l.targetPorsi) || 0) > 0);
 

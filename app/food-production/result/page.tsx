@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { NutritionPlates, dataGiziWarnings, parsePlates, type PlateView } from '@/components/food-production/NutritionPlates';
 import { useRouter, useSearchParams } from 'next/navigation';
 import OperationalScopeBar from '@/components/OperationalScopeBar';
 import KitchenScopeBar from '@/components/KitchenScopeBar';
@@ -119,6 +120,7 @@ function FoodProductionResultPageContent() {
     perPorsiAkgPct: { energiKcal?: number; proteinG?: number };
     akgProfile: string;
     warnings: string[];
+    plates: PlateView[];
   } | null>(null);
 
   const load = useCallback(async () => {
@@ -190,6 +192,7 @@ function FoodProductionResultPageContent() {
           },
           akgProfile: String(data.akgProfile || 'PORSI_KECIL'),
           warnings: Array.isArray(data.warnings) ? data.warnings : [],
+          plates: parsePlates(data.plates),
         });
       } catch {
         if (!cancelled) setResultAkg(null);
@@ -698,20 +701,21 @@ function FoodProductionResultPageContent() {
               {resultAkg && (
                 <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 space-y-1">
                   <div className="text-xs font-medium text-emerald-900">
-                    {detail.status === 'COMPLETED' ? 'AKG aktual / porsi' : 'Est. AKG / porsi (dari actual saat ini)'}
-                    <span className="font-normal text-emerald-800/80"> · profil {resultAkg.akgProfile}</span>
+                    {detail.status === 'COMPLETED'
+                      ? 'AKG per piring (resep yang diproduksi) vs target MBG'
+                      : 'Est. AKG per piring (resep yang diproduksi saat ini) vs target MBG'}
                   </div>
-                  <div className="text-sm tabular-nums text-emerald-950">
-                    ~{Math.round(resultAkg.perPorsi.energiKcal)} kkal
-                    {' · '}
-                    {resultAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
-                    {' · '}
-                    {resultAkg.perPorsiAkgPct.energiKcal ?? 0}% energi AKG
-                    {' · '}
-                    {resultAkg.perPorsiAkgPct.proteinG ?? 0}% protein AKG
-                  </div>
-                  {!!resultAkg.warnings.length && (
-                    <p className="text-[11px] text-amber-800">{resultAkg.warnings.join(' · ')}</p>
+                  {resultAkg.plates.length ? (
+                    <div className="text-xs"><NutritionPlates plates={resultAkg.plates} /></div>
+                  ) : (
+                    <div className="text-sm tabular-nums text-emerald-950">
+                      ~{Math.round(resultAkg.perPorsi.energiKcal)} kkal
+                      {' · '}
+                      {resultAkg.perPorsi.proteinG.toLocaleString('id-ID', { maximumFractionDigits: 1 })} g protein
+                    </div>
+                  )}
+                  {!!dataGiziWarnings(resultAkg.warnings).length && (
+                    <p className="text-[11px] text-amber-800">{dataGiziWarnings(resultAkg.warnings).join(' · ')}</p>
                   )}
                 </div>
               )}
