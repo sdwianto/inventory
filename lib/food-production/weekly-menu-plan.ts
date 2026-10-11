@@ -358,11 +358,11 @@ export function effectiveRecipeFamilies(
 export function slotRecipePorsi(
   day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'recipePorsiFamilies'>,
   recipeId: string,
-): { kategoriPorsiList: KategoriPorsiCurrent[]; targetPorsi: number } {
+): { kategoriPorsiList: KategoriPorsiCurrent[]; targetPorsi: number; split: boolean } {
   const all = porsiKategoriWithQty(day.porsiByKategori);
   const families = effectiveRecipeFamilies(day, recipeId);
   if (families.length === RECIPE_PORSI_FAMILIES.length) {
-    return { kategoriPorsiList: all, targetPorsi: sumAllPorsi(day.porsiByKategori) };
+    return { kategoriPorsiList: all, targetPorsi: sumAllPorsi(day.porsiByKategori), split: false };
   }
   const kategoriPorsiList: KategoriPorsiCurrent[] = [];
   let targetPorsi = 0;
@@ -371,7 +371,12 @@ export function slotRecipePorsi(
     kategoriPorsiList.push(...part.kategoriPorsiList);
     targetPorsi += part.total;
   }
-  return { kategoriPorsiList: all.filter((k) => kategoriPorsiList.includes(k)), targetPorsi };
+  return { kategoriPorsiList: all.filter((k) => kategoriPorsiList.includes(k)), targetPorsi, split: true };
+}
+
+/** Resep yang dibatasi ke keluarga ber-porsi 0 — tidak diproduksi hari itu. */
+export function slotRecipeSkipped(porsi: { split: boolean; targetPorsi: number }): boolean {
+  return porsi.split && !(porsi.targetPorsi > 0);
 }
 
 /** Keluarga porsi (ber-qty) yang tidak dilayani resep mana pun di kategori multi-resep. */
@@ -407,9 +412,10 @@ export function normalizeRecipePorsiFamilies(
   for (const [recipeId, value] of Object.entries(raw as Record<string, unknown>)) {
     const slot = slotOfRecipe(slots, recipeId);
     if (!slot || (slots[slot] || []).length < 2) continue;
-    if (!Array.isArray(value)) return { error: `Porsi resep ${recipeId}: pilihan PB/PK tidak valid` };
+    const label = KATEGORI_MENU_OPTIONS.find((o) => o.value === slot)?.label || slot;
+    if (!Array.isArray(value)) return { error: `${label}: pilihan PB/PK tidak valid` };
     const picked = RECIPE_PORSI_FAMILIES.filter((f) => value.includes(f));
-    if (!picked.length) return { error: `Porsi resep ${recipeId}: pilih minimal PB atau PK` };
+    if (!picked.length) return { error: `${label}: pilih minimal PB atau PK untuk tiap resep` };
     if (picked.length === RECIPE_PORSI_FAMILIES.length) continue;
     out[recipeId] = picked;
   }
@@ -563,10 +569,16 @@ export function buildPublishPlanLines(
   if (validated.error) return { error: validated.error };
 
   const lines: ProductionPlanLine[] = [];
+  const skipWarnings: string[] = [];
   for (const opt of KATEGORI_MENU_OPTIONS) {
     for (const recipeId of day.slots?.[opt.value] || []) {
       const recipe = recipesById.get(recipeId)!;
       const porsi = slotRecipePorsi(day, recipeId);
+      if (slotRecipeSkipped(porsi)) {
+        const fams = effectiveRecipeFamilies(day, recipeId).map((f) => RECIPE_PORSI_FAMILY_LABEL[f]).join('+');
+        skipWarnings.push(`${day.tanggal}: ${recipe.kode} (${fams}) 0 porsi — tidak diterbitkan`);
+        continue;
+      }
       lines.push({
         recipeId,
         recipeKode: recipe.kode,
@@ -597,7 +609,7 @@ export function buildPublishPlanLines(
     recipeBufferPct,
     catatan,
     total: ready.total,
-    warnings: [...validated.warnings, ...slotPorsiCoverageWarnings(day)],
+    warnings: [...validated.warnings, ...slotPorsiCoverageWarnings(day), ...skipWarnings],
   };
 }
 
@@ -957,6 +969,7 @@ export function draftNutritionLinesFromDay(
   if (total > 0) {
     for (const recipeId of slotRecipeIds(day.slots)) {
       const porsi = slotRecipePorsi(day, recipeId);
+      if (slotRecipeSkipped(porsi)) continue;
       if (porsi.kategoriPorsiList.length && porsi.targetPorsi > 0) {
         out.push({ recipeId, targetPorsi: porsi.targetPorsi, kategoriPorsiList: porsi.kategoriPorsiList });
       } else {

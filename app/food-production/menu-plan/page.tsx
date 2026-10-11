@@ -744,7 +744,11 @@ export default function MenuPlanPage() {
         toast.error(next.error);
         return;
       }
-      patchDay(selected.tanggal, { slots: next.slots, alergi: next.alergi });
+      patchDay(selected.tanggal, {
+        slots: next.slots,
+        alergi: next.alergi,
+        recipePorsiFamilies: next.recipePorsiFamilies,
+      });
       const warnings = applyMenuPackageWarnings(items, refs);
       toast.success(`Paket ${menu.kode} diterapkan`);
       if (warnings[0]) toast.message(warnings[0]);
@@ -1087,7 +1091,12 @@ export default function MenuPlanPage() {
         },
       } : undefined);
       if (Array.isArray(data.warnings) && data.warnings.length) {
-        toast.message(data.warnings[0]);
+        const shown = (data.warnings as string[]).slice(0, 3);
+        const more = data.warnings.length - shown.length;
+        toast.message(shown[0], {
+          description: [...shown.slice(1), ...(more > 0 ? [`+${more} peringatan lain`] : [])].join(' · ') || undefined,
+          duration: 9000,
+        });
       }
       skipAutosave.current = true;
       if (Array.isArray(data.days)) {

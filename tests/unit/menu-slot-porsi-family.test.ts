@@ -65,11 +65,26 @@ describe('menu slot porsi family (PB/PK split)', () => {
     expect(slotRecipePorsi(d, 'beef-pb')).toEqual({
       kategoriPorsiList: ['PORSI_BESAR', 'POSYANDU_BUMIL', 'POSYANDU_BUSUI', 'ORGANOLEPTIK'],
       targetPorsi: PB_TOTAL,
+      split: true,
     });
     expect(slotRecipePorsi(d, 'beef-pk')).toEqual({
       kategoriPorsiList: ['PORSI_KECIL', 'POSYANDU_BALITA'],
       targetPorsi: PK_TOTAL,
+      split: true,
     });
+  });
+
+  it('skips a recipe whose only family has 0 porsi instead of falling back to the full total', () => {
+    const noPk = { ...PORSI, PORSI_KECIL: 0, POSYANDU_BALITA: 0 };
+    const d = day({ porsiByKategori: noPk, recipePorsiFamilies: SPLIT });
+    const built = buildPublishPlanLines(d, recipes);
+    expect('error' in built).toBe(false);
+    if ('error' in built) return;
+    expect(built.lines.map((l) => l.recipeId)).not.toContain('beef-pk');
+    expect(built.lines.find((l) => l.recipeId === 'beef-pb')!.targetPorsi).toBe(PB_TOTAL);
+    expect(built.warnings.some((w) => /BEEF-PK \(PK\) 0 porsi/.test(w))).toBe(true);
+    expect(hidanganInputFromWeeklyDay(d, recipes).map((h) => h.recipeId)).not.toContain('beef-pk');
+    expect(draftNutritionLinesFromDay(d).map((l) => l.recipeId)).not.toContain('beef-pk');
   });
 
   it('ignores a family choice on a single-recipe category', () => {

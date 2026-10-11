@@ -30,6 +30,7 @@ import {
   porsiKategoriWithQty,
   slotRecipeIds,
   slotRecipePorsi,
+  slotRecipeSkipped,
   type WeeklyMenuDay,
   type WeeklyRecipeRef,
 } from '@/lib/food-production/weekly-menu-plan';
@@ -250,6 +251,7 @@ export function hidanganInputFromWeeklyDay(
     for (const recipeId of day.slots?.[opt.value] || []) {
       const recipe = recipesById.get(recipeId);
       const porsi = slotRecipePorsi({ ...day, porsiByKategori: acuan }, recipeId);
+      if (slotRecipeSkipped(porsi)) continue;
       const split = porsi.kategoriPorsiList.length > 0;
       out.push({
         recipeId,
