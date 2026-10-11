@@ -37,6 +37,7 @@ import {
   KATEGORI_MENU_OPTIONS,
   isKategoriMenu,
   type KategoriMenu,
+  type RecipePorsiFamily,
 } from '@/lib/food-production/recipe';
 import {
   KATEGORI_PORSI_OPTIONS,
@@ -65,7 +66,13 @@ import {
   dayPorsiSummary,
   dayRecipeIds,
   draftNutritionLinesFromDay,
+  effectiveRecipeFamilies,
   emptyWeeklyDays,
+  familyPorsi,
+  RECIPE_PORSI_FAMILIES,
+  RECIPE_PORSI_FAMILY_LABEL,
+  slotPorsiCoverageWarnings,
+  slotRecipePorsi,
   formatCopyPorsiDayLabel,
   groupDatesByWeekStart,
   indexWeeklyRpnByTanggal,
@@ -628,7 +635,27 @@ export default function MenuPlanPage() {
     const nextSlots = { ...day.slots };
     if (nextList.length) nextSlots[slot] = nextList;
     else delete nextSlots[slot];
-    patchDay(tanggal, { slots: nextSlots });
+    const nextFamilies = { ...(day.recipePorsiFamilies || {}) };
+    delete nextFamilies[recipeId];
+    if (nextList.length < 2) for (const id of nextList) delete nextFamilies[id];
+    patchDay(tanggal, { slots: nextSlots, recipePorsiFamilies: nextFamilies });
+  }
+
+  function toggleRecipeFamily(tanggal: string, recipeId: string, family: RecipePorsiFamily, checked: boolean) {
+    const day = days.find((d) => d.tanggal === tanggal);
+    if (!day) return;
+    const current = effectiveRecipeFamilies(day, recipeId);
+    const next = checked
+      ? RECIPE_PORSI_FAMILIES.filter((f) => f === family || current.includes(f))
+      : current.filter((f) => f !== family);
+    if (!next.length) {
+      toast.error('Pilih minimal PB atau PK untuk resep ini');
+      return;
+    }
+    const nextFamilies = { ...(day.recipePorsiFamilies || {}) };
+    if (next.length === RECIPE_PORSI_FAMILIES.length) delete nextFamilies[recipeId];
+    else nextFamilies[recipeId] = next;
+    patchDay(tanggal, { recipePorsiFamilies: nextFamilies });
   }
 
   function setPorsi(tanggal: string, key: keyof PortionTargetMap, raw: string) {
@@ -1411,25 +1438,66 @@ export default function MenuPlanPage() {
                           <div className="space-y-1.5">
                             {ids.map((id) => {
                               const rec = recipesById.get(id);
+                              const split = Boolean(day) && ids.length > 1;
+                              const fams = day && split ? effectiveRecipeFamilies(day, id) : [];
+                              const porsi = day && split ? slotRecipePorsi(day, id) : null;
                               return (
-                                <span
+                                <div
                                   key={id}
-                                  className="flex items-center gap-1 rounded border border-orange-200 bg-orange-50 px-1.5 py-1 text-[11px]"
+                                  className="rounded border border-orange-200 bg-orange-50 px-1.5 py-1 text-[11px]"
                                 >
-                                  <span className="truncate">
-                                    {rec ? `${rec.kode} · ${rec.nama}` : id}
-                                  </span>
-                                  {canManage && !locked && (
-                                    <button
-                                      type="button"
-                                      className="shrink-0 text-slate-500 hover:text-red-600"
-                                      onClick={() => removeRecipe(tanggal, slot.value, id)}
-                                      aria-label="Hapus resep"
+                                  <div className="flex items-center gap-1">
+                                    <span className="truncate flex-1">
+                                      {rec ? `${rec.kode} · ${rec.nama}` : id}
+                                    </span>
+                                    {canManage && !locked && (
+                                      <button
+                                        type="button"
+                                        className="shrink-0 text-slate-500 hover:text-red-600"
+                                        onClick={() => removeRecipe(tanggal, slot.value, id)}
+                                        aria-label="Hapus resep"
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </button>
+                                    )}
+                                  </div>
+                                  {day && split && (
+                                    <div
+                                      className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-700"
+                                      data-testid={`menu-slot-porsi-${tanggal}-${id}`}
+                                      onClick={(e) => e.stopPropagation()}
                                     >
-                                      <X className="h-3 w-3" />
-                                    </button>
+                                      {RECIPE_PORSI_FAMILIES.map((f) => {
+                                        const part = familyPorsi(day.porsiByKategori, f);
+                                        return (
+                                          <label key={f} className="inline-flex items-center gap-1 cursor-pointer">
+                                            <Checkbox
+                                              className="h-3 w-3"
+                                              checked={fams.includes(f)}
+                                              disabled={!canManage || locked}
+                                              onCheckedChange={(v) => toggleRecipeFamily(tanggal, id, f, v === true)}
+                                              aria-label={`${RECIPE_PORSI_FAMILY_LABEL[f]} untuk ${rec?.nama || id}`}
+                                            />
+                                            {RECIPE_PORSI_FAMILY_LABEL[f]} ({part.total.toLocaleString('id-ID')})
+                                          </label>
+                                        );
+                                      })}
+                                      <span className="ml-auto font-medium tabular-nums">
+                                        = {(porsi?.targetPorsi ?? 0).toLocaleString('id-ID')}
+                                      </span>
+                                    </div>
                                   )}
-                                </span>
+                                </div>
+                              );
+                            })}
+                            {day && ids.length > 1 && RECIPE_PORSI_FAMILIES.map((f) => {
+                              const part = familyPorsi(day.porsiByKategori, f);
+                              if (!(part.total > 0)) return null;
+                              if (ids.some((id) => effectiveRecipeFamilies(day, id).includes(f))) return null;
+                              return (
+                                <p key={f} className="text-[10px] text-amber-700">
+                                  {RECIPE_PORSI_FAMILY_LABEL[f]} ({part.total.toLocaleString('id-ID')}) belum ada resep
+                                </p>
                               );
                             })}
                             {canManage && !locked ? (
@@ -2067,6 +2135,7 @@ function DayInspector({
   ]);
   const alergiOptions = recipes.filter((r) => r.aktif !== false && !used.has(r.id));
   const total = sumAllPorsi(day.porsiByKategori);
+  const coverageWarnings = slotPorsiCoverageWarnings(day).map((w) => w.replace(`${day.tanggal}: `, ''));
   const preview = useMemo(() => {
     const built = buildKebutuhanBahanFromWeeklyDay(
       day,
@@ -2150,6 +2219,11 @@ function DayInspector({
         {' · '}Posyandu {sumPosyanduPorsi(day.porsiByKategori).toLocaleString('id-ID')}
         {' · '}Total {total.toLocaleString('id-ID')}
       </p>
+      {coverageWarnings.length > 0 && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 space-y-0.5">
+          {coverageWarnings.map((w) => <p key={w}>{w}</p>)}
+        </div>
+      )}
       {canManage && !locked && weekDates.length > 1 && (
         <Button type="button" variant="outline" size="sm" className="w-full" onClick={onCopyPorsi}>
           Salin porsi ke hari lain

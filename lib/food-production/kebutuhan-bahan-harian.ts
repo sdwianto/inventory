@@ -29,6 +29,7 @@ import {
   alergiKategoriPorsi,
   porsiKategoriWithQty,
   slotRecipeIds,
+  slotRecipePorsi,
   type WeeklyMenuDay,
   type WeeklyRecipeRef,
 } from '@/lib/food-production/weekly-menu-plan';
@@ -237,7 +238,7 @@ function aggregateRekap(hidangan: KebutuhanBahanHidangan[]): KebutuhanBahanRekap
 }
 
 export function hidanganInputFromWeeklyDay(
-  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi'>,
+  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'recipePorsiFamilies'>,
   recipesById: Map<string, KebutuhanRecipeRef>,
 ): KebutuhanHidanganInput[] {
   const acuan = day.porsiByKategori || emptyPortionTargets();
@@ -248,14 +249,16 @@ export function hidanganInputFromWeeklyDay(
   for (const opt of KATEGORI_MENU_OPTIONS) {
     for (const recipeId of day.slots?.[opt.value] || []) {
       const recipe = recipesById.get(recipeId);
+      const porsi = slotRecipePorsi({ ...day, porsiByKategori: acuan }, recipeId);
+      const split = porsi.kategoriPorsiList.length > 0;
       out.push({
         recipeId,
         recipeKode: recipe?.kode,
         recipeNama: recipe?.nama,
         slot: opt.value,
         slotLabel: opt.label,
-        targetPorsi: total,
-        kategoriPorsiList,
+        targetPorsi: split ? porsi.targetPorsi : total,
+        kategoriPorsiList: split ? porsi.kategoriPorsiList : kategoriPorsiList,
       });
     }
   }
@@ -400,7 +403,7 @@ export function buildAcuanResepCards(
 }
 
 export function buildKebutuhanBahanFromWeeklyDay(
-  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi'>,
+  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'recipePorsiFamilies'>,
   recipesById: Map<string, KebutuhanRecipeRef>,
   recipeBufferPct?: Record<string, number> | null,
   fullPortionKeys?: Set<string> | null,

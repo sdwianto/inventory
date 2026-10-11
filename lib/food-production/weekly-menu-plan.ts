@@ -5,8 +5,11 @@
 
 import {
   KATEGORI_MENU_OPTIONS,
+  KATEGORI_PORSI_BESAR_FAMILY,
+  KATEGORI_PORSI_KECIL_FAMILY,
   isKategoriMenu,
   type KategoriMenu,
+  type RecipePorsiFamily,
 } from '@/lib/food-production/recipe';
 import {
   resolveMenuItemKategoriMenu,
@@ -25,6 +28,7 @@ import {
   RECIPE_NEED_BUFFER_PCT,
   isIsoDate,
   shiftIsoDate,
+  type KategoriPorsi,
   type KategoriPorsiCurrent,
   type ProductionPlanLine,
 } from '@/lib/food-production/production-plan';
@@ -43,10 +47,14 @@ export interface WeeklyMenuAlergi {
 
 export type WeeklyMenuSlots = Partial<Record<KategoriMenu, string[]>>;
 
+/** Keluarga porsi per resep slot (key recipeId). Hanya berlaku bila kategori berisi >1 resep; tidak ada = semua. */
+export type WeeklyRecipePorsiFamilies = Record<string, RecipePorsiFamily[]>;
+
 export interface WeeklyMenuDay {
   tanggal: string;
   porsiByKategori: PortionTargetMap;
   slots: WeeklyMenuSlots;
+  recipePorsiFamilies?: WeeklyRecipePorsiFamilies;
   note?: string;
   alergi: WeeklyMenuAlergi[];
   productionPlanId?: string;
@@ -210,6 +218,7 @@ export function clearWeeklyMenuDayContent(day: WeeklyMenuDay): WeeklyMenuDay {
     tanggal: day.tanggal,
     porsiByKategori: emptyPortionTargets(),
     slots: {},
+    recipePorsiFamilies: {},
     alergi: [],
     note: '',
     ...(day.productionPlanId ? { productionPlanId: day.productionPlanId } : {}),
@@ -303,6 +312,110 @@ export function alergiKategoriPorsi(map: PortionTargetMap): KategoriPorsiCurrent
   return (Number(map.ORGANOLEPTIK) || 0) > 0 ? 'ORGANOLEPTIK' : 'PORSI_BESAR';
 }
 
+export const RECIPE_PORSI_FAMILIES: readonly RecipePorsiFamily[] = ['BESAR', 'KECIL'];
+
+export const RECIPE_PORSI_FAMILY_LABEL: Record<RecipePorsiFamily, string> = {
+  BESAR: 'PB',
+  KECIL: 'PK',
+};
+
+function familySet(family: RecipePorsiFamily): Set<KategoriPorsi> {
+  return family === 'KECIL' ? KATEGORI_PORSI_KECIL_FAMILY : KATEGORI_PORSI_BESAR_FAMILY;
+}
+
+/** Kategori porsi terisi (qty > 0) milik satu keluarga, beserta jumlahnya. */
+export function familyPorsi(
+  map: PortionTargetMap,
+  family: RecipePorsiFamily,
+): { kategoriPorsiList: KategoriPorsiCurrent[]; total: number } {
+  const fam = familySet(family);
+  const kategoriPorsiList = porsiKategoriWithQty(map).filter((k) => fam.has(k));
+  const total = kategoriPorsiList.reduce((s, k) => s + (Number(map[k]) || 0), 0);
+  return { kategoriPorsiList, total };
+}
+
+/** Kategori menu tempat resep berada di slot hari itu. */
+function slotOfRecipe(slots: WeeklyMenuSlots | null | undefined, recipeId: string): KategoriMenu | null {
+  for (const opt of KATEGORI_MENU_OPTIONS) {
+    if ((slots?.[opt.value] || []).includes(recipeId)) return opt.value;
+  }
+  return null;
+}
+
+/** Keluarga porsi efektif resep slot: pilihan hanya berlaku bila kategorinya berisi >1 resep. */
+export function effectiveRecipeFamilies(
+  day: Pick<WeeklyMenuDay, 'slots' | 'recipePorsiFamilies'>,
+  recipeId: string,
+): RecipePorsiFamily[] {
+  const slot = slotOfRecipe(day.slots, recipeId);
+  if (!slot || (day.slots?.[slot] || []).length < 2) return [...RECIPE_PORSI_FAMILIES];
+  const picked = day.recipePorsiFamilies?.[recipeId];
+  if (!Array.isArray(picked) || !picked.length) return [...RECIPE_PORSI_FAMILIES];
+  return RECIPE_PORSI_FAMILIES.filter((f) => picked.includes(f));
+}
+
+/** Kategori porsi + target porsi satu resep slot sesuai pilihan PB/PK hari itu. */
+export function slotRecipePorsi(
+  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'recipePorsiFamilies'>,
+  recipeId: string,
+): { kategoriPorsiList: KategoriPorsiCurrent[]; targetPorsi: number } {
+  const all = porsiKategoriWithQty(day.porsiByKategori);
+  const families = effectiveRecipeFamilies(day, recipeId);
+  if (families.length === RECIPE_PORSI_FAMILIES.length) {
+    return { kategoriPorsiList: all, targetPorsi: sumAllPorsi(day.porsiByKategori) };
+  }
+  const kategoriPorsiList: KategoriPorsiCurrent[] = [];
+  let targetPorsi = 0;
+  for (const f of families) {
+    const part = familyPorsi(day.porsiByKategori, f);
+    kategoriPorsiList.push(...part.kategoriPorsiList);
+    targetPorsi += part.total;
+  }
+  return { kategoriPorsiList: all.filter((k) => kategoriPorsiList.includes(k)), targetPorsi };
+}
+
+/** Keluarga porsi (ber-qty) yang tidak dilayani resep mana pun di kategori multi-resep. */
+export function slotPorsiCoverageWarnings(
+  day: Pick<WeeklyMenuDay, 'tanggal' | 'porsiByKategori' | 'slots' | 'recipePorsiFamilies'>,
+): string[] {
+  const warnings: string[] = [];
+  for (const opt of KATEGORI_MENU_OPTIONS) {
+    const ids = day.slots?.[opt.value] || [];
+    if (ids.length < 2) continue;
+    for (const f of RECIPE_PORSI_FAMILIES) {
+      const part = familyPorsi(day.porsiByKategori, f);
+      if (!(part.total > 0)) continue;
+      const covered = ids.some((id) => effectiveRecipeFamilies(day, id).includes(f));
+      if (!covered) {
+        warnings.push(`${day.tanggal}: ${opt.label} — ${RECIPE_PORSI_FAMILY_LABEL[f]} (${part.total}) tidak ada resep`);
+      }
+    }
+  }
+  return warnings;
+}
+
+/** Simpan hanya pilihan bermakna: resep di kategori multi-resep, satu keluarga saja. */
+export function normalizeRecipePorsiFamilies(
+  raw: unknown,
+  slots: WeeklyMenuSlots,
+): { families: WeeklyRecipePorsiFamilies } | { error: string } {
+  if (raw == null) return { families: {} };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'recipePorsiFamilies harus object per resep' };
+  }
+  const out: WeeklyRecipePorsiFamilies = {};
+  for (const [recipeId, value] of Object.entries(raw as Record<string, unknown>)) {
+    const slot = slotOfRecipe(slots, recipeId);
+    if (!slot || (slots[slot] || []).length < 2) continue;
+    if (!Array.isArray(value)) return { error: `Porsi resep ${recipeId}: pilihan PB/PK tidak valid` };
+    const picked = RECIPE_PORSI_FAMILIES.filter((f) => value.includes(f));
+    if (!picked.length) return { error: `Porsi resep ${recipeId}: pilih minimal PB atau PK` };
+    if (picked.length === RECIPE_PORSI_FAMILIES.length) continue;
+    out[recipeId] = picked;
+  }
+  return { families: out };
+}
+
 export function uniqueDayRecipesError(
   day: Pick<WeeklyMenuDay, 'slots' | 'alergi'>,
 ): string | null {
@@ -322,18 +435,24 @@ export function uniqueDayRecipesError(
   return null;
 }
 
-export function weeklyDayContentKey(day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'note'>) {
+type WeeklyDayContent = Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'note' | 'recipePorsiFamilies'>;
+
+export function weeklyDayContentKey(day: WeeklyDayContent) {
+  const fam = day.recipePorsiFamilies || {};
   return {
     porsiByKategori: day.porsiByKategori,
     slots: day.slots || {},
     alergi: day.alergi || [],
     note: String(day.note || ''),
+    recipePorsiFamilies: Object.fromEntries(
+      Object.keys(fam).sort().map((k) => [k, [...(fam[k] || [])].sort()]),
+    ),
   };
 }
 
 export function weeklyDayContentEqual(
-  a: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'note'>,
-  b: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'note'>,
+  a: WeeklyDayContent,
+  b: WeeklyDayContent,
 ): boolean {
   return JSON.stringify(weeklyDayContentKey(a)) === JSON.stringify(weeklyDayContentKey(b));
 }
@@ -428,7 +547,7 @@ export function publishRecipeBufferPct(recipeIds: string[]): Record<string, numb
 }
 
 export function buildPublishPlanLines(
-  day: Pick<WeeklyMenuDay, 'tanggal' | 'porsiByKategori' | 'slots' | 'alergi' | 'note'>,
+  day: Pick<WeeklyMenuDay, 'tanggal' | 'porsiByKategori' | 'slots' | 'alergi' | 'note' | 'recipePorsiFamilies'>,
   recipesById: Map<string, WeeklyRecipeRef>,
 ): {
   lines: ProductionPlanLine[];
@@ -447,12 +566,13 @@ export function buildPublishPlanLines(
   for (const opt of KATEGORI_MENU_OPTIONS) {
     for (const recipeId of day.slots?.[opt.value] || []) {
       const recipe = recipesById.get(recipeId)!;
+      const porsi = slotRecipePorsi(day, recipeId);
       lines.push({
         recipeId,
         recipeKode: recipe.kode,
         recipeNama: recipe.nama,
-        kategoriPorsiList: ready.kategoriPorsiList,
-        targetPorsi: ready.total,
+        kategoriPorsiList: porsi.kategoriPorsiList.length ? porsi.kategoriPorsiList : ready.kategoriPorsiList,
+        targetPorsi: porsi.kategoriPorsiList.length ? porsi.targetPorsi : ready.total,
       });
     }
   }
@@ -477,7 +597,7 @@ export function buildPublishPlanLines(
     recipeBufferPct,
     catatan,
     total: ready.total,
-    warnings: validated.warnings,
+    warnings: [...validated.warnings, ...slotPorsiCoverageWarnings(day)],
   };
 }
 
@@ -558,6 +678,12 @@ export function normalizeWeeklyDay(
   if ('error' in slots) return slots;
   const alergi = normalizeAlergi(row.alergi ?? previous?.alergi);
   if ('error' in alergi) return alergi;
+  const famResult = normalizeRecipePorsiFamilies(
+    row.recipePorsiFamilies !== undefined ? row.recipePorsiFamilies : previous?.recipePorsiFamilies,
+    slots,
+  );
+  if ('error' in famResult) return famResult;
+  const families = famResult.families;
   const note = String(row.note ?? previous?.note ?? '').trim();
   const uniqueErr = uniqueDayRecipesError({ slots, alergi });
   if (uniqueErr) return { error: uniqueErr };
@@ -567,6 +693,7 @@ export function normalizeWeeklyDay(
     tanggal,
     porsiByKategori: porsi,
     slots,
+    ...(Object.keys(families).length ? { recipePorsiFamilies: families } : {}),
     alergi,
     ...(note ? { note } : {}),
     ...(productionPlanId ? { productionPlanId } : {}),
@@ -733,6 +860,7 @@ export function applyMenuPackageToDay(
   return {
     ...day,
     slots,
+    recipePorsiFamilies: {},
     alergi,
   };
 }
@@ -766,6 +894,7 @@ export function copyWeekDays(
     return {
       ...day,
       slots: cloneSlots(src.slots),
+      recipePorsiFamilies: cloneFamilies(src.recipePorsiFamilies),
       alergi: cloneAlergi(src.alergi),
       // string kosong agar PUT tidak mewarisi note lama (?? previous).
       note: String(src.note || '').trim(),
@@ -798,6 +927,10 @@ function cloneSlots(slots: WeeklyMenuSlots | null | undefined): WeeklyMenuSlots 
   return out;
 }
 
+function cloneFamilies(fam: WeeklyRecipePorsiFamilies | null | undefined): WeeklyRecipePorsiFamilies {
+  return Object.fromEntries(Object.entries(fam || {}).map(([k, v]) => [k, [...v]]));
+}
+
 function cloneAlergi(rows: WeeklyMenuAlergi[] | null | undefined): WeeklyMenuAlergi[] {
   return (rows || []).map((row) => ({ ...row }));
 }
@@ -815,7 +948,7 @@ export function akgKeyForDay(map: PortionTargetMap): 'PORSI_KECIL' | 'PORSI_BESA
 }
 
 export function draftNutritionLinesFromDay(
-  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi'>,
+  day: Pick<WeeklyMenuDay, 'porsiByKategori' | 'slots' | 'alergi' | 'recipePorsiFamilies'>,
 ): Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[]; notes?: string }> {
   const total = sumAllPorsi(day.porsiByKategori);
   const kp = porsiKategoriWithQty(day.porsiByKategori);
@@ -823,7 +956,12 @@ export function draftNutritionLinesFromDay(
   const out: Array<{ recipeId: string; targetPorsi: number; kategoriPorsiList: string[]; notes?: string }> = [];
   if (total > 0) {
     for (const recipeId of slotRecipeIds(day.slots)) {
-      out.push({ recipeId, targetPorsi: total, kategoriPorsiList });
+      const porsi = slotRecipePorsi(day, recipeId);
+      if (porsi.kategoriPorsiList.length && porsi.targetPorsi > 0) {
+        out.push({ recipeId, targetPorsi: porsi.targetPorsi, kategoriPorsiList: porsi.kategoriPorsiList });
+      } else {
+        out.push({ recipeId, targetPorsi: total, kategoriPorsiList });
+      }
     }
   }
   const alergiKp = [alergiKategoriPorsi(day.porsiByKategori)];
