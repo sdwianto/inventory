@@ -3,6 +3,7 @@ import { txOpts } from '@/lib/api/transaction';
 // Sinkron status Customer PO dari webhook vendor (sales.app).
 
 import { syncCpoFromSoPayload, applySoCancelledWebhookToPoItems, isSupersededVendorSo } from '@/lib/api/cpo-line-cancel-sync';
+import { afterCpoVendorLinesSynced, appendExtraSoLines, isVendorSoCommitted, type PoLine } from '@/lib/api/cpo-extra-so-lines';
 import { findMatchingGrnLine, findMatchingVendorWebhookLine, type LocalPoLineLike } from '@/lib/uom/match-vendor-line';
 import { logger } from '@/lib/api/logger';
 import { resolveLineQtyBase } from '@/lib/uom/resolve-line-qty';
@@ -320,7 +321,8 @@ export async function syncCpoFromVendorEvent(
   tenantId: string,
   event: string,
   payload: Record<string, unknown>,
-) {
+  attempt = 0,
+): Promise<Record<string, unknown>> {
   const filter = findCpoFilter(tenantId, payload);
   if (!filter) return { action: 'skipped', reason: 'no_po_reference' };
 
@@ -368,8 +370,30 @@ export async function syncCpoFromVendorEvent(
     }
   }
 
+  let addedVendorLines: PoLine[] = [];
+  let vendorForLines: string | undefined;
   if (event === 'sales_order.confirmed' || event === 'sales_order.updated') {
     const soSynced = syncCpoFromSoPayload(po, payload, now);
+    const multiVendor = String(po.vendorTenantId || '') === 'multi';
+    vendorForLines = String(payload.vendorTenantId || (multiVendor ? '' : po.vendorTenantId) || '').trim() || undefined;
+    if (isVendorSoCommitted(event, payload.soStatus)) {
+      const extra = await appendExtraSoLines(
+        db,
+        String(po.tenantId || 'default'),
+        soSynced.items as PoLine[],
+        Array.isArray(payload.items) ? payload.items as JsonObject[] : [],
+        {
+          vendorTenantId: vendorForLines,
+          salesOrderId: payload.salesOrderId ? String(payload.salesOrderId) : undefined,
+          noSO: payload.noSO ? String(payload.noSO) : undefined,
+          multiVendor,
+          po,
+        },
+        now,
+      );
+      soSynced.items = extra.items as CpoLine[];
+      addedVendorLines = extra.added;
+    }
     if (event === 'sales_order.confirmed') {
       patch.confirmedAt = payload.confirmedAt ? new Date(String(payload.confirmedAt)) : now;
       if (soSynced.status === 'PARTIAL_CANCELLED' || soSynced.status === 'CANCELLED') {
@@ -450,8 +474,42 @@ export async function syncCpoFromVendorEvent(
     patch.invoiceTotal = parseInt(String(payload.total || 0), 10);
   }
 
-  await db.collection('customer_purchase_orders').updateOne({ ...tenantIdMatchFilter(po.tenantId), id: po.id }, { $set: patch });
-  return { action: 'updated', poId: po.id, noPO: po.noPO, status: patch.status };
+  const addedIds = addedVendorLines.map((l) => String(l.lineId));
+  const ver = Number(po.qtySyncVersion) || 0;
+  const res = await db.collection('customer_purchase_orders').updateOne(
+    {
+      $and: [
+        tenantIdMatchFilter(po.tenantId),
+        { id: po.id },
+        // Pull-sync paralel bisa sudah menambahkan baris yang sama — ulangi dari dokumen terbaru.
+        ...(addedIds.length ? [{ 'items.lineId': { $nin: addedIds } }] : []),
+        // items ditulis utuh: CAS qtySyncVersion agar keputusan purchasing / sinkron GRN yang
+        // terjadi sejak dokumen dibaca tidak tertimpa.
+        ...(patch.items
+          ? [{ $or: ver === 0 ? [{ qtySyncVersion: { $exists: false } }, { qtySyncVersion: 0 }] : [{ qtySyncVersion: ver }] }]
+          : []),
+      ],
+    },
+    patch.items ? { $set: patch, $inc: { qtySyncVersion: 1 } } : { $set: patch },
+  );
+  if (patch.items && res.matchedCount === 0) {
+    if (attempt < 2) return syncCpoFromVendorEvent(db, tenantId, event, payload, attempt + 1);
+    throw new Error(`Konflik versi PO ${String(po.noPO || po.id)} saat sinkron ${event} — akan dicoba ulang`);
+  }
+  if (event === 'sales_order.updated' || event === 'sales_order.confirmed') {
+    await afterCpoVendorLinesSynced(db, String(po.id), {
+      added: addedVendorLines,
+      vendorTenantId: vendorForLines,
+      itemsChanged: addedVendorLines.length > 0,
+    });
+  }
+  return {
+    action: 'updated',
+    poId: po.id,
+    noPO: po.noPO,
+    status: patch.status,
+    ...(addedVendorLines.length ? { addedVendorLines: addedVendorLines.map((l) => l.kode) } : {}),
+  };
 }
 
 /**

@@ -87,6 +87,16 @@ export interface ThreeWayMatchOptions {
   poSiblingReturns?: { items?: VendorInvoiceLine[] }[];
   /** Hanya cek qty (GRN, retur, invoice lain, sisa qty PO); semua cek harga dilewati. */
   qtyOnly?: boolean;
+  /**
+   * Baris invoice yang tidak ada di PO tidak menggagalkan match (tetap wajib tertutup GRN).
+   * Dipakai gerbang approval: keanggotaan PO diputuskan lewat override EXCEPTION, bukan blokir.
+   */
+  allowOffPoLines?: boolean;
+  /**
+   * Baris tambahan vendor yang belum diterima purchasing (PENDING) atau ditolak (REJECTED) — bukan
+   * bagian PO. Hanya dipakai untuk alasan EXCEPTION yang jelas bila invoice menagihnya.
+   */
+  poHeldLines?: Array<VendorInvoiceLine & { held: 'PENDING' | 'REJECTED' }>;
 }
 
 export interface ThreeWayMatchResult {

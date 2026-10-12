@@ -188,9 +188,15 @@ export function diffPoItemsAgainstActiveSo(
   });
 }
 
+/** Tambahan vendor yang ditolak purchasing bukan pembatalan isi PO — baris asli tetap utuh. */
+function isRejectedVendorAddition(l: CpoLine): boolean {
+  return l.addedFromVendorSo === true && l.cancelledSource === 'purchasing_rejected';
+}
+
 function rollupPartialCancelStatus(items: CpoLine[], currentStatus?: string): string {
-  const active = items.filter((l) => !l.cancelled);
-  const cancelled = items.filter((l) => l.cancelled);
+  const own = items.filter((l) => !isRejectedVendorAddition(l));
+  const active = own.filter((l) => !l.cancelled);
+  const cancelled = own.filter((l) => l.cancelled);
   const st = String(currentStatus || '');
   if (!cancelled.length) return st || 'SUBMITTED';
   if (!active.length) return 'CANCELLED';

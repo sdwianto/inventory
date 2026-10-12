@@ -174,6 +174,22 @@ export type CancelSalesOrderFromPoResult = {
   raw: Record<string, unknown>;
 };
 
+export type PushPoLineDecisionInput = {
+  salesAppUrl: string;
+  apiKey: string;
+  correlationId?: string;
+  idempotencyKey: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+};
+
+export type PushPoLineDecisionResult = {
+  action: string;
+  salesOrderId?: string;
+  noSO?: string;
+  raw: Record<string, unknown>;
+};
+
 function normalizeBaseUrl(url: string): string {
   return String(url || '').replace(/\/$/, '');
 }
@@ -940,6 +956,74 @@ export class IntegrationClient {
           correlationId,
           cause: e,
         });
+      await finishIntegrationCommand(this.db, commandId, {
+        status: 'FAILED',
+        errorCode: err.code,
+        errorMessage: err.message,
+        errorClass: err.errorClass,
+        httpStatus: err.httpStatus ?? null,
+      });
+      throw err;
+    }
+  }
+
+  /** Keputusan purchasing atas baris SO vendor di luar PO (diterima / ditolak) → tanda baris SO di Sales. */
+  async pushCustomerPoLineDecision(input: PushPoLineDecisionInput): Promise<PushPoLineDecisionResult> {
+    const correlationId = String(input.correlationId || randomUUID()).trim();
+    const url = `${normalizeBaseUrl(input.salesAppUrl)}/api/v1/integrations/customer-po/line-decision`;
+    const commandId = await startIntegrationCommand(this.db, {
+      correlationId,
+      commandType: 'PushCustomerPoLineDecision',
+      grnId: null,
+    });
+    try {
+      const res = await this.transport.request({
+        method: 'POST',
+        url,
+        pool: 'po',
+        timeoutMs: input.timeoutMs ?? 15_000,
+        maxAttempts: 1,
+        correlationId,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.dawam.integration.v1+json',
+          'X-Api-Key': input.apiKey,
+          'Idempotency-Key': input.idempotencyKey,
+          'X-Correlation-Id': correlationId,
+          ...buildTraceHttpHeaders(),
+        },
+        body: JSON.stringify({ ...input.body, correlationId }),
+      });
+      let data: Record<string, unknown> = {};
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        data = {};
+      }
+      throwIfHttpFailed(res, data, correlationId);
+      const nested = (data.result && typeof data.result === 'object')
+        ? data.result as Record<string, unknown>
+        : data;
+      const action = String(nested.action || '').trim();
+      if (!action) {
+        throw new IntegrationError('Sales.app tidak mengembalikan action keputusan baris', {
+          code: 'VALIDATION',
+          errorClass: 'validation',
+          retryable: false,
+          correlationId,
+        });
+      }
+      await finishIntegrationCommand(this.db, commandId, { status: 'SUCCEEDED' });
+      return {
+        action,
+        salesOrderId: nested.salesOrderId ? String(nested.salesOrderId) : undefined,
+        noSO: nested.noSO ? String(nested.noSO) : undefined,
+        raw: nested,
+      };
+    } catch (e) {
+      const err = e instanceof IntegrationError
+        ? e
+        : new IntegrationError(e instanceof Error ? e.message : String(e), { correlationId, cause: e });
       await finishIntegrationCommand(this.db, commandId, {
         status: 'FAILED',
         errorCode: err.code,

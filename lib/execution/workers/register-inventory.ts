@@ -22,6 +22,7 @@ import {
   executePoArrivalRiskAlertJob,
   executeNotificationOutboxDrainJob,
   executeCustomerTaxProfilePushJob,
+  executeVendorLineDecisionPushJob,
   executeSandboxResetJob,
   executeWebhookInboxJob,
   executeProductEnrichmentSyncJob,
@@ -258,6 +259,19 @@ export function registerInventoryHandlers(): void {
     lockKeyFromPayload: (_payload, job) => `customer-tax-profile:${job.tenantId}`,
     handler: async (ctx, payload) => assertExecutionHandlerSuccess(
       await executeCustomerTaxProfilePushJob(ctx.db, ctx.tenantId, payload),
+    ),
+  });
+
+  registerHandler<Record<string, unknown>>({
+    type: 'VENDOR_LINE_DECISION_PUSH',
+    domain: 'inventory',
+    classification: 'IO_INTENSIVE',
+    requiredCapabilities: ['SYNC'],
+    requiresLock: true,
+    lockTtlTier: 'SHORT',
+    lockKeyFromPayload: (payload, job) => `vendor-line-decision:${job.tenantId}:${String(payload.poId || job.id)}`,
+    handler: async (ctx, payload) => assertExecutionHandlerSuccess(
+      await executeVendorLineDecisionPushJob(ctx.db, ctx.tenantId, payload),
     ),
   });
 

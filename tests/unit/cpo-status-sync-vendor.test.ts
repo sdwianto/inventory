@@ -9,6 +9,7 @@ function mockDb(po: Record<string, unknown>) {
       updateOne: async (_filter: unknown, patch: { $set: Record<string, unknown> }) => {
         updates.push(patch.$set);
         Object.assign(po, patch.$set);
+        return { matchedCount: 1, modifiedCount: 1 };
       },
     }),
   };
@@ -130,5 +131,28 @@ describe('syncCpoFromVendorEvent', () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.cancelled).toBe(true);
     expect((updates[0]?.cancelledSoLines as unknown[])?.length).toBeGreaterThan(0);
+  });
+
+  it('items ditulis dengan CAS qtySyncVersion; konflik → baca ulang, gagal terus → error (inbox mencoba lagi)', async () => {
+    const filters: unknown[] = [];
+    let reads = 0;
+    let misses = 1;
+    const db = {
+      collection: () => ({
+        findOne: async () => { reads += 1; return { ...basePo, qtySyncVersion: 7 }; },
+        updateOne: async (filter: unknown) => {
+          filters.push(filter);
+          if (misses > 0) { misses -= 1; return { matchedCount: 0, modifiedCount: 0 }; }
+          return { matchedCount: 1, modifiedCount: 1 };
+        },
+      }),
+    };
+    const payload = { customerPoId: 'cpo-1', salesOrderId: 'so-1', noSO: 'SO001', cancelledItems: [{ kode: 'A', qty: 2 }] };
+    await syncCpoFromVendorEvent(db as never, 'sppg', 'sales_order.cancelled', payload);
+    expect(reads).toBe(2);
+    expect(JSON.stringify(filters[0])).toContain('"qtySyncVersion":7');
+
+    misses = 99;
+    await expect(syncCpoFromVendorEvent(db as never, 'sppg', 'sales_order.cancelled', payload)).rejects.toThrow(/Konflik versi/);
   });
 });

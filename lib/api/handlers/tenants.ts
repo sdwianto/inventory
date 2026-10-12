@@ -34,6 +34,16 @@ import {
   THREE_WAY_QTY_TOLERANCE_SETTING,
   normalizeThreeWayTolerancePct,
 } from '@/lib/api/three-way-match';
+import {
+  DEFAULT_VENDOR_LINE_POLICY,
+  VENDOR_LINE_AUTO_ACCEPT_MAX_VALUE_SETTING,
+  VENDOR_LINE_AUTO_ACCEPT_PCT_SETTING,
+  VENDOR_LINE_AUTO_ACCEPT_SETTING,
+  VENDOR_LINE_POLICY_SETTINGS,
+  normalizeVendorLineAutoAccept,
+  normalizeVendorLineAutoAcceptMaxValue,
+  normalizeVendorLineAutoAcceptPct,
+} from '@/lib/api/cpo-vendor-line-acceptance';
 import type { HandlerContext } from '@/types/api/handler';
 import { isValidNpwp, normalizeNpwpDigits, normalizeTenantTax, validateTenantTaxInput, type TenantTaxSettings } from '@/lib/api/tenant-tax';
 import { enqueueCustomerTaxProfilePush } from '@/lib/api/customer-tax-profile-push';
@@ -44,6 +54,7 @@ const TOLERANCE_SETTINGS = [
   PO_OVER_RECEIVE_TOLERANCE_SETTING,
   THREE_WAY_QTY_TOLERANCE_SETTING,
   THREE_WAY_PRICE_TOLERANCE_SETTING,
+  ...VENDOR_LINE_POLICY_SETTINGS,
 ] as const;
 import type { AuthContext } from '@/types/auth';
 
@@ -219,6 +230,21 @@ export async function handleTenants({
         const tolerance = normalizePoOverReceiveTolerancePct(update[PO_OVER_RECEIVE_TOLERANCE_SETTING]);
         if (tolerance === null) return err('Toleransi lebih terima PO harus angka 0–100 (%)', 400);
         update[PO_OVER_RECEIVE_TOLERANCE_SETTING] = tolerance;
+      }
+      if (VENDOR_LINE_AUTO_ACCEPT_SETTING in update) {
+        const v = normalizeVendorLineAutoAccept(update[VENDOR_LINE_AUTO_ACCEPT_SETTING]);
+        if (v === undefined) return err('Auto-terima barang tambahan vendor harus true/false', 400);
+        update[VENDOR_LINE_AUTO_ACCEPT_SETTING] = v ?? DEFAULT_VENDOR_LINE_POLICY.autoAccept;
+      }
+      if (VENDOR_LINE_AUTO_ACCEPT_PCT_SETTING in update) {
+        const v = normalizeVendorLineAutoAcceptPct(update[VENDOR_LINE_AUTO_ACCEPT_PCT_SETTING]);
+        if (v === undefined) return err('Batas % auto-terima barang tambahan vendor harus angka 0–20', 400);
+        update[VENDOR_LINE_AUTO_ACCEPT_PCT_SETTING] = v ?? DEFAULT_VENDOR_LINE_POLICY.maxIncreasePct;
+      }
+      if (VENDOR_LINE_AUTO_ACCEPT_MAX_VALUE_SETTING in update) {
+        const v = normalizeVendorLineAutoAcceptMaxValue(update[VENDOR_LINE_AUTO_ACCEPT_MAX_VALUE_SETTING]);
+        if (v === undefined) return err('Batas nominal auto-terima barang tambahan vendor tidak valid', 400);
+        update[VENDOR_LINE_AUTO_ACCEPT_MAX_VALUE_SETTING] = v ?? DEFAULT_VENDOR_LINE_POLICY.maxIncreaseValue;
       }
       const features = update.features as Record<string, unknown> | undefined;
       if (features && features.pblReferenceMode === true && features.rlFromPoReference !== true) {

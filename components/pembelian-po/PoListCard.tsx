@@ -19,6 +19,7 @@ import { canRequestApprovalPoStatus } from '@/lib/pembelian-po/permissions';
 import { canReviseCancelledPoStatus } from '@/lib/pembelian-po/revise-from-cancelled';
 import PrintPortal from '@/components/PrintPortal';
 import CustomerPoDocument from '@/components/CustomerPoDocument';
+import { VendorLineBadges, vendorLineDecisionStatus } from '@/components/pembelian-po/VendorLineBadges';
 import { printDocument } from '@/lib/doc-print';
 import { toast } from 'sonner';
 import {
@@ -59,8 +60,12 @@ export type PoListCardProps = {
   canRevise?: boolean;
   /** Tutup sisa backorder PO (SUPERVISOR+). */
   onShortClose?: (reason: string) => void;
+  /** Terima / tolak baris tambahan vendor (PO_APPROVE_ROLES). Resolve true bila tersimpan. */
+  onDecideVendorLine?: (lineId: string, decision: 'ACCEPTED' | 'REJECTED', reason?: string) => Promise<boolean>;
   tenantName?: string;
 };
+
+const VENDOR_LINE_REJECT_REASON_MIN = 10;
 
 const SHORT_CLOSABLE_PO_STATUSES = ['CONFIRMED', 'PARTIAL_CANCELLED', 'PARTIAL_SHIPPED', 'SHIPPED', 'PARTIAL_RECEIVED'];
 
@@ -87,8 +92,11 @@ export default function PoListCard({
   onRevise,
   canRevise = false,
   onShortClose,
+  onDecideVendorLine,
   tenantName,
 }: PoListCardProps) {
+  const [lineRejectTarget, setLineRejectTarget] = useState<JsonObject | null>(null);
+  const [lineRejectReason, setLineRejectReason] = useState('');
   const [shortCloseOpen, setShortCloseOpen] = useState(false);
   const [shortCloseReason, setShortCloseReason] = useState('');
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -117,6 +125,8 @@ export default function PoListCard({
   const failedVendors = vendorSubs.filter((s) => str(s.status) === 'FAILED');
   const hasRejectedQty = Boolean(po.hasRejectedQty) && ['RECEIVED', 'INVOICED'].includes(poStatus);
   const isSubmitting = submitting === poId || submitting.startsWith(`${poId}:`);
+  const pendingVendorLines = poItems.filter((it) => vendorLineDecisionStatus(it) === 'PENDING');
+  const canDecideLines = Boolean(onDecideVendorLine) && !isOptimistic && !['CANCELLED', 'REJECTED'].includes(poStatus);
   const openRemainingLines = poItems.filter((it) => !it.cancelled
     && num(it.qty) - num(it.qtyShortClosed) - num(it.qtyReceived) > 0.0001);
   const canShortCloseRow = Boolean(onShortClose) && !isOptimistic
@@ -179,6 +189,14 @@ export default function PoListCard({
                   title="Termasuk qty ditolak saat GRN — cek tindak lanjut RTV di halaman Penerimaan"
                 >
                   Termasuk item ditolak
+                </span>
+              )}
+              {pendingVendorLines.length > 0 && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-orange-50 text-orange-800 border-orange-300"
+                  title="Barang tambahan vendor menunggu keputusan purchasing — tagihannya tertahan"
+                >
+                  {pendingVendorLines.length} tambahan vendor menunggu
                 </span>
               )}
               {!isOptimistic && <AvailabilitySummaryBadge view={availability.view} />}
@@ -468,6 +486,15 @@ export default function PoListCard({
               <span className="font-medium">Alasan ditolak:</span> {str(po.rejectReason)}
             </p>
           )}
+          {pendingVendorLines.length > 0 && (
+            <p className="text-xs text-orange-900 mb-2 rounded border border-orange-200 bg-orange-50 px-2 py-1.5">
+              <span className="font-medium">{pendingVendorLines.length} barang tambahan vendor menunggu persetujuan.</span>{' '}
+              Tagihan vendor untuk barang ini tertahan sampai diterima.
+              {canDecideLines
+                ? ' Terima bila memang dibutuhkan; tolak bila tidak — vendor diberi tahu supaya tidak mengirim.'
+                : ' Hubungi ADMIN untuk menerima atau menolak.'}
+            </p>
+          )}
           {showAvailability && (
             <AvailabilityToolbar
               view={availability.view}
@@ -490,6 +517,7 @@ export default function PoListCard({
             <tbody>
               {poItems.map((it: JsonObject) => {
                 const cancelled = it.cancelled === true;
+                const rejectedByPurchasing = cancelled && it.cancelledSource === 'purchasing_rejected';
                 return (
                 <tr
                   key={str(it.lineId || it.kode)}
@@ -498,7 +526,7 @@ export default function PoListCard({
                   <td className={`py-1.5 pr-2 font-mono ${cancelled ? 'line-through' : ''}`}>{str(it.kode)}</td>
                   <td className={`py-1.5 pr-2 ${cancelled ? 'line-through' : ''}`}>
                     {str(it.nama)}
-                    {cancelled && (
+                    {cancelled && !rejectedByPurchasing && (
                       <span className="ml-1.5 inline-block text-[10px] font-medium px-1 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 no-underline align-middle">
                         Dibatalkan
                       </span>
@@ -508,6 +536,37 @@ export default function PoListCard({
                         {str(it.cancelReason)}
                       </div>
                     )}
+                    <VendorLineBadges line={it} />
+                    {canDecideLines && vendorLineDecisionStatus(it) === 'PENDING' && (() => {
+                      const lineId = str(it.lineId);
+                      const busy = submitting === `${poId}:line:${lineId}`;
+                      const moved = num(it.qtyShipped) > 0 || num(it.qtyReceived) > 0;
+                      return (
+                        <div className="mt-1 flex flex-wrap gap-1 no-print">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[10px] border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+                            disabled={isSubmitting || busy}
+                            onClick={() => void onDecideVendorLine?.(lineId, 'ACCEPTED')}
+                          >
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                            Terima
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[10px] border-rose-300 text-rose-700 hover:bg-rose-50"
+                            disabled={isSubmitting || busy || moved}
+                            title={moved ? 'Sudah dikirim/diterima — tidak bisa ditolak; retur lewat Penerimaan' : undefined}
+                            onClick={() => { setLineRejectTarget(it); setLineRejectReason(''); }}
+                          >
+                            <XCircle className="w-3 h-3 mr-1" />
+                            Tolak
+                          </Button>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="py-1.5 text-right whitespace-nowrap text-slate-600">
                     {it.estimasiHarga ? formatIDR(num(it.estimasiHarga)) : '—'}
@@ -525,7 +584,13 @@ export default function PoListCard({
                   <td className="py-1.5 text-center text-slate-600">{str(it.satuan) || '—'}</td>
                   {showAvailability && (
                     <td className="py-1.5 pl-3">
-                      <AvailabilityCell item={availabilityByLine.get(str(it.lineId))} />
+                      {rejectedByPurchasing ? (
+                        <span className="inline-block text-[10px] px-1.5 py-0.5 rounded border font-medium bg-rose-50 text-rose-600 border-rose-200">
+                          Tidak dikirim
+                        </span>
+                      ) : (
+                        <AvailabilityCell item={availabilityByLine.get(str(it.lineId))} />
+                      )}
                     </td>
                   )}
                 </tr>
@@ -533,9 +598,14 @@ export default function PoListCard({
               })}
             </tbody>
           </table>
-          {poItems.some((it) => it.cancelled) && (
+          {poItems.some((it) => it.cancelled && it.cancelledSource !== 'purchasing_rejected') && (
             <p className="text-[10px] text-rose-600 mt-2">
               Baris dicoret = item dibatalkan di sales.app (SO vendor). Item aktif tetap diproses.
+            </p>
+          )}
+          {poItems.some((it) => it.cancelled && it.cancelledSource === 'purchasing_rejected') && (
+            <p className="text-[10px] text-rose-600 mt-2">
+              Barang tambahan yang ditolak purchasing tidak dikirim vendor dan tagihannya tidak akan disetujui.
             </p>
           )}
           {cancelledSoLines.length > 0 && (
@@ -601,6 +671,46 @@ export default function PoListCard({
             </AlertDialogCancel>
             <AlertDialogAction onClick={handleReject}>
               Tolak
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={!!lineRejectTarget}
+        onOpenChange={(open) => { if (!open) { setLineRejectTarget(null); setLineRejectReason(''); } }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tolak barang tambahan vendor</AlertDialogTitle>
+            <AlertDialogDescription>
+              {str(lineRejectTarget?.nama || lineRejectTarget?.kode)} ({formatNumber(num(lineRejectTarget?.qty))}{' '}
+              {str(lineRejectTarget?.satuan)}) dibatalkan dari PO {str(po.noPO)}. Vendor diberi tahu supaya tidak
+              mengirim barang ini, dan tagihannya tidak akan disetujui.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-2">
+            <Label htmlFor="vendor-line-reject-reason">Alasan (wajib, min. {VENDOR_LINE_REJECT_REASON_MIN} karakter)</Label>
+            <Input
+              id="vendor-line-reject-reason"
+              value={lineRejectReason}
+              onChange={(e) => setLineRejectReason(e.target.value)}
+              placeholder="Contoh: tidak ada di kebutuhan menu minggu ini"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 hover:bg-rose-700"
+              disabled={lineRejectReason.trim().length < VENDOR_LINE_REJECT_REASON_MIN}
+              onClick={() => {
+                const target = lineRejectTarget;
+                const reason = lineRejectReason.trim();
+                setLineRejectTarget(null);
+                setLineRejectReason('');
+                if (target) void onDecideVendorLine?.(str(target.lineId), 'REJECTED', reason);
+              }}
+            >
+              Tolak baris
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

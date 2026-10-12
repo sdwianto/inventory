@@ -32,6 +32,9 @@ export default function TenantSetupPage() {
     poOverReceiveTolerancePct: 0,
     threeWayQtyTolerancePct: 0,
     threeWayPriceTolerancePct: 2,
+    vendorLineAutoAccept: true,
+    vendorLineAutoAcceptPct: 5,
+    vendorLineAutoAcceptMaxValue: 1_000_000,
     features: {
       multiUomEnabled: true,
       offlineQueueEnabled: true,
@@ -412,6 +415,51 @@ export default function TenantSetupPage() {
                 })}
               />
             </label>
+            <div className="sm:col-span-2 bg-slate-50 px-3 py-2 rounded space-y-2">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.vendorLineAutoAccept !== false}
+                  onChange={(e) => setForm({ ...form, vendorLineAutoAccept: e.target.checked })}
+                />
+                <span>Auto-terima barang tambahan vendor (di luar PO)</span>
+              </label>
+              <p className="text-[11px] text-slate-500">
+                Diterima otomatis bila pindahan dari PO lain (qty &amp; harga tidak naik), atau total tambahan per PO
+                ≤ batas terkecil dari % nilai PO awal dan nominal di bawah. Selebihnya menunggu keputusan ADMIN.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1">
+                  <span>Batas % nilai PO awal (0–20)</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={20}
+                    step={0.5}
+                    disabled={form.vendorLineAutoAccept === false}
+                    value={form.vendorLineAutoAcceptPct ?? 5}
+                    onChange={(e) => setForm({
+                      ...form,
+                      vendorLineAutoAcceptPct: e.target.value === '' ? 0 : Number(e.target.value),
+                    })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Batas nominal per PO (Rp)</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={50000}
+                    disabled={form.vendorLineAutoAccept === false}
+                    value={form.vendorLineAutoAcceptMaxValue ?? 1_000_000}
+                    onChange={(e) => setForm({
+                      ...form,
+                      vendorLineAutoAcceptMaxValue: e.target.value === '' ? 0 : Number(e.target.value),
+                    })}
+                  />
+                </label>
+              </div>
+            </div>
             <label className="flex flex-col gap-1 bg-slate-50 px-3 py-2 rounded sm:col-span-2">
               <span>Toleransi RL melebihi acuan rencana (%)</span>
               <Input

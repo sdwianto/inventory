@@ -2,6 +2,7 @@ import type { Db } from 'mongodb';
 import { logger } from '@/lib/api/logger';
 import { detectStockRecon } from '@/lib/recon/stock-recon';
 import { detectPoReceiptRecon } from '@/lib/recon/po-receipt-recon';
+import { detectPoVendorLineRecon } from '@/lib/recon/po-vendor-line-recon';
 import { detectGrniRecon } from '@/lib/recon/grni-recon';
 import { detectPlanIssueRecon } from '@/lib/recon/plan-issue-recon';
 import { detectControlsRecon } from '@/lib/recon/controls-recon';
@@ -11,9 +12,19 @@ import { RECON_JOBS, type ReconDetectResult, type ReconJob, type ReconReport } f
 
 type Detector = (db: Db, tenantId: string, opts: { now?: Date }) => Promise<ReconDetectResult>;
 
+async function detectPoReceiptAndVendorLines(db: Db, tenantId: string, opts: { now?: Date }): Promise<ReconDetectResult> {
+  const receipt = await detectPoReceiptRecon(db, tenantId, opts);
+  const vendorLines = await detectPoVendorLineRecon(db, tenantId, opts);
+  return {
+    findings: [...receipt.findings, ...vendorLines.findings],
+    ...(receipt.counts ? { counts: receipt.counts } : {}),
+    meta: { ...(receipt.meta || {}), ...(vendorLines.meta || {}) },
+  };
+}
+
 const DETECTORS: Record<ReconJob, Detector> = {
   stock: detectStockRecon,
-  'po-receipt': detectPoReceiptRecon,
+  'po-receipt': detectPoReceiptAndVendorLines,
   grni: detectGrniRecon,
   'plan-issue': detectPlanIssueRecon,
   controls: detectControlsRecon,

@@ -8,6 +8,7 @@ import type { VendorInvoiceLine, VendorInvoicePayload } from '@/types/integratio
 import { validateInvoiceAgainstGrn } from '@/lib/api/three-way-match';
 
 const APPROVABLE_PO_STATUSES = new Set(['RECEIVED', 'INVOICED']);
+const VENDOR_LINE_HOLD_CODES = new Set(['PO_LINE_PENDING_ACCEPTANCE', 'PO_LINE_REJECTED']);
 
 /** Payload 3-way match dari dokumen hutang tersimpan (untuk cek ulang saat review/approve). */
 export function invoicePayloadFromHutang(hutang: HutangDoc): VendorInvoicePayload {
@@ -41,7 +42,8 @@ export type PoReceiptGate =
  * po.status adalah rollup seluruh baris PO; pada PO multi-pengiriman yang sah sebagian baris
  * bisa belum dikirim. Yang menentukan adalah baris yang DITAGIH invoice ini: bila qty tiap
  * baris tertutup GRN POSTED (dikurangi retur & invoice lain) dan sisa qty PO, gerbang lolos —
- * apa pun jenis selisih match-nya. Selisih harga/EXCEPTION tetap diputuskan lewat override.
+ * apa pun jenis selisih match-nya. Selisih harga/EXCEPTION (termasuk baris di luar PO yang
+ * sudah diterima lewat GRN) tetap diputuskan lewat override.
  */
 export async function resolvePoReceiptGate(
   db: Db,
@@ -58,6 +60,7 @@ export async function resolvePoReceiptGate(
     const qty = await validateInvoiceAgainstGrn(db, tid, invoicePayloadFromHutang(hutang), {
       excludeHutangId: hutang.id,
       qtyOnly: true,
+      allowOffPoLines: true,
     });
     if (qty.ok) return { ok: true, via: 'QTY_COVERED' };
     return {
@@ -140,6 +143,7 @@ export async function assertCanApproveInvoice(
       tenantId: tid,
       noDO: hutang.noDO,
       status: 'POSTED',
+      ...(hutang.vendorTenantId ? { vendorTenantId: hutang.vendorTenantId } : {}),
     });
     if (!grn) {
       return {
@@ -148,6 +152,15 @@ export async function assertCanApproveInvoice(
         code: 'GRN_NOT_POSTED',
       };
     }
+  }
+
+  // Keanggotaan PO diputuskan purchasing, bukan approver tagihan — tidak bisa di-override.
+  if (hutang.matchStatus === 'EXCEPTION' && VENDOR_LINE_HOLD_CODES.has(String(hutang.matchCode || ''))) {
+    return {
+      ok: false,
+      error: `${hutang.matchError || 'Barang tambahan vendor belum diterima purchasing'} — terima/tolak barisnya di halaman PO dulu`,
+      code: String(hutang.matchCode),
+    };
   }
 
   if (hutang.matchStatus === 'EXCEPTION' && !overrideMatch) {
@@ -170,8 +183,13 @@ export async function enrichHutangDetail(db: Db, hutang: HutangDoc) {
     po = await db.collection('customer_purchase_orders').findOne({ tenantId: tid, noPO: hutang.noPO }) as JsonObject | null;
   }
   if (hutang.noDO) {
+    // noDO hanya unik per vendor — tanpa vendorTenantId GRN vendor lain ber-DO sama ikut tampil.
     grns = await db.collection('goods_receipts')
-      .find({ tenantId: tid, noDO: hutang.noDO })
+      .find({
+        tenantId: tid,
+        noDO: hutang.noDO,
+        ...(hutang.vendorTenantId ? { vendorTenantId: hutang.vendorTenantId } : {}),
+      })
       .sort({ postedAt: -1 })
       .limit(20)
       .toArray() as JsonObject[];

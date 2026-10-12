@@ -31,6 +31,8 @@ export const INTEGRATION_OUTBOX_TYPES = {
   ENSURE_PUSH_CANCEL_SO: 'ENSURE_PUSH_CANCEL_SO',
   /** Detail/Foto produk vendor-synced → Sales enrichment (Category A). */
   ENSURE_PRODUCT_ENRICHMENT: 'ENSURE_PRODUCT_ENRICHMENT',
+  /** Keputusan purchasing atas baris tambahan vendor → tanda baris SO di Sales. aggregateId = `poId:lineId`. */
+  ENSURE_PUSH_VENDOR_LINE_DECISION: 'ENSURE_PUSH_VENDOR_LINE_DECISION',
 } as const;
 
 export type IntegrationOutboxType =

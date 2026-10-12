@@ -120,6 +120,29 @@ describe.skipIf(!MongoMemoryReplSet)('Fase 6 rekonsiliasi harian', { timeout: 12
         items: [{ lineId: 'L2', localStokId: 'p-po', kode: 'P-PO', satuan: 'KG', qty: 3, qtyReceived: 3, qtyRejected: 0 }],
       },
     ]);
+    // Barang SO vendor tidak masuk PO (sinkron terlewat) + tagihan tertahan karenanya.
+    await db.collection('customer_purchase_orders').insertOne({
+      id: 'po-vl', tenantId: TID, noPO: 'PO-VL', status: 'CONFIRMED', vendorTenantId: 'multi', updatedAt: new Date(),
+      vendorSubmissions: [{
+        vendorTenantId: 'v1', vendorSoId: 'so-v1', status: 'SYNCED',
+        vendorSo: { noSO: 'SO-V1', items: [{ lineId: 's1', stokId: 'v-po', kode: 'P-PO', qty: 1 }, { lineId: 's2', stokId: 'v-x', kode: 'P-X', qty: 2 }] },
+      }],
+      items: [
+        { lineId: 'VL1', localStokId: 'p-po', vendorTenantId: 'v1', kode: 'P-PO', vendorStokId: 'v-po', satuan: 'KG', qty: 1 },
+        // Tambahan vendor yang belum diterima/ditolak lebih dari sehari.
+        { lineId: 'VL2', localStokId: 'p-po', vendorTenantId: 'v1', kode: 'P-Y', satuan: 'KG', qty: 1, addedFromVendorSo: true, addedAt: ago(30 * H) },
+      ],
+    });
+    await db.collection('integration_outbox').insertOne({
+      id: 'ob-decision', type: 'ENSURE_PUSH_VENDOR_LINE_DECISION', aggregateId: 'po-vl:VL3', tenantId: TID, status: 'FAILED',
+      attempts: 3, lastError: 'HTTP 503', updatedAt: ago(2 * H),
+      payload: { poId: 'po-vl', noPO: 'PO-VL', lineId: 'VL3', kode: 'P-Z', decision: 'ACCEPTED', vendorTenantId: 'v1' },
+    });
+    await db.collection('hutang').insertOne({
+      id: 'h-offpo', tenantId: TID, referenceType: 'VENDOR_INVOICE', noHutang: 'HT-OFFPO', noInvoice: 'INV-OFFPO', noPO: 'PO-VL',
+      vendorTenantId: 'v1', approvalStatus: 'PENDING_REVIEW', matchStatus: 'EXCEPTION',
+      matchError: '3-way match PO: P-X (PCS) tidak ada di PO', createdAt: ago(3 * H),
+    });
     const grnItem = (lineId: string, qty: number) => ({ lineId, localStokId: 'p-po', satuan: 'KG', qtyReceived: qty, qtyReceivedBase: qty, harga: 100 });
     await db.collection('goods_receipts').insertMany([
       { id: 'g1', tenantId: TID, noGRN: 'GRN-1', noPO: 'PO-1', status: 'POSTED', postedAt: ago(2 * H), items: [grnItem('L1', 5)], hutangId: 'h-x' },

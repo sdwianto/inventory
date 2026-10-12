@@ -965,6 +965,36 @@ export function useCustomerPoPage() {
     setSubmitting('');
   };
 
+  const decideVendorLine = async (
+    id: string,
+    lineId: string,
+    decision: 'ACCEPTED' | 'REJECTED',
+    reason?: string,
+  ): Promise<boolean> => {
+    setSubmitting(`${id}:line:${lineId}`);
+    try {
+      const data = await fetchJson<JsonObject>(
+        `/api/customer-purchase-orders/${encodeURIComponent(id)}/vendor-lines/${encodeURIComponent(lineId)}/decision`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision, ...(reason ? { reason } : {}) }),
+        },
+      );
+      if (str(data.id) === id) setList((prev) => prev.map((p) => (str(p.id) === id ? { ...p, ...data } : p)));
+      toast.success(decision === 'ACCEPTED'
+        ? `Baris diterima — tagihan PO ${str(data.noPO) || id} dicocokkan ulang`
+        : `Baris ditolak — vendor diberi tahu supaya tidak mengirim`);
+      void reloadList();
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal menyimpan keputusan baris');
+      return false;
+    } finally {
+      setSubmitting('');
+    }
+  };
+
   const rejectPo = async (id: string, reason = 'Ditolak admin') => {
     setSubmitting(id);
     try {
@@ -1142,6 +1172,7 @@ export function useCustomerPoPage() {
     syncSoLinesPo,
     rejectPo,
     shortClosePo,
+    decideVendorLine,
     canShortClose: ['SUPERVISOR', 'ADMIN', 'OWNER', 'MASTER'].includes(String(user?.role || '')),
     submitPo,
     vendorNameById,

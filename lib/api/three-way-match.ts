@@ -10,6 +10,7 @@ import type {
 } from '@/types/integration';
 import { qtyGt } from '@/lib/stock-ledger/precision';
 import { resolveSoSnapshotForPo } from '@/lib/api/hutang-variance-enrich';
+import { vendorLineAcceptanceStatus } from '@/lib/api/cpo-vendor-line-acceptance';
 import type { HutangDoc } from '@/types/documents';
 import type { JsonObject } from '@/types/json';
 
@@ -396,6 +397,8 @@ export function matchInvoiceLinesAgainstGrn(
   const { grnValue } = index;
   const alreadyInvoiced = buildAlreadyInvoicedIndex(opts.siblingInvoices || []);
   const poIndex = buildPoLineIndex(opts.poLines || []);
+  const heldPending = buildPoLineIndex((opts.poHeldLines || []).filter((l) => l.held === 'PENDING'));
+  const heldRejected = buildPoLineIndex((opts.poHeldLines || []).filter((l) => l.held === 'REJECTED'));
   const poClaimed = buildAlreadyInvoicedIndex(opts.poSiblingInvoices || []);
   const poReturned = buildAlreadyInvoicedIndex(opts.poSiblingReturns || []);
 
@@ -435,9 +438,23 @@ export function matchInvoiceLinesAgainstGrn(
       }
     }
 
-    if (poIndex.lineCount > 0 && invQty > 0) {
+    if (poIndex.lineCount + heldPending.lineCount + heldRejected.lineCount > 0 && invQty > 0) {
       const po = resolvePoLine(invLine, poIndex);
-      if (po.status === 'MISSING') {
+      if (po.status === 'MISSING' && opts.allowOffPoLines !== true) {
+        if (heldPending.lineCount && resolvePoLine(invLine, heldPending).status === 'FOUND') {
+          return {
+            ok: false,
+            error: `3-way match PO: ${kode} (${uomLabel}) barang tambahan vendor menunggu persetujuan purchasing di PO`,
+            code: 'PO_LINE_PENDING_ACCEPTANCE',
+          };
+        }
+        if (heldRejected.lineCount && resolvePoLine(invLine, heldRejected).status === 'FOUND') {
+          return {
+            ok: false,
+            error: `3-way match PO: ${kode} (${uomLabel}) barang tambahan vendor ditolak purchasing di PO`,
+            code: 'PO_LINE_REJECTED',
+          };
+        }
         return {
           ok: false,
           error: `3-way match PO: ${kode} (${uomLabel}) tidak ada di PO`,
@@ -546,6 +563,7 @@ export async function validateInvoiceAgainstGrn(
   const postedReturns = doReturns.filter((r) => !isReturnTiedToInvoice(r, liveHutangIds, liveInvoiceIds));
 
   let poLines: VendorInvoiceLine[] | undefined;
+  let poHeldLines: ThreeWayMatchOptions['poHeldLines'];
   let poSiblingInvoices: { noInvoice?: string; items?: VendorInvoiceLine[] }[] | undefined;
   let poSiblingReturns: { items?: VendorInvoiceLine[] }[] | undefined;
   const noPO = String(payload.noPO || '').trim();
@@ -566,7 +584,7 @@ export async function validateInvoiceAgainstGrn(
         if (ks && harga > 0 && !soPrice.has(ks)) soPrice.set(ks, harga);
       }
       const items = Array.isArray(po.items) ? po.items as Array<Record<string, unknown>> : [];
-      poLines = items.filter((it) => !it.cancelled).map((it) => {
+      const toLine = (it: Record<string, unknown>): VendorInvoiceLine => {
         const kode = String(it.vendorKode || it.kode || '');
         const satuan = it.satuan ? String(it.satuan) : undefined;
         return {
@@ -578,7 +596,15 @@ export async function validateInvoiceAgainstGrn(
           qty: parseFloat(String(it.qty)) || 0,
           harga: soPrice.get(kodeSatuanKey(kode, satuan)) || 0,
         };
-      });
+      };
+      // Baris tambahan vendor baru bagian PO setelah diterima purchasing (lihat cpo-vendor-line-acceptance).
+      const acceptance = (it: Record<string, unknown>) => vendorLineAcceptanceStatus(it as JsonObject);
+      poLines = items.filter((it) => !it.cancelled && acceptance(it) !== 'PENDING').map(toLine);
+      const held = items
+        .map((it) => ({ it, st: acceptance(it) }))
+        .filter(({ it, st }) => (st === 'PENDING' && !it.cancelled) || st === 'REJECTED')
+        .map(({ it, st }) => ({ ...toLine(it), held: st as 'PENDING' | 'REJECTED' }));
+      if (held.length) poHeldLines = held;
 
       const poSiblingFilter: Record<string, unknown> = {
         ...tenantIdMatchFilter(tenantId),
@@ -626,6 +652,7 @@ export async function validateInvoiceAgainstGrn(
     })),
     postedReturns: postedReturns.map(mapReturnDoc),
     ...(poLines ? { poLines } : {}),
+    ...(poHeldLines ? { poHeldLines } : {}),
     ...(poSiblingInvoices ? { poSiblingInvoices } : {}),
     ...(poSiblingReturns ? { poSiblingReturns } : {}),
   });

@@ -140,4 +140,52 @@ describe.skipIf(!MongoMemoryReplSet)('Approve tagihan pada PO PARTIAL_RECEIVED (
     const matched = alufoilInvoice({ matchStatus: 'MATCHED', matchError: null });
     expect(await assertCanApproveInvoice(db, matched)).toEqual({ ok: true });
   });
+
+  describe('baris di luar PO yang sudah diterima GRN (kasus INV2610000013 zulmy / B402689)', () => {
+    // Vendor menambah Garam ke SO yang tertaut PO ini; barang diterima lewat GRN dan ditagih,
+    // tapi baris tidak ada di PO. Nomor DO yang sama juga dipakai vendor lain (v2).
+    const garamInvoice = (overrides: Record<string, unknown> = {}): HutangDoc => alufoilInvoice({
+      id: 'h-garam',
+      noInvoice: 'INV-13',
+      vendorInvoiceId: 'vinv-garam',
+      noDO: 'DO-13',
+      matchError: '3-way match PO: B402689 (PCS) tidak ada di PO',
+      items: [{ lineId: 'grn-garam-l1', kode: 'B402689', nama: 'Garam 250g Kapal', satuan: 'PCS', qty: 5, harga: 2250 }],
+      ...overrides,
+    });
+
+    beforeEach(async () => {
+      await db.collection('goods_receipts').insertMany([
+        {
+          id: 'grn-garam', tenantId: TID, noGRN: 'GRN-GARAM', noDO: 'DO-13', noPO: 'CPO-P', status: 'POSTED', vendorTenantId: 'v1',
+          items: [{ lineId: 'grn-garam-l1', vendorKode: 'B402689', satuan: 'PCS', qtyReceived: 5, harga: 2250 }],
+        },
+        {
+          id: 'grn-v2', tenantId: TID, noGRN: 'GRN-V2', noDO: 'DO-13', noPO: 'CPO-OTHER', status: 'POSTED', vendorTenantId: 'v2',
+          items: [{ lineId: 'grn-v2-l1', vendorKode: 'B820971', satuan: 'KG', qtyReceived: 75, harga: 18000 }],
+        },
+      ]);
+      await db.collection('hutang').insertOne(garamInvoice());
+    });
+
+    it('gerbang lolos karena qty tertutup GRN; tetap wajib override', async () => {
+      expect(await assertCanApproveInvoice(db, garamInvoice(), { overrideMatch: true })).toEqual({ ok: true });
+      expect(await assertCanApproveInvoice(db, garamInvoice())).toMatchObject({ ok: false, code: 'MATCH_EXCEPTION' });
+    });
+
+    it('qty di luar PO melebihi GRN tetap diblokir walau override', async () => {
+      const over = garamInvoice({
+        items: [{ lineId: 'grn-garam-l1', kode: 'B402689', satuan: 'PCS', qty: 8, harga: 2250 }],
+      });
+      const res = await assertCanApproveInvoice(db, over, { overrideMatch: true });
+      expect(res).toMatchObject({ ok: false, code: 'PO_NOT_RECEIVED' });
+    });
+
+    it('detail hanya menampilkan GRN vendor tagihan walau nomor DO sama', async () => {
+      const detail = await enrichHutangDetail(db, garamInvoice());
+      expect(detail.canApprove).toBe(true);
+      const grnIds = (detail.grns as Array<{ id?: string }>).map((g) => g.id);
+      expect(grnIds).toEqual(['grn-garam']);
+    });
+  });
 });

@@ -97,6 +97,7 @@ function CustomerPoPageContent() {
     syncSoLinesPo,
     rejectPo,
     shortClosePo,
+    decideVendorLine,
     canShortClose,
     submitPo,
     vendorNameById,
@@ -323,6 +324,9 @@ function CustomerPoPageContent() {
                       canRevise={canRevisePo(po)}
                       onRevise={() => reviseCancelledPo(poId)}
                       onShortClose={canShortClose ? (reason) => shortClosePo(poId, reason) : undefined}
+                      onDecideVendorLine={canApprove
+                        ? (lineId, decision, reason) => decideVendorLine(poId, lineId, decision, reason)
+                        : undefined}
                       tenantName={str(user?.tenantName || user?.name)}
                     />
                   );

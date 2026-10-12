@@ -46,6 +46,7 @@ export const JOB_TYPES = {
   PO_ARRIVAL_RISK_ALERT: 'PO_ARRIVAL_RISK_ALERT',
   NOTIFICATION_OUTBOX_DRAIN: 'NOTIFICATION_OUTBOX_DRAIN',
   CUSTOMER_TAX_PROFILE_PUSH: 'CUSTOMER_TAX_PROFILE_PUSH',
+  VENDOR_LINE_DECISION_PUSH: 'VENDOR_LINE_DECISION_PUSH',
 } as const;
 
 const MAX_ATTEMPTS = 3;
@@ -436,6 +437,9 @@ export async function processJob(db: Db, job: BgJob) {
     } else if (job.type === JOB_TYPES.CUSTOMER_TAX_PROFILE_PUSH) {
       const { runCustomerTaxProfilePushJob } = await import('@/lib/api/customer-tax-profile-push');
       outcome = await runCustomerTaxProfilePushJob(db, job);
+    } else if (job.type === JOB_TYPES.VENDOR_LINE_DECISION_PUSH) {
+      const { runVendorLineDecisionPushJob } = await import('@/lib/api/vendor-line-decision-push');
+      outcome = await runVendorLineDecisionPushJob(db, job.tenantId, (job.payload || {}) as Record<string, unknown>);
     } else {
       outcome = { error: `Unknown job type: ${job.type}` };
     }

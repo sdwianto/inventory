@@ -291,6 +291,15 @@ export async function executeCustomerTaxProfilePushJob(
   return runCustomerTaxProfilePushJob(db, { tenantId, payload: payload as JsonObject });
 }
 
+export async function executeVendorLineDecisionPushJob(
+  db: Db,
+  tenantId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { runVendorLineDecisionPushJob } = await import('@/lib/api/vendor-line-decision-push');
+  return runVendorLineDecisionPushJob(db, tenantId, payload);
+}
+
 export async function executeAuditLogPurgeJob(
   db: Db,
 ): Promise<Record<string, unknown>> {

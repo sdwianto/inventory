@@ -198,5 +198,13 @@ export async function sweepAllStuckGrnInvoiceSyncs(
     /* best-effort */
   }
 
+  try {
+    const { sweepStaleVendorLineDecisions } = await import('@/lib/api/vendor-line-decision-push');
+    const decisions = await sweepStaleVendorLineDecisions(db, { now: new Date(now) });
+    enqueued += decisions.requeuedPos;
+  } catch {
+    /* best-effort */
+  }
+
   return { scanned: rows.length, enqueued, cancelledMisrouted };
 }

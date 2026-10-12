@@ -45,6 +45,15 @@ function hutang(overrides: Partial<HutangDoc>): HutangDoc {
 }
 
 describe('assertCanApproveInvoice', () => {
+  it.each(['PO_LINE_PENDING_ACCEPTANCE', 'PO_LINE_REJECTED'])('tagihan %s tidak bisa di-override approver', async (code) => {
+    const db = mockDb({ noPO: 'CPO1', status: 'RECEIVED' });
+    const res = await assertCanApproveInvoice(db, hutang({
+      matchStatus: 'EXCEPTION', matchCode: code, matchError: '3-way match PO: B402689 (PCS) barang tambahan vendor',
+    } as Partial<HutangDoc>), { overrideMatch: true });
+    expect(res).toMatchObject({ ok: false, code });
+    expect((res as { error?: string }).error).toContain('terima/tolak barisnya di halaman PO');
+  });
+
   it('blocks approval when PO is PARTIAL_RECEIVED and match is not MATCHED', async () => {
     const db = mockDb({ noPO: 'CPO1', status: 'PARTIAL_RECEIVED' });
     const res = await assertCanApproveInvoice(db, hutang({ matchStatus: 'PENDING' }));
@@ -90,7 +99,7 @@ describe('assertCanApproveInvoice', () => {
     it('qty tertutup GRN + override → boleh disetujui', async () => {
       const res = await assertCanApproveInvoice(mockDb(partialPo), exceptionInvoice(), { overrideMatch: true });
       expect(res.ok).toBe(true);
-      expect(qtyCheck.calls[0].opts).toMatchObject({ qtyOnly: true, excludeHutangId: 'h1' });
+      expect(qtyCheck.calls[0].opts).toMatchObject({ qtyOnly: true, allowOffPoLines: true, excludeHutangId: 'h1' });
       expect(qtyCheck.calls[0].payload).toMatchObject({ noDO: 'DO1', noPO: 'CPO1', vendorTenantId: 'v1', invoiceId: 'inv-1' });
     });
 

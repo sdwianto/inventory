@@ -11,6 +11,7 @@ import {
   type CpoLineCancelRecord,
 } from '@/lib/api/cpo-line-cancel-sync';
 import { fetchSoStatusForCustomerPo } from '@/lib/api/cpo-so-fetch';
+import { afterCpoVendorLinesSynced, appendExtraSoLines, isVendorSoCommitted, type PoLine } from '@/lib/api/cpo-extra-so-lines';
 import {
   enrichSubmissionsWithSoFromSales,
   poHasVendorSoNumbers,
@@ -157,7 +158,7 @@ type CpoLine = JsonObject & {
 export async function pullSoCancelStateForPo(
   db: Db,
   po: JsonObject,
-): Promise<{ updated: boolean; error?: string }> {
+): Promise<{ updated: boolean; error?: string; conflict?: boolean }> {
   const tenantId = String(po.tenantId || 'default');
   const subs = Array.isArray(po.vendorSubmissions) ? po.vendorSubmissions as JsonObject[] : [];
   const multi = isMultiVendorPo(po);
@@ -189,6 +190,7 @@ export async function pullSoCancelStateForPo(
   let lastError: string | undefined;
   let anyFetchOk = false;
   const now = new Date();
+  const addedVendorLines: PoLine[] = [];
 
   for (const target of targets) {
     const fetched = await fetchSoStatusForCustomerPo(db, tenantId, {
@@ -265,6 +267,18 @@ export async function pullSoCancelStateForPo(
             ? { vendorTenantId: vendorId, onlyVendorLines: multi }
             : undefined,
         ) as CpoLine[];
+        if (isVendorSoCommitted(null, soStatus)) {
+          const extra = await appendExtraSoLines(
+            db,
+            String(po.tenantId || 'default'),
+            items as PoLine[],
+            activeItems,
+            { ...meta, vendorTenantId: vendorId || (multi ? undefined : String(po.vendorTenantId || '')), multiVendor: multi, po },
+            now,
+          );
+          items = extra.items as CpoLine[];
+          addedVendorLines.push(...extra.added);
+        }
       }
     }
 
@@ -288,8 +302,16 @@ export async function pullSoCancelStateForPo(
   const itemsChanged = JSON.stringify(items) !== JSON.stringify(po.items);
   if (!itemsChanged && !statusChanged) return { updated: false };
 
-  await db.collection('customer_purchase_orders').updateOne(
-    { id: po.id },
+  const addedIds = addedVendorLines.map((l) => String(l.lineId));
+  const ver = Number(po.qtySyncVersion) || 0;
+  const res = await db.collection('customer_purchase_orders').updateOne(
+    {
+      id: po.id,
+      // Webhook paralel bisa sudah menambahkan baris yang sama — jangan gandakan.
+      ...(addedIds.length ? { 'items.lineId': { $nin: addedIds } } : {}),
+      // items dibaca sebelum fetch SO (jaringan) — jangan timpa keputusan / sinkron GRN sesudahnya.
+      $or: ver === 0 ? [{ qtySyncVersion: { $exists: false } }, { qtySyncVersion: 0 }] : [{ qtySyncVersion: ver }],
+    },
     {
       $set: {
         items,
@@ -300,8 +322,14 @@ export async function pullSoCancelStateForPo(
         lastVendorEventAt: now,
         updatedAt: now,
       },
+      ...(itemsChanged ? { $inc: { qtySyncVersion: 1 } } : {}),
     },
   );
+  if (res.matchedCount === 0) return { updated: false, conflict: true };
+  await afterCpoVendorLinesSynced(db, String(po.id), {
+    added: addedVendorLines,
+    itemsChanged: addedVendorLines.length > 0,
+  });
   return { updated: true };
 }
 

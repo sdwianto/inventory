@@ -4,6 +4,7 @@ import type { JsonObject } from '@/types/json';
 import { str, num, asArray, asObject } from '@/types/json';
 import { formatDate, formatDateTime, formatIDR, formatNumber } from '@/lib/format';
 import { getPoArrivalDate, PO_STATUS_STYLE } from '@/lib/po-calendar';
+import { VendorLineBadges } from '@/components/pembelian-po/VendorLineBadges';
 
 type CustomerPoDocumentProps = {
   po: JsonObject;
@@ -98,6 +99,7 @@ export default function CustomerPoDocument({
                   {cancelled && !!it.cancelReason && (
                     <div className="text-[10px] text-rose-600 no-underline line-clamp-2">{str(it.cancelReason)}</div>
                   )}
+                  <VendorLineBadges line={it} />
                 </td>
                 <td className="border border-slate-200 px-2 py-1.5 text-right whitespace-nowrap">
                   {it.estimasiHarga ? formatIDR(num(it.estimasiHarga)) : '—'}

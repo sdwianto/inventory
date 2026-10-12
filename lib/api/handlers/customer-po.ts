@@ -986,7 +986,12 @@ export async function handleCustomerPo({
       }
     }
 
-    const result = await pullSoCancelStateForPo(db, working);
+    let result = await pullSoCancelStateForPo(db, working);
+    if (result.conflict) {
+      working = await db.collection('customer_purchase_orders').findOne({ id: po.id }) as JsonObject;
+      result = await pullSoCancelStateForPo(db, working);
+      if (result.conflict) return err('PO sedang diperbarui proses lain — coba sinkron lagi sebentar lagi', 409);
+    }
     const updated = result.updated
       ? await db.collection('customer_purchase_orders').findOne({ id: po.id })
       : po;
@@ -1205,6 +1210,36 @@ export async function handleCustomerPo({
     });
   }
 
+  // POST /customer-purchase-orders/:id/vendor-lines/:lineId/decision — terima/tolak barang tambahan vendor
+  if (path[0] === 'customer-purchase-orders' && path[2] === 'vendor-lines' && path[4] === 'decision' && method === 'POST') {
+    const deniedRole = requireRole(auth, PO_APPROVE_ROLES);
+    if (deniedRole) return deniedRole;
+    const { denied, scopeAuth } = resolveOperationalScope(auth, scopeOpts);
+    if (denied) return denied;
+    const decision = String(poBody.decision || '').toUpperCase();
+    if (decision !== 'ACCEPTED' && decision !== 'REJECTED') return err('decision harus ACCEPTED atau REJECTED', 400);
+    const po = await db.collection('customer_purchase_orders').findOne(
+      withTenantFilter(scopeAuth, { id: path[1] }),
+      { projection: { tenantId: 1 } },
+    );
+    if (!po) return err('PO tidak ditemukan', 404);
+    const tenantId = String(po.tenantId || 'default');
+    const actor = await actorSnapshot(db, auth);
+    const { decideVendorLine } = await import('@/lib/api/cpo-vendor-line-acceptance');
+    const result = await decideVendorLine(db, {
+      tenantId,
+      poId: path[1],
+      lineId: String(path[3] || ''),
+      decision,
+      reason: typeof poBody.reason === 'string' ? poBody.reason : undefined,
+      actor: { userId: actor.userId, userName: actor.userName, role: actor.role },
+    });
+    if (!result.ok) return err(result.error, result.status);
+    await invalidateDashboardSnapshot(db, tenantId);
+    const updated = await db.collection('customer_purchase_orders').findOne({ id: path[1], tenantId });
+    return ok(await enrichOnePo(db, updated as JsonObject));
+  }
+
   // POST /customer-purchase-orders/:id/short-close — tutup sisa backorder (SUPERVISOR+, alasan wajib, audit)
   if (path[0] === 'customer-purchase-orders' && path[2] === 'short-close' && method === 'POST') {
     const deniedRole = requireRole(auth, PO_EDIT_ROLES);
@@ -1256,7 +1291,7 @@ export async function handleCustomerPo({
     const now = new Date();
     const canceller = await actorSnapshot(db, auth);
     const reason = String(poBody.reason || 'Dibatalkan customer');
-    const needsPeerPush = ['SUBMITTED', 'CONFIRMED', 'APPROVED'].includes(status);
+    const needsPeerPush = ['SUBMITTED', 'CONFIRMED', 'APPROVED', 'PARTIAL_CANCELLED'].includes(status);
     const tenantId = String(po.tenantId || 'default');
 
     const { runInTransactionOrFallback, txOpts } = await import('@/lib/api/transaction');
