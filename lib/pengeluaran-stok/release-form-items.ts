@@ -110,7 +110,7 @@ export function appendReleaseFormItem(
   ) {
     return { items, duplicate: true };
   }
-  return { items: [...items, next], duplicate: false };
+  return { items: [next, ...items], duplicate: false };
 }
 
 export function patchReleaseFormItemUom(
@@ -196,8 +196,8 @@ export type ReleasePrefillFormLine = {
 };
 
 /**
- * Isi dari acuan rencana: baris produk yang sama (satuan apa pun) diganti qty acuan
- * dalam satuan dasar; item lain tetap.
+ * Isi dari acuan rencana: baris acuan di atas. Produk yang sama (satuan apa pun)
+ * diganti qty acuan dalam satuan dasar; item lain tetap di bawah.
  */
 export function mergePrefillIntoReleaseItems(
   items: ReleaseFormItem[],
@@ -212,7 +212,6 @@ export function mergePrefillIntoReleaseItems(
   );
   const wh = lokasiKode.trim().toUpperCase();
   return [
-    ...kept,
     ...lines.map((l) => ({
       stokId: l.stokId,
       kode: str(l.kode),
@@ -225,6 +224,7 @@ export function mergePrefillIntoReleaseItems(
       ...(reasonById.get(l.stokId) ? { overReason: reasonById.get(l.stokId) } : {}),
       ...(reserveReasonById.get(l.stokId) ? { reservationOverrideReason: reserveReasonById.get(l.stokId) } : {}),
     })),
+    ...kept,
   ];
 }
 

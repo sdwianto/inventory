@@ -107,6 +107,51 @@ const INVOICE_STATUS_STYLE: Record<string, string> = {
 
 const PANDUAN_WH_ALL = 'ALL';
 
+/** Qty release: roda mouse tidak mengubah angka. Chevron dan ketik tetap jalan. */
+function ReleaseQtyInput({
+  value,
+  max,
+  onValue,
+}: {
+  value: number;
+  max: number;
+  onValue: (qty: number) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const stopWheel = (event: WheelEvent) => {
+      event.preventDefault();
+    };
+    el.addEventListener('wheel', stopWheel, { passive: false });
+    return () => el.removeEventListener('wheel', stopWheel);
+  }, []);
+  return (
+    <Input
+      ref={ref}
+      type="number"
+      min={0}
+      max={max}
+      data-release-qty=""
+      className="w-24 shrink-0"
+      value={value}
+      onChange={(e) => onValue(parseFloat(e.target.value) || 0)}
+    />
+  );
+}
+
+function blurReleaseQtyOnWheel(e: { currentTarget: HTMLElement }) {
+  const el = document.activeElement;
+  if (
+    el instanceof HTMLInputElement
+    && el.dataset.releaseQty != null
+    && e.currentTarget.contains(el)
+  ) {
+    el.blur();
+  }
+}
+
 export function ModeOperasional() {
   const user = useSessionUser();
   const confirm = useConfirm();
@@ -119,6 +164,8 @@ export function ModeOperasional() {
   const searchParams = useSearchParams();
   const wrPrefillDone = useRef(false);
   const clientKeySeq = useRef(0);
+  const itemsListRef = useRef<HTMLDivElement>(null);
+  const revealNewestItem = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
   const [detail, setDetail] = useState<JsonObject | null>(null);
@@ -146,6 +193,17 @@ export function ModeOperasional() {
       }));
     });
   }, [form.lokasiKode, form.items.length]);
+
+  useEffect(() => {
+    if (!revealNewestItem.current) return;
+    revealNewestItem.current = false;
+    // Baris baru ada di anak pertama. Geser baris itu, bukan seluruh daftar:
+    // daftar yang panjang dianggap "sudah terlihat" sehingga tidak ikut naik.
+    const row = itemsListRef.current?.firstElementChild;
+    if (row instanceof HTMLElement && form.items.length > 0) {
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }, [form.items]);
 
   const { data: listData = [], refetch: refetchList } = useApiQuery<JsonObject[]>(
     queryKeys.inventoryReleases.list,
@@ -281,6 +339,7 @@ export function ModeOperasional() {
         `/api/production-plans/${form.productionPlanId}/release-prefill?${qs.toString()}`,
       );
       setPrefill(data);
+      if (data.lines.length) revealNewestItem.current = true;
       setForm((prev) => ({
         ...prev,
         items: mergePrefillIntoReleaseItems(prev.items, data.lines, prev.lokasiKode),
@@ -470,6 +529,7 @@ export function ModeOperasional() {
     }
 
     let duplicate = false;
+    revealNewestItem.current = true;
     setForm((prev) => {
       const result = appendReleaseFormItem(prev.items, {
         ...pending,
@@ -479,6 +539,7 @@ export function ModeOperasional() {
       return result.duplicate ? prev : { ...prev, items: result.items };
     });
     if (duplicate) {
+      revealNewestItem.current = false;
       toast.error('Produk sudah ada');
       return;
     }
@@ -750,7 +811,10 @@ export function ModeOperasional() {
                 : 'Buat Release Inventory'}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 overflow-y-auto flex-1 py-2">
+          <div
+            className="space-y-4 overflow-y-auto flex-1 py-2"
+            onWheelCapture={blurReleaseQtyOnWheel}
+          >
             {editingRejectReason && (
               <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
                 <span className="font-medium">Alasan ditolak:</span> {editingRejectReason}
@@ -862,7 +926,7 @@ export function ModeOperasional() {
                 ))}
               </div>
             )}
-            <div className="space-y-2">
+            <div ref={itemsListRef} className="space-y-2">
               {form.items.map((it, i) => {
                 const display = resolveReleaseItemDisplay(it, productById, form.lokasiKode);
                 const acuan = prefill?.lines.find((l) => l.stokId === it.stokId);
@@ -873,7 +937,7 @@ export function ModeOperasional() {
                   && (!!overFlag || exceedsAcuan || !!it.overReason);
                 return (
                   <div
-                    key={it.clientKey || `${it.stokId}-${it.uomId}-${i}`}
+                    key={it.clientKey || `${it.stokId}-${it.uomId}`}
                     className="flex flex-col gap-2 border rounded-md p-2.5 text-sm sm:flex-row sm:items-start"
                   >
                     <div className="min-w-0 flex-1 space-y-0.5">
@@ -934,14 +998,10 @@ export function ModeOperasional() {
                         />
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Input
-                        type="number"
-                        min={0}
-                        max={display.stokAvail}
-                        className="w-24 shrink-0"
+                      <ReleaseQtyInput
                         value={it.qty}
-                        onChange={(e) => {
-                          const qty = parseFloat(e.target.value) || 0;
+                        max={display.stokAvail}
+                        onValue={(qty) => {
                           setForm((prev) => ({
                             ...prev,
                             items: prev.items.map((x, idx) => (idx === i ? { ...x, qty } : x)),

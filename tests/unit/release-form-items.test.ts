@@ -112,7 +112,7 @@ describe('buildReleaseFormItem + append', () => {
     items = appendReleaseFormItem(items, a).items;
 
     expect(items).toHaveLength(2);
-    expect(items.map((it) => it.nama).sort()).toEqual([
+    expect(items.map((it) => it.nama)).toEqual([
       'Bawang Merah Kupas',
       'Minyak Goreng',
     ]);

@@ -123,7 +123,7 @@ describe('mergePrefillIntoReleaseItems', () => {
       [{ stokId: 'gula', kode: 'GL', nama: 'Gula', uomId: 'gula-KG', satuan: 'KG', qty: 18, stokAvail: 20 }],
       'gkering',
     );
-    expect(merged.map((m) => [m.stokId, m.uomId, m.qty])).toEqual([['sabun', 'PCS', 3], ['gula', 'gula-KG', 18]]);
-    expect(merged[1].stokByWarehouse).toEqual({ GKERING: 20 });
+    expect(merged.map((m) => [m.stokId, m.uomId, m.qty])).toEqual([['gula', 'gula-KG', 18], ['sabun', 'PCS', 3]]);
+    expect(merged[0].stokByWarehouse).toEqual({ GKERING: 20 });
   });
 });
