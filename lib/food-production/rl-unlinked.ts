@@ -17,8 +17,9 @@ import {
   RL_POSTED_STATUSES,
   isExcludedOperationalKeperluan,
   loadPlanRecipeProductIds,
-  looksLikeProductionKeperluan,
+  parseReleaseKind,
   planDayWindowWib,
+  releaseRequiresProductionPlan,
 } from '@/lib/food-production/material-issue-reconcile';
 import { roundQty } from '@/lib/stock-ledger/precision';
 
@@ -71,6 +72,7 @@ type ReleaseRow = {
   noRelease?: string;
   tanggal?: Date | string;
   keperluan?: string;
+  releaseKind?: string;
   lokasiKode?: string;
   lokasiNama?: string;
   kitchenId?: string;
@@ -100,7 +102,7 @@ export async function listUnlinkedReleases(
   const releases = await db.collection(INVENTORY_RELEASES_COLLECTION)
     .find(withTenantFilter(scopeAuth, unlinkedReleaseFilter({ tanggal: { $gte: from, $lte: to } })))
     .project({
-      id: 1, noRelease: 1, tanggal: 1, keperluan: 1, lokasiKode: 1, lokasiNama: 1,
+      id: 1, noRelease: 1, tanggal: 1, keperluan: 1, releaseKind: 1, lokasiKode: 1, lokasiNama: 1,
       kitchenId: 1, createdBy: 1, approvedBy: 1, items: 1,
     })
     .sort({ tanggal: -1 })
@@ -140,7 +142,12 @@ export async function listUnlinkedReleases(
   const rows: UnlinkedReleaseRow[] = [];
   for (const rl of releases) {
     const keperluan = String(rl.keperluan || '');
-    const looksProduction = looksLikeProductionKeperluan(keperluan);
+    // Operasional eksplisit: tidak masuk worklist taut RPN.
+    if (parseReleaseKind(rl.releaseKind) === 'OPERATIONAL') continue;
+    const looksProduction = releaseRequiresProductionPlan({
+      releaseKind: rl.releaseKind,
+      keperluan,
+    });
     if (!looksProduction && isExcludedOperationalKeperluan(keperluan)) continue;
 
     const items = (rl.items || [])

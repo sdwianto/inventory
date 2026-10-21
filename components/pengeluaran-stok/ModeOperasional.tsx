@@ -45,7 +45,7 @@ import {
   type ReleaseFormState,
 } from '@/lib/pengeluaran-stok/release-form-items';
 import { ISSUE_ELIGIBLE_PLAN_STATUSES, referenceSourceLabel } from '@/lib/food-production/material-issue';
-import { looksLikeProductionKeperluan } from '@/lib/food-production/production-keperluan';
+import { releaseRequiresProductionPlan } from '@/lib/food-production/production-keperluan';
 import type { ReleasePrefill, ReleasePrefillSkipReason } from '@/lib/food-production/release-prefill';
 import { getClientFeatureFlags } from '@/lib/feature-flags-client';
 import { StockReversalSection, PendingStockReversals } from '@/components/stok/StockReversal';
@@ -177,7 +177,9 @@ export function ModeOperasional() {
   /** stokId → keterangan melebihi acuan dari preview server terakhir. */
   const [overFlags, setOverFlags] = useState<Record<string, string>>({});
   const [showUnlinked, setShowUnlinked] = useState(false);
-  const rlFromPoReference = getClientFeatureFlags().rlFromPoReference;
+  const featureFlags = getClientFeatureFlags();
+  const rlFromPoReference = featureFlags.rlFromPoReference;
+  const pblReferenceMode = featureFlags.pblReferenceMode && rlFromPoReference;
 
   usePrimeLineItemUoms(showForm, form.items.map((it) => it.stokId));
 
@@ -222,9 +224,12 @@ export function ModeOperasional() {
     [productionPlansData],
   );
 
-  const looksLikeProductionKeperluanForm = useMemo(
-    () => looksLikeProductionKeperluan(form.keperluan),
-    [form.keperluan],
+  const requiresProductionPlan = useMemo(
+    () => releaseRequiresProductionPlan({
+      releaseKind: form.releaseKind,
+      keperluan: form.keperluan,
+    }),
+    [form.releaseKind, form.keperluan],
   );
 
   const { data: saldoData } = useApiQuery<JsonObject>(
@@ -512,38 +517,49 @@ export function ModeOperasional() {
     );
   };
 
-  const addItem = async (p: JsonObject) => {
+  const appendProductToRelease = async (
+    p: JsonObject,
+    opts?: { lokasiKode?: string; qty?: number; closePicker?: boolean },
+  ) => {
+    const lokasiKode = opts?.lokasiKode || form.lokasiKode;
     // Optimistic: tulis nama/kode SEBELUM await UOM — detail langsung tampil,
     // tidak tergantung network / referensi row React Query setelah await.
     clientKeySeq.current += 1;
     const clientKey = `ck-${str(p.id)}-${clientKeySeq.current}`;
     const pending = buildReleaseFormItem({
       product: p,
-      lokasiKode: form.lokasiKode,
+      lokasiKode,
       uomId: '',
+      qty: opts?.qty,
       clientKey,
     });
     if (!pending) {
       toast.error('Produk tidak valid');
-      return;
+      return false;
     }
 
     let duplicate = false;
+    let merged = false;
     revealNewestItem.current = true;
     setForm((prev) => {
       const result = appendReleaseFormItem(prev.items, {
         ...pending,
-        stokAvail: qtyAtLokasi(pending, prev.lokasiKode),
+        stokAvail: qtyAtLokasi(pending, prev.lokasiKode || lokasiKode),
       });
       duplicate = result.duplicate;
+      merged = Boolean(result.merged);
       return result.duplicate ? prev : { ...prev, items: result.items };
     });
     if (duplicate) {
       revealNewestItem.current = false;
-      toast.error('Produk sudah ada');
-      return;
+      toast.error('Produk sudah ada (satu baris per produk) — ubah qty atau ganti satuan di baris yang ada');
+      return false;
     }
-    setPickerOpen(false);
+    if (opts?.closePicker !== false) setPickerOpen(false);
+    if (merged) {
+      toast.message('Qty digabung ke baris produk yang sama');
+      return true;
+    }
 
     const defaultUom = await fetchDefaultProductUom(pending.stokId);
     let uomDuplicate = false;
@@ -555,7 +571,70 @@ export function ModeOperasional() {
       uomDuplicate = result.duplicate;
       return { ...prev, items: result.items };
     });
-    if (uomDuplicate) toast.error('Produk sudah ada');
+    if (uomDuplicate) toast.error('Produk sudah ada — ubah qty di baris yang ada');
+    return !uomDuplicate;
+  };
+
+  const addItem = async (p: JsonObject) => {
+    await appendProductToRelease(p);
+  };
+
+  /** Dari Panduan Release: buka form RL (jika perlu) + isi baris produk. */
+  const addFromPanduan = async (row: JsonObject) => {
+    if (!canCreate) {
+      toast.error('Anda tidak bisa membuat Release');
+      return;
+    }
+    const productId = str(row.productId).trim();
+    const wh = str(row.warehouseKode).trim().toUpperCase();
+    const soh = num(row.soh);
+    if (!productId || !wh) {
+      toast.error('Baris panduan tidak lengkap');
+      return;
+    }
+    if (!(soh > 0)) {
+      toast.error('SOH kosong — tidak bisa ditambahkan');
+      return;
+    }
+
+    if (!showForm) {
+      setPrefill(null);
+      setOverFlags({});
+      setEditingReleaseId(null);
+      setEditingNoRelease('');
+      setEditingRejectReason('');
+      setForm({ ...EMPTY_RELEASE_FORM, lokasiKode: wh });
+      setShowForm(true);
+    } else if (form.lokasiKode !== wh) {
+      if (form.items.length > 0) {
+        toast.error(
+          `Form RL sedang gudang ${form.lokasiKode} — pilih baris gudang sama, atau kosongkan item dulu`,
+        );
+        return;
+      }
+      setForm((prev) => ({ ...prev, lokasiKode: wh }));
+    }
+
+    const fromCatalog = productById.get(productId);
+    const product: JsonObject = fromCatalog
+      ? { ...fromCatalog, id: productId }
+      : {
+          id: productId,
+          kode: str(row.productKode),
+          nama: str(row.productNama),
+          satuan: str(row.satuan),
+          stokByWarehouse: { [wh]: soh },
+        };
+    const qty = soh < 1 ? soh : 1;
+    const ok = await appendProductToRelease(product, {
+      lokasiKode: wh,
+      qty,
+      closePicker: false,
+    });
+    if (ok) {
+      setShowPanduan(false);
+      toast.success(`${str(row.productNama) || 'Produk'} ditambah ke RL — lanjut isi di form`);
+    }
   };
 
   const updateItemUom = (i: number, uom: ProductUom) => {
@@ -570,8 +649,8 @@ export function ModeOperasional() {
   const save = async (submit = false) => {
     if (!form.keperluan.trim()) { toast.error('Keperluan wajib diisi'); return; }
     if (!form.items.length) { toast.error('Tambah minimal 1 item'); return; }
-    if (looksLikeProductionKeperluanForm && !form.productionPlanId) {
-      toast.error('Pilih Rencana Produksi — bahan menu/produksi wajib ditautkan ke RPN');
+    if (requiresProductionPlan && !form.productionPlanId) {
+      toast.error('Jenis Produksi — pilih Rencana Produksi, atau ubah ke Operasional lain');
       return;
     }
     setSaving(true);
@@ -697,7 +776,11 @@ export function ModeOperasional() {
               <ArrowUpFromLine className="w-5 h-5" /> Mode Operasional — Release Inventory
             </h2>
             <p className="text-sm text-slate-500">
-              Staff gudang mengajukan pengeluaran barang operasional → Supervisor menyetujui & release stok.
+              {rlFromPoReference
+                ? (pblReferenceMode
+                  ? 'Bahan produksi hari ini → RL tertaut RPN → Setujui. PBL hanya konfirmasi, bukan pengeluaran kedua.'
+                  : 'Bahan produksi hari ini → RL tertaut RPN hari itu → Setujui. Operasional lain tanpa RPN.')
+                : 'Staff gudang mengajukan pengeluaran barang operasional → Supervisor menyetujui & release stok.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -810,6 +893,15 @@ export function ModeOperasional() {
                 ? `${editingRejectReason ? 'Perbaiki Release' : 'Edit Draft'}${editingNoRelease ? ` — ${editingNoRelease}` : ''}`
                 : 'Buat Release Inventory'}
             </DialogTitle>
+            {rlFromPoReference && (
+              <p className="text-xs text-muted-foreground">
+                {form.releaseKind === 'PRODUCTION'
+                  ? (pblReferenceMode
+                    ? 'Produksi: pilih RPN → isi barang → ajukan → setujui. PBL hanya konfirmasi acuan.'
+                    : 'Produksi: pilih RPN hari ini → isi barang → ajukan → setujui.')
+                  : 'Operasional lain: RPN tidak wajib. Stok keluar saat Setujui.'}
+              </p>
+            )}
           </DialogHeader>
           <div
             className="space-y-4 overflow-y-auto flex-1 py-2"
@@ -844,43 +936,68 @@ export function ModeOperasional() {
                 </Select>
               </div>
               <div>
-                <Label>
-                  Rencana produksi
-                  {looksLikeProductionKeperluanForm ? ' *' : ' (opsional)'}
-                </Label>
-                <select
-                  className="w-full h-10 border rounded-md px-2 text-sm bg-white"
-                  value={form.productionPlanId}
-                  onChange={(e) => {
+                <Label>Jenis release *</Label>
+                <Select
+                  value={form.releaseKind}
+                  onValueChange={(v) => {
+                    const releaseKind = v === 'PRODUCTION' ? 'PRODUCTION' : 'OPERATIONAL';
                     setPrefill(null);
                     setOverFlags({});
-                    setForm((prev) => ({ ...prev, productionPlanId: e.target.value }));
+                    setForm((prev) => ({
+                      ...prev,
+                      releaseKind,
+                      ...(releaseKind === 'OPERATIONAL' ? { productionPlanId: '' } : {}),
+                    }));
                   }}
                 >
-                  <option value="">— Tidak terkait rencana —</option>
-                  {productionPlans.map((p) => (
-                    <option key={str(p.id)} value={str(p.id)}>
-                      {str(p.noDokumen)} · {str(p.tanggal)} · {str(p.kitchenNama) || 'Dapur'}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="OPERATIONAL">Operasional lain</SelectItem>
+                    <SelectItem value="PRODUCTION">Produksi (bahan menu)</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  Wajib jika bahan untuk produksi — agar PBL bisa sinkron otomatis.
+                  Produksi wajib RPN. Operasional lain tidak.
                 </p>
               </div>
             </div>
-            {looksLikeProductionKeperluanForm && !form.productionPlanId && (
+            <div>
+              <Label>
+                Rencana produksi
+                {requiresProductionPlan ? ' *' : ' (opsional)'}
+              </Label>
+              <select
+                className="w-full h-10 border rounded-md px-2 text-sm bg-white"
+                value={form.productionPlanId}
+                onChange={(e) => {
+                  setPrefill(null);
+                  setOverFlags({});
+                  setForm((prev) => ({ ...prev, productionPlanId: e.target.value }));
+                }}
+              >
+                <option value="">— Tidak terkait rencana —</option>
+                {productionPlans.map((p) => (
+                  <option key={str(p.id)} value={str(p.id)}>
+                    {str(p.noDokumen)} · {str(p.tanggal)} · {str(p.kitchenNama) || 'Dapur'}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {requiresProductionPlan && !form.productionPlanId && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Keperluan terlihat untuk produksi — <strong>wajib</strong> pilih Rencana Produksi
-                agar stok tercatat ke RPN (PBL bisa sinkron otomatis).
+                Jenis <strong>Produksi</strong> — wajib pilih Rencana Produksi agar stok tercatat ke RPN.
               </div>
             )}
             <div>
-              <Label>Keperluan operasional *</Label>
+              <Label>Keperluan *</Label>
               <Input
                 value={form.keperluan}
                 onChange={(e) => setForm((prev) => ({ ...prev, keperluan: e.target.value }))}
-                placeholder="Contoh: Maintenance AC, sampel QC, dll."
+                placeholder={
+                  form.releaseKind === 'PRODUCTION'
+                    ? 'Contoh: AYAM KREMES, menu siang'
+                    : 'Contoh: Maintenance AC, sampel QC'
+                }
               />
             </div>
             <div>
@@ -1235,7 +1352,7 @@ export function ModeOperasional() {
           <DialogHeader>
             <DialogTitle>Panduan Release</DialogTitle>
             <p className="text-sm text-slate-500">
-              SOH per lot (asal PO/RPN / penyesuaian) dan sisa stok tanpa lot — filter gudang di bawah.
+              SOH per lot (asal PO/RPN / penyesuaian) — tombol Tambah mengisi form Release (qty awal 1).
             </p>
           </DialogHeader>
           <div className="flex flex-wrap items-end gap-3">
@@ -1269,17 +1386,18 @@ export function ModeOperasional() {
                   <th className="px-3 py-2 text-left">Tgl Terima</th>
                   <th className="px-3 py-2 text-center">Status Invoice</th>
                   <th className="px-3 py-2 text-left">Gudang</th>
+                  {canCreate ? <th className="px-3 py-2 text-right">Aksi</th> : null}
                 </tr>
               </thead>
               <tbody>
                 {panduanLoading && !panduanRows.length && (
                   <tr>
-                    <td colSpan={6} className="text-center py-10 text-slate-400">Memuat…</td>
+                    <td colSpan={canCreate ? 7 : 6} className="text-center py-10 text-slate-400">Memuat…</td>
                   </tr>
                 )}
                 {!panduanLoading && !panduanRows.length && (
                   <tr>
-                    <td colSpan={6} className="text-center py-10 text-slate-400">
+                    <td colSpan={canCreate ? 7 : 6} className="text-center py-10 text-slate-400">
                       Tidak ada SOH untuk filter gudang ini
                     </td>
                   </tr>
@@ -1321,6 +1439,20 @@ export function ModeOperasional() {
                       <td className="px-3 py-2 text-xs">
                         {str(r.warehouseNama) || str(r.warehouseKode) || '—'}
                       </td>
+                      {canCreate ? (
+                        <td className="px-3 py-2 text-right">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 whitespace-nowrap"
+                            disabled={!(num(r.soh) > 0)}
+                            onClick={() => { void addFromPanduan(r); }}
+                          >
+                            <Plus className="w-3 h-3 mr-1" /> Tambah ke RL
+                          </Button>
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}

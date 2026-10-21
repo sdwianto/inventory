@@ -12,6 +12,7 @@ import { getAvailableQtyAtLokasi, postStockMovements, qtyLt, roundQty } from '@/
 import { postConsumptionJournal } from '@/lib/api/stock-cost-journal';
 import { loadLotQcHeld, lotQcBlockedMessage, lotQcHeldTotal, lotQcPairKey } from '@/lib/stock-ledger/lot-qc';
 import {
+  blockingPlanNosFromPool,
   loadReservationPools,
   reservationBlockedMessage,
   reservationBlockedQty,
@@ -41,8 +42,8 @@ import {
 import { ISSUE_ELIGIBLE_PLAN_STATUSES } from '@/lib/food-production/material-issue';
 import {
   inferProductionPlanForRelease,
-  isExcludedOperationalKeperluan,
-  looksLikeProductionKeperluan,
+  parseReleaseKind,
+  releaseRequiresProductionPlan,
 } from '@/lib/food-production/material-issue-reconcile';
 import { resolveKitchenIdFilter } from '@/lib/food-production/kitchen-scope';
 import { casConflict, casEditFilter, casStatusFilter, casUpdateWithAudit, CasConflictError, insertWithAudit, isCasConflict } from '@/lib/api/cas';
@@ -85,6 +86,8 @@ interface ReleaseBody extends Record<string, unknown> {
   maintenanceRequestId?: string;
   assetId?: string;
   productionPlanId?: string;
+  /** PRODUCTION = wajib RPN; OPERATIONAL = tidak. Kosong = tebak dari keperluan (dokumen lama). */
+  releaseKind?: string;
 }
 
 interface ReleaseLineItem {
@@ -121,6 +124,7 @@ interface InventoryReleaseDoc extends Record<string, unknown> {
   lastEditedBy?: ReleaseUserRef;
   productionPlanId?: string;
   productionPlanNo?: string;
+  releaseKind?: string;
   tanggal?: Date | string;
   kitchenId?: string;
   keterangan?: string;
@@ -215,6 +219,7 @@ async function buildReleaseLineItems(
   if (!items.length) return { error: 'Minimal 1 item', status: 400 };
   const lineItems: ReleaseLineItem[] = [];
   const qcUsedByProduct = new Map<string, number>();
+  const seenProduct = new Set<string>();
   for (const it of items) {
     const prod = await findMasterDoc(db, 'products', scopeAuth, { id: it.stokId });
     if (!prod) return { error: `Produk tidak ditemukan: ${it.kode || it.stokId}`, status: 404 };
@@ -227,6 +232,13 @@ async function buildReleaseLineItems(
       gudangKode?: string | null;
     };
     if (!prodRow.id) return { error: `Produk tidak ditemukan: ${it.kode || it.stokId}`, status: 404 };
+    if (seenProduct.has(prodRow.id)) {
+      return {
+        error: `${prodRow.nama || prodRow.kode}: produk muncul lebih dari sekali — satukan qty dalam satu baris`,
+        status: 400,
+      };
+    }
+    seenProduct.add(prodRow.id);
     const whErr = assertProductWarehouse(prodRow, lokasiKode);
     if (whErr) return { error: whErr.error, status: 400 };
     const resolved = await resolveLineQtyBase(db, tenantId, prodRow.id, {
@@ -240,7 +252,8 @@ async function buildReleaseLineItems(
     const avail = await getAvailableQtyAtLokasi(db, tenantId, prodRow.id, lokasiKode);
     if (qtyLt(avail, qtyBase)) {
       return {
-        error: `Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup (sisa: ${avail} satuan dasar)`,
+        error: `Stok ${prodRow.nama} di ${warehouseLabel(lokasiKode)} tidak cukup `
+          + `(perlu ${qtyBase} satuan dasar, sisa ${avail}). Kurangi qty atau terima barang dulu.`,
         status: 400,
       };
     }
@@ -317,6 +330,8 @@ async function assertReleaseReservation(
         usable: Math.max(0, usable),
         blocked,
         satuan: it.satuan,
+        blockingPlanNos: blockingPlanNosFromPool(pool, planId),
+        overrideAvailable: true,
       });
     }
     used.set(it.stokId, need);
@@ -331,6 +346,7 @@ async function resolveReleaseProductionPlan(
   request: HandlerContext['request'],
   opts: {
     keperluan: string;
+    releaseKind?: string | null;
     productIds: string[];
     productQtyById?: Record<string, number>;
     explicitPlanId?: string;
@@ -343,6 +359,7 @@ async function resolveReleaseProductionPlan(
   const kitchenId = resolveKitchenIdFilter(url, request);
   const infer = await inferProductionPlanForRelease(db, scopeAuth, {
     keperluan: opts.keperluan,
+    releaseKind: opts.releaseKind,
     productIds: opts.productIds,
     productQtyById: opts.productQtyById,
     releaseDate: opts.releaseDate,
@@ -371,7 +388,7 @@ async function resolveReleaseProductionPlan(
   }
   if (infer && 'requiresPlan' in infer) {
     return {
-      error: 'Keperluan terlihat untuk produksi — pilih Rencana Produksi atau gunakan Mode Produksi (PBL).',
+      error: 'Jenis Produksi — pilih Rencana Produksi, atau ubah jenis ke Operasional lain.',
     };
   }
 
@@ -650,8 +667,10 @@ export async function handleInventoryReleases({
     }
     const now = new Date();
     const kitchenId = resolveKitchenIdFilter(url, request);
+    const releaseKind = parseReleaseKind(releaseBody.releaseKind) || undefined;
     const planResolved = await resolveReleaseProductionPlan(db, scopeAuth, url, request, {
       keperluan,
+      releaseKind,
       productIds,
       productQtyById,
       explicitPlanId: String(releaseBody.productionPlanId || '').trim() || undefined,
@@ -680,6 +699,7 @@ export async function handleInventoryReleases({
       lokasiNama: warehouseLabel(lokasiKode),
       ...(kitchenId ? { kitchenId } : {}),
       keperluan: String(releaseBody.keperluan).trim(),
+      ...(releaseKind ? { releaseKind } : {}),
       keterangan: [
         releaseBody.keterangan || '',
         planResolved.autoLinked
@@ -763,11 +783,15 @@ export async function handleInventoryReleases({
       if (!pid) continue;
       productQtyById[pid] = (productQtyById[pid] || 0) + (Number(it.qtyBase ?? it.qty) || 0);
     }
+    const releaseKind = releaseBody.releaseKind !== undefined
+      ? (parseReleaseKind(releaseBody.releaseKind) || undefined)
+      : (parseReleaseKind(doc.releaseKind) || undefined);
     const explicitPlanId = releaseBody.productionPlanId !== undefined
       ? String(releaseBody.productionPlanId || '').trim()
       : String(doc.productionPlanId || '').trim();
     const planResolved = await resolveReleaseProductionPlan(db, scopeAuth, url, request, {
       keperluan,
+      releaseKind,
       productIds,
       productQtyById,
       explicitPlanId: explicitPlanId || undefined,
@@ -811,6 +835,10 @@ export async function handleInventoryReleases({
       lastEditedBy: { userId: auth.userId, userName: auth.name || auth.email, role: auth.role },
       updatedAt: now,
     };
+    if (releaseBody.releaseKind !== undefined) {
+      if (releaseKind) patch.releaseKind = releaseKind;
+      else patch.releaseKind = null;
+    }
 
     if (releaseBody.productionPlanId !== undefined || planResolved.productionPlanId) {
       if (planResolved.productionPlanId) {
@@ -868,9 +896,15 @@ export async function handleInventoryReleases({
     if (doc.createdBy?.userId !== auth.userId && !auth.isMaster && auth.role !== 'ADMIN') {
       return err('Hanya pembuat yang bisa mengajukan', 403);
     }
-    if (looksLikeProductionKeperluan(String(doc.keperluan || '')) && !String(doc.productionPlanId || '').trim()) {
+    if (
+      releaseRequiresProductionPlan({
+        releaseKind: doc.releaseKind,
+        keperluan: String(doc.keperluan || ''),
+      })
+      && !String(doc.productionPlanId || '').trim()
+    ) {
       return err(
-        'Release bahan produksi tanpa Rencana Produksi — pilih RPN dulu sebelum ajukan.',
+        'Jenis Produksi — pilih Rencana Produksi dulu sebelum ajukan.',
         400,
       );
     }
@@ -936,9 +970,15 @@ export async function handleInventoryReleases({
     if (doc.createdBy?.userId === auth.userId && !auth.isMaster && auth.role !== 'ADMIN') {
       return err('Tidak bisa menyetujui permintaan sendiri', 403);
     }
-    if (looksLikeProductionKeperluan(String(doc.keperluan || '')) && !String(doc.productionPlanId || '').trim()) {
+    if (
+      releaseRequiresProductionPlan({
+        releaseKind: doc.releaseKind,
+        keperluan: String(doc.keperluan || ''),
+      })
+      && !String(doc.productionPlanId || '').trim()
+    ) {
       return err(
-        'Release bahan produksi tanpa Rencana Produksi — edit draft & pilih RPN dulu, atau batalkan.',
+        'Jenis Produksi — edit draft & pilih Rencana Produksi dulu, atau ubah jenis ke Operasional lain.',
         400,
       );
     }
@@ -998,13 +1038,20 @@ export async function handleInventoryReleases({
     let planForCheck: ProductionPlanDoc | null = null;
     let fallbackMrp: Awaited<ReturnType<typeof planFallbackMrpLines>> = [];
     if (referenceMode) {
-      if (!planId && !isExcludedOperationalKeperluan(String(doc.keperluan || ''))) {
+      if (
+        !planId
+        && releaseRequiresProductionPlan({
+          releaseKind: doc.releaseKind,
+          keperluan: String(doc.keperluan || ''),
+        })
+      ) {
         const productQtyById: Record<string, number> = {};
         for (const it of releaseLines) {
           productQtyById[String(it.stokId)] = (productQtyById[String(it.stokId)] || 0) + it.qtyBase;
         }
         const infer = await inferProductionPlanForRelease(db, scopeAuth, {
           keperluan: String(doc.keperluan || ''),
+          releaseKind: doc.releaseKind,
           productIds: Object.keys(productQtyById),
           productQtyById,
           releaseDate: doc.tanggal ? new Date(String(doc.tanggal)) : now,
@@ -1021,7 +1068,7 @@ export async function handleInventoryReleases({
           const list = infer.planAlreadyCompleted.map((m) => m.productionPlanNo).join(', ');
           return err(`Rencana ${list} sudah selesai — tolak release ini atau pilih rencana yang masih berjalan.`, 400);
         } else if (infer && 'requiresPlan' in infer) {
-          return err('Keperluan terlihat untuk produksi — edit release dan pilih Rencana Produksi.', 400);
+          return err('Jenis Produksi — edit release dan pilih Rencana Produksi.', 400);
         }
       }
       if (planId) {

@@ -29,6 +29,7 @@ import { loadLotQcHeld, lotQcBlockedMessage, lotQcHeldTotal, type LotQcHeldInfo 
 import {
   consumeReservationPool,
   loadReservationPools,
+  blockingPlanNosFromPool,
   reservationBlockedMessage,
   reservationBlockedQty,
 } from '@/lib/stock-ledger/plan-reservation';
@@ -389,12 +390,16 @@ async function postInSession(
         const need = -l.delta;
         const label = l.product.nama || l.product.kode || l.productId;
         if (qtyLt(onHand, need)) {
-          return fail(`${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (sisa: ${Math.max(0, onHand)})`, l.lineRef);
+          return fail(
+            `${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (perlu ${need}, sisa ${Math.max(0, onHand)})`,
+            l.lineRef,
+          );
         }
         const available = enforceLedger ? availableQtyAgainstLedger(onHand, info) : onHand;
         if (enforceLedger && qtyLt(available, need)) {
           return fail(
-            `${label}: Stok di lokasi ${l.lokasiKode} tidak cukup (sisa: ${available} — dibatasi saldo kartu stok)`,
+            `${label}: Stok di lokasi ${l.lokasiKode} tidak cukup `
+            + `(perlu ${need}, sisa ${available} — dibatasi saldo kartu stok)`,
             l.lineRef,
           );
         }
@@ -440,6 +445,7 @@ async function postInSession(
               usable,
               blocked,
               satuan: l.product.satuan,
+              blockingPlanNos: blockingPlanNosFromPool(pool, planId),
               overrideAvailable: input.sourceType === 'RELEASE',
             }), l.lineRef);
           }

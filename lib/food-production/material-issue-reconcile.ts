@@ -26,8 +26,8 @@ import { RECIPES_COLLECTION } from '@/lib/food-production/recipe';
 import { MENUS_COLLECTION } from '@/lib/food-production/menu';
 import {
   isExcludedOperationalKeperluan,
-  looksLikeProductionKeperluan,
   planDayWindowWib,
+  releaseRequiresProductionPlan,
 } from '@/lib/food-production/production-keperluan';
 import { qtyGt } from '@/lib/stock-ledger/precision';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
@@ -36,6 +36,9 @@ export {
   isExcludedOperationalKeperluan,
   looksLikeProductionKeperluan,
   planDayWindowWib,
+  parseReleaseKind,
+  releaseRequiresProductionPlan,
+  type ReleaseKind,
 } from '@/lib/food-production/production-keperluan';
 
 export const INVENTORY_RELEASES_COLLECTION = 'inventory_releases';
@@ -190,6 +193,7 @@ export async function inferProductionPlanForRelease(
   scopeAuth: AuthContext | Parameters<typeof withTenantFilter>[0],
   opts: {
     keperluan: string;
+    releaseKind?: string | null;
     productIds: string[];
     productQtyById?: Record<string, number>;
     releaseDate?: Date;
@@ -200,7 +204,11 @@ export async function inferProductionPlanForRelease(
   const explicit = String(opts.explicitPlanId || '').trim();
   if (explicit) return null;
 
-  if (isExcludedOperationalKeperluan(opts.keperluan)) return null;
+  // PRODUCTION selalu lanjut (meski teks keperluan "maintenance"). OPERATIONAL / legacy
+  // non-produksi → null. Jangan short-circuit isExcluded di depan: itu mengalahkan releaseKind.
+  if (!releaseRequiresProductionPlan({ releaseKind: opts.releaseKind, keperluan: opts.keperluan })) {
+    return null;
+  }
 
   const matches = await findProductionPlanOverlapsForRelease(db, scopeAuth, {
     productIds: opts.productIds,
@@ -222,9 +230,7 @@ export async function inferProductionPlanForRelease(
   if (eligible.length > 1) return { ambiguous: eligible };
   if (!eligible.length && completedOnly.length) return { planAlreadyCompleted: completedOnly };
 
-  if (looksLikeProductionKeperluan(opts.keperluan)) return { requiresPlan: true };
-
-  return null;
+  return { requiresPlan: true };
 }
 
 /** RL POSTED tanpa planId tapi overlap resep rencana (hari/dapur sama) — untuk readiness. */

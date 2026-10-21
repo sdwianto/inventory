@@ -85,6 +85,29 @@ describe('buildReleaseFormItem + append', () => {
     expect(second.items).toHaveLength(1);
   });
 
+  it('merges qty when same product and UOM added again', () => {
+    const a = buildReleaseFormItem({
+      product,
+      lokasiKode: 'GKERING',
+      uomId: 'uom-pcs',
+      satuan: 'PCS',
+      qty: 2,
+    })!;
+    const b = buildReleaseFormItem({
+      product,
+      lokasiKode: 'GKERING',
+      uomId: 'uom-pcs',
+      satuan: 'PCS',
+      qty: 5,
+    })!;
+    const first = appendReleaseFormItem([], a);
+    const second = appendReleaseFormItem(first.items, b);
+    expect(second.duplicate).toBe(false);
+    expect(second.merged).toBe(true);
+    expect(second.items).toHaveLength(1);
+    expect(second.items[0].qty).toBe(7);
+  });
+
   it('simulates concurrent add of two different products (race smoke)', () => {
     const p2: JsonObject = {
       id: 'prod-2',
@@ -197,9 +220,21 @@ describe('releaseDocToFormState', () => {
     });
     expect(form.lokasiKode).toBe('GKERING');
     expect(form.keperluan).toBe('AYAM KREMES');
+    // Dokumen lama tanpa releaseKind → tebak dari keperluan
+    expect(form.releaseKind).toBe('PRODUCTION');
     expect(form.items).toHaveLength(1);
     expect(form.items[0].nama).toBe('Bawang Merah Kupas');
     expect(form.items[0].qty).toBe(2);
+  });
+
+  it('honors explicit releaseKind on doc', () => {
+    const form = releaseDocToFormState({
+      lokasiKode: 'GKERING',
+      keperluan: 'AYAM KREMES',
+      releaseKind: 'OPERATIONAL',
+      items: [],
+    });
+    expect(form.releaseKind).toBe('OPERATIONAL');
   });
 });
 

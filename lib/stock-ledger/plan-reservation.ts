@@ -3,7 +3,8 @@
  * GRN dari PO yang tertaut rencana mengunci lot itu untuk rencana tersebut.
  * Stok tersedia = stok − lot tertahan QC − cadangan rencana lain.
  * Flag `planStockReservation` hanya mengatur pembuatan cadangan. Cadangan yang
- * sudah ada tetap dihormati sampai rencana selesai atau dibatalkan.
+ * sudah ada tetap dihormati sampai rencana selesai/dibatalkan, atau hari masak
+ * rencana sudah lewat (WIB) — supaya RPN kemarin tidak menahan RL hari ini.
  */
 
 import type { ClientSession, Db } from 'mongodb';
@@ -12,6 +13,7 @@ import { txOpts } from '@/lib/api/transaction';
 import { isTenantFeatureEnabled } from '@/lib/api/feature-flags';
 import { normalizeTenantId, tenantIdMatchFilter } from '@/lib/api/tenant-scope';
 import { isLotQcHeld, type IngredientLotDoc } from '@/lib/food-production/ingredient-lot';
+import { planDayWindowWib } from '@/lib/food-production/production-keperluan';
 import { PRODUCTION_PLANS_COLLECTION } from '@/lib/food-production/production-plan';
 import { isZeroQty, roundStockQty } from '@/lib/stock-ledger/precision';
 
@@ -51,6 +53,44 @@ function opts(session?: ClientSession | null) {
   return txOpts(session || undefined);
 }
 
+/** Hari masak RPN sudah berakhir (setelah 23:59:59.999 WIB tanggal rencana). */
+export function isPlanCookDayPast(planTanggal: string, asOf: Date = new Date()): boolean {
+  const t = String(planTanggal || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return false;
+  return planDayWindowWib(t).end.getTime() < asOf.getTime();
+}
+
+/** Cadangan RPN yang hari masaknya sudah lewat tidak mengunci stok RL lain. */
+export function isReservationPlanBlocking(
+  planTanggal: string | null | undefined,
+  asOf: Date = new Date(),
+): boolean {
+  const t = String(planTanggal || '').trim();
+  if (!t) return true; // tanpa tanggal: tetap kunci (aman)
+  return !isPlanCookDayPast(t, asOf);
+}
+
+async function loadPlanTanggalById(
+  db: Db,
+  tenantId: string,
+  planIds: string[],
+  session?: ClientSession | null,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(planIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return out;
+  const plans = await db.collection(PRODUCTION_PLANS_COLLECTION).find(
+    { ...tenantIdMatchFilter(tenantId), id: { $in: ids } },
+    { projection: { id: 1, tanggal: 1 }, ...opts(session) },
+  ).toArray();
+  for (const p of plans) {
+    const id = String(p.id || '').trim();
+    const tanggal = String(p.tanggal || '').slice(0, 10);
+    if (id && tanggal) out.set(id, tanggal);
+  }
+  return out;
+}
+
 export function reservationBlockedMessage(input: {
   label: string;
   lokasiKode: string;
@@ -58,18 +98,40 @@ export function reservationBlockedMessage(input: {
   usable: number;
   blocked: number;
   satuan?: string;
+  /** Nomor RPN yang mengunci (rencana lain). */
+  blockingPlanNos?: string[];
   /** Hanya Release Stok (RL) yang punya alur alasan + persetujuan ambil cadangan. */
   overrideAvailable?: boolean;
 }): string {
   const satuan = input.satuan ? ` ${input.satuan}` : '';
+  const plans = (input.blockingPlanNos || []).map((n) => String(n || '').trim()).filter(Boolean);
+  const planBit = plans.length
+    ? ` terkunci di ${plans.slice(0, 3).join(', ')}${plans.length > 3 ? ` (+${plans.length - 3})` : ''}`
+    : ' cadangan rencana lain';
   return (
-    `${input.label}: stok di ${input.lokasiKode} tidak cukup untuk permintaan ini `
-    + `(perlu ${input.need}${satuan}, tersedia ${input.usable}${satuan}, `
-    + `${input.blocked}${satuan} dikunci cadangan rencana lain). `
+    `${input.label}: stok di ${input.lokasiKode} tidak cukup `
+    + `(perlu ${input.need}${satuan}, bebas ${input.usable}${satuan}, `
+    + `${input.blocked}${satuan}${planBit}). `
     + (input.overrideAvailable === false
       ? 'Keluarkan lewat Release Stok rencana pemiliknya, atau ajukan Release Stok dengan alasan ambil cadangan.'
-      : 'Isi alasan ambil cadangan rencana lain, lalu minta persetujuan.')
+      : 'Isi alasan ambil cadangan di baris ini, lalu minta persetujuan supervisor.')
   );
+}
+
+/** Label RPN yang mengunci (selain rencana sendiri). */
+export function blockingPlanNosFromPool(
+  pool: ReservationPool | undefined,
+  ownPlanId?: string | null,
+): string[] {
+  if (!pool?.byPlan.size) return [];
+  const out: string[] = [];
+  for (const [id, qty] of pool.byPlan) {
+    if (!(qty > 0)) continue;
+    if (ownPlanId && id === ownPlanId) continue;
+    const no = pool.planNoById.get(id) || id.slice(0, 8);
+    out.push(no);
+  }
+  return out;
 }
 
 export function sanitizeReservationReason(raw: unknown): string {
@@ -160,6 +222,8 @@ export async function reserveGrnLotsForPlan(
 export type ReservationPool = {
   totalReleased: number;
   byPlan: Map<string, number>;
+  /** productionPlanId → noDokumen / productionPlanNo untuk pesan UI. */
+  planNoById: Map<string, string>;
 };
 
 /** Cadangan aktif pada lot yang sudah lolos QC (karantina tetap dihitung lewat guard QC). */
@@ -182,6 +246,14 @@ export async function loadReservationPools(
   ).toArray();
   if (!rows.length) return out;
 
+  const planTanggalById = await loadPlanTanggalById(
+    db,
+    tenantId,
+    rows.map((r) => String(r.productionPlanId)),
+    session,
+  );
+  const asOf = new Date();
+
   const lots = await db.collection('ingredient_lots').find(
     { tenantId, id: { $in: [...new Set(rows.map((r) => r.lotId))] } },
     { projection: { id: 1, qcStatus: 1, qtyRemaining: 1 }, ...opts(session) },
@@ -189,16 +261,19 @@ export async function loadReservationPools(
   const lotById = new Map(lots.map((l) => [l.id, l]));
 
   for (const row of rows) {
+    const planId = String(row.productionPlanId);
+    if (!isReservationPlanBlocking(planTanggalById.get(planId), asOf)) continue;
     const lot = lotById.get(row.lotId);
     if (!lot || isLotQcHeld(lot)) continue;
     const lotQty = roundStockQty(lot.qtyRemaining);
     const qty = Math.min(roundStockQty(row.qtyRemaining), lotQty);
     if (!(qty > 0)) continue;
     const key = pairKey(row.productId, row.warehouseKode);
-    const pool = out.get(key) || { totalReleased: 0, byPlan: new Map() };
+    const pool = out.get(key) || { totalReleased: 0, byPlan: new Map(), planNoById: new Map() };
     pool.totalReleased = roundStockQty(pool.totalReleased + qty);
-    const planId = String(row.productionPlanId);
     pool.byPlan.set(planId, roundStockQty((pool.byPlan.get(planId) || 0) + qty));
+    const planNo = String(row.productionPlanNo || '').trim();
+    if (planNo && !pool.planNoById.has(planId)) pool.planNoById.set(planId, planNo);
     out.set(key, pool);
   }
   return out;
@@ -275,8 +350,18 @@ export async function reservedQtyByLot(
     { tenantId: input.tenantId, lotId: { $in: input.lotIds }, status: 'ACTIVE', qtyRemaining: { $gt: 0 } },
     { projection: { lotId: 1, productionPlanId: 1, qtyRemaining: 1 }, ...opts(session) },
   ).toArray();
+  if (!rows.length) return out;
+  const planTanggalById = await loadPlanTanggalById(
+    db,
+    input.tenantId,
+    rows.map((r) => String(r.productionPlanId)),
+    session,
+  );
+  const asOf = new Date();
   for (const row of rows) {
     if (input.planId && row.productionPlanId === input.planId) continue;
+    const planId = String(row.productionPlanId);
+    if (!isReservationPlanBlocking(planTanggalById.get(planId), asOf)) continue;
     out.set(row.lotId, roundStockQty((out.get(row.lotId) || 0) + roundStockQty(row.qtyRemaining)));
   }
   return out;

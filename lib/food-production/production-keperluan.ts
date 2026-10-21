@@ -19,6 +19,31 @@ export function looksLikeProductionKeperluan(keperluan: string): boolean {
   return PRODUCTION_KEPERLUAN_RE.test(k);
 }
 
+/** Pilihan eksplisit di form RL — lebih jelas daripada tebak dari teks keperluan. */
+export type ReleaseKind = 'PRODUCTION' | 'OPERATIONAL';
+
+export function parseReleaseKind(raw: unknown): ReleaseKind | null {
+  const k = String(raw || '').trim().toUpperCase();
+  if (k === 'PRODUCTION' || k === 'OPERATIONAL') return k;
+  return null;
+}
+
+/**
+ * Wajib RPN?
+ * - PRODUCTION → ya
+ * - OPERATIONAL → tidak
+ * - kosong (dokumen lama) → tebak dari teks keperluan
+ */
+export function releaseRequiresProductionPlan(opts: {
+  releaseKind?: string | null;
+  keperluan: string;
+}): boolean {
+  const kind = parseReleaseKind(opts.releaseKind);
+  if (kind === 'PRODUCTION') return true;
+  if (kind === 'OPERATIONAL') return false;
+  return looksLikeProductionKeperluan(opts.keperluan);
+}
+
 /** Rentang hari rencana (UTC+7) untuk cocokkan tanggal RL. */
 export function planDayWindowWib(planTanggal: string): { start: Date; end: Date } {
   const t = String(planTanggal || '').slice(0, 10);

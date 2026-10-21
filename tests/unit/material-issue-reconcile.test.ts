@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   looksLikeProductionKeperluan,
+  parseReleaseKind,
+  releaseRequiresProductionPlan,
   isExcludedOperationalKeperluan,
   planDayWindowWib,
 } from '@/lib/food-production/production-keperluan';
@@ -117,6 +119,22 @@ describe('material-issue-reconcile', () => {
     expect(looksLikeProductionKeperluan('Maintenance AC')).toBe(false);
     expect(looksLikeProductionKeperluan('mencuci alat masak')).toBe(false);
     expect(looksLikeProductionKeperluan('STOK OPNAME')).toBe(false);
+  });
+
+  it('releaseKind overrides keperluan heuristic', () => {
+    expect(parseReleaseKind('PRODUCTION')).toBe('PRODUCTION');
+    expect(parseReleaseKind('operational')).toBe('OPERATIONAL');
+    expect(parseReleaseKind('')).toBeNull();
+    expect(releaseRequiresProductionPlan({ releaseKind: 'PRODUCTION', keperluan: 'Maintenance AC' })).toBe(true);
+    expect(releaseRequiresProductionPlan({ releaseKind: 'OPERATIONAL', keperluan: 'AYAM KREMES' })).toBe(false);
+    expect(releaseRequiresProductionPlan({ keperluan: 'AYAM KREMES' })).toBe(true);
+    expect(releaseRequiresProductionPlan({ keperluan: 'Maintenance AC' })).toBe(false);
+    // PRODUCTION + teks excluded: tetap wajib RPN (jangan dikalahkan isExcluded)
+    expect(releaseRequiresProductionPlan({
+      releaseKind: 'PRODUCTION',
+      keperluan: 'STOK OPNAME',
+    })).toBe(true);
+    expect(isExcludedOperationalKeperluan('STOK OPNAME')).toBe(true);
   });
 
   it('isExcludedOperationalKeperluan skips non-production ops', () => {

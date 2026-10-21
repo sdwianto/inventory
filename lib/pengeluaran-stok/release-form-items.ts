@@ -1,5 +1,9 @@
 import { asArray, asObject, num, str, type JsonObject } from '@/types/json';
 import { lineUomKey } from '@/lib/uom/line-ui';
+import {
+  looksLikeProductionKeperluan,
+  parseReleaseKind,
+} from '@/lib/food-production/production-keperluan';
 
 export type ReleaseFormItem = {
   stokId: string;
@@ -95,19 +99,33 @@ export function buildReleaseFormItem(args: {
   };
 }
 
+/**
+ * Tambah baris RL: satu produk = satu baris.
+ * Satuan sama → qty digabung ke baris yang ada (naik ke atas).
+ * Satuan beda / masih pending → ditolak (ubah qty di baris lama).
+ */
 export function appendReleaseFormItem(
   items: ReleaseFormItem[],
   next: ReleaseFormItem,
-): { items: ReleaseFormItem[]; duplicate: boolean } {
-  const key = lineUomKey(next.stokId, next.uomId);
-  if (items.some((it) => lineUomKey(it.stokId, it.uomId) === key)) {
-    return { items, duplicate: true };
-  }
-  // Cegah dobel klik sebelum UOM ter-resolve (clientKey pending, uomId kosong).
-  if (
-    !next.uomId
-    && items.some((it) => it.stokId === next.stokId && !it.uomId)
-  ) {
+): { items: ReleaseFormItem[]; duplicate: boolean; merged?: boolean } {
+  const existingIdx = items.findIndex((it) => it.stokId === next.stokId);
+  if (existingIdx >= 0) {
+    const existing = items[existingIdx]!;
+    const sameUom = Boolean(
+      existing.uomId
+      && next.uomId
+      && lineUomKey(existing.stokId, existing.uomId) === lineUomKey(next.stokId, next.uomId),
+    );
+    if (sameUom) {
+      const merged: ReleaseFormItem = {
+        ...existing,
+        qty: (Number(existing.qty) || 0) + (Number(next.qty) || 1),
+        reservationOverrideReason: next.reservationOverrideReason || existing.reservationOverrideReason,
+        overReason: next.overReason || existing.overReason,
+      };
+      const rest = items.filter((_, i) => i !== existingIdx);
+      return { items: [merged, ...rest], duplicate: false, merged: true };
+    }
     return { items, duplicate: true };
   }
   return { items: [next, ...items], duplicate: false };
@@ -230,6 +248,8 @@ export function mergePrefillIntoReleaseItems(
 
 export type ReleaseFormState = {
   lokasiKode: string;
+  /** PRODUCTION = wajib RPN; OPERATIONAL = tidak. */
+  releaseKind: 'PRODUCTION' | 'OPERATIONAL';
   keperluan: string;
   keterangan: string;
   maintenanceRequestId: string;
@@ -240,6 +260,7 @@ export type ReleaseFormState = {
 
 export const EMPTY_RELEASE_FORM: ReleaseFormState = {
   lokasiKode: 'GKERING',
+  releaseKind: 'OPERATIONAL',
   keperluan: '',
   keterangan: '',
   maintenanceRequestId: '',
@@ -251,9 +272,14 @@ export const EMPTY_RELEASE_FORM: ReleaseFormState = {
 /** Muat dokumen release (REJECTED/DRAFT) ke state form edit. */
 export function releaseDocToFormState(release: JsonObject): ReleaseFormState {
   const lokasiKode = str(release.lokasiKode) || 'GKERING';
+  const keperluan = str(release.keperluan);
+  const parsedKind = parseReleaseKind(release.releaseKind);
+  const releaseKind: ReleaseFormState['releaseKind'] = parsedKind
+    ?? (looksLikeProductionKeperluan(keperluan) ? 'PRODUCTION' : 'OPERATIONAL');
   return {
     lokasiKode,
-    keperluan: str(release.keperluan),
+    releaseKind,
+    keperluan,
     keterangan: str(release.keterangan),
     maintenanceRequestId: str(release.maintenanceRequestId),
     assetId: str(release.assetId),
