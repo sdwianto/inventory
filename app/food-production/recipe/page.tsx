@@ -1201,7 +1201,8 @@ export default function FoodProductionRecipePage() {
               <th className="text-left p-3 font-medium w-24">Hasil</th>
               <th className="text-left p-3 font-medium w-28">Efektif</th>
               <th className="text-left p-3 font-medium w-20">Status</th>
-              <th className="p-2 w-[4.5rem]" />
+              {/* 3 ikon (riwayat, ubah, hapus) × 2rem + padding sel — jangan dipersempit, ikon hapus meluber dan memicu scroll. */}
+              <th className="p-2 w-[7.25rem]" />
             </tr>
           </thead>
           <tbody>
