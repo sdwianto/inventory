@@ -24,6 +24,12 @@ import { storeBase64Image, deleteMediaFile } from '@/lib/api/media-storage';
 import { validateBase64Image } from '@/lib/api/image-base64';
 import type { HandlerContext } from '@/types/api/handler';
 
+const LIST_HARD_CAP = 5000;
+
+function escapeListRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const MANAGE_ROLES = ['ADMIN', 'OWNER', 'SUPERVISOR', 'MASTER'] as const;
 
 interface MenuBody extends Record<string, unknown> {
@@ -206,16 +212,18 @@ export async function handleMenus({
     const q = (url.searchParams.get('q') || '').trim();
     if (q) {
       filter.$or = [
-        { nama: { $regex: q, $options: 'i' } },
-        { kode: { $regex: q, $options: 'i' } },
+        { nama: { $regex: escapeListRegex(q), $options: 'i' } },
+        { kode: { $regex: escapeListRegex(q), $options: 'i' } },
       ];
     }
     filter = withTenantFilter(scopeAuth, filter);
 
+    // Klien memuat seluruh daftar lalu memfilter lokal — batas lama 200 (urut kode)
+    // membuang entri terbaru begitu tenant melewati 200 dokumen.
     const list = await db.collection(MENUS_COLLECTION)
       .find(filter)
       .sort({ kode: 1 })
-      .limit(200)
+      .limit(LIST_HARD_CAP)
       .toArray();
 
     return ok(list.map((doc) => {
