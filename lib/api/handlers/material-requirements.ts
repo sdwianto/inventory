@@ -34,6 +34,7 @@ import {
   type ProductionPlanDoc,
 } from '@/lib/food-production/production-plan';
 import { buildPoOrderedReceivedMap, type CpoLine } from '@/lib/api/cpo-status-sync';
+import { expandRelocatedLines } from '@/lib/api/cpo-relocated-lines';
 import { MENUS_COLLECTION, type MenuDoc } from '@/lib/food-production/menu';
 import { RECIPES_COLLECTION, applyFullPortionExceptions, type RecipeDoc } from '@/lib/food-production/recipe';
 import { KITCHENS_COLLECTION } from '@/lib/food-production/kitchen';
@@ -124,11 +125,17 @@ async function withLatestLinkedPoTarget(
       productionPlanId: planId,
       status: { $nin: ['CANCELLED'] },
     }),
-    { sort: { createdAt: -1 }, projection: { id: 1, status: 1, items: 1 } },
-  ) as { status?: string; items?: CpoLine[] } | null;
+    { sort: { createdAt: -1 }, projection: { id: 1, tenantId: 1, status: 1, items: 1 } },
+  ) as { id?: string; tenantId?: string; status?: string; items?: CpoLine[] } | null;
   if (!linkedPo || !isPoAppliedStatus(linkedPo.status)) return built;
 
-  const poItemsByProductId = buildPoOrderedReceivedMap(linkedPo.items || []);
+  const poItems = await expandRelocatedLines(
+    db,
+    String(linkedPo.tenantId || ''),
+    linkedPo.items || [],
+    new Set([String(linkedPo.id || '')]),
+  );
+  const poItemsByProductId = buildPoOrderedReceivedMap(poItems);
   if (!poItemsByProductId.size) return built;
 
   const overridden = applyLinkedPoTargets(built.lines, poItemsByProductId);

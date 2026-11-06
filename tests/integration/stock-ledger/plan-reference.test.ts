@@ -269,6 +269,72 @@ describe.skipIf(!MongoMemoryReplSet)('loadPlanReference (Mongo replica set)', { 
     expect(ref.lines[0].qtyOnHand).toBeUndefined();
   });
 
+  describe('baris PO yang dipindah vendor ke PO lain', () => {
+    const asal = (id: string, planId: string, targetPoId: string) => ({
+      id, tenantId: TID, noPO: id.toUpperCase(), productionPlanId: planId, status: 'CONFIRMED', createdAt: new Date(20),
+      items: [{
+        lineId: `${id}-garam`, localStokId: 'garam-pak', kode: 'GR01', vendorKode: 'V-PAK', satuan: 'PAK', qty: 4, qtyReceived: 0,
+        cancelled: true, relocatedTo: { poId: targetPoId, noPO: targetPoId.toUpperCase(), lineId: `${targetPoId}-garam` },
+      }],
+    });
+    const tujuan = (id: string, planId: string | null, status: string) => ({
+      id, tenantId: TID, noPO: id.toUpperCase(), productionPlanId: planId, status, createdAt: new Date(21),
+      items: [{ lineId: `${id}-garam`, localStokId: 'garam', kode: 'GR01', vendorKode: 'V-KG', satuan: 'GR', qty: 2000, qtyReceived: 1500 }],
+    });
+
+    it('cakupan & acuan mengikuti baris tujuan (barang, satuan, qty) dan menunjuk PO tujuan', async () => {
+      await db.collection('customer_purchase_orders').insertMany([
+        asal('po-rel-a', 'plan-rel', 'po-rel-t'),
+        tujuan('po-rel-t', null, 'RECEIVED'),
+      ]);
+      const ref = await loadPlanReference(db, scope, { id: 'plan-rel', tenantId: TID });
+      expect(ref.lines).toHaveLength(1);
+      // Identitas barang dari baris tujuan: garam KG (bukan garam-pak), 2000 GR → 2 KG.
+      expect(ref.lines[0]).toMatchObject({
+        productId: 'garam', satuan: 'KG', sumber: 'PO', poQtyOrdered: 2, poQtyReceived: 1.5, acuanQty: 1.5,
+      });
+      expect(ref.lines[0].poRefs).toEqual([{
+        poId: 'po-rel-t', noPO: 'PO-REL-T', status: 'RECEIVED', relocatedFromNoPO: 'PO-REL-A',
+        satuan: 'GR', qtyOrdered: 2000, qtyReceived: 1500,
+      }]);
+    });
+
+    it('PO tujuan yang juga PO rencana ini tidak digandakan', async () => {
+      await db.collection('customer_purchase_orders').insertMany([
+        asal('po-rel2-a', 'plan-rel2', 'po-rel2-t'),
+        tujuan('po-rel2-t', 'plan-rel2', 'CONFIRMED'),
+      ]);
+      const ref = await loadPlanReference(db, scope, { id: 'plan-rel2', tenantId: TID });
+      expect(ref.lines).toHaveLength(1);
+      expect(ref.lines[0]).toMatchObject({ productId: 'garam', poQtyOrdered: 2, poQtyReceived: 1.5 });
+      expect(ref.lines[0].poRefs.map((r) => [r.noPO, r.relocatedFromNoPO])).toEqual([['PO-REL2-T', undefined]]);
+    });
+
+    it('PO tujuan belum berlaku (DRAFT/REJECTED) atau dibatalkan tidak menutup kebutuhan', async () => {
+      for (const [n, status] of [['d', 'DRAFT'], ['r', 'REJECTED'], ['c', 'CANCELLED']] as const) {
+        await db.collection('customer_purchase_orders').insertMany([
+          asal(`po-rel${n}-a`, `plan-rel${n}`, `po-rel${n}-t`),
+          tujuan(`po-rel${n}-t`, null, status),
+        ]);
+        const ref = await loadPlanReference(db, scope, { id: `plan-rel${n}`, tenantId: TID }, {
+          fallbackMrpLines: [{ productId: 'garam', satuan: 'KG', qtyGross: 2 }],
+        });
+        expect(ref.lines, status).toHaveLength(1);
+        expect(ref.lines[0], status).toMatchObject({ productId: 'garam', sumber: 'MRP', poQtyOrdered: 0, acuanQty: 2 });
+        expect(ref.lines[0].poRefs, status).toEqual([]);
+      }
+    });
+
+    it('PO tujuan yang sama-sama milik rencana tetapi DRAFT tidak dihitung lewat jalur mana pun', async () => {
+      await db.collection('customer_purchase_orders').insertMany([
+        asal('po-rel3-a', 'plan-rel3', 'po-rel3-t'),
+        tujuan('po-rel3-t', 'plan-rel3', 'DRAFT'),
+      ]);
+      const ref = await loadPlanReference(db, scope, { id: 'plan-rel3', tenantId: TID });
+      expect(ref.lines).toEqual([]);
+    });
+  });
+
   it('rencana tanpa PO, MRP, dan RL menghasilkan acuan kosong', async () => {
     const ref = await loadPlanReference(db, scope, { id: 'plan-kosong', tenantId: TID });
     expect(ref.mrpSource).toBe('NONE');

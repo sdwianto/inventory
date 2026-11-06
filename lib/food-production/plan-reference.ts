@@ -23,6 +23,9 @@ import {
 } from '@/lib/food-production/material-requirement';
 import { MATERIAL_ISSUES_COLLECTION } from '@/lib/food-production/material-issue';
 import { isPoAppliedStatus } from '@/lib/food-production/production-plan';
+import { expandRelocatedLines, type RelocatedVia } from '@/lib/api/cpo-relocated-lines';
+
+type RelocatableCpoLine = { relocatedVirtual?: boolean; relocatedVia?: RelocatedVia };
 import { getStokByWarehouseBatch } from '@/lib/api/stok-lokasi';
 import { resolveProductGudangKode } from '@/lib/api/product-warehouse';
 import { roundQty } from '@/lib/stock-ledger/precision';
@@ -43,6 +46,8 @@ export interface PlanReferencePoRef {
   satuan?: string;
   qtyOrdered: number;
   qtyReceived: number;
+  /** Diisi bila baris dipindah vendor: `noPO` = PO tujuan, ini = PO rencana asal. */
+  relocatedFromNoPO?: string;
 }
 
 export interface PlanReferenceRlRef {
@@ -227,7 +232,7 @@ export async function loadPlanReference(
     return out;
   };
 
-  type PoRow = { id?: string; noPO?: string; status?: string; items?: CpoLine[] };
+  type PoRow = { id?: string; noPO?: string; status?: string; items?: Array<CpoLine & RelocatableCpoLine> };
   type MrpDoc = { id?: string; lines?: MrpLineInput[] } | null;
   type RlRow = { noRelease?: string; items?: ReleaseItem[] };
   type IssueRow = { lines?: Array<{ productId?: string; qtyIssued?: number }> };
@@ -264,7 +269,17 @@ export async function loadPlanReference(
       : Promise.resolve([])),
   ]) as [PoRow[], MrpDoc, RlRow[], IssueRow[], RlRow[]];
 
-  const appliedPos = pos.filter((po) => isPoAppliedStatus(po.status));
+  // Baris yang dipindah vendor ke PO lain tetap menutup kebutuhan rencana ini (lihat
+  // cpo-relocated-lines). PO tujuan yang juga PO rencana ini sudah terhitung → tidak digandakan.
+  const appliedPoRows = pos.filter((p) => isPoAppliedStatus(p.status));
+  const countedPoIds = new Set(appliedPoRows.map((po) => String(po.id || '')));
+  const appliedPos: PoRow[] = [];
+  for (const po of appliedPoRows) {
+    appliedPos.push({
+      ...po,
+      items: await expandRelocatedLines(db, tenantId, po.items || [], countedPoIds, opts.session),
+    });
+  }
   const mrpLines = mrpDoc?.lines?.length ? mrpDoc.lines : (opts.fallbackMrpLines || []);
   const mrpSource: PlanReference['mrpSource'] = mrpDoc?.lines?.length
     ? 'MRP_DOC'
@@ -358,14 +373,16 @@ export async function loadPlanReference(
       const rawId = String(it.localStokId);
       const { row, canonId } = touch(rawId, { kode: it.kode || it.vendorKode });
       const src = { satuan: it.satuan, uomId: it.uomId };
-      const label = `PO ${po.noPO || po.id}`;
+      const label = `PO ${it.relocatedVia?.noPO || po.noPO || po.id}`;
       const owner = uomOwner(rawId, canonId);
       row.poQtyOrdered = roundQty(row.poQtyOrdered + toBase(row, owner, { ...src, qty: ordered }, label));
       row.poQtyReceived = roundQty(row.poQtyReceived + toBase(row, owner, { ...src, qty: received }, label));
+      const via = it.relocatedVirtual ? it.relocatedVia : undefined;
       row.poRefs.push({
-        poId: String(po.id || ''),
-        noPO: String(po.noPO || ''),
-        status: String(po.status || ''),
+        poId: String(via?.poId || po.id || ''),
+        noPO: String(via?.noPO || po.noPO || ''),
+        status: String(via?.status || po.status || ''),
+        ...(via ? { relocatedFromNoPO: String(po.noPO || po.id || '') } : {}),
         satuan: it.satuan,
         qtyOrdered: roundQty(ordered),
         qtyReceived: roundQty(received),
